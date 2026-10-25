@@ -1,0 +1,25 @@
+# 复制为 config.toml 后填写。任何 OpenAI 兼容平台均可用。
+[llm]
+base_url = "https://open.bigmodel.cn/api/paas/v4"   # 例：智谱；DeepSeek 用 https://api.deepseek.com
+chat_model  = "glm-4.6"        # 对话模型
+cheap_model = "glm-4.5-flash"  # 记忆提取/技能提炼/人格演化用廉价模型
+api_key_env = "ALICE_API_KEY"  # 从该环境变量读 API Key
+
+[persona]
+name = "Alice"       # AI 的名字
+# 数据触发：每累计 N 条新记忆演化一次人格。安静则不变（没有时间兜底）
+evolve_every_memories = 15
+
+[context]
+recent_turns = 16              # 注入原文的最近对话轮数（1 轮 = 用户+AI 各一条）
+active_days = 2                # 活跃层/仓库层分界（天）
+survival_days = 7              # 生存过滤线（天）
+survival_min_uses = 1          # 跨过生存线存活所需的最少(提及+使用)次数
+warehouse_index_max_lines = 120
+active_full = 20               # 近期记忆全量注入的条数，其余只列标题
+longterm_top_k = 12            # 每轮注入的长期记忆条数
+longterm_capacity = 2000       # 长期层容量上限
+
+[memory]
+extract_every_turns = 10       # 每累计多少用户轮跑一次记忆提取
+distill_every_memories = 30    # 数据触发：每累计 N 条新记忆提炼一次技能
