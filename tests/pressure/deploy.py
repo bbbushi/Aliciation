@@ -172,6 +172,17 @@ def _python() -> str:
     return str(venv) if venv.exists() else sys.executable
 
 
+def _check_syntax(home: Path) -> None:
+    """复制完先编译一遍：另一棒改到一半的文件要当场说清楚，别等起服务超时。"""
+    proc = subprocess.run(
+        [_python(), "-m", "compileall", "-q", "alice"],
+        cwd=home, capture_output=True, text=True, timeout=120,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stdout + proc.stderr).strip().splitlines()[-12:]
+        raise DeployError("副本里 alice/ 编不过：\n" + "\n".join(detail))
+
+
 def create(case: case_mod.Case, *, stamp: str | None = None) -> Session:
     """建会话目录、部署、起服务、生成人格底色、落判定基准。"""
     stamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -179,6 +190,7 @@ def create(case: case_mod.Case, *, stamp: str | None = None) -> Session:
     home.mkdir(parents=True, exist_ok=False)
     _copy_core(home)
     _write_config(home)
+    _check_syntax(home)
 
     port = free_port()
     log = open(home / "server.log", "w", encoding="utf-8")
