@@ -216,6 +216,10 @@
         <div class="meta"><span class="act" id="curAct">—</span><span id="curCount"></span></div>
         <div class="line" id="curLine">还没开始。</div>
         <div class="note" id="curNote"></div>
+        <div class="row" style="margin-top:9px">
+          <button id="sendScript" class="ghost" disabled title="把上面这句当成你说的话发出去（Alt+Enter）">发给她</button>
+          <span id="sendHint" class="hint"></span>
+        </div>
         <div id="progress"><i></i></div>
       </div>
     </div>
@@ -282,6 +286,7 @@
     cases: $("cases"), start: $("start"), redeploy: $("redeploy"), stop: $("stop"), caseMeta: $("caseMeta"),
     curAct: $("curAct"), curCount: $("curCount"), curLine: $("curLine"), curNote: $("curNote"),
     scriptCard: $("scriptCard"), progressBar: $("progress").firstElementChild,
+    sendScript: $("sendScript"), sendHint: $("sendHint"),
     list: $("list"), judgeTarget: $("judgeTarget"), judgeSaid: $("judgeSaid"),
     modes: $("modes"), levels: $("levels"), judgeNote: $("judgeNote"),
     judgeSubmit: $("judgeSubmit"), judgeSkip: $("judgeSkip"), judgeHint: $("judgeHint"),
@@ -434,6 +439,13 @@
     }
   }
 
+  function reloadFrame() {
+    const base = lastFrameBase || (state && state.base) || "";
+    if (!base) return;
+    el.frame.src = "about:blank";
+    setTimeout(() => { el.frame.src = base; lastFrameBase = base; }, 120);
+  }
+
   function renderCurrent() {
     const cur = state && state.current;
     const total = cur ? cur.total : 0;
@@ -452,6 +464,16 @@
     el.curLine.textContent = cur.script || (cur.act === "done" ? "该记的记完了，点「生成报告」。" : "");
     el.curNote.textContent = cur.note || "";
     el.scriptCard.classList.toggle("done", cur.act === "done");
+    renderSend();
+  }
+
+  function renderSend() {
+    const cur = state && state.current;
+    const ready = !!(cur && cur.act !== "done" && state.status === "running");
+    el.sendScript.disabled = !ready || !!state.sending;
+    el.sendScript.textContent = state && state.sending ? "发送中…" : "发给她";
+    if (ready && cur.script && !state.sending) el.sendHint.textContent = "Alt+Enter";
+    else if (!ready) el.sendHint.textContent = "";
   }
 
   function renderList() {
@@ -662,6 +684,32 @@
   el.bannerRedeploy.addEventListener("click", redeploy);
   el.stop.addEventListener("click", stopRun);
   el.cases.addEventListener("change", () => { syncCaseMeta(); });
+  async function sendScript() {
+    const cur = state && state.current;
+    if (!cur || cur.act === "done") return;
+    el.sendScript.disabled = true;
+    el.sendHint.textContent = "等她说…";
+    try {
+      const out = await api("/api/send", { act: cur.act, n: cur.n });
+      toast("她回了：" + (out.reply || "").replace(/\s+/g, " ").slice(0, 24) + "…");
+      reloadFrame();
+    } catch (e) {
+      toast(e.message || "发送失败", true);
+    } finally {
+      el.sendHint.textContent = "";
+      renderSend();
+    }
+  }
+
+  el.sendScript.addEventListener("click", sendScript);
+
+  document.addEventListener("keydown", (ev) => {
+    if (!ev.altKey || ev.key !== "Enter") return;
+    if (el.sendScript.disabled) return;
+    ev.preventDefault();
+    sendScript();
+  });
+
   el.judgeSubmit.addEventListener("click", submitJudge);
   el.judgeSkip.addEventListener("click", skip);
   el.report.addEventListener("click", showReport);

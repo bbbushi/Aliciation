@@ -88,6 +88,7 @@ class Launcher:
         self.judges: dict[str, dict] = {}
         self.report_md = ""
         self.memory: dict = {}
+        self.sending = False    # 正在替人发一句剧本
         self.stale = False      # alice/、web/、用例变了：重新部署即生效
         self.restart = False    # 启动器自己的代码变了：得重启这个进程
         self.changed: list[str] = []
@@ -176,6 +177,30 @@ class Launcher:
         """页面上的「退出启动器」：停掉场次，然后让 serve_forever 收工。"""
         self.stop()
         self.shutdown_event.set()
+
+    # ---------- 替人发剧本 ----------
+
+    def send_script(self, act: str, n: int) -> dict:
+        """把某一句剧本台词当成用户发出去；左边界面刷新后能看到这一来一回。
+
+        保持"人说话"的形状：走的是同一个 /api/chat，不是绕过对话循环。
+        """
+        with self.lock:
+            session, case = self.session, self.case
+            if session is None or case is None or self.status != "running":
+                raise ValueError("场次没在跑")
+            if self.sending:
+                raise ValueError("上一条还没回，等她说完")
+            match = next((t for a, i, t in self._ordered() if a == act and i == n), None)
+            if match is None:
+                raise ValueError(f"用例里没有 {act} 第 {n} 轮")
+            self.sending = True
+        try:
+            result = session.chat(match.user)
+            return {"ok": True, "spoken": match.user, "reply": result.get("reply", "")}
+        finally:
+            with self.lock:
+                self.sending = False
 
     # ---------- 收对话 ----------
 
@@ -376,6 +401,7 @@ class Launcher:
             return {
                 "status": self.status,
                 "error": self.error,
+                "sending": self.sending,
                 "stale": self.stale,
                 "restart": self.restart,
                 "changed": self.changed,
@@ -477,6 +503,10 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("note") or ""),
                 )
                 self._json({"ok": True, "judgment": judge})
+            elif path == "/api/send":
+                body = self._body()
+                self._json(self.launcher.send_script(str(body.get("act") or ""),
+                                                     int(body.get("n") or 0)))
             elif path == "/api/report":
                 self._json(self.launcher.build_report())
             else:
