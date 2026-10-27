@@ -93,6 +93,7 @@ class Launcher:
         self.changed: list[str] = []
         self.snapshot = _snapshot()
         self.ui_version = _ui_version()
+        self.shutdown_event = threading.Event()
         threading.Thread(target=self._watch_loop, daemon=True).start()
 
     # ---------- 用例 ----------
@@ -170,6 +171,11 @@ class Launcher:
     def stop(self) -> None:
         with self.lock:
             self._stop_locked()
+
+    def request_shutdown(self) -> None:
+        """页面上的「退出启动器」：停掉场次，然后让 serve_forever 收工。"""
+        self.stop()
+        self.shutdown_event.set()
 
     # ---------- 收对话 ----------
 
@@ -460,6 +466,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/stop":
                 self.launcher.stop()
                 self._json({"ok": True})
+            elif path == "/api/shutdown":
+                self._json({"ok": True})
+                threading.Thread(target=self.launcher.request_shutdown, daemon=True).start()
             elif path == "/api/judge":
                 body = self._body()
                 judge = self.launcher.judge(
@@ -494,7 +503,12 @@ def serve(port: int = 8899, open_browser: bool = True) -> None:
         raise SystemExit(f"端口 {port}~{port + 19} 都被占用了")
     url = f"http://127.0.0.1:{port}"
     print(f"压测启动器：{url}", flush=True)
-    print("点「开始测试」部署一场；改了 alice/ 或 web/ 会亮「环境已过期」。Ctrl+C 退出。", flush=True)
+    print("点「开始测试」部署一场；改了 alice/ 或 web/ 会亮「环境已过期」。", flush=True)
+    print("关掉它：页面右下「退出启动器」，或 Ctrl+C，或 pkill -f tests/pressure/launch.py", flush=True)
+    threading.Thread(
+        target=lambda: (launcher.shutdown_event.wait(), httpd.shutdown()),
+        daemon=True,
+    ).start()
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

@@ -242,6 +242,7 @@
 
     <footer class="panel">
       <button id="report" class="primary" disabled>生成报告</button>
+      <button id="quit" class="ghost" title="停掉场次并关闭这个启动器">退出</button>
       <span class="path" id="home"></span>
     </footer>
   </aside>
@@ -284,7 +285,7 @@
     list: $("list"), judgeTarget: $("judgeTarget"), judgeSaid: $("judgeSaid"),
     modes: $("modes"), levels: $("levels"), judgeNote: $("judgeNote"),
     judgeSubmit: $("judgeSubmit"), judgeSkip: $("judgeSkip"), judgeHint: $("judgeHint"),
-    report: $("report"), home: $("home"),
+    report: $("report"), home: $("home"), quit: $("quit"),
     overlay: $("overlay"), sheetBody: $("sheetBody"), sheetPath: $("sheetPath"),
     sheetClose: $("sheetClose"), sheetReload: $("sheetReload"), toast: $("toast"),
   };
@@ -664,6 +665,16 @@
   el.judgeSubmit.addEventListener("click", submitJudge);
   el.judgeSkip.addEventListener("click", skip);
   el.report.addEventListener("click", showReport);
+  el.quit.addEventListener("click", async () => {
+    if (!confirm("退出启动器？\n\n会把当前场次一起停掉（已经记下的判定请先生成报告）。")) return;
+    try { await api("/api/shutdown", {}); } catch (e) { /* 进程可能先走了 */ }
+    el.overlay.classList.remove("show");
+    while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+    const bye = document.createElement("div");
+    bye.style.cssText = "margin:auto;text-align:center;color:#737c8a;font-size:15px;line-height:2";
+    bye.innerHTML = "<div>启动器已退出。</div><div style='font-size:13px'>这个页面可以关掉了；下次用 <code style=\"background:#fff;border:1px solid #e2e5ea;border-radius:5px;padding:1px 5px\">python3 tests/pressure/launch.py</code> 再启动。</div>";
+    document.body.appendChild(bye);
+  });
   el.sheetClose.addEventListener("click", () => el.overlay.classList.remove("show"));
   el.sheetReload.addEventListener("click", showReport);
   el.overlay.addEventListener("click", (e) => { if (e.target === el.overlay) el.overlay.classList.remove("show"); });

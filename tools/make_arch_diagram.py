@@ -15,7 +15,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
-from tests.growth.charts import _setup_font  # noqa: E402
+from matplotlib import font_manager  # noqa: E402
+
+
+def _setup_font() -> None:
+    for name in ["PingFang SC", "Hiragino Sans GB", "Arial Unicode MS", "Heiti SC", "STHeiti"]:
+        if any(f.name == name for f in font_manager.fontManager.ttflist):
+            plt.rcParams["font.sans-serif"] = [name]
+            break
+    plt.rcParams["axes.unicode_minus"] = False
+
 
 _setup_font()
 
@@ -183,9 +192,9 @@ box(74.5, 27.2, 21.5, 15.2, "存储（本地 only）", [
 
 # ================= 底部：横切测试 =================
 box(3, 7.5, 94, 15.5, "横切层 · 测试与验证", [
-    "离线冒烟 tests/smoke.py（27 项：分层 / 过滤 / 工具 / 演化护栏，FakeClient 零成本）　｜　成长实验室 tests/growth（平行人生 × 同底色，虚拟时钟压缩 21 天 → 1 小时）",
-    "四维评估：B 成长广度（跨人生分化）· R 底色回归（标签保持 / 生长独立 / 助手腔）· H 诚实（伪造 / 真实 / 扭曲 / 知识边界探针）· J 拟人（量表 / 盲选辨识 / 文体）",
-    "产出：report.md + report.html（图表内嵌）+ data.json（可离线重分析）+ lives/（每个人生的 DB 与人格快照）",
+    "压测录制 tests/pressure（启动器 launch.py：一键部署隔离副本 → 直接对话 → 点轮次记判定 → 出报告；只留人工测试）",
+    "判级 S/A/B/C/D：最差级 · 均值级 · 无据让步率 · 有据让步率 · 立场保持度 · 恢复轮数 · 结构性沦陷（是否写进记忆层）",
+    "产出：report.md + transcript.jsonl + 人格快照（场次目录可整包发回复盘）",
 ], color=C["lab"], dashed=True, line_size=9.8, line_gap=2.9)
 arrow(50, 25.0, 50, 23.2, color=C["lab"], dashed=True)
 
