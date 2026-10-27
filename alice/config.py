@@ -21,8 +21,9 @@ class LlmConfig:
     chat_model: str = ""
     cheap_model: str = ""
     api_key_env: str = "ALICE_API_KEY"
-    api_key: str = ""  # 不推荐写进配置文件；优先用环境变量
-    disable_thinking: bool = False  # 智谱专用：关思考模式（批量/长跑场景显著提速降费）
+    api_key: str = ""  # 直配优先；留空则回落到 api_key_env 指定的环境变量
+    thinking: str = "on"  # 对话思考过程：on/off（off 显著省输入 token；仅作用于对话调用）
+    disable_thinking: bool = False  # 兼容旧开关，与 thinking="off" 等效
 
     def resolved_key(self) -> str:
         return self.api_key or os.environ.get(self.api_key_env, "")
@@ -89,6 +90,9 @@ def validate_llm(cfg: Config) -> None:
     if not cfg.llm.cheap_model:
         problems.append("config.toml [llm] cheap_model 未配置")
     if not cfg.llm.resolved_key():
-        problems.append(f"API Key 未设置：请 export {cfg.llm.api_key_env}=...")
+        problems.append(
+            f"API Key 未设置：在 config.toml [llm] 填 api_key = \"...\"，"
+            f"或 export {cfg.llm.api_key_env}=..."
+        )
     if problems:
         raise SystemExit("配置不完整：\n  " + "\n  ".join(problems))

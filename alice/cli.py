@@ -93,8 +93,18 @@ def main() -> None:
     sub.add_parser("consolidate", help="立即运行分层维护与生存过滤")
     sub.add_parser("evolve", help="立即运行人格演化")
     sub.add_parser("distill", help="从记忆提炼技能")
+    p_serve = sub.add_parser("serve", help="启动本地图形界面（浏览器）")
+    p_serve.add_argument("--port", type=int, default=8800, help="监听端口（默认 8800）")
+    p_serve.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     args = parser.parse_args()
+
+    if args.cmd == "serve":
+        from .server import run as run_server
+
+        run_server(port=args.port, open_browser=not args.no_open)
+        return
+
     cfg = load(args.config)
     store = Store(appconfig.DB_PATH)
     try:

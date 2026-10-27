@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alice</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="seed" class="screen hidden">
+  <div class="seed-card">
+    <h1>为你的 <span id="seed-name">Alice</span> 选择人格底色</h1>
+    <p>选 2~4 个气质标签作为底色；剩下的性格，由你们的经历慢慢生长。</p>
+    <div id="tag-list" class="tags"></div>
+    <button id="seed-go" class="btn primary" disabled>开始</button>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div id="chat" class="chat">
+    <header>
+      <div class="who" id="name">Alice</div>
+      <div class="head-right">
+        <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
+        <button id="panel-btn" class="btn ghost" title="监测仪">监测</button>
+      </div>
+    </header>
+    <main id="msgs"></main>
+    <footer>
+      <input id="input" type="text" placeholder="说点什么…" autocomplete="off" autofocus>
+      <button id="send" class="btn primary">发送</button>
+    </footer>
+  </div>
+
+  <aside id="panel" class="hidden">
+    <div class="panel-sec">
+      <div class="panel-title">思考深度</div>
+      <select id="thinking">
+        <option value="on">开（默认）</option>
+        <option value="off">关（更省 token）</option>
+      </select>
+      <div class="panel-hint">关：跳过思考过程，回复更快、输入 token 大幅下降；随时可切回。</div>
+    </div>
+
+    <div class="panel-sec">
+      <div class="panel-title">监测仪</div>
+      <div id="cards"></div>
+      <div class="panel-title small">添加指标</div>
+      <div id="pool" class="chips"></div>
+      <div class="panel-hint">评审型指标每轮对话后用廉价模型评审一次。</div>
+    </div>
+  </aside>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

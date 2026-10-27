@@ -9,13 +9,23 @@ from .config import Config, validate_llm
 
 def make_client(cfg: Config):
     validate_llm(cfg)
-    from openai import OpenAI  # 延迟导入：离线测试无需安装
+    try:
+        from openai import OpenAI  # 延迟导入：离线测试无需安装
+    except ImportError as e:
+        raise SystemExit(
+            "缺少依赖 openai：请先运行  pip install -r requirements.txt"
+            "（或使用 .venv/bin/python 运行）"
+        ) from e
 
     # 超时收紧 + 关闭内置重试（外层 chat() 已带退避重试），避免单请求挂死拖垮长跑
     return OpenAI(
         base_url=cfg.llm.base_url, api_key=cfg.llm.resolved_key(),
         timeout=120.0, max_retries=0,
     )
+
+
+def thinking_disabled(cfg: Config) -> bool:
+    return cfg.llm.thinking == "off" or cfg.llm.disable_thinking
 
 
 def chat(
@@ -35,10 +45,10 @@ def chat(
     }
     if tools:
         kwargs["tools"] = tools
+        if thinking_disabled(cfg):  # 思考深度只作用于对话调用，不影响提取/评审
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
-    if cfg.llm.disable_thinking and "bigmodel" in (cfg.llm.base_url or ""):
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     last_err: Exception | None = None
     for attempt in range(3):

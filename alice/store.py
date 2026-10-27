@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS skills (
   use_count INTEGER NOT NULL DEFAULT 0,
   last_used_at REAL
 );
+CREATE TABLE IF NOT EXISTS turn_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  module TEXT NOT NULL,
+  value REAL NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_turn_metrics_module ON turn_metrics (module, ts);
 """
 
 _PUNCT = re.compile(r"[\s，。！？、,.!?~…—\-\"'「」《》()（）:：;；·]")
@@ -81,7 +89,8 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
 class Store:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
 

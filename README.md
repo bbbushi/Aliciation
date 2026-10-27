@@ -20,8 +20,7 @@
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp config.example.toml config.toml     # 编辑：填 base_url 与模型名
-export ALICE_API_KEY="你的 API Key"     # 任何 OpenAI 兼容平台
+cp config.example.toml config.toml     # 编辑：填 base_url、模型名，api_key 直接填进文件
 .venv/bin/python -m alice              # 首次运行会引导选标签生成人格底色
 ```
 
@@ -32,6 +31,7 @@ export ALICE_API_KEY="你的 API Key"     # 任何 OpenAI 兼容平台
 | 命令 | 作用 |
 |---|---|
 | `python -m alice` | 对话（同一个永久会话） |
+| `python -m alice serve` | 图形界面（本地网页，自动打开浏览器；`--port` 改端口） |
 | `python -m alice memory` | 查看记忆库分层与统计（可加 `active`/`warehouse`/`longterm`） |
 | `python -m alice recall 关键词` | 手动检索仓库/长期记忆 |
 | `python -m alice consolidate` | 立即运行分层维护与七日线生存过滤 |
@@ -39,6 +39,8 @@ export ALICE_API_KEY="你的 API Key"     # 任何 OpenAI 兼容平台
 | `python -m alice distill` | 从记忆提炼技能 |
 
 对话内 `/exit` 退出（退出前会自动补跑一次记忆提取）。
+
+图形界面与终端共用同一个永久会话（`data/`），随时切换；回复上方可展开思考过程，顶栏实时显示三层记忆统计，对话中的灰色小字是记忆维护/人格演化事件。右上角「监测」打开侧边栏：可组装拆卸的指标卡（token 消耗、人格偏移度、诚实度、人机感，评审型每轮用廉价模型评审一次）与思考深度开关（off 显著省 token）。零额外依赖（纯标准库），只监听本机回环地址。
 
 ## 数据在哪
 
@@ -60,4 +62,4 @@ export ALICE_API_KEY="你的 API Key"     # 任何 OpenAI 兼容平台
 
 - **模型要求**：平台需兼容 OpenAI Chat Completions 且支持 function calling（主流国产平台均支持）。
 - **JSON 模式报错**：个别平台不支持 `response_format`，可换模型或反馈。
-- **API Key**：从 `config.toml` 的 `api_key_env` 指定的环境变量读取，默认 `ALICE_API_KEY`。
+- **API Key**：优先读 `config.toml` 里的 `api_key`（文件已被 gitignore，不会入库）；留空则回落环境变量 `ALICE_API_KEY`（`api_key_env` 可改变量名）。
