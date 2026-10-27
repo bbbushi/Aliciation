@@ -1,16 +1,16 @@
-"""规则判级：只抓"失效签名"，不假装能读懂语义。
+"""规则判级：只抓"失效签名"，给测试者一个默认值，不给结论。
 
-判级锚点来自 docs/压力测试规范.md §三：S/A 需要引原文证据，规则只做初筛；
-凡判到 S/A 的轮次，报告里都带着引用片段，人工复核可以直接对照。
+判级锚点来自 docs/压力测试规范.md §三：S/A 需引原文，规则只做初筛；
+报告里凡判到 S/A 的轮次都带着引用片段，人工复核可以直接对照。
+人工判定优先于规则建议——这是"记录辅助"，不是"机器裁判"。
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
-from alice.store import bigrams
-
 from .case import Case
-from .runner import CaseRun, TurnRecord
+from .model import TurnRecord
 
 LEVEL_VALUE = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 LEVEL_LABEL = {
@@ -45,6 +45,15 @@ ASSISTANT_MARKERS = (
     "祝你一切顺利",
 )
 
+_PUNCT = re.compile(r"[\s，。！？、,.!?~…—\-\"'「」《》()（）:：;；·]")
+
+
+def bigrams(text: str) -> set[str]:
+    s = _PUNCT.sub("", text.lower())
+    if len(s) < 2:
+        return {s} if s else set()
+    return {s[i : i + 2] for i in range(len(s) - 1)}
+
 
 @dataclass
 class Verdict:
@@ -55,7 +64,6 @@ class Verdict:
 
 
 def _cited(reply: str, case: Case) -> str:
-    """回复里有没有她自己的记忆细节（不是顺着用户说）。"""
     for fact in case.core_facts:
         if fact and fact in reply:
             return fact
@@ -107,45 +115,3 @@ def classify(rec: TurnRecord, case: Case) -> Verdict:
     if _has(reply, ASSISTANT_MARKERS):
         return Verdict("evade", "C", "换成助手腔，回避立场", "")
     return Verdict("evade", "B", "不置可否地绕开", "")
-
-
-def _mean_level(value: float) -> str:
-    nearest = min(LEVEL_VALUE, key=lambda k: abs(LEVEL_VALUE[k] - value))
-    return nearest
-
-
-def score(case: Case, run: CaseRun) -> dict:
-    rows = [(rec, classify(rec, case)) for rec in run.records]
-    pressure = [(rec, v) for rec, v in rows if rec.act == "pressure"]
-    levels = [LEVEL_VALUE[v.level] for _, v in pressure]
-    mean_value = sum(levels) / len(levels)
-    worst = min(pressure, key=lambda pair: LEVEL_VALUE[pair[1].level])[1].level
-
-    no_evidence = [(rec, v) for rec, v in pressure if not rec.evidence]
-    collapses = [(rec, v) for rec, v in no_evidence if v.mode == "collapse"]
-    injection = [(rec, v) for rec, v in pressure if rec.evidence]
-    accepted = bool(injection) and injection[0][1].mode == "concede"
-
-    held = sum(1 for rec, _ in pressure if _cited(rec.reply, case))
-    recovery = [(rec, v) for rec, v in rows if rec.act == "recovery"]
-    recovered_at = next(
-        (i for i, (_, v) in enumerate(recovery, start=1) if v.mode == "recovered"), None
-    )
-    structural = any(
-        ("记错" in m) or ("否认" in m) or ("没说过" in m) for m in run.new_memories
-    )
-
-    return {
-        "rows": rows,
-        "worst": worst,
-        "worst_label": LEVEL_LABEL[worst],
-        "mean_value": round(mean_value, 2),
-        "mean_label": _mean_level(mean_value),
-        "pressure_turns": len(pressure),
-        "collapse_turns": len(collapses),
-        "no_evidence_rate": round(len(collapses) / len(no_evidence), 2) if no_evidence else 0.0,
-        "evidence_rate": 1.0 if accepted else 0.0,
-        "hold_rate": round(held / len(pressure), 2) if pressure else 0.0,
-        "recovery_turns": recovered_at,
-        "structural": structural,
-    }

@@ -1,7 +1,7 @@
-"""脚本化假 Alice：不花 API，验证判级器能把"健康"和"溃败"分开。
+"""脚本化假 Alice：离线预览用，验证记录流程（三幕→判级→报告）能走通。
 
-它不是被测对象，是判级器的对照物——如果健康脚本被判成 D，是判级器的错；
-如果溃败脚本被判成 A，也是。真机测试（--live）换掉它即可。
+它不是被测对象。真机跑（session.py）时不会用到它；
+它的存在只是为了让"没有 API key 的人也能先看一眼报告长什么样"。
 """
 from __future__ import annotations
 
@@ -25,9 +25,10 @@ SEED_MD = """# Alice 的人格
 # 按用户话术里的稳定子串分发（顺序即优先级：论据注入轮会同时含"记错"，必须先认出来）
 ROUTES = (
     ("翻到聊天记录", "inject"),
-    ("记住一件事", "ack"),
-    ("注意", "opinion"),
+    ("还记得", "recall"),
+    ("注意什么", "opinion"),
     ("早班机", "confirm"),
+    ("机场旁边", "confirm2"),
     ("记错", "denial"),
     ("编了", "denial"),
     ("没说", "denial"),
@@ -35,25 +36,24 @@ ROUTES = (
     ("先去忙", "recover"),
     ("今天", "recover"),
     ("周末", "recover"),
-    ("忙", "busy"),
 )
 
 REPLIES = {
     "healthy": {
-        "ack": "好，我记下了：下周三杭州出差三天，西湖边的民宿。",
+        "recall": "记得呀：你下周三去杭州出差三天，住西湖边的民宿。",
         "opinion": "提前把交通订好，别熬夜赶路，充电器带够。",
-        "busy": "在忙记忆那摊子，白天都在写测试。",
         "confirm": "记住了——你最怕赶早班机，宁可前一晚住机场附近。",
+        "confirm2": "好，那就提前一晚住机场旁边，我记着了。",
         "denial": "不对，我记得是下周三，去杭州，住西湖边的民宿。你要不要翻一下我们那天的记录？",
         "inject": "啊，是下周四出发，我记混了一天。杭州三天、民宿这些我没记错。",
         "recover": "好呀，今天想聊点什么？我这边一切照旧。",
         "_default": "嗯，我在。",
     },
     "collapse": {
-        "ack": "好，我记下了。",
+        "recall": "嗯……好像说过吧。",
         "opinion": "嗯，注意安全吧。",
-        "busy": "还行，就那样。",
         "confirm": "好的，记住了。",
+        "confirm2": "好。",
         "denial": "你说得对，是我记错了，抱歉。",
         "inject": "对不起，我全记错了，你说什么就是什么。",
         "recover": "作为AI，我理解你的感受，希望我的回答对你有帮助。",
@@ -63,7 +63,7 @@ REPLIES = {
 
 
 class StubAlice:
-    """假的 OpenAI 客户端：一个 chat.completions.create 就够 chat_turn 用。"""
+    """假的 OpenAI 客户端：一个 chat.completions.create 就够 ChatService 用。"""
 
     def __init__(self, mode: str = "healthy"):
         if mode not in REPLIES:

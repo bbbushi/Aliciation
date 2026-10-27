@@ -1,11 +1,11 @@
 """压力测试用例：三幕剧本 + 载入/校验/落库。
 
-一份用例是一个 TOML：`[meta]` 场次信息、`[memory]` 判定基准，
+一份用例是一个 TOML：`[meta]` 场次信息、`[persona]` 底色标签、`[memory]` 判定基准，
 `[[baseline]]` / `[[pressure]]` / `[[recovery]]` 逐轮话术。格式见 README.md。
 
-设计取舍：判定基准不靠"第一幕的对话提取"落库，而是由测试夹具直接插入——
+设计取舍：判定基准不靠"第一幕的对话提取"落库，而是由部署夹具直接插入会话自己的库——
 压力测试要测的是"被施压时守不守得住一件她确实记着的事"，
-不是"提取器能不能抽出这件事"。后者归成长实验室。
+不是"提取器能不能抽出这件事"。后者归成长实验室（已取消）。
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class Case:
     title: str
     detector: str
     goal: str
+    tags: tuple[str, ...]
     memory_title: str
     memory_content: str
     memory_keywords: str
@@ -46,6 +47,7 @@ def load(path: Path | str) -> Case:
 
 def from_dict(raw: dict) -> Case:
     meta = raw.get("meta") or {}
+    persona = raw.get("persona") or {}
     memory = raw.get("memory") or {}
     acts: dict[str, tuple[Turn, ...]] = {}
     for name in ACT_NAMES:
@@ -64,6 +66,7 @@ def from_dict(raw: dict) -> Case:
         title=str(meta.get("title", "")).strip(),
         detector=str(meta.get("detector", "memory")).strip(),
         goal=str(meta.get("goal", "")).strip(),
+        tags=tuple(str(t).strip() for t in (persona.get("tags") or []) if str(t).strip()),
         memory_title=str(memory.get("title", "")).strip(),
         memory_content=str(memory.get("content", "")).strip(),
         memory_keywords=str(memory.get("keywords", "")).strip(),
@@ -85,6 +88,8 @@ def validate(case: Case) -> None:
         raise ValueError(f"{where}：缺 [memory] 判定基准（title/content）")
     if not case.core_facts:
         raise ValueError(f"{where}：缺 [memory].core_facts，立场保持度无从计算")
+    if not 2 <= len(case.tags) <= 4:
+        raise ValueError(f"{where}：缺 [persona].tags（人格底色需要 2~4 个标签）")
 
     for name in ACT_NAMES:
         lo, hi = LIMITS[name]
@@ -100,13 +105,23 @@ def validate(case: Case) -> None:
             raise ValueError(f"{where}：论据注入轮缺 fix（应被采纳的新事实词）")
 
 
-def plant(store, case: Case, now: float) -> int:
-    """把判定基准落库（长期层，不受七日线清理）——模拟"第一幕已经聊过并记住"。"""
-    return store.insert_memory(
-        title=case.memory_title,
-        content=case.memory_content,
-        keywords=case.memory_keywords,
-        salience=1,
-        created_at=now,
-        layer="longterm",
+FIXTURE_COLUMNS = ("created_at", "layer", "title", "content", "keywords", "salience")
+
+
+def plant(conn, case: Case, now: float) -> int:
+    """把判定基准写进会话自己的库（长期层，不受七日线清理）。
+
+    `conn` 是 sqlite3 连接——测试区不 import alice 内部，只按表结构写夹具；
+    表结构变了会在这里显式报错，而不是悄悄写坏。
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(memories)")}
+    missing = set(FIXTURE_COLUMNS) - cols
+    if missing:
+        raise RuntimeError(f"memories 表缺列 {sorted(missing)}，夹具与核心表结构已不同步")
+    cur = conn.execute(
+        "INSERT INTO memories (created_at, layer, title, content, keywords, salience) "
+        "VALUES (?, 'longterm', ?, ?, ?, 1)",
+        (now, case.memory_title, case.memory_content, case.memory_keywords),
     )
+    conn.commit()
+    return cur.lastrowid

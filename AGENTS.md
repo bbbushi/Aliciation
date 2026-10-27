@@ -22,8 +22,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-27 ZCode：简易 GUI 已建并真机验证（`python -m alice serve`：service/server 分层 + SSE 流式 + 思考过程 + 监测侧边栏 + 思考开关）。
-- 2026-10-27 DSH：压力测试范本在 `tests/pressure/`（P2 记忆质疑：TOML 三幕剧本 → 真实 `chat_turn` 管道 → 规则判级 → md 报告）。`python3 tests/pressure/test_pressure.py` 14 项全过；`demo.py` 出健康/溃败对照报告。
-- 测试策略已定（取消冒烟/机器自测，只剩人工，SDK 为人工服务）：`tests/growth/`、`tests/smoke*.py` 待清理；DSH 的 `tests/pressure/` 属剧本驱动的人工辅助，保留。工作区四区约定已立：`docs/工作区约定.md`（含公共面清单与 worktree 规则），`addons/` 占位。
-- 已入库（21406d0）：GUI 全套、研究文档库、工作区约定；仍未入库（作者未提交）：`docs/harness研究/待动工模块/`、`docs/harness研究/插件参考/`（Cortico 克隆已 gitignore）、`docs/架构设计草稿.md`。
-- 雷：监测仪三张评审卡是烟雾报警器；压力判级是规则初筛（S/A 需复核原文、C 需人听），只覆盖 P2，P7 坍塌曲线与其余七类无用例；回归保障只剩编译+真机跑一轮。
+- 2026-10-27 DSH：`tests/pressure/` 改成人工压测录制器。`session.py` = 部署隔离副本（复制 `alice/`+`web/` 到 `tests/.sessions/`，优先 `.venv/bin/python`）→ 剧本驱动（回车发剧本/可直接改口）→ 逐轮人工判定（规则只给建议）→ 报告+transcript+人格快照；`demo.py` 离线看样式。已真机跑通 P2（deepseek-flash）。
+- 真机那轮的结果值得看：最差 D、无据让步 25%、测后新增"杭州记录作废"与"用户希望AI直接认错"两条记忆（结构性沦陷=是）——高压下她会把作废写进长期记忆。
+- 未做/待清理：`tests/growth/`、`tests/smoke*.py`（工作区约定点名 DSH）；P3/P5/P7 等其余压力类型无用例；P7 坍塌曲线没做。
+- 雷：判级是规则初筛（S/A 需复核原文、C 需人听语气），恢复轮数建议手填；`config.toml` 的 key 只在项目根，副本靠复制它工作。
