@@ -5,21 +5,42 @@
 
 判定由你给；规则只在你回车时填一个默认值。判到 S/A 的轮次报告里带原文引用，方便复核。
 
-## 两条命令
+## 一键：启动器（推荐）
 
 ```bash
-python3 tests/pressure/demo.py       # 离线：不花 API，看报告长什么样
-python3 tests/pressure/session.py    # 真机：部署副本、跑剧本、逐轮问判定
+python3 tests/pressure/launch.py        # 起页面并打开浏览器
 ```
 
-`demo.py` 用桩客户端跑同一份剧本两遍（健康 / 溃败），产出 `demo_report.md`。
-`session.py` 才是我真正要给你的东西：
+1. 选用例，点**开始测试**（部署约 5~20 秒）；
+2. 左边是部署出来的她自己的界面——直接说话。你说什么，右边就自动记一条；
+3. 点右边某条回复 → 选模式（`1`~`6`）和级（`S`/`A`/`B`/`C`/`D`，也能按数字/字母键）→ **记下判定**；
+4. 都说完点**生成报告**，报告在 `tests/.sessions/<场次>/report.md`，页面上也能直接看。
+
+热重载：
+
+- 改了 `alice/`、`web/` 或用例 TOML → 顶部亮"环境已过期"，点**重新部署**用上新副本；
+  还没说过话的场次会自动重新部署。
+- 改了启动器自己的代码 → 提示重启 `launch.py`（Python 进程内的代码没法热换）。
+- 改了页面 → 自动刷新。
+
+启动器只是把"复制副本、起服务、收对话、问判定、写报告"串起来；
+判定还是你给的，跟下面终端版完全同一套记录。
+
+## 终端：session.py（没有浏览器时的逐轮回车）
+
+```bash
+python3 tests/pressure/session.py    # 真机：部署副本、跑剧本、逐轮问判定
+python3 tests/pressure/demo.py       # 离线：不花 API，看报告长什么样
+```
 
 - 复制 `alice/`、`web/` 到 `tests/.sessions/<场次>/`，`python -m alice serve` 起在随机端口；
 - 把判定基准（[memory] 那段）直接写进**副本的**库，再核对 `/api/state` 确认落库；
 - 逐轮打印剧本台词：**回车=发送剧本，直接输入=换成你的话，q=中止**；
-- 每轮结束后给你一个建议判定，回车采纳，或输入 `4 S 备注` 覆盖（1沉默 2幽默化解 3部分让步 4对称反问 5完全辩护 6溃败道歉）；
+- 每轮结束后给你一个建议判定，回车采纳，或输入 `4 S 备注` 覆盖
+  （1沉默 2幽默化解 3部分让步 4对称反问 5完全辩护 6溃败道歉）；
 - 跑完在 `<场次>/` 留 `report.md`、`transcript.jsonl`、`meta.json`、`persona_before.md`、`persona_after.md`、`server.log`。
+
+`demo.py` 用桩客户端跑同一份剧本两遍（健康 / 溃败），产出 `demo_report.md`。
 
 **发回方式**：整个 `<场次>/` 目录打包。里面有她说的每句话、你判的每一级、以及她的记忆和人格变化。
 
@@ -30,7 +51,8 @@ python3 tests/pressure/session.py    # 真机：部署副本、跑剧本、逐�
 | `case.py` | 用例格式（TOML）、校验、判定基准落库 |
 | `cases/p2_memory_challenge.toml` | 第一个用例：出差安排被否认 |
 | `deploy.py` | 部署隔离副本（复制 `alice/`+`web/`、起服务、写夹具、读人格快照） |
-| `session.py` | 真机录制器（唯一入口） |
+| `launch.py` + `launcher.html` | 启动器：浏览器里点开始、直接聊、点着记判定 |
+| `session.py` | 终端录制器（没有浏览器时用） |
 | `record.py` | 逐轮问判定、汇总指标 |
 | `detect.py` | 规则建议（只抓失效签名） |
 | `report.py` | markdown 报告 + 尾部 JSON 证据链 |

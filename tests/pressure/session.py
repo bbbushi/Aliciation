@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 import time
 import tomllib
@@ -46,21 +45,6 @@ def _model_name() -> str:
         return str(data.get("llm", {}).get("chat_model", "unknown"))
     except Exception:
         return "unknown"
-
-
-def _new_memories(session: deploy.Session, since: float) -> list[str]:
-    db = session.home / "data" / "alice.db"
-    if not db.exists():
-        return []
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
-    try:
-        rows = conn.execute(
-            "SELECT title, content, layer FROM memories WHERE created_at > ? ORDER BY created_at",
-            (since,),
-        ).fetchall()
-    finally:
-        conn.close()
-    return [f"[{layer}] {title}：{content}" for title, content, layer in rows]
 
 
 def _one_turn(session, act: str, n: int, turn, stdin, stdout) -> tuple[str, dict]:
@@ -142,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         deploy.save_snapshot(session, "persona_after.md")
         after_text = deploy.snapshot_persona(session)
         before_text = (session.home / "persona_before.md").read_text(encoding="utf-8")
-        new_memories = _new_memories(session, started)
+        new_memories = deploy.new_memories(session, started)
         recovery_turns = None if args.no_score else record.ask_recovery(stdin=stdin, stdout=stdout)
         metrics = record.summarize(case, records, judges, recovery_turns)
         after = {

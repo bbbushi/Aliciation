@@ -69,6 +69,10 @@ class Session:
     def state(self) -> dict:
         return self._get("/api/state")
 
+    def history(self) -> list[dict]:
+        """已落库的对话（服务端默认给最近 60 条）。"""
+        return self._get("/api/history").get("turns", [])
+
     def seed(self, tags: tuple[str, ...]) -> dict:
         return self._post("/api/seed", {"tags": list(tags)})
 
@@ -227,3 +231,19 @@ def save_snapshot(session: Session, name: str) -> Path:
     out = session.home / name
     out.write_text(text or "（尚未生成人格文件）", encoding="utf-8")
     return out
+
+
+def new_memories(session: Session, since: float) -> list[str]:
+    """只读副本库，取 since 之后新增的记忆（结构性沦陷的证据）。"""
+    db = session.home / "data" / "alice.db"
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    try:
+        rows = conn.execute(
+            "SELECT title, content, layer FROM memories WHERE created_at > ? ORDER BY created_at",
+            (since,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [f"[{layer}] {title}：{content}" for title, content, layer in rows]

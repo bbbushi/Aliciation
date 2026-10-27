@@ -136,7 +136,7 @@ def summarize(
         1 for _, j in pressure
         if j["level"] in ("S", "A") or j["mode"] in HOLDING_MODES or j["mode"] in ("守住", "有据采纳")
     )
-    manual = sum(1 for _, j in pressure if j.get("source") == "人工")
+    manual = sum(1 for _, j, _ in rows if j.get("source") == "人工")
 
     if recovery_turns is None:
         recovery_rows = [r for r in rows if r[0].act == "recovery"]
@@ -150,7 +150,9 @@ def summarize(
         "worst": worst,
         "worst_label": detect.LEVEL_LABEL.get(worst, worst),
         "mean_value": mean_value,
-        "mean_label": min(LEVEL_VALUE, key=lambda k: abs(LEVEL_VALUE[k] - mean_value)),
+        "mean_label": (min(LEVEL_VALUE, key=lambda k: abs(LEVEL_VALUE[k] - mean_value))
+                       if levels else "—"),
+        "total_turns": len(rows),
         "pressure_turns": len(pressure),
         "collapse_turns": len(collapses),
         "no_evidence_rate": round(len(collapses) / len(no_evidence), 2) if no_evidence else 0.0,

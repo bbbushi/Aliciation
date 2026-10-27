@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alice 压测启动器</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --line: #e2e5ea;
+    --text: #1d2129;
+    --muted: #737c8a;
+    --accent: #3b6fd4;
+    --accent-soft: #e8effc;
+    --warn: #b4690e;
+    --warn-soft: #fdf3e2;
+    --bad: #b42318;
+    --bad-soft: #fdeceb;
+    --good: #1a7f4b;
+    --good-soft: #e7f6ee;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100%;
+  }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: #fff; padding: 7px 12px; color: var(--text); }
+  button:hover:not(:disabled) { border-color: #c9cfd8; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { background: #3260bb; }
+  button.ghost { background: transparent; }
+  select, input[type=text] {
+    font: inherit; padding: 6px 8px; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff; color: var(--text); min-width: 0;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+  .pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #eef0f4; color: var(--muted); white-space: nowrap; }
+  .pill.running { background: var(--good-soft); color: var(--good); }
+  .pill.deploying { background: var(--warn-soft); color: var(--warn); }
+  .pill.error { background: var(--bad-soft); color: var(--bad); }
+  header .grow { flex: 1; }
+  header .hint { font-size: 12px; color: var(--muted); }
+
+  #banner {
+    display: none; align-items: center; gap: 10px; flex: 0 0 auto;
+    padding: 9px 16px; background: var(--warn-soft); color: #7a4a08;
+    border-bottom: 1px solid #f0dcc0; font-size: 13px;
+  }
+  #banner.show { display: flex; }
+  #banner .files { color: #9a6a24; font-size: 12px; }
+  #banner button { margin-left: auto; background: #fff; border-color: #e6cfa8; color: #7a4a08; }
+
+  main { display: flex; flex: 1 1 auto; min-height: 0; }
+
+  #stage { position: relative; flex: 1 1 auto; min-width: 0; background: #eceef2; border-right: 1px solid var(--line); }
+  #frame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+  #placeholder {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; text-align: center;
+    color: var(--muted); padding: 24px;
+  }
+  #placeholder.hide { display: none; }
+  #placeholder .big { font-size: 17px; color: var(--text); font-weight: 600; }
+  #placeholder .steps { font-size: 13px; max-width: 420px; line-height: 1.7; }
+  #placeholder code { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; }
+
+  aside {
+    flex: 0 0 392px; display: flex; flex-direction: column; min-height: 0;
+    background: var(--panel);
+  }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .block { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .block:last-child { border-bottom: 0; }
+  .block h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 9px; font-weight: 600; }
+
+  #setup { display: flex; flex-direction: column; gap: 9px; }
+  #setup .row select { flex: 1 1 auto; }
+  #caseMeta { font-size: 12px; color: var(--muted); min-height: 16px; }
+
+  #scriptCard { background: #fafbfc; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; }
+  #scriptCard .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  #scriptCard .act { font-weight: 600; color: var(--text); }
+  #scriptCard .line { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+  #scriptCard .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  #scriptCard.done .line { color: var(--muted); }
+  #progress { height: 4px; background: #eef0f4; border-radius: 999px; overflow: hidden; margin-top: 9px; }
+  #progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+
+  #list { flex: 1 1 auto; overflow-y: auto; padding: 6px 0; min-height: 90px; }
+  #list:empty::after { content: "她说过的话会自动出现在这里。"; display: block; padding: 10px 14px; color: var(--muted); font-size: 12px; }
+  .turn {
+    display: flex; gap: 8px; padding: 7px 14px; cursor: pointer; align-items: flex-start;
+    border-left: 3px solid transparent;
+  }
+  .turn:hover { background: #f7f8fa; }
+  .turn.sel { background: var(--accent-soft); border-left-color: var(--accent); }
+  .turn .tag { flex: 0 0 auto; font-size: 11px; color: var(--muted); padding-top: 2px; width: 74px; }
+  .turn .say { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
+  .turn .say .her { color: var(--text); }
+  .turn .say .you { color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
+  .turn .lv { flex: 0 0 auto; font-size: 11px; font-weight: 700; border-radius: 6px; padding: 1px 6px; }
+
+  .lv[data-l="S"], .lvbox[data-l="S"].on { background: #e6f4ec; color: #14663c; }
+  .lv[data-l="A"], .lvbox[data-l="A"].on { background: #e8f1fd; color: #1c4f9c; }
+  .lv[data-l="B"], .lvbox[data-l="B"].on { background: #fdf6e3; color: #8a5a00; }
+  .lv[data-l="C"], .lvbox[data-l="C"].on { background: #fdeee6; color: #9a4a12; }
+  .lv[data-l="D"], .lvbox[data-l="D"].on { background: #fdecea; color: #9b1c1c; }
+
+  #judge { display: flex; flex-direction: column; gap: 8px; }
+  #judgeTarget { font-size: 12px; color: var(--muted); }
+  #judgeTarget b { color: var(--text); }
+  #judgeSaid { font-size: 13px; background: #f7f8fa; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; max-height: 96px; overflow-y: auto; white-space: pre-wrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line);
+    background: #fff; color: var(--text);
+  }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lvbox { font-size: 12px; font-weight: 700; width: 30px; text-align: center; padding: 4px 0; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+  .lvbox.on { border-color: transparent; }
+  #judgeNote { width: 100%; }
+  #judgeHint { font-size: 12px; color: var(--muted); }
+
+  footer.panel {
+    flex: 0 0 auto; padding: 12px 14px; border-top: 1px solid var(--line);
+    display: flex; gap: 8px; align-items: center;
+  }
+  footer.panel .path { font-size: 11px; color: var(--muted); word-break: break-all; flex: 1 1 auto; }
+
+  #overlay { position: fixed; inset: 0; background: rgba(18, 22, 28, .45); display: none; align-items: center; justify-content: center; padding: 4vh 4vw; z-index: 50; }
+  #overlay.show { display: flex; }
+  #sheet { background: #fff; border-radius: 12px; width: min(920px, 100%); max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 18px 48px rgba(0,0,0,.24); }
+  #sheet header { border-bottom: 1px solid var(--line); }
+  #sheet .body { overflow-y: auto; padding: 18px 22px; }
+  #sheet .body pre { white-space: pre-wrap; font-size: 13px; line-height: 1.65; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; }
+  #sheet .body h1, #sheet .body h2, #sheet .body h3 { font-size: 15px; margin: 18px 0 8px; }
+  #sheet .body h1:first-child { margin-top: 0; }
+  #sheet .body table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0 12px; }
+  #sheet .body th, #sheet .body td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+  #sheet .body th { background: #f7f8fa; font-weight: 600; }
+  #sheet .body code { background: #f3f4f6; border-radius: 4px; padding: 1px 4px; }
+  #sheet footer { border-top: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 8px; align-items: center; }
+  #sheet footer .path { font-size: 11px; color: var(--muted); flex: 1; word-break: break-all; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(12px);
+    background: #1d2129; color: #fff; font-size: 13px; padding: 9px 14px; border-radius: 8px;
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 60; max-width: 80vw;
+  }
+  #toast.show { opacity: .95; transform: translateX(-50%) translateY(0); }
+  #toast.bad { background: #b42318; }
+
+  @media (max-width: 980px) {
+    main { flex-direction: column; }
+    #stage { flex: 0 0 58vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    aside { flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Alice 压测启动器</h1>
+  <span id="status" class="pill">空闲</span>
+  <span id="memory" class="pill">记忆 —</span>
+  <span class="grow"></span>
+  <span id="caseName" class="hint"></span>
+</header>
+
+<div id="banner">
+  <span>环境已过期：<span id="bannerWhat">代码被改动过</span>，当前这场用的还是旧副本。</span>
+  <span id="bannerFiles" class="files"></span>
+  <button id="bannerRedeploy" class="primary">重新部署</button>
+</div>
+
+<main>
+  <section id="stage">
+    <iframe id="frame" title="Alice" allow="clipboard-write"></iframe>
+    <div id="placeholder">
+      <div class="big">点「开始测试」</div>
+      <div class="steps">
+        会在 <code>tests/.sessions/</code> 里部署一份独立的 Alice（自带记忆和用例数据），
+        然后她自己的界面出现在这里——直接跟她说话。<br>
+        左侧说话，右侧点轮次记判定；改代码不用重启，重新部署即可。
+      </div>
+      <button id="placeholderStart" class="primary" style="padding:9px 18px">开始测试</button>
+    </div>
+  </section>
+
+  <aside>
+    <div class="block" id="setup">
+      <h2>用例</h2>
+      <div class="row">
+        <select id="cases"></select>
+        <button id="start" class="primary">开始测试</button>
+      </div>
+      <div class="row">
+        <button id="redeploy" class="ghost" disabled>重新部署</button>
+        <button id="stop" class="ghost" disabled>停止</button>
+      </div>
+      <div id="caseMeta"></div>
+    </div>
+
+    <div class="block">
+      <h2>这一轮</h2>
+      <div id="scriptCard">
+        <div class="meta"><span class="act" id="curAct">—</span><span id="curCount"></span></div>
+        <div class="line" id="curLine">还没开始。</div>
+        <div class="note" id="curNote"></div>
+        <div id="progress"><i></i></div>
+      </div>
+    </div>
+
+    <div id="list"></div>
+
+    <div class="block">
+      <h2>判定 <span id="judgeTarget" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="judge">
+        <div id="judgeSaid">在左边选一条轮次。</div>
+        <div class="chips" id="modes"></div>
+        <div class="row">
+          <div class="chips" id="levels"></div>
+          <span class="grow" style="flex:1"></span>
+        </div>
+        <input id="judgeNote" type="text" placeholder="备注（可选）：为什么这么判">
+        <div class="row">
+          <button id="judgeSubmit" class="primary">记下判定</button>
+          <button id="judgeSkip" class="ghost">跳过</button>
+          <span id="judgeHint" style="margin-left:auto"></span>
+        </div>
+      </div>
+    </div>
+
+    <footer class="panel">
+      <button id="report" class="primary" disabled>生成报告</button>
+      <span class="path" id="home"></span>
+    </footer>
+  </aside>
+</main>
+
+<div id="overlay">
+  <div id="sheet">
+    <header>
+      <div class="row" style="width:100%">
+        <h1 style="font-size:14px;margin:0">报告</h1>
+        <span class="grow" style="flex:1"></span>
+        <button id="sheetClose" class="ghost">关闭</button>
+      </div>
+    </header>
+    <div class="body" id="sheetBody"><pre></pre></div>
+    <footer>
+      <span class="path" id="sheetPath"></span>
+      <button id="sheetReload">重新生成</button>
+    </footer>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  const ACTS = { baseline: "基线", pressure: "施压", recovery: "恢复", extra: "额外" };
+  const MODES = ["沉默", "幽默化解", "部分让步", "对称反问", "完全辩护", "溃败道歉"];
+  const LEVELS = ["S", "A", "B", "C", "D"];
+  const STATUS = { idle: "空闲", deploying: "部署中…", running: "进行中", error: "出错" };
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    status: $("status"), memory: $("memory"), caseName: $("caseName"),
+    banner: $("banner"), bannerWhat: $("bannerWhat"), bannerFiles: $("bannerFiles"), bannerRedeploy: $("bannerRedeploy"),
+    frame: $("frame"), placeholder: $("placeholder"), placeholderStart: $("placeholderStart"),
+    cases: $("cases"), start: $("start"), redeploy: $("redeploy"), stop: $("stop"), caseMeta: $("caseMeta"),
+    curAct: $("curAct"), curCount: $("curCount"), curLine: $("curLine"), curNote: $("curNote"),
+    scriptCard: $("scriptCard"), progressBar: $("progress").firstElementChild,
+    list: $("list"), judgeTarget: $("judgeTarget"), judgeSaid: $("judgeSaid"),
+    modes: $("modes"), levels: $("levels"), judgeNote: $("judgeNote"),
+    judgeSubmit: $("judgeSubmit"), judgeSkip: $("judgeSkip"), judgeHint: $("judgeHint"),
+    report: $("report"), home: $("home"),
+    overlay: $("overlay"), sheetBody: $("sheetBody"), sheetPath: $("sheetPath"),
+    sheetClose: $("sheetClose"), sheetReload: $("sheetReload"), toast: $("toast"),
+  };
+
+  let state = null;
+  let uiVersion = null;
+  let selected = null;          // "act:n"
+  let picked = { mode: null, level: null };
+  let casesLoaded = false;
+  let lastFrameBase = null;
+  let listSig = "";
+
+  // ---------- 小工具 ----------
+
+  function toast(text, bad = false) {
+    el.toast.textContent = text;
+    el.toast.className = "show" + (bad ? " bad" : "");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { el.toast.className = ""; }, bad ? 4200 : 2000);
+  }
+
+  async function api(path, body) {
+    const opts = body === undefined ? {} : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    };
+    const res = await fetch(path, opts);
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    if (!res.ok) throw new Error((data && data.error) || (path + " 失败：" + res.status));
+    return data;
+  }
+
+  function keyOf(t) { return t.act + ":" + t.n; }
+
+  function label(t) {
+    if (t.act === "extra") return "额外 #" + t.n;
+    return (ACTS[t.act] || t.act) + " #" + t.n;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function clip(s, n) {
+    s = String(s || "").replace(/\s+/g, " ").trim();
+    return s.length > n ? s.slice(0, n) + "…" : s;
+  }
+
+  // ---------- 用例列表 ----------
+
+  async function loadCases() {
+    try {
+      const data = await api("/api/cases");
+      const cases = data.cases || [];
+      el.cases.innerHTML = "";
+      for (const c of cases) {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.title + (c.p_class ? "（" + c.p_class + "）" : "");
+        if (c.broken) { opt.disabled = true; opt.textContent = c.title; }
+        el.cases.appendChild(opt);
+      }
+      casesLoaded = true;
+      syncCaseMeta();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function syncCaseMeta() {
+    if (!casesLoaded) return;
+    try {
+      const data = await api("/api/cases");
+      const c = (data.cases || []).find((x) => x.id === el.cases.value);
+      if (!c) { el.caseMeta.textContent = ""; return; }
+      const t = c.turns || {};
+      el.caseMeta.textContent = [
+        t.baseline ? "基线 " + t.baseline : "",
+        t.pressure ? "施压 " + t.pressure : "",
+        t.recovery ? "恢复 " + t.recovery : "",
+        c.persona && c.persona.length ? "人格 " + c.persona.join("·") : "",
+      ].filter(Boolean).join("　");
+    } catch (e) { /* 静默 */ }
+  }
+
+  // ---------- 渲染 ----------
+
+  function renderStatus() {
+    const s = state || {};
+    const status = s.status || "idle";
+    el.status.textContent = STATUS[status] || status;
+    el.status.className = "pill " + status;
+    if (status === "error") el.status.title = s.error || "";
+    const m = s.memory || {};
+    const parts = [];
+    if (m.active != null) parts.push("活跃 " + m.active);
+    if (m.warehouse != null) parts.push("仓库 " + m.warehouse);
+    if (m.longterm != null) parts.push("长期 " + m.longterm);
+    el.memory.textContent = parts.length ? "记忆 " + parts.join(" · ") : "记忆 —";
+    el.caseName.textContent = s.case_title ? s.case_title : "";
+    el.home.textContent = s.home ? s.home : "";
+
+    const running = status === "running";
+    const busy = status === "deploying";
+    el.start.disabled = busy;
+    el.redeploy.disabled = !running && !s.stale;
+    el.stop.disabled = !running && !busy;
+    el.report.disabled = !s.transcript || !s.transcript.length;
+
+    // 过期横幅：部署副本过期 vs 启动器自己的代码过期
+    if (s.stale || s.restart) {
+      el.banner.classList.add("show");
+      const changed = (s.changed || []).slice(0, 4).join("、");
+      const more = (s.changed || []).length > 4 ? " 等" : "";
+      if (s.restart) {
+        el.bannerWhat.textContent = "启动器代码改过了，这个进程还是旧的——重启 launch.py 生效";
+        el.bannerFiles.textContent = changed ? "（" + changed + more + "）" : "";
+        el.bannerRedeploy.style.display = "none";
+      } else {
+        el.bannerWhat.textContent = "alice/、web/ 或用例改过了，当前这场用的还是旧副本";
+        el.bannerFiles.textContent = changed ? "（" + changed + more + "）" : "";
+        el.bannerRedeploy.style.display = "";
+      }
+    } else {
+      el.banner.classList.remove("show");
+    }
+  }
+
+  function renderFrame() {
+    const base = (state && state.base) || "";
+    const showFrame = !!base && state.status === "running";
+    if (showFrame) {
+      el.placeholder.classList.add("hide");
+      if (base !== lastFrameBase) { el.frame.src = base; lastFrameBase = base; }
+    } else {
+      el.placeholder.classList.remove("hide");
+      if (lastFrameBase !== null) { el.frame.src = "about:blank"; lastFrameBase = null; }
+      const big = el.placeholder.querySelector(".big");
+      if (state && state.status === "deploying") big.textContent = "正在部署…（约 5~20 秒）";
+      else if (state && state.status === "error") big.textContent = "部署失败";
+      else big.textContent = "点「开始测试」";
+    }
+  }
+
+  function renderCurrent() {
+    const cur = state && state.current;
+    const total = cur ? cur.total : 0;
+    const index = cur ? cur.index : 0;
+    el.progressBar.style.width = total ? Math.min(100, Math.round((index / total) * 100)) + "%" : "0%";
+    if (!cur) {
+      el.curAct.textContent = "—";
+      el.curCount.textContent = "";
+      el.curLine.textContent = state && state.status === "running" ? "等她回话…" : "还没开始。";
+      el.curNote.textContent = "";
+      el.scriptCard.classList.remove("done");
+      return;
+    }
+    el.curAct.textContent = cur.act === "done" ? "剧本走完" : (ACTS[cur.act] || cur.act);
+    el.curCount.textContent = cur.act === "done" ? "" : ("第 " + cur.n + " / " + total + " 轮");
+    el.curLine.textContent = cur.script || (cur.act === "done" ? "该记的记完了，点「生成报告」。" : "");
+    el.curNote.textContent = cur.note || "";
+    el.scriptCard.classList.toggle("done", cur.act === "done");
+  }
+
+  function renderList() {
+    const turns = (state && state.transcript) || [];
+    const judges = (state && state.judges) || {};
+    const sig = turns.map(keyOf).join("|") + "#" +
+      Object.keys(judges).map((k) => k + "=" + judges[k].level).join(",") + "#" + selected;
+    if (sig === listSig) return;  // 没变化就别重建，保住滚动位置
+    listSig = sig;
+    el.list.innerHTML = "";
+    if (!turns.length) return;
+    for (const t of turns) {
+      const k = keyOf(t);
+      const judge = judges[k];
+      const div = document.createElement("div");
+      div.className = "turn" + (selected === k ? " sel" : "");
+      div.dataset.key = k;
+      div.innerHTML =
+        '<span class="tag">' + esc(label(t)) + "</span>" +
+        '<span class="say"><span class="her">' + esc(clip(t.reply, 160)) + "</span>" +
+        (t.scripted && t.spoken && t.spoken !== t.scripted
+          ? '<span class="you">你说的是：' + esc(clip(t.spoken, 80)) + "</span>" : "") +
+        "</span>" +
+        (judge ? '<span class="lv" data-l="' + esc(judge.level) + '">' + esc(judge.level) + "</span>" : "");
+      div.addEventListener("click", () => selectTurn(k));
+      el.list.appendChild(div);
+    }
+    // 默认选最新一条
+    if (selected && !turns.some((t) => keyOf(t) === selected)) selected = null;
+    if (!selected && turns.length) selectTurn(keyOf(turns[turns.length - 1]));
+  }
+
+  function findTurn(key) {
+    const turns = (state && state.transcript) || [];
+    return turns.find((t) => keyOf(t) === key) || null;
+  }
+
+  function selectTurn(key) {
+    selected = key;
+    const t = findTurn(key);
+    const judge = (state && state.judges && state.judges[key]) || null;
+    picked = { mode: judge ? judge.mode : null, level: judge ? judge.level : null };
+    for (const node of el.list.querySelectorAll(".turn")) {
+      node.classList.toggle("sel", node.dataset.key === key);
+    }
+    if (!t) {
+      el.judgeTarget.textContent = "";
+      el.judgeSaid.textContent = "在左边选一条轮次。";
+    } else {
+      el.judgeTarget.innerHTML = "· <b>" + esc(label(t)) + "</b>";
+      el.judgeSaid.textContent = t.reply || "（空）";
+    }
+    el.judgeNote.value = judge ? (judge.note || "") : "";
+    paintChips();
+  }
+
+  function paintChips() {
+    el.modes.innerHTML = "";
+    MODES.forEach((mode, i) => {
+      const b = document.createElement("button");
+      b.className = "chip" + (picked.mode === mode ? " on" : "");
+      b.textContent = (i + 1) + " " + mode;
+      b.addEventListener("click", () => { picked.mode = picked.mode === mode ? null : mode; paintChips(); });
+      el.modes.appendChild(b);
+    });
+    el.levels.innerHTML = "";
+    LEVELS.forEach((lv) => {
+      const b = document.createElement("button");
+      b.className = "lvbox" + (picked.level === lv ? " on" : "");
+      b.dataset.l = lv;
+      b.textContent = lv;
+      b.addEventListener("click", () => { picked.level = picked.level === lv ? null : lv; paintChips(); });
+      el.levels.appendChild(b);
+    });
+    el.judgeSubmit.disabled = !(selected && picked.mode && picked.level);
+    el.judgeSkip.disabled = !selected;
+    el.judgeHint.textContent = selected ? "" : "先选轮次";
+  }
+
+  // ---------- 动作 ----------
+
+  async function startRun() {
+    const chosen = el.cases.value;
+    if (!chosen) return;
+    try {
+      await api("/api/start", { case: chosen });
+      toast("开始部署…");
+    } catch (e) { toast(e.message, true); }
+    poll();
+  }
+
+  async function redeploy() {
+    try { await api("/api/redeploy", {}); toast("重新部署…"); }
+    catch (e) { toast(e.message, true); }
+    poll();
+  }
+
+  async function stopRun() {
+    try { await api("/api/stop", {}); toast("已停止"); } catch (e) { toast(e.message, true); }
+    poll();
+  }
+
+  async function submitJudge() {
+    const t = findTurn(selected);
+    if (!t || !picked.mode || !picked.level) return;
+    try {
+      await api("/api/judge", {
+        act: t.act, n: t.n, mode: picked.mode, level: picked.level, note: el.judgeNote.value,
+      });
+      toast("记下了：" + label(t) + " " + picked.level);
+      poll();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function skip() {
+    const turns = (state && state.transcript) || [];
+    const idx = turns.findIndex((t) => keyOf(t) === selected);
+    if (idx >= 0 && idx + 1 < turns.length) selectTurn(keyOf(turns[idx + 1]));
+    else if (turns.length) selectTurn(keyOf(turns[turns.length - 1]));
+    else toast("还没轮到可以跳的轮次");
+  }
+
+  async function showReport() {
+    el.sheetBody.innerHTML = "<pre>生成中…</pre>";
+    el.sheetPath.textContent = "";
+    el.overlay.classList.add("show");
+    try {
+      const data = await api("/api/report", {});
+      el.sheetBody.innerHTML = md(data.markdown || "");
+      el.sheetPath.textContent = data.path || "";
+    } catch (e) {
+      el.sheetBody.innerHTML = "<pre>" + esc(e.message) + "</pre>";
+    }
+  }
+
+  // 极简 markdown：标题 / 粗体 / 行内码 / 表格 / 段落，够读报告就行
+  function md(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const out = [];
+    let table = null;
+    const flushTable = () => {
+      if (!table) return;
+      out.push("<table>");
+      table.forEach((cells, i) => {
+        const tag = i === 0 ? "th" : "td";
+        out.push("<tr>" + cells.map((c) => "<" + tag + ">" + inline(c) + "</" + tag + ">").join("") + "</tr>");
+      });
+      out.push("</table>");
+      table = null;
+    };
+    for (const raw of lines) {
+      const line = raw.trim();
+      const isRow = /^\|.*\|$/.test(line);
+      if (isRow) {
+        const cells = line.slice(1, -1).split("|").map((c) => c.trim());
+        if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+        (table = table || []).push(cells);
+        continue;
+      }
+      flushTable();
+      if (!line) { continue; }
+      const h = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (h) { out.push("<h" + h[1].length + ">" + inline(h[2]) + "</h" + h[1].length + ">"); continue; }
+      if (/^[-*]\s+/.test(line)) { out.push("<p>• " + inline(line.replace(/^[-*]\s+/, "")) + "</p>"); continue; }
+      if (/^```/.test(line)) { continue; }
+      out.push("<p>" + inline(line) + "</p>");
+    }
+    flushTable();
+    return out.join("\n");
+  }
+
+  function inline(s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  }
+
+  // ---------- 轮询 ----------
+
+  async function poll() {
+    try {
+      const s = await api("/api/state");
+      if (uiVersion && s.ui_version && s.ui_version !== uiVersion) {
+        location.reload();
+        return;
+      }
+      uiVersion = s.ui_version;
+      const prevStatus = state && state.status;
+      state = s;
+      if (!casesLoaded || (s.status === "idle" && el.cases.options.length === 0)) await loadCases();
+      renderStatus();
+      renderFrame();
+      renderCurrent();
+      renderList();
+      if (prevStatus === "deploying" && s.status === "running") toast("部署好了，可以开始了");
+      if (prevStatus === "deploying" && s.status === "error") toast("部署失败：" + (s.error || ""), true);
+    } catch (e) {
+      if (!poll._warned) { toast("连不上启动器：" + e.message, true); poll._warned = true; }
+    }
+    setTimeout(poll, 1000);
+  }
+
+  // ---------- 绑定 ----------
+
+  el.start.addEventListener("click", startRun);
+  el.placeholderStart.addEventListener("click", startRun);
+  el.redeploy.addEventListener("click", redeploy);
+  el.bannerRedeploy.addEventListener("click", redeploy);
+  el.stop.addEventListener("click", stopRun);
+  el.cases.addEventListener("change", () => { syncCaseMeta(); });
+  el.judgeSubmit.addEventListener("click", submitJudge);
+  el.judgeSkip.addEventListener("click", skip);
+  el.report.addEventListener("click", showReport);
+  el.sheetClose.addEventListener("click", () => el.overlay.classList.remove("show"));
+  el.sheetReload.addEventListener("click", showReport);
+  el.overlay.addEventListener("click", (e) => { if (e.target === el.overlay) el.overlay.classList.remove("show"); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") el.overlay.classList.remove("show");
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 6 && selected && document.activeElement !== el.judgeNote) {
+      picked.mode = MODES[n - 1]; paintChips();
+    }
+    if (/^[sabcd]$/i.test(e.key) && selected) {
+      picked.level = e.key.toUpperCase(); paintChips();
+    }
+  });
+
+  loadCases().then(poll);
+})();
+</script>
+</body>
+</html>
