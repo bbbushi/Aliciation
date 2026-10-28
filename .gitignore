@@ -6,3 +6,4 @@ config.toml
 .DS_Store
 docs/harness研究/插件参考/Cortico/
 tests/.sessions/
+dist/

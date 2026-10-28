@@ -25,4 +25,5 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 2026-10-28 DSH：初始化语义定为「从头开始」——首开 / `?setup` / 人格面板「重新初始化」都会丢弃旧对话与记忆，旧数据整体归档到 `data/archive/<时间戳>[-n]/`（`alice.db`+`persona/`+`note.txt` 记丢弃量）；想接着聊走「以她开始」。
 - 同批：`POST /api/reset`；`/api/seed`、`/api/persona` 接受 `reset`；标签生成改「先生成后清空」（`persona.generate_seed_md`，LLM 失败时旧数据分毫不动）。
 - GUI：欢迎页显示丢弃警告；人格面板加「重新初始化」；已入库 `050074e`（GUI 初始化页+人格导入），本次在其上继续。
+- 打包：`dist/alice-harness-20261028.zip`（516K，45 文件）＝ alice/+web/+tests/pressure/+少量 docs；不带 data/、config.toml、harness研究、.sessions。`dist/` 已进 .gitignore，不要入库。
 - 雷：`config.toml` 的 API key 已过期（chat 401）；本机无 `timeout` 命令、无 Chrome；`data/` 里现有 22 轮对话，任何重置操作之前先确认。
