@@ -1,14 +1,18 @@
 """会话服务层：GUI 与未来渠道共用的会话入口（单写者）。"""
 from __future__ import annotations
 
+import shutil
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from . import config as appconfig
 from . import consolidation, loop, metrics, persona, skills, thought
 from .config import Config, load
 from .llm import make_client
 from .store import Store
+
+ARCHIVE_ROOT = appconfig.DATA_DIR / "archive"  # 初始化时把旧会话整体搬到这里
 
 
 def _iso(ts) -> str | None:
@@ -112,15 +116,65 @@ class ChatService:
             events.extend(self._watchers_due())
         return events
 
-    def seed(self, tags: list[str]) -> dict:
+    def seed(self, tags: list[str], reset: bool = False) -> dict:
+        """reset=True 表示「初始化」：先归档旧会话（对话/记忆/人格），再装新人格。"""
         with self._lock:
-            persona.seed_from_tags(self.store, self.client, self.cfg, tags)
+            if reset:
+                # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
+                md = persona.generate_seed_md(self.client, self.cfg, tags)
+                self._archive_locked()
+                persona.install_persona(
+                    self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
+            else:
+                persona.seed_from_tags(self.store, self.client, self.cfg, tags)
         return self.state()
 
-    def install_persona(self, md_text: str, source: str = "用户导入") -> dict:
+    def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False) -> dict:
         with self._lock:
+            if reset:
+                self._archive_locked()
             persona.install_persona(self.store, self.cfg, md_text, source=source)
         return self.state()
+
+    def reset_session(self) -> dict:
+        """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
+        with self._lock:
+            self._archive_locked()
+            return self.state()
+
+    def _archive_locked(self) -> Path | None:
+        """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
+        turns = self._turn_count()
+        mem = self._memory_stats()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = ARCHIVE_ROOT / stamp
+        n = 2
+        while dest.exists():  # 同一秒内多次初始化也不能盖掉上一份归档
+            dest = ARCHIVE_ROOT / f"{stamp}-{n}"
+            n += 1
+        self.store.close()
+        dest.mkdir(parents=True)
+        moved = False
+        for name in ("alice.db", "alice.db-wal", "alice.db-shm"):
+            src = appconfig.DATA_DIR / name
+            if src.exists():
+                shutil.move(str(src), str(dest / name))
+                moved = True
+        if appconfig.PERSONA_DIR.exists():
+            shutil.move(str(appconfig.PERSONA_DIR), str(dest / "persona"))
+            moved = True
+        if not moved:
+            dest.rmdir()
+            self.store = Store(appconfig.DB_PATH)
+            return None
+        (dest / "note.txt").write_text(
+            f"初始化归档：{datetime.now():%Y-%m-%d %H:%M}\n"
+            f"丢弃了 {turns} 轮对话、"
+            f"{mem['active'] + mem['warehouse'] + mem['longterm']} 条记忆、{mem['skills']} 个技能。\n",
+            encoding="utf-8",
+        )
+        self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
+        return dest
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None) -> dict:
         """处理一轮对话；on_delta/on_tool/on_reasoning 为流式回调（见 loop.chat_turn）。"""

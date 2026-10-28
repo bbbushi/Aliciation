@@ -88,20 +88,22 @@ def make_handler(svc: ChatService):
                 body = self._body()
                 md_text = str(body.get("persona_md") or "").strip()
                 source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
+                reset = bool(body.get("reset"))
                 if not md_text:
                     self._json({"error": "人格文档是空的"}, 400)
                 else:
                     try:
-                        self._json(svc.install_persona(md_text, source))
+                        self._json(svc.install_persona(md_text, source, reset=reset))
                     except ValueError as e:
                         self._json({"error": str(e)}, 400)
             elif path == "/api/seed":
                 body = self._body()
                 md_text = str(body.get("persona_md") or "").strip()
                 source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
+                reset = bool(body.get("reset"))
                 if md_text:  # 自定义初始人格导入（不走 LLM）
                     try:
-                        self._json(svc.install_persona(md_text, source))
+                        self._json(svc.install_persona(md_text, source, reset=reset))
                     except ValueError as e:
                         self._json({"error": str(e)}, 400)
                 else:
@@ -110,9 +112,11 @@ def make_handler(svc: ChatService):
                         self._json({"error": "请选择 2~4 个有效标签"}, 400)
                     else:
                         try:
-                            self._json(svc.seed(tags))
+                            self._json(svc.seed(tags, reset=reset))
                         except Exception as e:  # 种子生成要走 LLM，失败须回传可读错误
                             self._json({"error": f"人格底色生成失败：{e}"}, 502)
+            elif path == "/api/reset":  # 丢掉当前会话（旧数据归档），回到第一次见面
+                self._json(svc.reset_session())
             elif path == "/api/chat":
                 text = str(self._body().get("text") or "").strip()
                 if not text:

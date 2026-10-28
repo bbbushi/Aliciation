@@ -22,7 +22,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-28 DSH：GUI 初始化页重做（标签或人格文档导入，拖放/预览/校验；`?setup` 可主动回到初始化页）+ 聊天页「人格」面板（查看/下载/替换，旧版自动快照）。
-- 同批：`persona.install_persona` 两种文档都收（无「## 底色」就把整份文档放进底色层，适合角色卡），`source` 记进 CHANGELOG；server 新增 `GET/POST /api/persona`。
-- ZCode 的 v0.2 P0（`alice/thought.py` 思辨层 + store `kind='stance'` + cli/retrieval/config 改动）随本次一并入库——不带上 HEAD 的 service.py 就会 import 失败。
-- 雷：`config.toml` 的 API key 已过期（chat 返回 401），真机对话要先换 key；本机没有 `timeout` 命令，也没有 Chrome/Chromium。
+- 2026-10-28 DSH：初始化语义定为「从头开始」——首开 / `?setup` / 人格面板「重新初始化」都会丢弃旧对话与记忆，旧数据整体归档到 `data/archive/<时间戳>[-n]/`（`alice.db`+`persona/`+`note.txt` 记丢弃量）；想接着聊走「以她开始」。
+- 同批：`POST /api/reset`；`/api/seed`、`/api/persona` 接受 `reset`；标签生成改「先生成后清空」（`persona.generate_seed_md`，LLM 失败时旧数据分毫不动）。
+- GUI：欢迎页显示丢弃警告；人格面板加「重新初始化」；已入库 `050074e`（GUI 初始化页+人格导入），本次在其上继续。
+- 雷：`config.toml` 的 API key 已过期（chat 401）；本机无 `timeout` 命令、无 Chrome；`data/` 里现有 22 轮对话，任何重置操作之前先确认。

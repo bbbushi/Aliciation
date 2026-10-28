@@ -159,10 +159,22 @@ function showWelcome(s, reseting = false) {
   $("#welcome").classList.remove("hidden");
   $("#seed-name").textContent = s.name;
   $("#w-sub").textContent = reseting
-    ? "正在重新设置人格；已有的对话和记忆都不会丢。"
+    ? "正在重新设置人格。初始化＝从头开始，旧会话会被归档。"
     : s.persona && s.persona.installed
       ? "她已经有一个先装好的人格。也可以换一个人格再开始。"
       : "先定下她的底色，再开始。";
+
+  /* 初始化＝新会话：旧对话和记忆归档（data/archive/）后丢弃 */
+  const mem = s.memory || {};
+  const lost = (mem.active || 0) + (mem.warehouse || 0) + (mem.longterm || 0);
+  const warn = $("#w-warn");
+  if (s.turns > 0 || lost > 0) {
+    warn.textContent = `初始化会丢弃现有的 ${s.turns} 轮对话与 ${lost} 条记忆` +
+      "（先归档到 data/archive/，日后还能翻出来）。想接着现在这个她聊，就点上面的「以她开始」。";
+    warn.classList.remove("hidden");
+  } else {
+    warn.classList.add("hidden");
+  }
 
   if (s.persona && s.persona.installed) {
     $("#current-persona").classList.remove("hidden");
@@ -197,7 +209,7 @@ function showWelcome(s, reseting = false) {
     btn.disabled = true;
     btn.textContent = "生成底色中…";
     try {
-      const st = await postJSON("/api/seed", { tags: [...picked] });
+      const st = await postJSON("/api/seed", { tags: [...picked], reset: true });
       await startChat(st);
     } catch (e) {
       btn.disabled = false;
@@ -221,7 +233,7 @@ function showWelcome(s, reseting = false) {
       back: () => closeModal(),
     },
     async (md, src) => {
-      const st = await postJSON("/api/persona", { persona_md: md, source: src });
+      const st = await postJSON("/api/persona", { persona_md: md, source: src, reset: true });
       await startChat(st);
     },
   );
@@ -371,6 +383,23 @@ async function openPersonaView() {
   openModal("当前人格", meta, body, [
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
+    {
+      label: "重新初始化",
+      cls: "btn ghost",
+      onClick: async () => {
+        const ok = window.confirm(
+          `重新初始化＝丢掉这 ${p.turns || 0} 轮对话和全部记忆，从「第一次见面」重新开始。\n` +
+            "旧数据会先归档到 data/archive/，之后还能找回。确定吗？",
+        );
+        if (!ok) return;
+        try {
+          await postJSON("/api/reset", {});
+          location.href = "/?setup";
+        } catch (e) {
+          toast(`重置失败：${e.message}`);
+        }
+      },
+    },
     { label: "关闭", onClick: closeModal },
   ]);
 }

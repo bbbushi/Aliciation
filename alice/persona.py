@@ -87,18 +87,27 @@ def persona_md() -> str | None:
     return None
 
 
-def seed_from_tags(store: Store, client, cfg: Config, tags: list[str]) -> Path:
-    """由标签生成人格底色并落盘。"""
+def generate_seed_md(client, cfg: Config, tags: list[str]) -> str:
+    """由标签生成底色正文（只生成、不落盘）。
+
+    初始化时先要这份正文，确认 LLM 能给出结果之后才清空旧会话——免得生成失败
+    而旧对话已经被归档走。结构不合规则退回纯模板，保证正文永远可用。
+    """
     prompt = SEED_PROMPT.format(tags="、".join(tags), name=cfg.persona.name)
     from .llm import chat_text
 
     md = chat_text(client, cfg, [{"role": "user", "content": prompt}])
     if "## 底色" not in md or "## 生长" not in md:
-        # 结构不合规则退回纯模板，保证文件永远可用
         md = (
             f"# {cfg.persona.name} 的人格\n\n"
             f"## 底色 · 气质与风格\n\n（标签：{'、'.join(tags)}）\n\n{GROWTH_PLACEHOLDER}"
         )
+    return md
+
+
+def seed_from_tags(store: Store, client, cfg: Config, tags: list[str]) -> Path:
+    """由标签生成人格底色并落盘。"""
+    md = generate_seed_md(client, cfg, tags)
     current = persona_md()
     if current:  # 重定底色也留旧版快照：标签生成与文档导入走同一条可回滚路径
         version = int(store.meta_get("persona_version", "0") or 0) + 1
