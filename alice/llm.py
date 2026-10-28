@@ -28,6 +28,31 @@ def thinking_disabled(cfg: Config) -> bool:
     return cfg.llm.thinking == "off" or cfg.llm.disable_thinking
 
 
+def safe_provider_error(exc: Exception) -> str:
+    """只返回固定分类，供应商异常正文可能含 URL、请求内容或凭据。"""
+    status = getattr(exc, "status_code", None)
+    if status == 401:
+        return "令牌无效或已过期"
+    if status == 403:
+        return "当前令牌没有访问权限"
+    if status == 402:
+        return "账户余额不足"
+    if status == 404:
+        return "模型或接口地址不存在"
+    if status == 429:
+        return "请求受限或账户额度不足"
+    if status in (400, 422):
+        return "供应商拒绝请求，请核对接口地址与模型名称"
+    if isinstance(status, int) and status >= 500:
+        return "供应商服务暂时不可用"
+    name = type(exc).__name__
+    if name in ("APITimeoutError", "TimeoutException", "ReadTimeout", "ConnectTimeout") or isinstance(exc, TimeoutError):
+        return "连接超时，请检查网络后重试"
+    if name in ("APIConnectionError", "ConnectError", "ConnectionError") or isinstance(exc, ConnectionError):
+        return "无法连接接口地址，请检查网络与地址"
+    return "模型请求失败，请检查接口地址、模型和账户状态"
+
+
 def chat(
     client,
     cfg: Config,
@@ -59,7 +84,7 @@ def chat(
             if attempt < 2:
                 import time
                 time.sleep(2 * (attempt + 1))  # 2s、4s 退避
-    raise RuntimeError(f"LLM 调用失败：{last_err}") from last_err
+    raise RuntimeError(f"LLM 调用失败：{safe_provider_error(last_err)}") from None
 
 
 def chat_text(client, cfg: Config, messages: list[dict], *, model: str | None = None) -> str:

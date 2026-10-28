@@ -178,7 +178,6 @@ async function startChat(s) {
   h.turns.forEach((t) => bubble(t.role, t.content));
   scrollBottom();
   $("#input").focus();
-  loadPanel();
 }
 
 /* ---------- 初始化（第一次打开） ---------- */
@@ -501,120 +500,234 @@ document.addEventListener("keydown", (e) => {
 });
 $("#persona-btn").onclick = () => openPersonaView();
 
-/* ---------- 监测仪 ---------- */
+/* ---------- 设置 ---------- */
 
-function sparkline(values) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "spark");
-  svg.setAttribute("viewBox", "0 0 120 26");
-  if (values.length >= 2) {
-    const min = Math.min(...values), max = Math.max(...values);
-    const span = max - min || 1;
-    const pts = values.map((v, i) => {
-      const x = (i / (values.length - 1)) * 118 + 1;
-      const y = 23 - ((v - min) / span) * 20;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-    const poly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-    poly.setAttribute("points", pts);
-    poly.setAttribute("fill", "none");
-    poly.setAttribute("stroke", "#b0895e");
-    poly.setAttribute("stroke-width", "1.5");
-    svg.appendChild(poly);
-  }
-  return svg;
+let restartCommand = null;
+
+function showRestartCommand(command) {
+  if (typeof command === "string" && command.trim()) restartCommand = command;
+  $("#restart-command").textContent = restartCommand
+    || "未能读取本次启动命令。请使用启动此服务时的原命令，并保留 --config 和 --port 参数。";
 }
 
-function metricCard(name, c) {
-  const card = document.createElement("div");
-  card.className = "card";
-
-  const head = document.createElement("div");
-  head.className = "card-head";
-  const nm = document.createElement("div");
-  nm.className = "card-name";
-  nm.textContent = c.title;
-  const x = document.createElement("button");
-  x.className = "card-x";
-  x.title = "移除";
-  x.textContent = "×";
-  x.onclick = () => toggleMetric(name, false);
-  head.appendChild(nm);
-  head.appendChild(x);
-
-  const val = document.createElement("div");
-  val.className = "card-val";
-  if (c.last != null) {
-    val.textContent = Math.round(c.last);
-    const unit = document.createElement("span");
-    unit.className = "unit";
-    unit.textContent = c.unit;
-    val.appendChild(unit);
-  } else {
-    val.textContent = "—";
-  }
-
-  const sub = document.createElement("div");
-  sub.className = "card-sub";
-  sub.textContent = c.last != null
-    ? `均值 ${Math.round(c.avg)} · 近 ${c.history.length} 轮` + (c.detail ? ` · ${c.detail}` : "")
-    : "等待数据";
-
-  card.appendChild(head);
-  card.appendChild(val);
-  card.appendChild(sub);
-  card.appendChild(sparkline(c.history || []));
-  card.title = c.desc;
-  return card;
-}
-
-function renderPanel(snapshot) {
-  if (!snapshot || !snapshot.cards) return;
-  const cardsBox = $("#cards");
-  const poolBox = $("#pool");
-  cardsBox.textContent = "";
-  poolBox.textContent = "";
-  for (const [name, c] of Object.entries(snapshot.cards)) {
-    if (c.enabled) cardsBox.appendChild(metricCard(name, c));
-    else {
-      const chip = document.createElement("div");
-      chip.className = "chip";
-      chip.textContent = `+ ${c.title}`;
-      chip.title = c.desc + (c.judge ? "（每轮一次廉价评审）" : "（零成本）");
-      chip.onclick = () => toggleMetric(name, true);
-      poolBox.appendChild(chip);
-    }
-  }
-}
-
-async function loadPanel() {
+async function loadRuntimeInfo() {
+  restartCommand = null;
   try {
-    const d = await api("/api/metrics");
-    $("#thinking").value = d.thinking;
-    renderPanel(d.snapshot);
-  } catch (e) { /* 面板失败不影响聊天 */ }
+    const info = await api("/api/runtime", { headers: { "X-Alice-Intent": "runtime" } });
+    showRestartCommand(info.restart_command);
+  } catch (e) {
+    showRestartCommand(null);
+  }
 }
 
-async function toggleMetric(name, on) {
+async function loadSettings() {
+  const thinking = $("#thinking");
+  thinking.disabled = true;
   try {
-    const d = await postJSON("/api/metrics/toggle", { module: name, on });
-    renderPanel(d.snapshot);
-  } catch (e) { /* 忽略 */ }
+    const d = await api("/api/settings");
+    if (d.thinking !== "on" && d.thinking !== "off") throw new Error("思考深度状态无效");
+    thinking.value = d.thinking;
+    thinking.disabled = false;
+  } catch (e) {
+    toast("读取设置失败：" + e.message, 4000);
+  }
 }
 
-$("#panel-btn").onclick = () => {
-  $("#panel").classList.toggle("hidden");
-  loadPanel();
-};
+function openSettings() {
+  $("#settings-modal").classList.remove("hidden");
+  loadSettings();
+  loadModelSettings();
+  loadRuntimeInfo();
+}
+
+function closeSettings() {
+  $("#settings-modal").classList.add("hidden");
+}
+
+$("#settings-btn").onclick = openSettings;
+$("#welcome-settings-btn").onclick = openSettings;
+$("#settings-x").onclick = closeSettings;
+$("#settings-modal").addEventListener("click", (e) => {
+  if (e.target.id === "settings-modal") closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#settings-modal").classList.contains("hidden")) closeSettings();
+});
 
 $("#thinking").onchange = async () => {
+  const thinking = $("#thinking");
+  thinking.disabled = true;
   try {
-    await postJSON("/api/settings", { thinking: $("#thinking").value });
+    const d = await postJSON("/api/settings", { thinking: thinking.value });
+    thinking.value = d.thinking;
+    thinking.disabled = false;
   } catch (e) {
     toast(e.message);
-    loadPanel();
+    loadSettings();
   }
 };
+
+const MODEL_PRESETS = {
+  zhipu: {
+    base_url: "https://open.bigmodel.cn/api/paas/v4/",
+    chat_model: "glm-4.6",
+    cheap_model: "glm-4.5-flash",
+  },
+  deepseek: {
+    base_url: "https://api.deepseek.com",
+    chat_model: "deepseek-v4-pro",
+    cheap_model: "deepseek-flash",
+  },
+};
+const MODEL_IDS = ["#model-provider", "#model-base-url", "#model-chat", "#model-cheap",
+  "#model-key-mode", "#model-test", "#model-save"];
+let modelRevision = null;
+let modelWorking = false;
+
+function modelBusy(on) {
+  modelWorking = on;
+  MODEL_IDS.forEach((id) => { $(id).disabled = on || !modelRevision; });
+  $("#model-key").disabled = on || !modelRevision || $("#model-key-mode").value !== "replace";
+}
+
+function modelResult(message, kind = "") {
+  const el = $("#model-result");
+  el.textContent = message;
+  el.className = "settings-result" + (kind ? ` ${kind}` : "");
+}
+
+async function loadModelSettings() {
+  if (modelWorking) return;
+  modelRevision = null;
+  modelBusy(true);
+  modelResult("正在读取本机配置…");
+  try {
+    const d = await api("/api/model-config", {
+      headers: { "X-Alice-Intent": "model-config" },
+    });
+    modelRevision = d.revision;
+    $("#model-provider").value = d.provider || "custom";
+    $("#model-base-url").value = d.base_url || "";
+    $("#model-chat").value = d.chat_model || "";
+    $("#model-cheap").value = d.cheap_model || "";
+    $("#model-key-mode").value = "keep";
+    $("#model-key").value = "";
+    const source = d.key_source === "file" ? "配置文件" : d.key_source === "environment" ? "环境变量" : "";
+    $("#model-key-status").textContent = d.key_present
+      ? `当前密钥已配置（${source}），不会回显。`
+      : "当前没有可用密钥；请选择“替换密钥”。";
+    modelResult("");
+  } catch (e) {
+    modelResult(`读取失败：${e.message}`, "error");
+  } finally {
+    modelBusy(false);
+  }
+}
+
+$("#model-provider").onchange = () => {
+  const preset = MODEL_PRESETS[$("#model-provider").value];
+  if (!preset) return;
+  $("#model-base-url").value = preset.base_url;
+  $("#model-chat").value = preset.chat_model;
+  $("#model-cheap").value = preset.cheap_model;
+  modelResult("已填入预设建议值；保存前可继续修改。", "");
+};
+
+$("#model-key-mode").onchange = () => {
+  $("#model-key").disabled = modelWorking || $("#model-key-mode").value !== "replace";
+  if ($("#model-key-mode").value !== "replace") $("#model-key").value = "";
+};
+
+function modelPayload() {
+  return {
+    provider: $("#model-provider").value,
+    base_url: $("#model-base-url").value.trim(),
+    chat_model: $("#model-chat").value.trim(),
+    cheap_model: $("#model-cheap").value.trim(),
+    replace_api_key: $("#model-key-mode").value === "replace",
+    api_key: $("#model-key-mode").value === "replace" ? $("#model-key").value : "",
+    revision: modelRevision,
+  };
+}
+
+async function postModel(path, payload) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Alice-Intent": "model-config" },
+    body: JSON.stringify(payload),
+  });
+}
+
+$("#model-test").onclick = async () => {
+  if (!modelRevision || modelWorking) return;
+  modelBusy(true);
+  modelResult("正在用候选配置测试两个模型，可能需要几十秒…");
+  try {
+    const d = await postModel("/api/model-config/test", modelPayload());
+    modelResult(d.message || "候选连接可用。", "ok");
+  } catch (e) {
+    modelResult(`候选连接失败：${e.message}；当前配置未改变。`, "error");
+  } finally {
+    modelBusy(false);
+  }
+};
+
+$("#model-save").onclick = async () => {
+  if (!modelRevision || modelWorking) return;
+  modelBusy(true);
+  modelResult("正在验证候选配置并保存；当前对话轮次会先完成…");
+  try {
+    const d = await postModel("/api/model-config", modelPayload());
+    modelRevision = d.revision;
+    $("#model-key-mode").value = "keep";
+    $("#model-key").value = "";
+    $("#model-key-status").textContent = "当前密钥已配置，不会回显。";
+    modelResult("已保存；随后开始的轮次立即使用新配置，无需重启。", "ok");
+  } catch (e) {
+    modelResult(`保存失败：${e.message}；请关闭设置后重新打开，核对当前配置。`, "error");
+  } finally {
+    modelBusy(false);
+  }
+};
+
+$("#shutdown-btn").onclick = async () => {
+  const ok = window.confirm("确定关闭 Alice 服务吗？\n正在进行的回复与记忆整理会完成，然后服务进程退出。关闭浏览器标签页本身不会退出服务。");
+  if (!ok) return;
+  $("#settings-modal").classList.add("hidden");
+  $("#shutdown-screen").classList.remove("hidden");
+  $("#shutdown-title").textContent = "正在关闭 Alice";
+  $("#shutdown-state").textContent = "正在等待当前回复完成，并整理本机记忆…";
+  $("#shutdown-return").classList.add("hidden");
+  showRestartCommand(restartCommand);
+  $("#shutdown-btn").disabled = true;
+  $("#send").disabled = true;
+  $("#input").disabled = true;
+  try {
+    const r = await fetch("/api/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Alice-Intent": "shutdown" },
+      body: "{}",
+    });
+    const d = await r.json().catch(() => ({}));
+    showRestartCommand(d.restart_command);
+    if (r.ok && d.status === "closed") {
+      $("#shutdown-title").textContent = "Alice 服务已退出";
+      $("#shutdown-state").textContent = "当前回复和退出前整理已完成；对话与记忆保存在本机。";
+    } else if (d.status === "closed_with_warning") {
+      $("#shutdown-title").textContent = "服务已退出，记忆整理未完成";
+      $("#shutdown-state").textContent = d.error || "原始对话已保存在本机，重新启动后可继续整理。";
+    } else {
+      $("#shutdown-title").textContent = "退出失败或未能确认";
+      $("#shutdown-state").textContent = d.error || `服务器返回 HTTP ${r.status}；请检查本机进程与数据。`;
+      $("#shutdown-return").classList.remove("hidden");
+    }
+  } catch (e) {
+    $("#shutdown-title").textContent = "无法确认服务是否已退出";
+    $("#shutdown-state").textContent = "关闭请求的连接已中断。请在终端检查进程，再决定是否重新启动；不要盲目重发正在进行的对话。";
+    $("#shutdown-return").classList.remove("hidden");
+  }
+};
+$("#shutdown-return").onclick = () => location.reload();
 
 /* ---------- 发送与流式接收 ---------- */
 
@@ -652,7 +765,6 @@ function handleEvent(ev, node) {
     if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
     if (!raw().trim()) txt.textContent = "（沉默）";
     renderMemory(ev.memory);
-    if (ev.metrics) renderPanel(ev.metrics);
   } else if (ev.type === "error") {
     if (!raw().trim() && !txt.textContent.trim()) node.remove();
     sysline(ev.message);

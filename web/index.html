@@ -11,6 +11,7 @@
 <!-- 初始化：第一次打开（还没有任何对话）时出现 -->
 <div id="welcome" class="screen hidden">
   <div class="welcome-card">
+    <div class="welcome-tools"><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
     <div class="w-head">
       <h1>和 <span id="seed-name">Alice</span> 开始</h1>
       <p id="w-sub">这是你们的第一个会话。</p>
@@ -63,7 +64,7 @@
       <div class="head-right">
         <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
         <button id="persona-btn" class="btn ghost" title="看人格、换人格">人格</button>
-        <button id="panel-btn" class="btn ghost" title="监测仪">监测</button>
+        <button id="settings-btn" class="btn ghost" type="button">设置</button>
       </div>
     </header>
     <main id="msgs"></main>
@@ -72,25 +73,6 @@
       <button id="send" class="btn primary">发送</button>
     </footer>
   </div>
-
-  <aside id="panel" class="hidden">
-    <div class="panel-sec">
-      <div class="panel-title">思考深度</div>
-      <select id="thinking">
-        <option value="on">开（默认）</option>
-        <option value="off">关（更省 token）</option>
-      </select>
-      <div class="panel-hint">关：跳过思考过程，回复更快、输入 token 大幅下降；随时可切回。</div>
-    </div>
-
-    <div class="panel-sec">
-      <div class="panel-title">监测仪</div>
-      <div id="cards"></div>
-      <div class="panel-title small">添加指标</div>
-      <div id="pool" class="chips"></div>
-      <div class="panel-hint">评审型指标每轮对话后用廉价模型评审一次。</div>
-    </div>
-  </aside>
 </div>
 
 <!-- 人格弹层：查看当前人格 / 替换 -->
@@ -103,6 +85,70 @@
     <div class="modal-meta" id="modal-meta"></div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal-card settings-card">
+    <div class="modal-head">
+      <div class="modal-title" id="settings-title">设置</div>
+      <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
+    </div>
+    <div class="modal-body settings-body">
+      <section class="settings-section">
+        <label class="panel-title" for="thinking">思考深度</label>
+        <select id="thinking" disabled>
+          <option value="on">开（默认）</option>
+          <option value="off">关（更省 token）</option>
+        </select>
+        <div class="settings-hint">关：跳过对话的思考过程，回复更快；随时可切回。</div>
+      </section>
+      <section id="model-settings" class="settings-section">
+        <div class="panel-title">模型接口</div>
+        <div class="settings-hint">预设只填入可编辑的建议值；打开设置不会改变当前配置。保存时会验证候选配置，可能产生少量模型费用。</div>
+        <label for="model-provider">供应商</label>
+        <select id="model-provider" disabled>
+          <option value="zhipu">智谱</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">自定义 OpenAI 兼容</option>
+        </select>
+        <label for="model-base-url">Base URL</label>
+        <input id="model-base-url" type="url" spellcheck="false" autocomplete="off" disabled>
+        <label for="model-chat">对话模型</label>
+        <input id="model-chat" type="text" spellcheck="false" autocomplete="off" disabled>
+        <label for="model-cheap">廉价模型</label>
+        <input id="model-cheap" type="text" spellcheck="false" autocomplete="off" disabled>
+        <div id="model-key-status" class="settings-hint"></div>
+        <label for="model-key-mode">API Key</label>
+        <select id="model-key-mode" disabled>
+          <option value="keep">不修改现有密钥</option>
+          <option value="replace">替换密钥</option>
+        </select>
+        <input id="model-key" type="password" placeholder="选择“替换密钥”后输入新 Key" autocomplete="new-password" disabled>
+        <div class="settings-hint">密钥不回显；保留时空白框不会写入掩码或空值。候选连接探测仅验证当前网络、凭据和两个模型的普通非流式调用，不保证工具、流式或未来可用。</div>
+        <div class="settings-actions">
+          <button id="model-test" class="btn ghost" type="button" disabled>测试候选连接</button>
+          <button id="model-save" class="btn primary" type="button" disabled>验证并保存</button>
+        </div>
+        <div id="model-result" class="settings-result" role="status"></div>
+      </section>
+      <section id="shutdown-settings" class="settings-section">
+        <div class="panel-title">关闭服务</div>
+        <div class="settings-hint">关闭浏览器标签页不会结束服务。点击关闭后，会等待正在进行的回复与记忆整理完成。</div>
+        <button id="shutdown-btn" class="btn ghost" type="button">关闭 Alice 服务…</button>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="shutdown-screen" class="screen shutdown-screen hidden" role="status">
+  <div class="seed-card shutdown-card">
+    <h1 id="shutdown-title">正在关闭 Alice</h1>
+    <p id="shutdown-state">正在等待当前回复完成，并整理本机记忆…</p>
+    <p>对话和记忆保存在这台电脑的 Alice 项目目录中。</p>
+    <p>需要重新启动时，在 PowerShell 执行以下命令：</p>
+    <code id="restart-command">正在读取本次启动命令…</code>
+    <button id="shutdown-return" class="btn ghost hidden" type="button">服务仍在时重新打开界面</button>
   </div>
 </div>
 
