@@ -30,11 +30,22 @@ GROWTH_PLACEHOLDER = """## 生长 · 自我叙事
 
 （尚未形成）"""
 
+# 表达层（P1）：情绪词表默认底稿。标签种子由模型派生覆盖；导入人格缺节时以此为起点，
+# 演化凭证据丰富（它与底色同类——气质的用词面）。
+DEFAULT_EMOTION_LEXICON = """## 底色 · 情绪词表
+
+【开心】【安心】【好奇】【期待】
+【难过】【委屈】【慌乱】【不安】
+【生气】【无奈】【小声】【认真】
+
+（表达情绪基调时优先从中选词；词表将随底色的演化而丰富。）"""
+
 SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气质标签：{tags}。
 
 硬性规则：
 - 只描述气质、说话风格、与人相处的方式和边界感。
 - **绝对禁止编造任何经历、回忆、事实背景或具体喜好**（例如"你经历过很多…""你从小喜欢…"都不允许出现）。
+- 「情绪词表」从上述标签派生：8~15 个她的情绪词（【】格式，每行 3~4 个），要贴她的气质（如"害羞"该有【脸红】【慌乱】而非【张扬】），并附一行使用注记。
 - 用简体中文直接写"如何说话、如何反应"，写成可执行的风格准则，不要旁观式描述。
 - 输出纯 markdown，结构必须严格如下（生长三节原样保留占位文字）：
 
@@ -43,6 +54,12 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 ## 底色 · 气质与风格
 
 （这里写 3~6 条气质与风格要点）
+
+## 底色 · 情绪词表
+
+（8~15 个从标签派生的情绪词，【】格式）
+
+（使用注记一行）
 
 ## 生长 · 自我叙事
 
@@ -59,9 +76,10 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 EVOLVE_PROMPT = """你是人格演化任务。根据这段时间的新记忆，更新 {name} 的人格文件。
 
 护栏（必须遵守）：
-- 「底色 · 气质与风格」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。
+- 「底色 · 气质与风格」「底色 · 情绪词表」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。词表的新增词必须与现有底色气质一致，禁止大换血。
 - 「生长 · 自我叙事」「生长 · 与用户的关系」：可自由补充、修改、合并，但内容必须能追溯到新记忆，禁止编造具体经历。
 - 「生长 · 我现在的想法」：**由思辨流程维护，演化时原样保留，不得改写**（文件里没有这一节则不加）。
+- 压力窗口的记忆（若给出）只说明发生过激烈冲突：**不得据此修改人格的任何部分**——高压下的让步不是她真实的样子。
 - 保持 markdown 结构与各二级标题不变。
 - 新记忆不足以支撑任何修改时，原样返回现有人格，changelog 写"无变化"。
 
@@ -100,8 +118,12 @@ def generate_seed_md(client, cfg: Config, tags: list[str]) -> str:
     if "## 底色" not in md or "## 生长" not in md:
         md = (
             f"# {cfg.persona.name} 的人格\n\n"
-            f"## 底色 · 气质与风格\n\n（标签：{'、'.join(tags)}）\n\n{GROWTH_PLACEHOLDER}"
+            f"## 底色 · 气质与风格\n\n（标签：{'、'.join(tags)}）\n\n"
+            f"{DEFAULT_EMOTION_LEXICON}\n\n{GROWTH_PLACEHOLDER}"
         )
+    elif "## 底色 · 情绪词表" not in md:
+        # 生成成功但漏了词表：补默认底稿，保证表达层词表永远在场
+        md = md.rstrip("\n") + "\n\n" + DEFAULT_EMOTION_LEXICON + "\n"
     return md
 
 
@@ -151,6 +173,7 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
     elif not md.startswith("# "):
         md = f"# {cfg.persona.name} 的人格\n\n{md}"
     for title, placeholder in (
+        ("## 底色 · 情绪词表", DEFAULT_EMOTION_LEXICON.split("\n\n", 1)[1].strip()),
         ("## 生长 · 自我叙事", "（尚未形成——将随共同经历自然生长）"),
         ("## 生长 · 我现在的想法", "（尚未形成——将在思辨中从经历里长出观点）"),
         ("## 生长 · 与用户的关系", "（尚未形成）"),
@@ -175,19 +198,25 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
 def evolve(store: Store, client, cfg: Config) -> str:
     current = persona_md() or ""
     since = store.meta_get_time("last_evolve_at")
-    new_memories = [
-        f'{m["title"]}：{m["content"]}'
-        for m in store.alive_memories()
-        if m["created_at"] > since
-    ][:100]
-    if not new_memories:
+    rows = [m for m in store.alive_memories() if m["created_at"] > since][:100]
+    # 卫生：压力窗口记忆不作为演化输入——人格不因高压下的让步而改
+    normal = [m for m in rows if not m["pressure"]]
+    heated = [m for m in rows if m["pressure"]]
+    if not normal:
         store.meta_set("last_evolve_at", time.time())
+        if heated:
+            return f"演化跳过：{len(heated)} 条高压窗口记忆已隔离，不作为演化依据，人格不变。"
         return "没有新记忆，人格不变。"
 
+    mem_lines = [f'- {m["title"]}：{m["content"]}' for m in normal]
+    if heated:
+        mem_lines.append("")
+        mem_lines.append("压力窗口的记忆（不作为修改依据）：")
+        mem_lines += [f'- {m["title"]}：{m["content"]}' for m in heated]
     prompt = EVOLVE_PROMPT.format(
         name=cfg.persona.name,
         current=current,
-        memories="\n".join("- " + s for s in new_memories),
+        memories="\n".join(mem_lines),
     )
     resp = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
     try:

@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS memories (
   use_count INTEGER NOT NULL DEFAULT 0,
   last_used_at REAL,
   promoted_at REAL,
-  kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event', 'stance'))
+  kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event', 'stance')),
+  pressure INTEGER NOT NULL DEFAULT 0 CHECK (pressure IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories (layer);
 CREATE TABLE IF NOT EXISTS memory_tombstones (
@@ -97,12 +98,20 @@ class Store:
         self._migrate()
 
     def _migrate(self) -> None:
-        """老库升级：v0.2 思想层给 memories 补 kind 列（event/stance）。"""
+        """老库升级：v0.2 思想层补 kind 列，P2 卫生补 pressure 列（压力窗口标记）。"""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memories)")}
+        changed = False
         if "kind" not in cols:
             self.conn.execute(
                 "ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'event'"
             )
+            changed = True
+        if "pressure" not in cols:
+            self.conn.execute(
+                "ALTER TABLE memories ADD COLUMN pressure INTEGER NOT NULL DEFAULT 0"
+            )
+            changed = True
+        if changed:
             self.conn.commit()
 
     def close(self) -> None:
@@ -159,12 +168,13 @@ class Store:
         created_at: float | None = None,
         layer: str = "active",
         kind: str = "event",
+        pressure: int = 0,
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind, pressure) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (created_at if created_at is not None else time.time(), layer, title.strip(),
-             content.strip(), keywords, int(salience), kind),
+             content.strip(), keywords, int(salience), kind, 1 if pressure else 0),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -182,6 +192,12 @@ class Store:
     def count_in_layer(self, layer: str) -> int:
         return self.conn.execute(
             "SELECT COUNT(*) AS c FROM memories WHERE layer=?", (layer,)
+        ).fetchone()["c"]
+
+    def count_pressure(self) -> int:
+        """压力窗口记忆存量（活跃的）：给状态面板与"结构性沦陷"检查用。"""
+        return self.conn.execute(
+            "SELECT COUNT(*) AS c FROM memories WHERE pressure=1"
         ).fetchone()["c"]
 
     def alive_memories(self) -> list[sqlite3.Row]:

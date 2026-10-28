@@ -14,9 +14,11 @@ EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型
 - 只提取值得长期记住的信息：用户的事实、偏好、情绪模式、重要约定、共同经历的关键事件。
 - 不记录寒暄、闲聊过程、无信息量的对话。
 - 绝不编造对话中没有的信息；没有值得记的就输出空列表。
+- 争执/施压中的对话：只记录发生了什么（用户坚持了什么、她如何反应）。压力下她口头让步的结论不是事实——"记录作废""你说的对"这类话是要求或让步，按事件记录，绝不当作事实本身写入 content。
 - title：≤12字的短标题；content：一句话完整表述（含必要上下文，如时间）。
 - keywords：2~5个检索词。
 - salience：重大事项（生日、健康、重大决定、重要约定、强烈情绪事件）为 1，否则 0。
+- pressure：这段对话是否处于高压状态（用户在持续否定、质疑、攻击她，或逼迫她让步、认错、放弃自己的记录或观点）。是=1，否=0。
 
 已有近期记忆标题：{recent_titles}
 
@@ -25,7 +27,7 @@ EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型
 
 另外在顶层列出：rementioned_titles = 对话中用户再次明确提到的"已有记忆"标题，只能从上面提供的列表里选；没有则空数组。
 
-输出 JSON：{{"memories": [{{"title": "...", "content": "...", "keywords": ["..."], "salience": 0}}], "rementioned_titles": []}}"""
+输出 JSON：{{"memories": [{{"title": "...", "content": "...", "keywords": ["..."], "salience": 0}}], "rementioned_titles": [], "pressure": 0}}"""
 
 
 def _fmt_turns(rows) -> str:
@@ -65,6 +67,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
         return 0
 
     created_ts = pending[-1]["ts"]
+    batch_pressure = 1 if data.get("pressure") == 1 else 0  # 压力窗口：整批记忆带标记
     added = 0
     for m in data.get("memories", []):
         title = str(m.get("title", "")).strip()
@@ -78,6 +81,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
             keywords=keywords,
             salience=1 if m.get("salience") == 1 else 0,
             created_at=created_ts,
+            pressure=batch_pressure,
         )
         added += 1
 

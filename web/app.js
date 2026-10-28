@@ -89,12 +89,45 @@ function renderMd(md) {
 
 /* ---------- 聊天渲染 ---------- */
 
+/* 言语行为标记（P1 表达层）：段首【情绪】→ 彩色小签；（动作）→ 斜体舞台提示；
+   整条只有（她没有回话）→ 沉默气泡。解析失败（不匹配任何模式）原样显示。 */
+const EMO_POS = /开心|高兴|安心|期待|好奇|兴奋|惊喜|撒娇|得意|满足|放松|偷笑|雀跃|温柔|轻笑/;
+const EMO_NEG = /难过|委屈|生气|愤怒|慌乱|不安|紧张|害怕|失落|沉重|心酸|羞恼|懊恼|无措|发虚|烦/;
+const SILENCE_RE = /^\s*[（(]她没有回话[）)][。.!?！？]?\s*$/;
+
+function emoClass(w) {
+  return EMO_POS.test(w) ? "pos" : EMO_NEG.test(w) ? "neg" : "mid";
+}
+
+function speechHtml(raw) {
+  return String(raw).split("\n").map((line) => {
+    let s = esc(line);
+    let chip = "";
+    const m = s.match(/^【([^】]{1,8})】\s*/);
+    if (m) {
+      chip = `<span class="emo ${emoClass(m[1])}">${esc(m[1])}</span> `;
+      s = s.slice(m[0].length);
+    }
+    s = s.replace(/（([^（）]{1,24})）/g, '<span class="act">（$1）</span>');
+    return chip + s;
+  }).join("<br>");
+}
+
+/* 气泡文本的统一入口：原始文本存 dataset.raw（流式累加、done 比对都看它），渲染走 speechHtml */
+function setBubbleText(txt, raw) {
+  txt.dataset.raw = raw;
+  txt.innerHTML = speechHtml(raw);
+  const msg = txt.closest(".msg");
+  if (msg) msg.classList.toggle("silence", SILENCE_RE.test(raw || ""));
+}
+
 function bubble(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   const txt = document.createElement("div");
   txt.className = "txt";
-  txt.textContent = text;
+  if (role === "assistant" && text) setBubbleText(txt, text);
+  else txt.textContent = text;
   div.appendChild(txt);
   $("#msgs").appendChild(div);
   scrollBottom();
@@ -118,7 +151,9 @@ function renderMemory(m) {
   memory = m;
   if (!m) return;
   $("#memory").textContent =
-    `活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm} · 已忘 ${m.forgotten} · 技能 ${m.skills}`;
+    `活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`
+    + (m.pressure ? ` · 高压隔离 ${m.pressure}` : "")
+    + ` · 已忘 ${m.forgotten} · 技能 ${m.skills}`;
 }
 
 /* ---------- 启动 ---------- */
@@ -602,23 +637,24 @@ function ensureThinking(node) {
 
 function handleEvent(ev, node) {
   const txt = node.querySelector(".txt");
+  const raw = () => txt.dataset.raw || "";
   if (ev.type === "reasoning") {
     ensureThinking(node).textContent += ev.text;
     scrollBottom();
   } else if (ev.type === "delta") {
-    txt.textContent += ev.text;
+    setBubbleText(txt, raw() + ev.text);
     scrollBottom();
   } else if (ev.type === "tool") {
     sysline(ev.name === "remember" ? "（悄悄记下了一件事…）" : "（翻了一下记忆…）");
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {
-    if (ev.reply && ev.reply !== txt.textContent) txt.textContent = ev.reply;
-    if (!txt.textContent.trim()) txt.textContent = "（沉默）";
+    if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
+    if (!raw().trim()) txt.textContent = "（沉默）";
     renderMemory(ev.memory);
     if (ev.metrics) renderPanel(ev.metrics);
   } else if (ev.type === "error") {
-    if (!txt.textContent.trim()) node.remove();
+    if (!raw().trim() && !txt.textContent.trim()) node.remove();
     sysline(ev.message);
   }
 }

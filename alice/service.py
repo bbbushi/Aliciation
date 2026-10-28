@@ -44,6 +44,7 @@ class ChatService:
             "active": s.count_in_layer("active"),
             "warehouse": s.count_in_layer("warehouse"),
             "longterm": s.count_in_layer("longterm"),
+            "pressure": s.count_pressure(),
             "forgotten": tomb,
             "skills": s.count_skills(),
         }

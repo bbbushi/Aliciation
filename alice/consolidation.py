@@ -24,9 +24,20 @@ def run(store: Store, cfg: Config, now: float | None = None) -> dict:
         if m["created_at"] >= survival_cutoff:
             continue  # 仓库宽限期内，等下一次跨线
         uses = m["mention_count"] + m["use_count"]
-        if m["salience"] >= 1 or uses >= cfg.context.survival_min_uses:
+        # 压力窗口的记忆不凭重要度单独晋升：被再次真实提及（uses）才可入长期层，
+        # 否则高压下的让步产物会经 salience 直通长期层——结构性沦陷
+        promotable = uses >= cfg.context.survival_min_uses or (
+            m["salience"] >= 1 and not m["pressure"]
+        )
+        if promotable:
             store.set_layer(m["id"], "longterm")
             promoted.append(m["title"])
+        elif m["pressure"]:
+            store.expire_memory(
+                m["id"],
+                f"七天线未存活（压力窗口记忆：提及+使用 {uses} 次，不凭重要度晋升）",
+            )
+            expired.append(m["title"])
         else:
             store.expire_memory(
                 m["id"], f"七天线未存活（提及+使用 {uses} 次，重要度 {m['salience']}）"

@@ -147,6 +147,31 @@ html, body {
   overflow-y: auto;
 }
 
+/* 言语行为标记（P1 表达层）：情绪小签 / 舞台提示 / 沉默气泡 */
+.msg .txt .emo {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  margin-right: 2px;
+  border-radius: 999px;
+  vertical-align: 2px;
+  background: #efece4;
+  color: var(--muted);
+}
+.msg .txt .emo.pos { background: #e7f0e2; color: #5c7a4e; }
+.msg .txt .emo.neg { background: #f6e5e0; color: #a25b4d; }
+.msg .txt .act { color: var(--muted); font-style: italic; font-size: 13.5px; }
+.msg.silence { justify-content: center; }
+.msg.silence .txt {
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-style: italic;
+  border-radius: 999px;
+  padding: 6px 18px;
+}
+
 .sys {
   align-self: center;
   font-size: 12px;
