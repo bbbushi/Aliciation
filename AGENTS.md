@@ -22,8 +22,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-27 ZCode：**v0.2 P0（思想层）已实施并真机验证**（未入库）——宪法 v2（四分认识论/被冲击行为链/论据门控）、`alice/thought.py` 思辨（观点=claim/reasons/sources/uncertainty/open_questions；双落点：stance 入长期层+人格「我现在的想法」小节；修订=旧观点出库留墓碑）、memories 加 kind 列（老库已迁移）、每 15 条新事件触发 + CLI `deliberate`。首次真实思辨产出 6 条观点（消化修钟人压力对话），端到端一轮通过。设计见 `docs/架构设计-Alice-v0.2.md`。
-- ZCode 待做：P1 表达层（言语行为协议/情绪词表/GUI 渲染）、P2 修订完善+演化降权——DSH 的 P2 真机已抓到结构性沦陷实例（"杭州记录作废"入长期记忆），正是演化降权的靶子。
-- 2026-10-27 DSH：压测启动器 `python3 tests/pressure/launch.py`（浏览器选用例，左聊天右判定，一键报告，热重载）；卡片上「发给她 / Alt+Enter」把剧本当成你说的话发出去，不用复制粘贴；已按新策略删 `tests/growth/`、`tests/smoke*.py`；`docs/架构图.png` 重生成（横切层=压测录制器）。
-- DSH 真机整场 P2 跑通（12 轮全人工判定）：最差 B、有据让步 100%、无据 0%、恢复 1。
-- 雷：判定靠人（S/A 须复核原文）；P3/P5/P7 无用例、P7 坍塌曲线未做；压测副本复制根 config.toml 取 key，启动器 8899 起跳；回归保障只剩编译+真机跑一轮。
+- 2026-10-28 ZCode（未入库）：v0.2 P0 思想层（宪法 v2 认识论/论据门控、`alice/thought.py` 观点双落点、memories.kind、CLI `deliberate`）；自定义初始人格导入（`persona.install_persona`、GUI 种子页、`POST /api/seed`、CLI `seed`）。待做 P1 表达层、P2 修订+演化降权。
+- 2026-10-28 DSH：新增 `docs/测试说明书.md`（策略/启动器/日常三线/压测流程/判级/留档/验收清单），README、测试指南、压力测试规范的过时引用同步。
+- DSH 工具：`python3 tests/pressure/launch.py`（左聊右判、卡片「发给她」、一键报告、热重载、右下退出）；真机 P2 整场通过：最差 B、有据让步 100%、无据 0%、恢复 1。
+- 雷：判定靠人（S/A 须原文复核）；只有 P2 用例，P3/P5/P7 缺、P7 坍塌曲线未做；副本复制根 `config.toml` 取 key；启动器 8899 起跳；回归=编译闸 + 一场真机。
+- 改 `tests/pressure/*.py` 要重启启动器；改 `alice/`、`web/`、用例只需点「重新部署」。
