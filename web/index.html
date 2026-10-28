@@ -8,12 +8,50 @@
 </head>
 <body>
 
-<div id="seed" class="screen hidden">
-  <div class="seed-card">
-    <h1>为你的 <span id="seed-name">Alice</span> 选择人格底色</h1>
-    <p>选 2~4 个气质标签作为底色；剩下的性格，由你们的经历慢慢生长。</p>
-    <div id="tag-list" class="tags"></div>
-    <button id="seed-go" class="btn primary" disabled>开始</button>
+<!-- 初始化：第一次打开（还没有任何对话）时出现 -->
+<div id="welcome" class="screen hidden">
+  <div class="welcome-card">
+    <div class="w-head">
+      <h1>和 <span id="seed-name">Alice</span> 开始</h1>
+      <p id="w-sub">这是你们的第一个会话。</p>
+    </div>
+
+    <div id="current-persona" class="cur hidden">
+      <div class="cur-text">
+        <div class="cur-title">她已经有一个先装好的人格</div>
+        <div class="cur-meta" id="cur-meta"></div>
+      </div>
+      <div class="cur-actions">
+        <button id="cur-view" class="btn ghost">看看</button>
+        <button id="cur-start" class="btn primary">以她开始</button>
+      </div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-tab="tags" role="tab">选气质标签</button>
+      <button class="tab" data-tab="import" role="tab">导入人格文档</button>
+    </div>
+
+    <section id="tab-tags" class="tab-pane">
+      <p class="hint">选 2~4 个气质标签当底色。剩下的性格，由你们的经历慢慢长。</p>
+      <div id="tag-list" class="tags"></div>
+      <button id="seed-go" class="btn primary wide" disabled>生成底色并开始</button>
+    </section>
+
+    <section id="tab-import" class="tab-pane hidden">
+      <div id="drop" class="drop">
+        <div class="drop-icon">↓</div>
+        <div class="drop-main">把人格文档拖到这里，或 <button id="pick-file" class="link" type="button">选择文件</button></div>
+        <div class="hint">.md / .markdown / .txt；也可以直接粘贴到下面</div>
+        <input type="file" id="import-file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+      </div>
+      <textarea id="import-md" rows="8" spellcheck="false" placeholder="# Alice 的人格&#10;&#10;## 底色 · 气质与风格&#10;&#10;- 说话轻声，短句&#10;- 不急着给建议&#10;- 不确定时就说不知道"></textarea>
+      <div id="import-check" class="check"></div>
+      <div class="row">
+        <button id="import-preview" class="btn ghost" disabled>预览</button>
+        <button id="import-go" class="btn primary" disabled>安装并开始</button>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -23,6 +61,7 @@
       <div class="who" id="name">Alice</div>
       <div class="head-right">
         <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
+        <button id="persona-btn" class="btn ghost" title="看人格、换人格">人格</button>
         <button id="panel-btn" class="btn ghost" title="监测仪">监测</button>
       </div>
     </header>
@@ -52,6 +91,21 @@
     </div>
   </aside>
 </div>
+
+<!-- 人格弹层：查看当前人格 / 替换 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title" id="modal-title">当前人格</div>
+      <button id="modal-x" class="card-x" title="关闭">×</button>
+    </div>
+    <div class="modal-meta" id="modal-meta"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
 
 <script src="/app.js"></script>
 </body>

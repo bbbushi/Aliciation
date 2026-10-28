@@ -72,6 +72,8 @@ def make_handler(svc: ChatService):
                 self._json(svc.state())
             elif path == "/api/history":
                 self._json({"turns": svc.history()})
+            elif path == "/api/persona":
+                self._json(svc.persona_view())
             elif path == "/api/metrics":
                 self._json({
                     "thinking": svc.cfg.llm.thinking,
@@ -82,15 +84,35 @@ def make_handler(svc: ChatService):
 
         def do_POST(self):
             path = urlparse(self.path).path
-            if path == "/api/seed":
-                tags = self._body().get("tags") or []
-                if not (2 <= len(tags) <= 4) or not set(tags) <= set(svc.state()["tags"]):
-                    self._json({"error": "请选择 2~4 个有效标签"}, 400)
+            if path == "/api/persona":  # 已初始化之后也能替换人格（旧版自动快照）
+                body = self._body()
+                md_text = str(body.get("persona_md") or "").strip()
+                source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
+                if not md_text:
+                    self._json({"error": "人格文档是空的"}, 400)
                 else:
                     try:
-                        self._json(svc.seed(tags))
-                    except Exception as e:  # 种子生成要走 LLM，失败须回传可读错误
-                        self._json({"error": f"人格底色生成失败：{e}"}, 502)
+                        self._json(svc.install_persona(md_text, source))
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
+            elif path == "/api/seed":
+                body = self._body()
+                md_text = str(body.get("persona_md") or "").strip()
+                source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
+                if md_text:  # 自定义初始人格导入（不走 LLM）
+                    try:
+                        self._json(svc.install_persona(md_text, source))
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
+                else:
+                    tags = body.get("tags") or []
+                    if not (2 <= len(tags) <= 4) or not set(tags) <= set(svc.state()["tags"]):
+                        self._json({"error": "请选择 2~4 个有效标签"}, 400)
+                    else:
+                        try:
+                            self._json(svc.seed(tags))
+                        except Exception as e:  # 种子生成要走 LLM，失败须回传可读错误
+                            self._json({"error": f"人格底色生成失败：{e}"}, 502)
             elif path == "/api/chat":
                 text = str(self._body().get("text") or "").strip()
                 if not text:

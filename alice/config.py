@@ -52,6 +52,7 @@ class ContextConfig:
 class MemoryConfig:
     extract_every_turns: int = 10
     distill_every_memories: int = 30  # 数据触发：每累计 N 条新记忆提炼一次技能
+    deliberate_every_memories: int = 15  # 数据触发：每累计 N 条新事件记忆思辨一次（思想层）
 
 
 @dataclass

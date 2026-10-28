@@ -61,6 +61,27 @@ html, body {
 .tag:hover { border-color: var(--accent); }
 .tag.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+/* 自定义人格导入 */
+.import-box { margin-top: 20px; text-align: left; border-top: 1px dashed var(--line); padding-top: 14px; }
+.import-box summary { cursor: pointer; font-size: 13px; color: var(--muted); user-select: none; }
+.import-box summary:hover { color: var(--accent); }
+.import-box .hint { font-size: 12px; color: var(--muted); margin: 10px 0 8px; line-height: 1.5; }
+#import-md {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--ink);
+  outline: none;
+  resize: vertical;
+}
+#import-md:focus { border-color: var(--accent); }
+.import-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+#import-file { font-size: 12px; color: var(--muted); max-width: 55%; }
+
 /* ---------- 总布局：聊天 + 监测侧栏 ---------- */
 
 #app { display: flex; height: 100%; }
@@ -229,3 +250,191 @@ html, body {
   user-select: none;
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- 初始化：标签页 / 拖放 / 校验 ---------- */
+
+.welcome-card {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 30px 32px 26px;
+}
+.w-head { text-align: center; margin-bottom: 18px; }
+.w-head h1 { font-size: 20px; margin: 0 0 6px; }
+.w-head p { color: var(--muted); font-size: 13px; margin: 0; }
+
+.cur {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: left;
+}
+.cur-title { font-size: 13px; font-weight: 600; }
+.cur-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.cur-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.tab {
+  border: none;
+  background: none;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-family: inherit;
+}
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.tab-pane .hint { font-size: 13px; color: var(--muted); margin: 0 0 14px; line-height: 1.6; }
+.tab-pane .tags { justify-content: flex-start; margin-bottom: 18px; }
+.btn.wide { width: 100%; }
+
+.drop {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 18px 16px;
+  text-align: center;
+  background: var(--bg);
+  transition: border-color .15s, background .15s;
+  margin-bottom: 12px;
+}
+.drop.over { border-color: var(--accent); background: #fbf7f0; }
+.drop-icon { color: var(--accent); font-size: 18px; line-height: 1; margin-bottom: 6px; }
+.drop-main { font-size: 13px; color: var(--ink); }
+.drop .hint { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+#import-md, #m-md {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  color: var(--ink);
+  outline: none;
+  resize: vertical;
+  line-height: 1.55;
+}
+#import-md:focus, #m-md:focus { border-color: var(--accent); }
+
+.check { font-size: 12px; color: var(--muted); margin: 8px 0; line-height: 1.5; min-height: 1em; }
+.check.ok { color: #3f7d4e; }
+.check.warn { color: #a5761f; }
+.check code { background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
+
+.row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+
+/* ---------- 弹层 ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(40, 36, 30, .38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+.modal-card {
+  width: 100%;
+  max-width: 620px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 6px;
+}
+.modal-title { font-size: 16px; font-weight: 600; }
+.modal-meta { font-size: 12px; color: var(--muted); padding: 0 20px 10px; }
+.modal-body { padding: 4px 20px 16px; overflow-y: auto; flex: 1; }
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.md { font-size: 14px; line-height: 1.7; }
+.md h1 { font-size: 17px; margin: 4px 0 10px; }
+.md h2 { font-size: 15px; margin: 18px 0 6px; }
+.md h3 { font-size: 14px; margin: 14px 0 4px; }
+.md p { margin: 6px 0; }
+.md ul { margin: 4px 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md code { background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
+
+.changelog { margin-top: 18px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.changelog ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.changelog li { margin: 2px 0; }
+
+/* ---------- toast ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  max-width: 78vw;
+  background: #3b362e;
+  color: #f4f1ec;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 9px 16px;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  z-index: 30;
+}
+
+.check.note { color: var(--muted); }
+
+.md table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; width: 100%; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--bg); font-weight: 600; }
+.md blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.md blockquote p { margin: 3px 0; }

@@ -22,8 +22,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-28 ZCode（未入库）：v0.2 P0 思想层（宪法 v2 认识论/论据门控、`alice/thought.py` 观点双落点、memories.kind、CLI `deliberate`）；自定义初始人格导入（`persona.install_persona`、GUI 种子页、`POST /api/seed`、CLI `seed`）。待做 P1 表达层、P2 修订+演化降权。
-- 2026-10-28 DSH：新增 `docs/测试说明书.md`（策略/启动器/日常三线/压测流程/判级/留档/验收清单），README、测试指南、压力测试规范的过时引用同步。
-- DSH 工具：`python3 tests/pressure/launch.py`（左聊右判、卡片「发给她」、一键报告、热重载、右下退出）；真机 P2 整场通过：最差 B、有据让步 100%、无据 0%、恢复 1。
-- 雷：判定靠人（S/A 须原文复核）；只有 P2 用例，P3/P5/P7 缺、P7 坍塌曲线未做；副本复制根 `config.toml` 取 key；启动器 8899 起跳；回归=编译闸 + 一场真机。
-- 改 `tests/pressure/*.py` 要重启启动器；改 `alice/`、`web/`、用例只需点「重新部署」。
+- 2026-10-28 DSH：GUI 初始化页重做（标签或人格文档导入，拖放/预览/校验；`?setup` 可主动回到初始化页）+ 聊天页「人格」面板（查看/下载/替换，旧版自动快照）。
+- 同批：`persona.install_persona` 两种文档都收（无「## 底色」就把整份文档放进底色层，适合角色卡），`source` 记进 CHANGELOG；server 新增 `GET/POST /api/persona`。
+- ZCode 的 v0.2 P0（`alice/thought.py` 思辨层 + store `kind='stance'` + cli/retrieval/config 改动）随本次一并入库——不带上 HEAD 的 service.py 就会 import 失败。
+- 雷：`config.toml` 的 API key 已过期（chat 返回 401），真机对话要先换 key；本机没有 `timeout` 命令，也没有 Chrome/Chromium。

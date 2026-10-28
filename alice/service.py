@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 
 from . import config as appconfig
-from . import consolidation, loop, metrics, persona, skills
+from . import consolidation, loop, metrics, persona, skills, thought
 from .config import Config, load
 from .llm import make_client
 from .store import Store
+
+
+def _iso(ts) -> str | None:
+    """库里的 float 时间戳 → 本地可读时间（GUI 展示用）。"""
+    try:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return None
 
 
 class ChatService:
@@ -35,6 +44,21 @@ class ChatService:
             "skills": s.count_skills(),
         }
 
+    def _turn_count(self) -> int:
+        """已完成的助手轮数：0 表示这场会话还没真正开始（GUI 据此决定是否显示初始化页）。"""
+        row = self.store.conn.execute(
+            "SELECT COUNT(*) AS c FROM turns WHERE role = 'assistant'").fetchone()
+        return int(row["c"] or 0)
+
+    def _persona_stats(self) -> dict:
+        md = persona.persona_md()
+        return {
+            "installed": md is not None,
+            "version": int(self.store.meta_get("persona_version", "0") or 0),
+            "installed_at": _iso(self.store.meta_get("persona_seeded_at")),
+            "chars": len(md or ""),
+        }
+
     def state(self) -> dict:
         with self._lock:
             return {
@@ -43,6 +67,24 @@ class ChatService:
                 "tags": list(persona.TAGS),
                 "continuity": loop._continuity(self.store),
                 "memory": self._memory_stats(),
+                "turns": self._turn_count(),
+                "persona": self._persona_stats(),
+            }
+
+    def persona_view(self) -> dict:
+        """当前人格全文 + 元信息 + 变更记录尾部（GUI 的人格面板用）。"""
+        with self._lock:
+            md = persona.persona_md() or ""
+            changelog: list[str] = []
+            path = appconfig.PERSONA_CHANGELOG
+            if path.exists():
+                lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()]
+                changelog = [ln for ln in lines if ln][-6:]
+            return {
+                "md": md,
+                "changelog": changelog,
+                "turns": self._turn_count(),
+                **self._persona_stats(),
             }
 
     def history(self, limit: int = 60) -> list[dict]:
@@ -73,6 +115,11 @@ class ChatService:
     def seed(self, tags: list[str]) -> dict:
         with self._lock:
             persona.seed_from_tags(self.store, self.client, self.cfg, tags)
+        return self.state()
+
+    def install_persona(self, md_text: str, source: str = "用户导入") -> dict:
+        with self._lock:
+            persona.install_persona(self.store, self.cfg, md_text, source=source)
         return self.state()
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None) -> dict:
@@ -146,7 +193,7 @@ class ChatService:
 
     def _watchers_due(self) -> list[str]:
         events: list[str] = []
-        for watcher in (persona.evolve_if_due, skills.distill_if_due):
+        for watcher in (persona.evolve_if_due, thought.deliberate_if_due, skills.distill_if_due):
             try:
                 msg = watcher(self.store, self.client, self.cfg)
             except Exception as e:  # 后台任务失败不影响对话

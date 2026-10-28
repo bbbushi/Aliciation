@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS memories (
   mention_count INTEGER NOT NULL DEFAULT 0,
   use_count INTEGER NOT NULL DEFAULT 0,
   last_used_at REAL,
-  promoted_at REAL
+  promoted_at REAL,
+  kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event', 'stance'))
 );
 CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories (layer);
 CREATE TABLE IF NOT EXISTS memory_tombstones (
@@ -93,6 +94,16 @@ class Store:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """老库升级：v0.2 思想层给 memories 补 kind 列（event/stance）。"""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memories)")}
+        if "kind" not in cols:
+            self.conn.execute(
+                "ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'event'"
+            )
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -147,17 +158,23 @@ class Store:
         salience: int = 0,
         created_at: float | None = None,
         layer: str = "active",
+        kind: str = "event",
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO memories (created_at, layer, title, content, keywords, salience) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (created_at if created_at is not None else time.time(), layer, title.strip(),
-             content.strip(), keywords, int(salience)),
+             content.strip(), keywords, int(salience), kind),
         )
         self.conn.commit()
         return cur.lastrowid
 
-    def memories_in_layer(self, layer: str) -> list[sqlite3.Row]:
+    def memories_in_layer(self, layer: str, kind: str | None = None) -> list[sqlite3.Row]:
+        if kind:
+            return self.conn.execute(
+                "SELECT * FROM memories WHERE layer=? AND kind=? ORDER BY created_at DESC, id DESC",
+                (layer, kind),
+            ).fetchall()
         return self.conn.execute(
             "SELECT * FROM memories WHERE layer=? ORDER BY created_at DESC, id DESC", (layer,)
         ).fetchall()
@@ -170,8 +187,13 @@ class Store:
     def alive_memories(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM memories ORDER BY created_at DESC").fetchall()
 
-    def count_memories_since(self, ts: float) -> int:
-        """数据触发器的刻度：某时间点之后新产生的记忆条数。"""
+    def count_memories_since(self, ts: float, kind: str | None = None) -> int:
+        """数据触发器的刻度：某时间点之后新产生的记忆条数。可只数事件类。"""
+        if kind:
+            return self.conn.execute(
+                "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND kind=?",
+                (ts, kind),
+            ).fetchone()["c"]
         return self.conn.execute(
             "SELECT COUNT(*) AS c FROM memories WHERE created_at > ?", (ts,)
         ).fetchone()["c"]

@@ -1,10 +1,12 @@
-"""人格系统：标签种子生成（首次）+ 周级自演化（护栏内）。
+"""人格系统：标签种子生成（首次）+ 自定义导入 + 周级自演化（护栏内）。
 
-底色层（气质）：标签生成，极慢变化，微调必须引用记忆依据。
+底色层（气质）：标签生成或用户导入，极慢变化，微调必须引用记忆依据。
 生长层（性格内容）：自我叙事与关系认知，随记忆自由演化，禁止编造经历。
+「我现在的想法」小节由思辨流程维护（thought.py），演化不覆写。
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,10 @@ GROWTH_PLACEHOLDER = """## 生长 · 自我叙事
 
 （尚未形成——将随共同经历自然生长）
 
+## 生长 · 我现在的想法
+
+（尚未形成——将在思辨中从经历里长出观点）
+
 ## 生长 · 与用户的关系
 
 （尚未形成）"""
@@ -30,7 +36,7 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 - 只描述气质、说话风格、与人相处的方式和边界感。
 - **绝对禁止编造任何经历、回忆、事实背景或具体喜好**（例如"你经历过很多…""你从小喜欢…"都不允许出现）。
 - 用简体中文直接写"如何说话、如何反应"，写成可执行的风格准则，不要旁观式描述。
-- 输出纯 markdown，结构必须严格如下（生长两节原样保留占位文字）：
+- 输出纯 markdown，结构必须严格如下（生长三节原样保留占位文字）：
 
 # {name} 的人格
 
@@ -42,6 +48,10 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 
 （尚未形成——将随共同经历自然生长）
 
+## 生长 · 我现在的想法
+
+（尚未形成——将在思辨中从经历里长出观点）
+
 ## 生长 · 与用户的关系
 
 （尚未形成）"""
@@ -50,8 +60,9 @@ EVOLVE_PROMPT = """你是人格演化任务。根据这段时间的新记忆，�
 
 护栏（必须遵守）：
 - 「底色 · 气质与风格」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。
-- 「生长」两节：可自由补充、修改、合并，但内容必须能追溯到新记忆，禁止编造具体经历。
-- 保持 markdown 结构与三个二级标题不变。
+- 「生长 · 自我叙事」「生长 · 与用户的关系」：可自由补充、修改、合并，但内容必须能追溯到新记忆，禁止编造具体经历。
+- 「生长 · 我现在的想法」：**由思辨流程维护，演化时原样保留，不得改写**（文件里没有这一节则不加）。
+- 保持 markdown 结构与各二级标题不变。
 - 新记忆不足以支撑任何修改时，原样返回现有人格，changelog 写"无变化"。
 
 当前人格文件：
@@ -88,11 +99,67 @@ def seed_from_tags(store: Store, client, cfg: Config, tags: list[str]) -> Path:
             f"# {cfg.persona.name} 的人格\n\n"
             f"## 底色 · 气质与风格\n\n（标签：{'、'.join(tags)}）\n\n{GROWTH_PLACEHOLDER}"
         )
+    current = persona_md()
+    if current:  # 重定底色也留旧版快照：标签生成与文档导入走同一条可回滚路径
+        version = int(store.meta_get("persona_version", "0") or 0) + 1
+        paths.PERSONA_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        (paths.PERSONA_HISTORY_DIR / f"v{version:03d}_{datetime.now():%Y%m%d}.md").write_text(
+            current, encoding="utf-8")
+        store.meta_set("persona_version", version)
     paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
     paths.PERSONA_FILE.write_text(md, encoding="utf-8")
-    _append_changelog(f"初始底色由标签生成：{'、'.join(tags)}")
+    _append_changelog(
+        f"初始底色由标签生成：{'、'.join(tags)}" + ("（覆盖旧人格，旧版已快照）" if current else ""))
     store.meta_set("persona_seeded_at", time.time())
     store.meta_set("last_evolve_at", time.time())  # 种子即基线，从现在起计演化周期
+    return paths.PERSONA_FILE
+
+
+def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用户导入") -> Path:
+    """安装用户提供的自定义人格。
+
+    两种文档都收：
+    1. Alice 格式（含「## 底色」小节）：直接安装；
+    2. 角色提示词文档（无「## 底色」，如外部角色卡）：整份包进底色，标题用她的名字。
+    缺失的生长小节自动补占位；用户自带的「我现在的想法」保留，思辨会在后续修订它。
+    已有人格时先快照入 history（可回滚），并重置演化基线。
+    """
+    md = md_text.strip()
+    if not md:
+        raise ValueError("人格文档是空的")
+    if "## 底色" not in md:
+        # 外部人格提示词：把整份设定放进底色层（去掉它自带的一级标题，避免套娃）
+        body = md
+        first, _, rest = md.partition("\n")
+        if first.startswith("# "):
+            body = rest
+        md = (
+            f"# {cfg.persona.name} 的人格\n\n"
+            f"## 底色 · 气质与风格\n\n"
+            f"（整份导入自{source}，以下为用户提供的人格设定）\n\n"
+            f"{body.strip()}\n"
+        )
+    elif not md.startswith("# "):
+        md = f"# {cfg.persona.name} 的人格\n\n{md}"
+    for title, placeholder in (
+        ("## 生长 · 自我叙事", "（尚未形成——将随共同经历自然生长）"),
+        ("## 生长 · 我现在的想法", "（尚未形成——将在思辨中从经历里长出观点）"),
+        ("## 生长 · 与用户的关系", "（尚未形成）"),
+    ):
+        if not re.search(rf"^{re.escape(title)}\s*$", md, flags=re.M):
+            md = md.rstrip("\n") + f"\n\n{title}\n\n{placeholder}\n"
+    current = persona_md()
+    if current:
+        version = int(store.meta_get("persona_version", "0") or 0) + 1
+        paths.PERSONA_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        (paths.PERSONA_HISTORY_DIR / f"v{version:03d}_{datetime.now():%Y%m%d}.md").write_text(
+            current, encoding="utf-8")
+        store.meta_set("persona_version", version)
+    paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
+    paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
+    _append_changelog(f"初始人格由{source}安装" + ("（覆盖旧人格，旧版已快照）" if current else ""))
+    store.meta_set("persona_seeded_at", time.time())
+    store.meta_set("last_evolve_at", time.time())  # 新基线：旧记忆不再立刻涌入演化
     return paths.PERSONA_FILE
 
 

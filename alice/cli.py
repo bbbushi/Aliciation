@@ -92,6 +92,9 @@ def main() -> None:
     p_recall.add_argument("query")
     sub.add_parser("consolidate", help="立即运行分层维护与生存过滤")
     sub.add_parser("evolve", help="立即运行人格演化")
+    sub.add_parser("deliberate", help="立即运行思辨（从记忆消化观点）")
+    p_seed = sub.add_parser("seed", help="安装自定义初始人格（markdown 文件）")
+    p_seed.add_argument("file", help="人格文件路径，须含「## 底色」小节")
     sub.add_parser("distill", help="从记忆提炼技能")
     p_serve = sub.add_parser("serve", help="启动本地图形界面（浏览器）")
     p_serve.add_argument("--port", type=int, default=8800, help="监听端口（默认 8800）")
@@ -117,6 +120,15 @@ def main() -> None:
             print("分层维护完成。")
         elif args.cmd == "evolve":
             print(persona.evolve(store, make_client(cfg), cfg))
+        elif args.cmd == "deliberate":
+            from . import thought
+
+            print(thought.deliberate(store, make_client(cfg), cfg))
+        elif args.cmd == "seed":
+            from pathlib import Path
+
+            md = Path(args.file).read_text(encoding="utf-8")
+            print(f"人格已安装：{persona.install_persona(store, cfg, md)}")
         elif args.cmd == "distill":
             print(skills.distill(store, make_client(cfg), cfg))
         else:
