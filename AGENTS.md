@@ -22,7 +22,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-28 ZCode：**v0.2 实现期全部完成（P0 思想层 → P2 修订与压力卫生 → P1 表达层，均未提交）**。P1：宪法「言语行为标记」（【情绪】/（动作）/（她没有回话）沉默合法）；人格新增「底色 · 情绪词表」（标签种子派生、导入补默认、演化护栏同底色）；GUI 渲染情绪小签/动作斜体/沉默气泡（流式与历史共用 setBubbleText，解析失败原样显示）。离线验证：python 干跑 4 项 + node 沙箱 11 项全过。验收挂 P5（DSH 人工压力轮）；P3 感知保真按设计条件触发，未动。
-- 未提交清单：P0+P2+P1（alice/{retrieval,persona,thought,store,extraction,consolidation,service}.py + web/{app.js,style.css}）+ 自定义人格导入 + 监控侧栏 + 哲学侧文献与导读 10 篇 + 架构设计 v0.2 定稿（含实施状态）+ 架构图 v0.2 重绘（tools/make_arch_diagram.py），等用户发话再提交。
+- 2026-10-28 ZCode：**v0.2 全部实施并入库（b40ac06 已推送）**：P0 思想层/宪法v2、P1 表达层（言语行为标记+情绪词表+GUI 渲染）、P2 修订门控（无据拒绝/曾以为史）与压力卫生（pressure 标记/晋升闸门/思辨演化隔离）。验收挂 P4/P7/P5，等 DSH 人工压力轮。
+- 工作区余量（未入库，归属见名）：`人格提示词/`（用户私人物料）、`docs/harness研究/插件参考/`（外部项目 clone，含非 Cortico 两个，未 gitignore）、`docs/harness研究/待动工模块/设计-监测仪v2.md`。
 - data/：主库今晨 09:06 重置（旧 22 轮/14 记忆在 data/archive/20261028-090645/），现装有标签种子人格（**无情绪词表节——重新种底色或重新导入才会带上**）、0 轮对话；Yuki 截图对话不在主库也不在 dist（dist 库为空）。
 - 雷：config.toml API key 仍过期（chat 401）——P1 的真机表现（P5）待 key 恢复后人工验；本机无 `timeout` 命令、无 Chrome；机上另有多个 alice serve 进程（8877/8878/8800 等），归属未查。
