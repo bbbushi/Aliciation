@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .config import Config, PROJECT_ROOT, load
+from .config import Config, PROJECT_ROOT, USER_DIR, load
 from .config_edit import ConfigConflict
 from .service import ChatService
 
@@ -438,7 +438,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         cfg: Config | None = None, config_path: Path | None = None) -> None:
     if host not in ("127.0.0.1", "localhost"):
         raise ValueError("服务只能监听本机回环地址 127.0.0.1 或 localhost")
-    config_path = Path(config_path).resolve() if config_path is not None else PROJECT_ROOT / "config.toml"
+    config_path = Path(config_path).resolve() if config_path is not None else USER_DIR / "config.toml"
     gate = _ShutdownGate()
     # Bind before constructing Store or running startup maintenance. A duplicate launch
     # must fail without opening or changing the existing local conversation.

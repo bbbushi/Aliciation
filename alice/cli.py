@@ -102,7 +102,7 @@ def main() -> None:
     p_serve.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     args = parser.parse_args()
-    config_path = Path(args.config) if args.config else appconfig.PROJECT_ROOT / "config.toml"
+    config_path = Path(args.config) if args.config else appconfig.USER_DIR / "config.toml"
 
     if args.cmd == "serve":
         from .server import run as run_server

@@ -69,8 +69,8 @@ class ChatService:
     """拥有 Store 与 client 的生命周期；所有写操作经 _lock 串行（单一永久会话语义）。"""
 
     def __init__(self, cfg: Config | None = None, db_path=None, client=None, *, config_path=None):
-        self._config_path = Path(config_path).resolve() if config_path is not None else appconfig.PROJECT_ROOT / "config.toml"
-        # 三参数注入模式不碰项目根配置；只有 GUI/自主加载模式绑定写回路径。
+        self._config_path = Path(config_path).resolve() if config_path is not None else appconfig.USER_DIR / "config.toml"
+        # 三参数注入模式不碰本机配置；只有 GUI/自主加载模式绑定写回路径（user/config.toml）。
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
         self.store = Store(db_path or appconfig.DB_PATH)
