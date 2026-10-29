@@ -22,6 +22,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-29 AgentMerge：已将 `origin/main` 合并进 `ytq` 并解掉冲突（`AGENTS.md`、`alice/config.py`）；`alice/config.py` 继续默认读取 `user/config.toml`，同时保留 `str|Path` 入参。
-- 保留两侧已落地内容：`user/` 迁移（`user/config.toml` + `user/data/`）与“观察器”只读侧栏功能（入口“观察”）。
-- 待后续人工验收：观察器真实环境验收；以及测试区对 `user/` 新会话布局的适配（见此前 DSH 提示点）。
+- 2026-10-29 ZCode：**护栏正式退役（用户决定，未提交）**——宪法删「观点与被冲击时」整节（先停一拍/守住或有据修订/权重只给论据/讨好不是回应，A/B 证明会表演化）；保留语义契约（三分法+四分定义+记忆区读法）与 P1 表达标记。依据设计哲学·机制优先于条款；退位复测（v0.3 验收第 7 条）待真思辨跑通后做。
+- **合并遗留的旧配置路径已修**：service.py:72 / server.py:441 / cli.py:105 三处默认值改指 `USER_DIR/config.toml`（原后果：GUI 在线改配置写错文件、CLI 无参启动失败）；旧路径引用全库清零，起服验证通过。
+- AgentMerge 已并入 origin/main 的 GUI 三件+观察器+复盘文档（docs/项目问题清单与分层整改建议.md）；ytq 与 main 内容已汇合（本地 main = 合并结果）。
+- 待人工验收：观察器、GUI 三件（docs 两份验收单）；DSH 启动器待适配 user/ 布局（launch.py:69、deploy.py:146/221/237/250）。
+- 雷：服务当前停着；主库 11 轮在 user/data/；本机无 timeout/Chrome。
