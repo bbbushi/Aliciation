@@ -11,6 +11,7 @@
 <!-- 初始化：第一次打开（还没有任何对话）时出现 -->
 <div id="welcome" class="screen hidden">
   <div class="welcome-card">
+    <div class="welcome-tools"><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
     <div class="w-head">
       <h1>和 <span id="seed-name">Alice</span> 开始</h1>
       <p id="w-sub">这是你们的第一个会话。</p>
@@ -63,7 +64,8 @@
       <div class="head-right">
         <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
         <button id="persona-btn" class="btn ghost" title="看人格、换人格">人格</button>
-        <button id="panel-btn" class="btn ghost" title="监测仪">监测</button>
+        <button id="observer-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="observer">观察</button>
+        <button id="settings-btn" class="btn ghost" type="button">设置</button>
       </div>
     </header>
     <main id="msgs"></main>
@@ -72,23 +74,58 @@
       <button id="send" class="btn primary">发送</button>
     </footer>
   </div>
-
-  <aside id="panel" class="hidden">
-    <div class="panel-sec">
-      <div class="panel-title">思考深度</div>
-      <select id="thinking">
-        <option value="on">开（默认）</option>
-        <option value="off">关（更省 token）</option>
-      </select>
-      <div class="panel-hint">关：跳过思考过程，回复更快、输入 token 大幅下降；随时可切回。</div>
+  <aside id="observer" class="observer hidden" aria-label="开发者观察器">
+    <div class="obs-head"><strong>开发者观察器</strong><button id="obs-close" class="card-x" type="button" title="关闭并清空观察记录">×</button></div>
+    <div class="obs-tools">
+      <label><input id="obs-auto" type="checkbox" checked> 自动刷新</label>
+      <button id="obs-refresh" class="btn ghost" type="button">刷新到最新</button>
+      <button id="obs-clear" class="btn ghost" type="button">清空观察记录</button>
     </div>
-
-    <div class="panel-sec">
-      <div class="panel-title">监测仪</div>
-      <div id="cards"></div>
-      <div class="panel-title small">添加指标</div>
-      <div id="pool" class="chips"></div>
-      <div class="panel-hint">评审型指标每轮对话后用廉价模型评审一次。</div>
+    <p id="obs-status" class="obs-status" role="status">等待首次快照</p>
+    <p id="obs-time" class="obs-hint"></p>
+    <div class="obs-scroll">
+      <details class="obs-help"><summary>观察范围与保留规则</summary><p>只读，不调用模型或 recall。自动刷新每 5 秒尝试，本页回复结束也刷新；单写者锁忙时只保留最后快照。空闲且连接正常时，通常在下一次轮询加请求耗时后可见；长轮次、断线和后台标签页无固定最大延迟。</p><p>变化是两次快照之间的净差异，不是完整事件流；无法还原期间多次改写、精确原因或关联轮次。仅跟踪最近至多 2000 个存活 ID，正文指纹只比较各字段前 16000 字及长度，超长尾部同长度改写不可见。</p><p>临时保留相邻基线、最近一次人格前后原文与最多 100 条变化摘要；不保存记忆旧正文，不写本地存储或文件。关闭、清空、会话/服务身份变化、刷新页面都会清除。网络中断保留最后有效快照并标注未知间隔。</p></details>
+      <label class="obs-view-label" for="obs-view">查看</label>
+      <select id="obs-view">
+        <option value="overview">变化与触发进度</option>
+        <option value="memories">记忆 / 观点</option>
+        <option value="persona">人格 / 思想原文</option>
+        <option value="history">人格历史快照</option>
+        <option value="tombstones">遗忘墓碑（实际记录）</option>
+        <option value="skills">技能（次级观察）</option>
+      </select>
+      <section id="obs-overview">
+        <p id="obs-counts"></p><p id="obs-coverage" class="obs-hint"></p>
+        <h3>为什么可能还没变化</h3><div id="obs-progress"></div>
+        <h3>本次观察期间的变化</h3><p class="obs-hint">以下时间是观测区间，不是发生时刻。遗忘的实际时间与原因请查墓碑。字段变化不等于人格成长、污染或退化。</p>
+        <ol id="obs-changes" class="obs-changes"></ol>
+      </section>
+      <section id="obs-browser" class="hidden">
+        <p id="obs-list-hint" class="obs-hint"></p>
+        <form id="obs-search" class="obs-filters">
+          <select id="obs-layer" aria-label="记忆层级"><option value="all">全部层级</option><option value="active">活跃</option><option value="warehouse">仓库</option><option value="longterm">长期</option></select>
+          <select id="obs-kind" aria-label="记忆类型"><option value="all">事件和观点</option><option value="event">事件</option><option value="stance">观点</option></select>
+          <input id="obs-query" type="search" maxlength="200" placeholder="搜索标题 / 正文" aria-label="检索文本"><button class="btn ghost" type="submit">检索</button>
+        </form>
+        <p id="obs-list-time" class="obs-hint"></p><div id="obs-list"></div>
+        <div class="obs-pagination"><button id="obs-first" class="btn ghost" type="button">首页</button><button id="obs-next" class="btn ghost" type="button" disabled>下一页</button></div>
+      </section>
+      <section id="obs-persona" class="hidden">
+        <p id="obs-persona-meta" class="obs-hint"></p>
+        <details open><summary>当前原文（底色 / 生长 / 思想）</summary><pre id="obs-persona-text" class="obs-text"></pre></details>
+        <button id="obs-persona-full" class="btn ghost" type="button">分段查看当前完整原文</button>
+        <h3>最近一次观察到的人格文本变化</h3><p id="obs-persona-diff-meta" class="obs-hint"></p>
+        <details><summary>删除 / 增加的原文片段</summary><div id="obs-persona-diff"></div></details>
+        <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
+        <details><summary>已有变更记录（原文，含模型说明）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
+        <p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p>
+      </section>
+      <section id="obs-detail" class="hidden">
+        <div class="obs-head"><strong id="obs-detail-title">条目详情</strong><button id="obs-detail-close" class="card-x" type="button" title="关闭详情">×</button></div>
+        <p id="obs-detail-time" class="obs-hint"></p><dl id="obs-detail-meta"></dl><pre id="obs-detail-text" class="obs-text"></pre>
+        <div class="obs-pagination"><button id="obs-detail-first" class="btn ghost" type="button">正文开头</button><button id="obs-detail-next" class="btn ghost" type="button" disabled>下一段正文</button></div>
+        <p class="obs-hint">每段最多 8000 字符；翻段重新读取当前存储，可能与前段不是同一版本。记忆无精确入库时间、修改时间或来源轮次；created_at 可能是提取批末消息时间。</p>
+      </section>
     </div>
   </aside>
 </div>
@@ -106,8 +143,73 @@
   </div>
 </div>
 
+<div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal-card settings-card">
+    <div class="modal-head">
+      <div class="modal-title" id="settings-title">设置</div>
+      <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
+    </div>
+    <div class="modal-body settings-body">
+      <section class="settings-section">
+        <label class="panel-title" for="thinking">思考深度</label>
+        <select id="thinking" disabled>
+          <option value="on">开（默认）</option>
+          <option value="off">关（更省 token）</option>
+        </select>
+        <div class="settings-hint">关：跳过对话的思考过程，回复更快；随时可切回。</div>
+      </section>
+      <section id="model-settings" class="settings-section">
+        <div class="panel-title">模型接口</div>
+        <div class="settings-hint">预设只填入可编辑的建议值；打开设置不会改变当前配置。保存时会验证候选配置，可能产生少量模型费用。</div>
+        <label for="model-provider">供应商</label>
+        <select id="model-provider" disabled>
+          <option value="zhipu">智谱</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">自定义 OpenAI 兼容</option>
+        </select>
+        <label for="model-base-url">Base URL</label>
+        <input id="model-base-url" type="url" spellcheck="false" autocomplete="off" disabled>
+        <label for="model-chat">对话模型</label>
+        <input id="model-chat" type="text" spellcheck="false" autocomplete="off" disabled>
+        <label for="model-cheap">廉价模型</label>
+        <input id="model-cheap" type="text" spellcheck="false" autocomplete="off" disabled>
+        <div id="model-key-status" class="settings-hint"></div>
+        <label for="model-key-mode">API Key</label>
+        <select id="model-key-mode" disabled>
+          <option value="keep">不修改现有密钥</option>
+          <option value="replace">替换密钥</option>
+        </select>
+        <input id="model-key" type="password" placeholder="选择“替换密钥”后输入新 Key" autocomplete="new-password" disabled>
+        <div class="settings-hint">密钥不回显；保留时空白框不会写入掩码或空值。候选连接探测仅验证当前网络、凭据和两个模型的普通非流式调用，不保证工具、流式或未来可用。</div>
+        <div class="settings-actions">
+          <button id="model-test" class="btn ghost" type="button" disabled>测试候选连接</button>
+          <button id="model-save" class="btn primary" type="button" disabled>验证并保存</button>
+        </div>
+        <div id="model-result" class="settings-result" role="status"></div>
+      </section>
+      <section id="shutdown-settings" class="settings-section">
+        <div class="panel-title">关闭服务</div>
+        <div class="settings-hint">关闭浏览器标签页不会结束服务。点击关闭后，会等待正在进行的回复与记忆整理完成。</div>
+        <button id="shutdown-btn" class="btn ghost" type="button">关闭 Alice 服务…</button>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="shutdown-screen" class="screen shutdown-screen hidden" role="status">
+  <div class="seed-card shutdown-card">
+    <h1 id="shutdown-title">正在关闭 Alice</h1>
+    <p id="shutdown-state">正在等待当前回复完成，并整理本机记忆…</p>
+    <p>对话和记忆保存在这台电脑的 Alice 项目目录中。</p>
+    <p>需要重新启动时，在 PowerShell 执行以下命令：</p>
+    <code id="restart-command">正在读取本次启动命令…</code>
+    <button id="shutdown-return" class="btn ghost hidden" type="button">服务仍在时重新打开界面</button>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
+<script src="/observer.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

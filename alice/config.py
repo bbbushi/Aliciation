@@ -68,8 +68,8 @@ def _build(cls, raw: dict):
     return cls(**{k: v for k, v in raw.items() if k in fields})
 
 
-def load(path: Path | None = None) -> Config:
-    p = path or (PROJECT_ROOT / "config.toml")
+def load(path: Path | str | None = None) -> Config:
+    p = Path(path) if path is not None else (PROJECT_ROOT / "config.toml")
     raw: dict = {}
     if p.exists():
         with open(p, "rb") as f:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 from . import config as appconfig
 from . import consolidation, persona, retrieval, skills
@@ -101,14 +102,16 @@ def main() -> None:
     p_serve.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     args = parser.parse_args()
+    config_path = Path(args.config) if args.config else appconfig.PROJECT_ROOT / "config.toml"
 
     if args.cmd == "serve":
         from .server import run as run_server
 
-        run_server(port=args.port, open_browser=not args.no_open)
+        run_server(port=args.port, open_browser=not args.no_open,
+                   cfg=load(config_path), config_path=config_path)
         return
 
-    cfg = load(args.config)
+    cfg = load(config_path)
     store = Store(appconfig.DB_PATH)
     try:
         if args.cmd == "memory":
@@ -125,8 +128,6 @@ def main() -> None:
 
             print(thought.deliberate(store, make_client(cfg), cfg))
         elif args.cmd == "seed":
-            from pathlib import Path
-
             md = Path(args.file).read_text(encoding="utf-8")
             print(f"人格已安装：{persona.install_persona(store, cfg, md)}")
         elif args.cmd == "distill":
