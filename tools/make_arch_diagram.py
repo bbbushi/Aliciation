@@ -21,8 +21,8 @@ from matplotlib import font_manager  # noqa: E402
 
 # ---------- 版本信息（改版只动这里） ----------
 VERSION = "v0.3"
-SUBTITLE = "底色捐赠"
-CHANGELOG_LINE = "v0.3（2026-10-29）：底色捐赠入图——导入=消化捐赠人（风格继承/认知收养/经历不继承/来历段），收养认知为思想层冷启动脊柱。"
+SUBTITLE = "底色捐赠 · 表达从简"
+CHANGELOG_LINE = "v0.3b（2026-10-29）：表达层从简——拟态标记（【情绪】/(动作)/(她没有回话)）与情绪词表移除，情绪从文字本身表达；宪法行为条款退役（契约保留）。"
 
 
 def _setup_font() -> None:
@@ -88,7 +88,7 @@ def arrow(x1, y1, x2, y2, label="", color="#555", lw=1.6,
 ax.text(50, 94.8, "用户", ha="center", fontsize=15, fontweight="bold",
         bbox=dict(boxstyle="circle,pad=0.45", fc="#EEE", ec="#666"))
 box(16, 84.6, 68, 9.4, "渠道层 · GUI 与 CLI（service.ChatService 单写者锁串行）",
-    ["GUI：alice/server.py（纯标准库 · SSE 流式）+ web/（原生 JS：情绪小签/动作斜体/沉默气泡渲染）",
+    ["GUI：alice/server.py（纯标准库 · SSE 流式）+ web/（原生 JS：纯文本渲染）",
      "CLI：python -m alice（serve / chat / deliberate / seed / memory …）"],
     color=C["channel"], line_size=9.8)
 arrow(50, 94.0, 50, 94.2, color=C["channel"])
@@ -119,11 +119,10 @@ for i in range(3):
 # ---- 左：上下文组装 ----
 box(5, 42.5, 25, 26.5, "上下文组装（retrieval）", [
     "┌ 稳定前缀（吃 prompt 缓存）",
-    "│ 1 宪法 v2：认识论四分 ·",
-    "│   被冲击行为链 · 论据门控",
-    "│   言语行为标记【情绪】",
-    "│   （动作）（她没有回话）",
-    "│ 2 人格：底色+情绪词表 · 生长",
+    "│ 1 宪法：认识论四分（契约）·",
+    "│   三分法 · 记忆区读法",
+    "│   （行为条款已退役）",
+    "│ 2 人格：底色 · 生长",
     "│   ·「我现在的想法」（思辨",
     "│     维护，演化不覆写）",
     "│ 3 记忆区：长期 top-k ·",
@@ -184,9 +183,9 @@ arrow(85, 41.4, 85, 42.2, color=C["llm"])
 box(5, 24.5, 24.5, 16.5, "人格子系统（persona · v0.3）", [
     "标签种子 / 导入消化（install）",
     "导入文档=捐赠人：LLM 提取→",
-    "风格+情绪词→底色；认知→收养",
-    "审查（认可→收养·拒绝→记「没",
-    "拿走」）；背景事实零落库，只进",
+    "风格→底色；认知→收养审查",
+    "（认可→收养·拒绝→记「没拿",
+    "走」）；背景事实零落库，只进",
     "来历段——她不扮演任何人",
     "演化：援引依据 · 快照回滚",
 ], color=C["persona"], line_size=8.6, line_gap=1.72)

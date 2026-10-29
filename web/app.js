@@ -89,36 +89,13 @@ function renderMd(md) {
 
 /* ---------- 聊天渲染 ---------- */
 
-/* 言语行为标记（P1 表达层）：段首【情绪】→ 彩色小签；（动作）→ 斜体舞台提示；
-   整条只有（她没有回话）→ 沉默气泡。解析失败（不匹配任何模式）原样显示。 */
-const EMO_POS = /开心|高兴|安心|期待|好奇|兴奋|惊喜|撒娇|得意|满足|放松|偷笑|雀跃|温柔|轻笑/;
-const EMO_NEG = /难过|委屈|生气|愤怒|慌乱|不安|紧张|害怕|失落|沉重|心酸|羞恼|懊恼|无措|发虚|烦/;
-const SILENCE_RE = /^\s*[（(]她没有回话[）)][。.!?！？]?\s*$/;
-
-function emoClass(w) {
-  return EMO_POS.test(w) ? "pos" : EMO_NEG.test(w) ? "neg" : "mid";
-}
-
-function speechHtml(raw) {
-  return String(raw).split("\n").map((line) => {
-    let s = esc(line);
-    let chip = "";
-    const m = s.match(/^【([^】]{1,8})】\s*/);
-    if (m) {
-      chip = `<span class="emo ${emoClass(m[1])}">${esc(m[1])}</span> `;
-      s = s.slice(m[0].length);
-    }
-    s = s.replace(/（([^（）]{1,24})）/g, '<span class="act">（$1）</span>');
-    return chip + s;
-  }).join("<br>");
-}
-
-/* 气泡文本的统一入口：原始文本存 dataset.raw（流式累加、done 比对都看它），渲染走 speechHtml */
+/* 表达层从简：情绪由文字本身表达（语气/措辞/节奏），GUI 只做纯文本渲染；
+   历史上的言语行为标记（【情绪】/(动作)）即使出现也原样显示，不做特殊渲染。 */
 function setBubbleText(txt, raw) {
-  txt.dataset.raw = raw;
-  txt.innerHTML = speechHtml(raw);
+  txt.dataset.raw = raw || "";
+  txt.textContent = raw || "";
   const msg = txt.closest(".msg");
-  if (msg) msg.classList.toggle("silence", SILENCE_RE.test(raw || ""));
+  if (msg) msg.classList.toggle("silence", !(raw || "").trim());
 }
 
 function bubble(role, text) {
@@ -126,8 +103,7 @@ function bubble(role, text) {
   div.className = `msg ${role}`;
   const txt = document.createElement("div");
   txt.className = "txt";
-  if (role === "assistant" && text) setBubbleText(txt, text);
-  else txt.textContent = text;
+  if (text) setBubbleText(txt, text);
   div.appendChild(txt);
   $("#msgs").appendChild(div);
   scrollBottom();

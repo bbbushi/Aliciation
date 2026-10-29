@@ -19,6 +19,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 不碰 `.zcodeignore`、`~/.zcode/`。
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作区约定.md`。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
+- **分支流程（2026-10-29 起）**：改动一律先推 `ytq`，验收后 `--no-ff` 合并（或 PR）进 main；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。remote 已切 SSH。
 
 ## 当前
 

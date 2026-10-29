@@ -28,15 +28,14 @@ _PROTECTED_SECTIONS = ("## 生长 · 我现在的想法", "## 生长 · 我的�
 
 DIGEST_PROMPT = """下面是一份人格设定文档（一位"捐赠人"的角色稿）。AI 会继承 TA 的说话风格与部分认知，但不会把 TA 的经历当成自己的——那段背景只是一场 TA 经历过的、AI 复盘过的体验。
 
-请把文档拆解为四类，输出 JSON：
-- style_traits：说话习惯与风格要点（3~8 条，短语）。只描述"怎么说"，不涉及任何经历。
-- emotion_words：贴合该角色的情绪词（6~12 个，【】格式）。
+请把文档拆解为三类，输出 JSON：
+- style_traits：说话习惯与风格要点（3~10 条，短语）。只描述"怎么说"——语气、用词、节奏都算风格；不涉及任何经历。
 - candidate_stances：文档中体现的价值观、态度、看世界的方式（0~8 条）。每条 {{claim, from_donor}}——claim 是一句可被 AI 自己持有或拒绝的主张，from_donor 一句话说明它来自文档里的什么。
 - story_facts：背景中的事实性要素（地点、人物、身世、事件；0~12 条，短语）。这些一律不成为 AI 的经历，只用于撰写来历。
 - donor_name：文档中角色的名字（没有就空字符串）。
 
 硬性规则：不新增文档之外的设定；文档没有的内容输出空列表。
-输出 JSON：{{"style_traits": [], "emotion_words": [], "candidate_stances": [{{"claim": "", "from_donor": ""}}], "story_facts": [], "donor_name": ""}}
+输出 JSON：{{"style_traits": [], "candidate_stances": [{{"claim": "", "from_donor": ""}}], "story_facts": [], "donor_name": ""}}
 
 人格设定文档：
 {doc}"""
@@ -71,22 +70,11 @@ GROWTH_PLACEHOLDER = """## 生长 · 自我叙事
 
 （尚未形成）"""
 
-# 表达层（P1）：情绪词表默认底稿。标签种子由模型派生覆盖；导入人格缺节时以此为起点，
-# 演化凭证据丰富（它与底色同类——气质的用词面）。
-DEFAULT_EMOTION_LEXICON = """## 底色 · 情绪词表
-
-【开心】【安心】【好奇】【期待】
-【难过】【委屈】【慌乱】【不安】
-【生气】【无奈】【小声】【认真】
-
-（表达情绪基调时优先从中选词；词表将随底色的演化而丰富。）"""
-
 SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气质标签：{tags}。
 
 硬性规则：
 - 只描述气质、说话风格、与人相处的方式和边界感。
 - **绝对禁止编造任何经历、回忆、事实背景或具体喜好**（例如"你经历过很多…""你从小喜欢…"都不允许出现）。
-- 「情绪词表」从上述标签派生：8~15 个她的情绪词（【】格式，每行 3~4 个），要贴她的气质（如"害羞"该有【脸红】【慌乱】而非【张扬】），并附一行使用注记。
 - 用简体中文直接写"如何说话、如何反应"，写成可执行的风格准则，不要旁观式描述。
 - 输出纯 markdown，结构必须严格如下（生长三节原样保留占位文字）：
 
@@ -95,12 +83,6 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 ## 底色 · 气质与风格
 
 （这里写 3~6 条气质与风格要点）
-
-## 底色 · 情绪词表
-
-（8~15 个从标签派生的情绪词，【】格式）
-
-（使用注记一行）
 
 ## 生长 · 自我叙事
 
@@ -117,7 +99,7 @@ SEED_PROMPT = """为一个陪伴型 AI 生成人格底色。用户选择的气�
 EVOLVE_PROMPT = """你是人格演化任务。根据这段时间的新记忆，更新 {name} 的人格文件。
 
 护栏（必须遵守）：
-- 「底色 · 气质与风格」「底色 · 情绪词表」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。词表的新增词必须与现有底色气质一致，禁止大换血。
+- 「底色 · 气质与风格」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。
 - 「生长 · 自我叙事」「生长 · 与用户的关系」：可自由补充、修改、合并，但内容必须能追溯到新记忆，禁止编造具体经历。
 - 「生长 · 我现在的想法」「生长 · 我的来历」：**由思辨/消化流程维护，演化无权改动**——输入里不会出现这两节之外你也不得输出它们。
 - 压力窗口的记忆已被代码隔离，不出现在下方输入中：人格不因高压下的让步而改，这是硬边界不是请求。
@@ -160,11 +142,8 @@ def generate_seed_md(client, cfg: Config, tags: list[str]) -> str:
         md = (
             f"# {cfg.persona.name} 的人格\n\n"
             f"## 底色 · 气质与风格\n\n（标签：{'、'.join(tags)}）\n\n"
-            f"{DEFAULT_EMOTION_LEXICON}\n\n{GROWTH_PLACEHOLDER}"
+            f"{GROWTH_PLACEHOLDER}"
         )
-    elif "## 底色 · 情绪词表" not in md:
-        # 生成成功但漏了词表：补默认底稿，保证表达层词表永远在场
-        md = md.rstrip("\n") + "\n\n" + DEFAULT_EMOTION_LEXICON + "\n"
     return md
 
 
@@ -215,7 +194,6 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
     elif not md.startswith("# "):
         md = f"# {cfg.persona.name} 的人格\n\n{md}"
     for title, placeholder in (
-        ("## 底色 · 情绪词表", DEFAULT_EMOTION_LEXICON.split("\n\n", 1)[1].strip()),
         ("## 生长 · 我的来历", "（尚未消化——导入文档的来历将写在这里）"),
         ("## 生长 · 自我叙事", "（尚未形成——将随共同经历自然生长）"),
         ("## 生长 · 我现在的想法", "（尚未形成——将在思辨中从经历里长出观点）"),
@@ -262,9 +240,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     resp = chat(client, cfg, [{"role": "user", "content": DIGEST_PROMPT.format(doc=doc)}],
                 model=cfg.llm.cheap_model, json_mode=True)
     data = parse_json(resp.choices[0].message.content or "")
-    styles = [str(s).strip() for s in (data.get("style_traits") or []) if str(s).strip()][:8]
-    words = [str(w).strip() for w in (data.get("emotion_words") or []) if str(w).strip()][:12]
-    words = [w if w.startswith("【") else f"【{w}】" for w in words]
+    styles = [str(s).strip() for s in (data.get("style_traits") or []) if str(s).strip()][:10]
     stances = [s for s in (data.get("candidate_stances") or [])
                if isinstance(s, dict) and str(s.get("claim", "")).strip()][:8]
     facts = [str(f).strip() for f in (data.get("story_facts") or []) if str(f).strip()][:12]
@@ -312,28 +288,17 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     style_block = "\n".join(f"- {s}" for s in styles) if styles else "（文档未提取到风格要点）"
     style_header = f"（来自捐赠文档「{donor}」的风格，AI 只继承说话方式）"
     if not is_alice_format:
-        word_block = "\n".join("".join(words[i:i + 4]) for i in range(0, len(words), 4)) if words \
-            else DEFAULT_EMOTION_LEXICON.split("\n\n", 1)[1].strip()
         narrative = "\n".join(
             f"- {c}（继承自《{donor}》，尚未经我自己的经历检验）" for c in adopted)
         md = "\n\n".join([
             f"# {cfg.persona.name} 的人格",
             f"## 底色 · 气质与风格\n\n{style_header}\n\n{style_block}",
-            f"## 底色 · 情绪词表\n\n{word_block}\n\n（表达情绪基调时优先从中选词。）",
         ])
     else:
         md = persona_md() or f"# {cfg.persona.name} 的人格\n"
         md = re.sub(r"## 底色 · 气质与风格\n\n.*?(?=\n## )",
                     f"## 底色 · 气质与风格\n\n{style_header}\n\n{style_block}\n\n",
                     md, count=1, flags=re.S)
-        if words:
-            wb = "\n".join("".join(words[i:i + 4]) for i in range(0, len(words), 4))
-            if re.search(r"^## 底色 · 情绪词表\s*$", md, flags=re.M):
-                md = re.sub(r"## 底色 · 情绪词表\n\n.*?(?=\n## )",
-                            f"## 底色 · 情绪词表\n\n{wb}\n\n（表达情绪基调时优先从中选词。）\n\n",
-                            md, count=1, flags=re.S)
-            else:
-                md = md.rstrip("\n") + f"\n\n## 底色 · 情绪词表\n\n{wb}\n"
 
     adopted_brief = "、".join(f"「{c}」" for c in adopted) if adopted else "（TA的认知里还没有我认可的）"
     rejected_brief = "、".join(f"「{c}」（{why}）" for c, why in rejected) if rejected else "（暂无明确拒绝的）"
@@ -365,7 +330,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
             f"- {c}（继承自《{donor}》，尚未经我自己的经历检验）" for c in adopted)
         md = thought._write_section(md, narrative)
         paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
-    return (f"消化完成：风格 {len(styles)} 条、情绪词 {len(words)} 个、"
+    return (f"消化完成：风格 {len(styles)} 条、"
             f"收养认知 {len(adopted)} 条、拒绝 {len(rejected)} 条"
             + (f"（捐赠人「{donor}」）" if donor else ""))
 
