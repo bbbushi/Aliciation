@@ -4,6 +4,7 @@ __pycache__/
 data/
 config.toml
 .DS_Store
-docs/harness研究/插件参考/Cortico/
+wiki/harness研究/插件参考/
 tests/.sessions/
 dist/
+user/

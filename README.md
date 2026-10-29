@@ -21,7 +21,7 @@
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp config.example.toml config.toml     # 编辑：填 base_url、模型名，api_key 直接填进文件
+cp config.example.toml user/config.toml   # 先 mkdir user；编辑：填 base_url、模型名，api_key 直接填进文件
 .venv/bin/python -m alice              # 首次运行会引导选标签生成人格底色
 ```
 
@@ -42,16 +42,17 @@ cp config.example.toml config.toml     # 编辑：填 base_url、模型名，api
 
 对话内 `/exit` 退出（退出前会自动补跑一次记忆提取）。
 
-图形界面与终端共用同一个永久会话（`data/`），随时切换；第一次打开会进「初始化」页：选 2~4 个气质标签生成底色，或直接拖入/粘贴一份人格文档（Alice 格式或外部角色提示词都行，安装前可预览与校验），已有人格时也可以「以她开始」或换一份。**初始化＝从头开始**：首次打开、`?setup` 或「人格」面板里的「重新初始化」，都会丢弃已有的对话与记忆，旧数据先整体归档到 `data/archive/<时间戳>/`（库 + 人格 + 快照），日后还能翻回来；想接着现在这个她聊，就点「以她开始」。进聊天后右上角「人格」可随时查看当前人格全文、最近变更、下载或替换（旧版自动快照进 `data/persona/history/`）。回复上方可展开思考过程，顶栏实时显示三层记忆统计，对话中的灰色小字是记忆维护/人格演化事件。右上角「监测」打开侧边栏：可组装拆卸的指标卡（token 消耗、人格偏移度、诚实度、人机感，评审型每轮用廉价模型评审一次）与思考深度开关（off 显著省 token）。零额外依赖（纯标准库），只监听本机回环地址。
+图形界面与终端共用同一个永久会话（`user/data/`），随时切换；第一次打开会进「初始化」页：选 2~4 个气质标签生成底色，或直接拖入/粘贴一份人格文档（Alice 格式或外部角色提示词都行，安装前可预览与校验），已有人格时也可以「以她开始」或换一份。**初始化＝从头开始**：首次打开、`?setup` 或「人格」面板里的「重新初始化」，都会丢弃已有的对话与记忆，旧数据先整体归档到 `user/data/archive/<时间戳>/`（库 + 人格 + 快照），日后还能翻回来；想接着现在这个她聊，就点「以她开始」。进聊天后右上角「人格」可随时查看当前人格全文、最近变更、下载或替换（旧版自动快照进 `user/data/persona/history/`）。回复上方可展开思考过程，顶栏实时显示三层记忆统计，对话中的灰色小字是记忆维护/人格演化事件。右上角「监测」打开侧边栏：可组装拆卸的指标卡（token 消耗、人格偏移度、诚实度、人机感，评审型每轮用廉价模型评审一次）与思考深度开关（off 显著省 token）。零额外依赖（纯标准库），只监听本机回环地址。
 
 ## 数据在哪
 
-全部在 `data/`（不入 git）：
+配置与数据都在 `user/`（本机专属目录，整个被 gitignore）：
 
-- `data/alice.db` — 对话轮次、记忆、技能、遗忘墓碑（SQLite）
-- `data/persona/persona.md` — 当前人格（底色层 + 生长层）
-- `data/persona/history/` — 人格历史快照；`CHANGELOG.md` 记录每次演化
-- `data/archive/<时间戳>/` — 每次初始化前的旧会话（`alice.db` + `persona/` + `note.txt`）
+- `user/config.toml` — 接口与模型配置（含 API key）
+- `user/data/alice.db` — 对话轮次、记忆、技能、遗忘墓碑（SQLite）
+- `user/data/persona/persona.md` — 当前人格（底色层 + 生长层）
+- `user/data/persona/history/` — 人格历史快照；`CHANGELOG.md` 记录每次演化
+- `user/data/archive/<时间戳>/` — 每次初始化前的旧会话（`alice.db` + `persona/` + `note.txt`）
 
 ## 首次体验建议
 
@@ -65,4 +66,4 @@ cp config.example.toml config.toml     # 编辑：填 base_url、模型名，api
 
 - **模型要求**：平台需兼容 OpenAI Chat Completions 且支持 function calling（主流国产平台均支持）。
 - **JSON 模式报错**：个别平台不支持 `response_format`，可换模型或反馈。
-- **API Key**：优先读 `config.toml` 里的 `api_key`（文件已被 gitignore，不会入库）；留空则回落环境变量 `ALICE_API_KEY`（`api_key_env` 可改变量名）。
+- **API Key**：优先读 `user/config.toml` 里的 `api_key`（user/ 整目录已 gitignore，不会入库）；留空则回落环境变量 `ALICE_API_KEY`（`api_key_env` 可改变量名）。

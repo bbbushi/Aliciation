@@ -1,4 +1,7 @@
-"""配置加载：项目根目录 config.toml + 内置默认值。"""
+"""配置加载：user/config.toml + 内置默认值。
+
+user/ 是本机专属目录（config + 全部数据，gitignored）——换机器/交仓库时整个目录带走或删掉即可。
+"""
 from __future__ import annotations
 
 import os
@@ -7,7 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+USER_DIR = PROJECT_ROOT / "user"
+DATA_DIR = USER_DIR / "data"
 DB_PATH = DATA_DIR / "alice.db"
 PERSONA_DIR = DATA_DIR / "persona"
 PERSONA_FILE = PERSONA_DIR / "persona.md"
@@ -69,7 +73,7 @@ def _build(cls, raw: dict):
 
 
 def load(path: Path | None = None) -> Config:
-    p = path or (PROJECT_ROOT / "config.toml")
+    p = path or (USER_DIR / "config.toml")
     raw: dict = {}
     if p.exists():
         with open(p, "rb") as f:

@@ -83,7 +83,7 @@ def main() -> None:
         prog="alice",
         description="Alice — 陪伴型 harness（单一永久会话 + 三层记忆 + 可生长人格）",
     )
-    parser.add_argument("--config", default=None, help="config.toml 路径（默认项目根目录）")
+    parser.add_argument("--config", default=None, help="config.toml 路径（默认 user/config.toml）")
     sub = parser.add_subparsers(dest="cmd")
 
     p_mem = sub.add_parser("memory", help="查看记忆库分层与统计")
