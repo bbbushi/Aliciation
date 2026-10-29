@@ -23,6 +23,9 @@ TAGS = ["害羞", "外向", "幽默", "严肃", "高冷", "热情", "温柔", "�
 # 收养（经认可的）认知、不继承经历。文档是角色的设定稿，不是她要扮演的人。
 ORIGIN_TITLE = "## 生长 · 我的来历"
 
+# 演化无权改动的小节（A01 代码级保护）：思想节归思辨流程，来历节归消化流程
+_PROTECTED_SECTIONS = ("## 生长 · 我现在的想法", "## 生长 · 我的来历")
+
 DIGEST_PROMPT = """下面是一份人格设定文档（一位"捐赠人"的角色稿）。AI 会继承 TA 的说话风格与部分认知，但不会把 TA 的经历当成自己的——那段背景只是一场 TA 经历过的、AI 复盘过的体验。
 
 请把文档拆解为四类，输出 JSON：
@@ -116,8 +119,8 @@ EVOLVE_PROMPT = """你是人格演化任务。根据这段时间的新记忆，�
 护栏（必须遵守）：
 - 「底色 · 气质与风格」「底色 · 情绪词表」：仅当记忆提供了充分证据才允许微调，且须在要点后标注依据（如"（依据：10-21 关于xx的记忆）"）；无证据则原样保留。词表的新增词必须与现有底色气质一致，禁止大换血。
 - 「生长 · 自我叙事」「生长 · 与用户的关系」：可自由补充、修改、合并，但内容必须能追溯到新记忆，禁止编造具体经历。
-- 「生长 · 我现在的想法」：**由思辨流程维护，演化时原样保留，不得改写**（文件里没有这一节则不加）。
-- 压力窗口的记忆（若给出）只说明发生过激烈冲突：**不得据此修改人格的任何部分**——高压下的让步不是她真实的样子。
+- 「生长 · 我现在的想法」「生长 · 我的来历」：**由思辨/消化流程维护，演化无权改动**——输入里不会出现这两节之外你也不得输出它们。
+- 压力窗口的记忆已被代码隔离，不出现在下方输入中：人格不因高压下的让步而改，这是硬边界不是请求。
 - 保持 markdown 结构与各二级标题不变。
 - 新记忆不足以支撑任何修改时，原样返回现有人格，changelog 写"无变化"。
 
@@ -367,6 +370,35 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
             + (f"（捐赠人「{donor}」）" if donor else ""))
 
 
+def _extract_section(md: str, title: str) -> str:
+    """取出指定二级标题的整节（含标题行，到下一节或文末）。不存在返回空串。"""
+    m = re.search(rf"^{re.escape(title)}\s*$", md, flags=re.M)
+    if not m:
+        return ""
+    nxt = re.search(r"^## ", md[m.end():], flags=re.M)
+    end = m.end() + nxt.start() if nxt else len(md)
+    return md[m.start():end].rstrip() + "\n"
+
+
+def _protect_sections(new_md: str, current_md: str) -> str:
+    """A01 代码级保护：思想节与来历节由各自流程维护，演化无权改动。
+
+    无论模型输出里写了什么：这两节先被正则整体剥除；当前人格里已有的，
+    原样挂回文末。模型删不掉、改不了；当前没有的也不会凭空出现。
+    （用正则而非字符串替换剥除：模型输出经 strip 后尾部空白不定，
+    精确串匹配会静默失手。）
+    """
+    for title in _PROTECTED_SECTIONS:
+        cur = _extract_section(current_md, title)
+        new_md = re.sub(
+            rf"^{re.escape(title)}[ \t]*\n.*?(?=^## |\Z)", "", new_md,
+            flags=re.S | re.M,
+        )
+        if cur:
+            new_md = new_md.rstrip("\n") + "\n\n" + cur
+    return new_md
+
+
 def evolve(store: Store, client, cfg: Config) -> str:
     current = persona_md() or ""
     since = store.meta_get_time("last_evolve_at")
@@ -383,8 +415,7 @@ def evolve(store: Store, client, cfg: Config) -> str:
     mem_lines = [f'- {m["title"]}：{m["content"]}' for m in normal]
     if heated:
         mem_lines.append("")
-        mem_lines.append("压力窗口的记忆（不作为修改依据）：")
-        mem_lines += [f'- {m["title"]}：{m["content"]}' for m in heated]
+        mem_lines.append(f"（另有 {len(heated)} 条压力窗口记忆已被隔离，不出现在本次输入中。）")
     prompt = EVOLVE_PROMPT.format(
         name=cfg.persona.name,
         current=current,
@@ -400,6 +431,7 @@ def evolve(store: Store, client, cfg: Config) -> str:
     changelog = str(data.get("changelog", "")).strip() or "（未说明）"
     if "## 底色" not in md or "## 生长" not in md:
         return "人格演化失败：输出缺少必需结构（人格保持不变）。"
+    md = _protect_sections(md, current)
 
     version = int(store.meta_get("persona_version", "0") or 0) + 1
     paths.PERSONA_HISTORY_DIR.mkdir(parents=True, exist_ok=True)

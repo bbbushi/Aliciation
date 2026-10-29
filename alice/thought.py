@@ -25,7 +25,7 @@ SECTION_TITLE = "## 生长 · 我现在的想法"
 DELIBERATE_PROMPT = """你是 {name} 的思辨任务：把积累的记忆消化成观点。记忆是养料，观点是消化产物——不是复述事件，而是从事件里长出「我怎么看」。
 
 硬性规则：
-- 每条观点的 sources 必须指向下方记忆里实际存在的标题；禁止无出处的深刻。
+- 每条观点的 sources 必须逐字使用下方记忆里实际存在的标题（代码逐条校验，出处不实的观点会被整个丢弃）；禁止无出处或空出处的观点。
 - 观点要带不确定度：没想透的部分如实写；未决问题单列——没想清也是认知状态的一部分。
 - 修订必须带新论据：写 replaces 时，新观点的 sources 里至少要有一个出处不在旧观点的依据里；没有新证据就维持原观点，不要因为被质疑就改。
 - 叙事里修订过的观点写成「以前我以为X，后来觉得Y（依据…）」——思想的变动要可见。
@@ -73,6 +73,28 @@ def _write_section(md: str, narrative: str) -> str:
     return rest.rstrip("\n") + "\n\n" + block if rest.strip() else block
 
 
+def _render_stances(store: Store) -> str:
+    """从库内已接纳的 stance 确定性重建「我现在的想法」小节正文（A01）。
+
+    只读长期层在库的观点：被拒/被丢的内容不在这张表里，天然混不进人格叙事。
+    """
+    lines = []
+    for m in store.memories_in_layer("longterm", kind="stance"):
+        body = m["content"]
+        former = ""
+        first, _, rest = body.partition("\n")
+        if first.startswith("曾以为："):
+            former = first[len("曾以为："):].strip()
+            body = rest
+        mu = re.search(r"^不确定：(.+)$", body, flags=re.M)
+        unc = mu.group(1).strip() if mu else "暂无"
+        lines.append(
+            f"- 以前我以为{former}，现在觉得{m['title']}（不确定：{unc}）" if former
+            else f"- {m['title']}（不确定：{unc}）"
+        )
+    return "\n".join(lines)
+
+
 def deliberate(store: Store, client, cfg: Config) -> str:
     anchor = store.meta_get_time("last_deliberate_at") or store.meta_get_time("last_evolve_at")
     events = [m for m in store.alive_memories() if m["kind"] == "event"]
@@ -109,13 +131,18 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         store.meta_set("last_deliberate_at", time.time())
         return "思辨完成：这批记忆还不足以长出新观点。"
 
-    added = revised = rejected = 0
+    title_pressure = {m["title"]: bool(m["pressure"]) for m in material}
+    added = revised = rejected = dropped = 0
     for v in views:
         claim = str(v["claim"]).strip()[:24]
         sources = [str(s).strip() for s in (v.get("sources") or []) if str(s).strip()]
+        valid = [s for s in sources if s in title_pressure]  # A01：出处必须逐字存在于本次材料
+        if not valid:
+            dropped += 1  # 空出处或虚构出处：整条丢弃，不给"无中生有的深刻"留门
+            continue
         content = (
             f'{str(v.get("reasons", "")).strip()}\n'
-            f'出处：{"、".join(sources) or "（未注明）"}\n'
+            f'出处：{"、".join(valid)}\n'
             f'不确定：{str(v.get("uncertainty", "暂无")).strip()}\n'
             f'未决：{str(v.get("open_questions", "暂无")).strip()}'
         )
@@ -126,15 +153,18 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         if old is not None and old["title"] == claim:
             continue  # 原观点重申，不重复入库
         if old is not None:
-            # 有据让步门控：修订生效需新论据（至少一个出处不在旧观点依据里）
-            if not set(sources) - _sources_of(old["content"]):
+            # 有据让步门控：修订生效需新论据（校验后的出处至少一个不在旧观点依据里）
+            if not set(valid) - _sources_of(old["content"]):
                 rejected += 1
                 continue
             content = f'曾以为：{old["title"]}\n{content}'  # 修订史：记录被放弃的主张
+        # A01：压力沿派生链保留——出处含压力记忆的观点自身带压力标记，
+        # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
+        src_pressure = any(title_pressure[s] for s in valid)
         store.insert_memory(
             title=claim, content=content,
-            keywords="观点 " + " ".join(sources),
-            layer="longterm", kind="stance",
+            keywords="观点 " + " ".join(valid),
+            layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
         )
         if old is not None:
             store.expire_memory(old["id"], reason=f"观点被新证据修订：{old['title']} → {claim}")
@@ -147,14 +177,20 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         parts.append(f"修订 {revised} 条")
     if rejected:
         parts.append(f"拒绝无据修订 {rejected} 条")
+    if dropped:
+        parts.append(f"丢弃无实据观点 {dropped} 条")
     summary = "、".join(parts)
 
     narrative = str(data.get("narrative", "")).strip()
     if added or revised:  # 观点集无实际变化时不动小节——被拒的修订不落进人格
-        lines = narrative.splitlines()
-        while lines and lines[0].lstrip().startswith("#"):  # 模型可能自带标题，统一由 SECTION_TITLE 承担
-            lines.pop(0)
-        narrative = "\n".join(lines).strip()
+        if dropped or rejected:
+            # A01：本批存在被拒/被丢内容——模型叙事不可信，从库内已接纳观点确定性重建
+            narrative = _render_stances(store)
+        else:
+            lines = narrative.splitlines()
+            while lines and lines[0].lstrip().startswith("#"):  # 模型可能自带标题，统一由 SECTION_TITLE 承担
+                lines.pop(0)
+            narrative = "\n".join(lines).strip()
         if narrative:
             paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
             new_md = _write_section(current_md or f"# {cfg.persona.name} 的人格\n", narrative)
