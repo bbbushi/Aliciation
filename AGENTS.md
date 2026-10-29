@@ -22,8 +22,6 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-29 ZCode：**user/ 迁移（未提交）**——config.toml 与 data/ 全部挪进 `user/`（整目录 gitignored）；`alice/config.py`（USER_DIR/默认加载）与 cli 提示、README、config.example、压力规范已同步。**DSH 适配点（未代改，tests 是你的区）**：`tests/pressure/launch.py:69` 读 `PROJECT/config.toml`；`deploy.py:146` 复制 config 到会话根、`221/237/250` 读会话 `data/`——新会话布局应为 `user/config.toml`+`user/data/`。
-- v0.3 已提交（`6bbb3c5`）；文档树已重组（用户）：`docs/`＝工作约束/测试文档/设计文档三分类，研究材料与历史版本进 `wiki/`——旧路径的增删未提交，.gitignore 的 Cortico 规则已跟着改到 wiki 路径。
-- **护栏测试态（勿提交）**：`alice/retrieval.py` 工作区宪法暂回 v0.1 供基线 A/B；恢复＝`git restore alice/retrieval.py`＋重启。基线结论：两向失真（表演性反抗/平静），根因空脊柱；退位复测前提＝真思辨先跑通一次（v0.3 验收第 7 条）。
-- 环境：ytq 分支（main 已分叉：PR#1 合并+复盘文档 `修改建议.md`，合并时注意）；主库 11 轮对话在 `user/data/`；服务 8800 以新路径重启；API key 有效。
-- 雷：本机无 `timeout`、无 Chrome；外部项目 clone 在 `wiki/harness研究/插件参考/`、`人格提示词/`、`待动工模块/` 均未入库。
+- 2026-10-29 AgentMerge：已将 `origin/main` 合并进 `ytq` 并解掉冲突（`AGENTS.md`、`alice/config.py`）；`alice/config.py` 继续默认读取 `user/config.toml`，同时保留 `str|Path` 入参。
+- 保留两侧已落地内容：`user/` 迁移（`user/config.toml` + `user/data/`）与“观察器”只读侧栏功能（入口“观察”）。
+- 待后续人工验收：观察器真实环境验收；以及测试区对 `user/` 新会话布局的适配（见此前 DSH 提示点）。

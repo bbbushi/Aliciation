@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/
 config.toml
+config.toml.*.tmp
 .DS_Store
 wiki/harness研究/插件参考/
 tests/.sessions/
