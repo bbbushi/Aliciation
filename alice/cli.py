@@ -128,7 +128,7 @@ def main() -> None:
             from pathlib import Path
 
             md = Path(args.file).read_text(encoding="utf-8")
-            print(f"人格已安装：{persona.install_persona(store, cfg, md)}")
+            print(f"人格已安装：{persona.install_persona(store, cfg, md, client=make_client(cfg))}")
         elif args.cmd == "distill":
             print(skills.distill(store, make_client(cfg), cfg))
         else:

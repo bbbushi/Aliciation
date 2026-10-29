@@ -134,7 +134,8 @@ class ChatService:
         with self._lock:
             if reset:
                 self._archive_locked()
-            persona.install_persona(self.store, self.cfg, md_text, source=source)
+            persona.install_persona(self.store, self.cfg, md_text, source=source,
+                                    client=self.client)  # v0.3：传 client 走消化流程
         return self.state()
 
     def reset_session(self) -> dict:

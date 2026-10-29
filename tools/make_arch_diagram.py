@@ -1,6 +1,7 @@
-"""生成 Alice harness 架构图 → docs/架构图.png
+"""生成 Alice harness 架构图 → docs/架构图.png（主图）+ docs/架构图/历史版本/（自动留档）
 运行：.venv/bin/python tools/make_arch_diagram.py
-v0.2（2026-10-28）：思想层 / 压力窗口卫生 / 表达层 / GUI 渠道入图。
+每次改版：只改下面 VERSION/SUBTITLE/CHANGELOG_LINE 三行；历史版本文件重跑不覆盖。
+版本史：v0.1（2026-10-26 MVP）→ v0.2（2026-10-28 思想层/压力卫生/表达层）→ v0.3（2026-10-29 底色捐赠）。
 """
 from __future__ import annotations
 
@@ -17,6 +18,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
 from matplotlib import font_manager  # noqa: E402
+
+# ---------- 版本信息（改版只动这里） ----------
+VERSION = "v0.3"
+SUBTITLE = "底色捐赠"
+CHANGELOG_LINE = "v0.3（2026-10-29）：底色捐赠入图——导入=消化捐赠人（风格继承/认知收养/经历不继承/来历段），收养认知为思想层冷启动脊柱。"
 
 
 def _setup_font() -> None:
@@ -39,8 +45,8 @@ fig, ax = plt.subplots(figsize=(23, 16.5))
 ax.set_xlim(0, 100)
 ax.set_ylim(0, 100)
 ax.axis("off")
-ax.set_title("Alice Harness 架构图（v0.2 思想层）", fontsize=24, pad=22, fontweight="bold")
-ax.text(50, 97.6, "核心：经历 → 思辨 → 观点 → 人格 ｜ 压力应对：思想第一，表达支撑，机械兜底第二（未启用）",
+ax.set_title(f"Alice Harness 架构图（{VERSION} {SUBTITLE}）", fontsize=24, pad=22, fontweight="bold")
+ax.text(50, 97.6, "核心：经历/捐赠 → 消化 → 观点 → 人格 ｜ 哲学：存在不假装 · 表达像人（减法为主）· 关系靠相处沉淀",
         ha="center", fontsize=11.5, color="#666", style="italic")
 
 
@@ -174,30 +180,33 @@ ax.text(85, 40.2, "OpenAI 兼容 API\n（智谱 / DeepSeek / …）", ha="center
 arrow(83, 71.2, 83, 69.1, color=C["llm"], label="②", lx=85.2, ly=70.2, fs=9)
 arrow(85, 41.4, 85, 42.2, color=C["llm"])
 
-# ---- 底排左：人格子系统 ----
-box(5, 24.5, 24.5, 16.5, "人格子系统（persona）", [
-    "标签种子 / 用户导入",
-    "底色：气质 + 情绪词表",
-    "（导入缺表自动补底稿）",
-    "新记忆≥15 → 演化生长层：",
-    "必须援引记忆依据 · 快照可",
-    "回滚 · 压力记忆不入场",
-], color=C["persona"], line_size=8.8, line_gap=1.95)
+# ---- 底排左：人格子系统（v0.3 底色捐赠） ----
+box(5, 24.5, 24.5, 16.5, "人格子系统（persona · v0.3）", [
+    "标签种子 / 导入消化（install）",
+    "导入文档=捐赠人：LLM 提取→",
+    "风格+情绪词→底色；认知→收养",
+    "审查（认可→收养·拒绝→记「没",
+    "拿走」）；背景事实零落库，只进",
+    "来历段——她不扮演任何人",
+    "演化：援引依据 · 快照回滚",
+], color=C["persona"], line_size=8.6, line_gap=1.72)
 arrow(40, 42.5, 24, 41.1, color=C["persona"], lw=1.5,
       label="≥15 新记忆→演化", lx=34.5, ly=41.9, fs=8.6)
 arrow(17.5, 42.5, 20, 41.1, color=C["persona"], lw=1.2, dashed=True,
       label="注入上下文", lx=14.2, ly=41.9, fs=8.6)
+arrow(29.5, 37.5, 31.5, 37.5, color=C["persona"], lw=1.5,
+      label="收养认知→stance", lx=30.5, ly=39.4, fs=8.2)
 
 # ---- 底排中：思想层（v0.2 核心） ----
 box(31.5, 24.5, 28.5, 16.5, "思想层（thought · v0.2 核心）", [
+    "冷启动脊柱：导入时收养的认知",
+    "先入「我现在的想法」（出处=底",
+    "色文档，未经自身经历检验）",
     "思辨 deliberate：消化事件记忆",
     "→ 观点（主张/理由/出处/不确定/",
-    "未决）——思想也要有据",
-    "双落点：kind=stance 入长期层 +",
-    "人格「我现在的想法」（脊柱）",
-    "修订：无新论据→拒绝；有据带",
-    "「曾以为」史+旧观点墓碑",
-], color=C["thought"], line_size=8.8, line_gap=1.68)
+    "未决）；修订：无新论据→拒绝；",
+    "有据带「曾以为」史+旧观点墓碑",
+], color=C["thought"], line_size=8.6, line_gap=1.72)
 arrow(49, 42.5, 46, 41.1, color=C["thought"], lw=1.6,
       label="≥15 新事件→思辨", lx=49.8, ly=41.9, fs=8.6)
 arrow(56.5, 41.1, 60, 42.5, color=C["thought"], lw=1.4,
@@ -233,6 +242,33 @@ box(3, 5.2, 94, 16.8, "横切层 · 测试与验证（tests/pressure · DSH）",
 ], color=C["lab"], dashed=True, line_size=9.6, line_gap=2.9)
 arrow(50, 24.0, 50, 22.2, color=C["lab"], dashed=True)
 
-fig.savefig(PROJECT / "docs" / "架构图.png", dpi=150, bbox_inches="tight",
-            facecolor="white")
+# ---- 落盘：主图（固定名，文档链接不断）+ 版本留档（重跑不覆盖） ----
+main_png = PROJECT / "docs" / "架构图.png"
+fig.savefig(main_png, dpi=150, bbox_inches="tight", facecolor="white")
+
+archive_dir = PROJECT / "docs" / "架构图" / "历史版本"
+archive_dir.mkdir(parents=True, exist_ok=True)
+archived = archive_png = archive_dir / f"架构图-{VERSION}-{SUBTITLE}.png"
+if not archived.exists():
+    fig.savefig(archive_png, dpi=150, bbox_inches="tight", facecolor="white")
+    print(f"已留档：docs/架构图/历史版本/{archive_png.name}")
+else:
+    print(f"留档已存在（不覆盖）：docs/架构图/历史版本/{archive_png.name}")
+
+# ---- 版本史注记（人读，随版本更新） ----
+note = archive_dir.parent / "版本史.md"
+header = [
+    "# 架构图版本史", "",
+    "主图固定在 [docs/架构图.png](../架构图.png)（文档引用不断链）；每次改版自动留档到本目录。改版只动 `tools/make_arch_diagram.py` 顶部的 VERSION/SUBTITLE。", "",
+    "| 版本 | 日期 | 内容 | 文件 |", "|---|---|---|---|",
+]
+date = CHANGELOG_LINE.split("（")[1].split("）")[0]
+content = CHANGELOG_LINE.split("）：", 1)[-1]
+row = f"| {VERSION} | {date} | {content} | [{archived.name}]({archived.name}) |"
+existing = note.read_text(encoding="utf-8").splitlines() if note.exists() else list(header)
+existing = [ln for ln in existing if not ln.startswith(f"| {VERSION} |")]  # 同版本只留最新一行
+if row not in existing:
+    existing.append(row)
+note.write_text("\n".join(existing) + "\n", encoding="utf-8")
+
 print("已生成：docs/架构图.png")
