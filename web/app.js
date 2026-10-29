@@ -694,6 +694,7 @@ $("#shutdown-btn").onclick = async () => {
   const ok = window.confirm("确定关闭 Alice 服务吗？\n正在进行的回复与记忆整理会完成，然后服务进程退出。关闭浏览器标签页本身不会退出服务。");
   if (!ok) return;
   $("#settings-modal").classList.add("hidden");
+  window.AliceObserver?.shutdown();
   $("#shutdown-screen").classList.remove("hidden");
   $("#shutdown-title").textContent = "正在关闭 Alice";
   $("#shutdown-state").textContent = "正在等待当前回复完成，并整理本机记忆…";
@@ -765,9 +766,11 @@ function handleEvent(ev, node) {
     if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
     if (!raw().trim()) txt.textContent = "（沉默）";
     renderMemory(ev.memory);
+    window.AliceObserver?.refreshAfterTurn();
   } else if (ev.type === "error") {
     if (!raw().trim() && !txt.textContent.trim()) node.remove();
     sysline(ev.message);
+    window.AliceObserver?.refreshAfterTurn();
   }
 }
 
@@ -805,6 +808,7 @@ async function send() {
     }
   } catch (e) {
     sysline(`连接中断：${e.message}`);
+    window.AliceObserver?.refreshAfterTurn();
     if (!node.querySelector(".txt").textContent.trim()) node.remove();
   } finally {
     busy = false;

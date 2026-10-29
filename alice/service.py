@@ -5,12 +5,14 @@ import copy
 import os
 import shutil
 import threading
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as appconfig
-from . import consolidation, loop, persona, skills, thought
+from . import consolidation, loop, observation, persona, skills, thought
 from .config import Config, load
 from .config_edit import ConfigConflict, revision, replace_llm_values
 from .llm import make_client, safe_provider_error
@@ -76,6 +78,7 @@ class ChatService:
         try:
             self.client = client if client is not None else make_client(self.cfg)
             self._lock = threading.RLock()  # 单一永久会话语义：所有读写串行
+            self._observer_scope = uuid.uuid4().hex  # Ephemeral identity; never written to Alice's data.
             saved_thinking = self.store.meta_get("thinking")
             if saved_thinking in ("on", "off"):  # GUI 里改过的思考深度优先于 config 文件
                 self.cfg.llm.thinking = saved_thinking
@@ -155,6 +158,38 @@ class ChatService:
                 for r in self.store.recent_turns(limit)
             ]
 
+    def _observer_read(self, reader, *, scope=None, **kwargs) -> dict:
+        """Read only between writers; busy never queues or accesses the shared Store."""
+        if not self._lock.acquire(blocking=False):
+            return {"status": "busy", "scope": self._observer_scope}
+        try:
+            if scope is not None and scope != self._observer_scope:
+                return {"status": "reset", "scope": self._observer_scope}
+            # LIMIT bounds results, not full-text scan work. Abort expensive SQL so an
+            # observer search cannot hold up a subsequent chat indefinitely.
+            deadline = time.monotonic() + 1.0
+            self.store.conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+            try:
+                result = reader(self.store, **kwargs)
+            finally:
+                self.store.conn.set_progress_handler(None, 0)
+            return {"status": "ok", "scope": self._observer_scope, **result}
+        except observation.ObservationError as exc:
+            return {"status": "error", "scope": self._observer_scope, "error": str(exc)}
+        except Exception:
+            return {"status": "error", "scope": self._observer_scope, "error": "观察读取未完成，请稍后刷新或缩小检索范围"}
+        finally:
+            self._lock.release()
+
+    def observer_snapshot(self, *, scope=None) -> dict:
+        return self._observer_read(observation.snapshot, scope=scope, cfg=self.cfg)
+
+    def observer_list(self, *, scope=None, **kwargs) -> dict:
+        return self._observer_read(observation.list_items, scope=scope, **kwargs)
+
+    def observer_detail(self, *, scope=None, **kwargs) -> dict:
+        return self._observer_read(observation.detail, scope=scope, **kwargs)
+
     # ---------- 写操作（全部持锁） ----------
 
     def prepare(self) -> list[str]:
@@ -201,6 +236,7 @@ class ChatService:
 
     def _archive_locked(self) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
+        self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
         turns = self._turn_count()
         mem = self._memory_stats()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

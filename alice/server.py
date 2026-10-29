@@ -11,7 +11,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .config import Config, PROJECT_ROOT, load
 from .config_edit import ConfigConflict
@@ -225,6 +225,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict):
                 self._file("index.html", "text/html; charset=utf-8")
             elif path == "/app.js":
                 self._file("app.js", "application/javascript; charset=utf-8")
+            elif path == "/observer.js":
+                self._file("observer.js", "application/javascript; charset=utf-8")
             elif path == "/style.css":
                 self._file("style.css", "text/css; charset=utf-8")
             elif path == "/api/state":
@@ -233,6 +235,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict):
                 self._json({"turns": svc.history()})
             elif path == "/api/persona":
                 self._json(svc.persona_view())
+            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail"):
+                self._observer_get(path)
             elif path == "/api/settings":
                 self._json({"thinking": svc.thinking_view()})
             elif path == "/api/runtime":
@@ -257,6 +261,34 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict):
                 })
             else:
                 self._json({"error": "not found"}, 404)
+
+        def _observer_get(self, path: str) -> None:
+            if not self._trusted_intent("observer"):
+                self._json({"status": "error", "error": "只能从本机 GUI 读取观察数据"}, 403)
+                return
+            allowed = {
+                "/api/observer/snapshot": {"scope"},
+                "/api/observer/list": {"scope", "view", "layer", "kind", "q", "before", "ceiling"},
+                "/api/observer/detail": {"scope", "view", "id", "offset"},
+            }[path]
+            try:
+                query = urlparse(self.path).query
+                if len(query) > 4096:
+                    raise ValueError
+                parsed = parse_qs(query, keep_blank_values=True, max_num_fields=8)
+                if set(parsed) - allowed or any(len(values) != 1 for values in parsed.values()):
+                    raise ValueError
+                params = {key: values[0] for key, values in parsed.items()}
+                scope = params.get("scope")
+                if scope is not None and (len(scope) != 32 or any(ch not in "0123456789abcdef" for ch in scope)):
+                    raise ValueError
+            except ValueError:
+                self._json({"status": "error", "error": "观察请求参数无效"}, 400)
+                return
+            reader = {"/api/observer/snapshot": svc.observer_snapshot,
+                      "/api/observer/list": svc.observer_list,
+                      "/api/observer/detail": svc.observer_detail}[path]
+            self._json(reader(**params))
 
         def do_POST(self):
             path = urlparse(self.path).path
