@@ -9,6 +9,7 @@ docs/贴吧通道-参考与边界.md; these endpoints have no verified stability
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Callable
 from urllib.parse import urlencode, urlsplit
 
@@ -17,6 +18,56 @@ _ORIGIN = "https://tieba.baidu.com"
 _CODE_FIELDS = ("errno", "no", "error_code", "err_code")
 _MESSAGE_FIELDS = ("error", "errmsg", "error_msg", "msg")
 _VERIFICATION_MESSAGE = re.compile(r"验证码|安全验证|访问验证|人机验证")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def normalize_forums(value: object) -> list[str]:
+    """Canonical exact forum names, not search terms or fuzzy/suffix matches."""
+    if not isinstance(value, list):
+        raise ValueError("贴吧范围须为吧名列表")
+    result = []
+    for raw in value:
+        if not isinstance(raw, str):
+            raise ValueError("吧名须为文字")
+        name = unicodedata.normalize("NFC", raw.strip()).translate(_ASCII_LOWER)
+        if (not name or len(name) > 128 or any(ord(c) < 32 or ord(c) == 127
+                                               or unicodedata.category(c) in ("Cc", "Cs") for c in name)):
+            raise ValueError("吧名须为不超过128字的非空名称，不含控制字符")
+        if name not in result:
+            result.append(name)
+    return result
+
+
+def options(value: object = None) -> dict:
+    """Validate host-supplied policy independently of untrusted page fields."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict) or set(value) - {"preferred_forums", "read_replies", "reply_limit"}:
+        _fail("invalid_request", "贴吧阅读范围配置无效")
+    try:
+        forums = normalize_forums(value.get("preferred_forums", []))
+    except ValueError:
+        _fail("invalid_request", "贴吧优先吧名列表无效")
+    replies, limit = value.get("read_replies", False), value.get("reply_limit", 20)
+    if type(replies) is not bool or type(limit) is not int or not 0 < limit <= 9007199254740991:
+        _fail("invalid_request", "贴吧回帖数量须为可准确表示的正整数")
+    return {"preferred_forums": forums, "read_replies": replies, "reply_limit": limit}
+
+
+def forum_name(value: object) -> str:
+    """Missing or malformed origin labels never qualify for a restricted forum."""
+    try:
+        return normalize_forums([value])[0]
+    except ValueError:
+        return ""
+
+
+def _search_forum(item: dict) -> str:
+    direct = forum_name(item.get("forum_name"))
+    info = item.get("forum_info")
+    nested = forum_name(info.get("forum_name")) if isinstance(info, dict) else ""
+    # Conflicting server metadata is not resolved by guessing.
+    return "" if direct and nested and direct != nested else direct or nested
 
 
 def _fail(code: str, message: str, *, diagnostic: dict | None = None):
@@ -102,7 +153,7 @@ def _data(payload: object, stage: str) -> dict:
 
 
 def search(query: str, limit: int, *, fetch_json: Callable[[str], object],
-           trace: dict | None = None) -> list[dict]:
+           trace: dict | None = None, tieba_options: dict | None = None) -> list[dict]:
     """One anonymous multsearch GET; snippets are transient discovery metadata."""
     from .discovery_sources import DiscoveryError, _plain, normalize_candidate, validate_query
 
@@ -115,6 +166,7 @@ def search(query: str, limit: int, *, fetch_json: Callable[[str], object],
         trace["rejected"] += 1
         _fail("tieba_response", message)
 
+    policy = options(tieba_options)
     query = validate_query(query)
     if type(limit) is not int or limit <= 0:
         _fail("invalid_request", "结果数量必须为正整数")
@@ -141,6 +193,7 @@ def search(query: str, limit: int, *, fetch_json: Callable[[str], object],
         item = card.get("data")
         if not isinstance(item, dict):
             invalid_card("贴吧搜索帖子字段无效")
+        origin = _search_forum(item)
         tid = _identifier(item.get("tid"))
         if tid is None or not isinstance(item.get("title"), str):
             invalid_card("贴吧搜索帖子标识或标题无效")
@@ -153,7 +206,7 @@ def search(query: str, limit: int, *, fetch_json: Callable[[str], object],
         try:
             candidate = normalize_candidate({
                 "platform": "tieba", "url": f"{_ORIGIN}/p/{tid}", "title": title,
-                "coverage": "search_snippet", "snippet": snippet,
+                "coverage": "search_snippet", "snippet": snippet, "forum_name": origin,
             })
         except DiscoveryError:
             trace["rejected"] += 1
@@ -164,6 +217,8 @@ def search(query: str, limit: int, *, fetch_json: Callable[[str], object],
         candidates.append(candidate)
         seen.add(tid)
         trace["accepted"] += 1
+    preferred = set(policy["preferred_forums"])
+    candidates.sort(key=lambda item: item.get("forum_name") not in preferred)
     result = candidates[:limit]
     trace["returned"] = len(result)
     return result
@@ -180,6 +235,41 @@ def _match_thread(scope: dict, tid: str, *, include_id: bool = False) -> None:
             _fail("tieba_response", "贴吧正文的帖子标识格式无效")
         if actual != tid:
             _fail("source_mismatch", "贴吧正文与候选帖子不匹配")
+
+
+def check_forum(name: str, *, fetch_json: Callable[[str], object]) -> dict:
+    """Resolve one explicitly requested forum and inspect its public first page.
+
+    This is an existence/access check, not interest search or content collection.
+    Only fixed identifiers and counts cross the worker boundary, never user data
+    or the homepage's post titles, snippets, author profiles or control tokens.
+    """
+    requested = forum_name(name)
+    if not requested:
+        _fail("invalid_request", "请输入可检测的吧名")
+    data = _data(fetch_json(_ORIGIN + "/mg/f/getFrsData?" + urlencode({
+        "kw": requested, "pn": 1, "rn": 1,
+    })), "forum_check")
+    forum = data.get("forum")
+    if not isinstance(forum, dict):
+        _fail("tieba_forum_unconfirmed", "未取得可确认的吧信息")
+    actual, identity = forum_name(forum.get("name")), _identifier(forum.get("id"))
+    threads = data.get("thread_list")
+    if not actual or not identity or not isinstance(threads, list):
+        _fail("tieba_forum_unconfirmed", "贴吧返回的信息不足以确认该吧")
+    seen = set()
+    for thread in threads:
+        if not isinstance(thread, dict):
+            _fail("tieba_response", "吧首页帖子列表结构无效")
+        if thread.get("is_live_ad") is True or _integer(thread.get("is_live_ad")) == 1:
+            continue
+        tid = _identifier(thread.get("tid")) or _identifier(thread.get("id"))
+        if not tid or not isinstance(thread.get("title"), str) or not thread["title"].strip():
+            _fail("tieba_response", "吧首页帖子信息无法确认")
+        seen.add(tid)
+    return {"requested": requested, "forum_name": actual, "forum_id": identity,
+            "thread_count": len(seen),
+            "status": "mismatch" if actual != requested else "ready" if seen else "empty"}
 
 
 def _body(content: object) -> str:
@@ -213,21 +303,34 @@ def _body(content: object) -> str:
     return _plain(markup, len(markup)).strip()
 
 
-def read(candidate: dict, *, fetch_json: Callable[[str], object]) -> dict:
-    """One getPbData GET, pn=1/rn=1; only an explicitly identified floor 1."""
+def read(candidate: dict, *, fetch_json: Callable[[str], object],
+         tieba_options: dict | None = None, text_limit: int = 12000) -> dict:
+    """One getPbData GET; explicit main floor plus opt-in top-level replies."""
     from .discovery_sources import _plain, normalize_candidate
 
+    policy = options(tieba_options)
     candidate = normalize_candidate(candidate, "tieba")
+    if type(text_limit) is not int or text_limit < 80:
+        _fail("invalid_request", "贴吧文字读取额度无效")
     match = re.fullmatch(r"/p/([1-9][0-9]*)/?", urlsplit(candidate["url"]).path)
     if match is None:
         _fail("platform_scope", "贴吧读取仅支持帖子地址")
     tid = match[1]
     payload = fetch_json(_ORIGIN + "/mg/p/getPbData?" + urlencode({
-        "kz": tid, "format": "json", "pn": 1, "rn": 1,
+        "kz": tid, "format": "json", "pn": 1,
+        "rn": policy["reply_limit"] + 1 if policy["read_replies"] else 1,
     }))
     data = _data(payload, "read")
     _match_thread(payload, tid)
     _match_thread(data, tid)
+    forum = data.get("forum")
+    origin = forum_name(forum.get("name")) if isinstance(forum, dict) else ""
+    if candidate.get("forum_name") and origin and candidate["forum_name"] != origin:
+        _fail("source_mismatch", "帖子正文所属吧与搜索结果不一致")
+    page = data.get("page")
+    current_page = _integer(page.get("current_page")) if isinstance(page, dict) else None
+    if (policy["read_replies"] and current_page != 1) or (current_page is not None and current_page != 1):
+        _fail("tieba_response", "贴吧未返回可确认的帖子首页")
     thread = data.get("thread")
     if "thread" in data:
         if not isinstance(thread, dict):
@@ -236,20 +339,33 @@ def read(candidate: dict, *, fetch_json: Callable[[str], object]) -> dict:
     posts = data.get("post_list")
     if not isinstance(posts, list):
         _fail("tieba_response", "贴吧正文响应缺少楼层列表")
-    main_posts = []
+    main_posts, replies = [], []
+    seen_floors, seen_ids = set(), set()
     for post in posts:
         if not isinstance(post, dict) or _integer(post.get("floor")) is None:
             _fail("tieba_response", "贴吧楼层字段格式无效")
-        if _integer(post["floor"]) == 1:
+        floor = _integer(post["floor"])
+        if floor < 1:
+            _fail("tieba_response", "贴吧楼层编号无效")
+        if floor == 1:
             main_posts.append(post)
+        elif policy["read_replies"]:
+            post_id = _identifier(post.get("id"))
+            if not post_id:
+                _fail("tieba_response", "贴吧回帖缺少可靠标识")
+            if floor in seen_floors or post_id in seen_ids:
+                continue
+            _match_thread(post, tid)
+            replies.append((floor, post))
+            seen_floors.add(floor); seen_ids.add(post_id)
     if not main_posts:
         _fail("unreadable", "贴吧未返回可确认的一楼主帖，本轮未读取正文")
     if len(main_posts) != 1:
         _fail("tieba_response", "贴吧主帖楼层重复，无法确认正文")
     post = main_posts[0]
     _match_thread(post, tid)
-    text = _body(post.get("content"))
-    if not text:
+    main_text = _body(post.get("content"))
+    if not main_text and not policy["read_replies"]:
         _fail("tieba_no_text", "贴吧主帖未返回可读取文字，不读取图片或视频")
     title = candidate["title"]
     # Some valid responses omit thread.title. The first-floor post title, when
@@ -259,6 +375,34 @@ def read(candidate: dict, *, fetch_json: Callable[[str], object]) -> dict:
             if not isinstance(source["title"], str):
                 _fail("tieba_response", "贴吧主帖标题格式无效")
             title = _plain(source["title"], 300) or title
-    return {"title": title,
-            "text": "【贴吧主帖文字节选；不含回帖、楼中楼及图片或视频内容】\n\n" + text,
-            "coverage": "forum_main_post_excerpt"}
+    header = (f"【所属吧：{origin}】\n" if origin else "【所属吧未能确认】\n")
+    header += ("【帖子首页文字节选；主帖与各楼回帖分别标注；不含楼中楼、图片或视频；不代表完整讨论或全吧意见】\n\n"
+               if policy["read_replies"] else "【贴吧主帖文字节选；不含回帖、楼中楼及图片或视频内容】\n\n")
+    main_label = header + "【主帖 · 1楼】\n"
+    text = (main_label + (main_text or "（主帖没有可读取文字，未理解其中的媒体内容）"))[:text_limit]
+    content_chars = min(len(main_text), max(0, text_limit - len(main_label)))
+    count = 0
+    for floor, reply in sorted(replies, key=lambda item: item[0]):
+        if count >= policy["reply_limit"]:
+            break
+        if _identifier(reply.get("id")) == _identifier(post.get("id")):
+            continue
+        value = _body(reply.get("content"))
+        if not value:
+            continue
+        label = f"\n\n【回帖 · {floor}楼（与主帖分开记录）】\n"
+        remaining = text_limit - len(text) - len(label)
+        if remaining <= 0:
+            break
+        text += label + value[:remaining]
+        content_chars += min(len(value), remaining)
+        count += 1
+        if len(value) > remaining:
+            break
+    if not main_text and count == 0:
+        _fail("tieba_no_text", "主帖及获准首页回帖均无可读取文字")
+    return {"title": title, "text": text,
+            "coverage": "forum_thread_excerpt" if count else "forum_main_post_excerpt",
+            "tieba_forum": origin, "tieba_reply_count": count,
+            "tieba_replies_requested": policy["read_replies"], "tieba_page": 1,
+            "tieba_text_chars": content_chars}
