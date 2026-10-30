@@ -133,9 +133,12 @@ def _record_usage(usage_out: dict | None, resp) -> None:
 def chat_turn(store: Store, client, cfg: Config, user_text: str,
               ts: float | None = None, now: float | None = None,
               on_delta=None, on_tool=None, on_reasoning=None,
-              usage_out: dict | None = None) -> str:
+              usage_out: dict | None = None, on_persist=None,
+              request_id=None, on_request_progress=None, on_maintenance_warning=None) -> str:
     ts = ts if ts is not None else time.time()
-    store.add_turn("user", user_text, ts=ts)
+    store.add_turn("user", user_text, ts=ts, request_id=request_id)
+    if on_request_progress is not None:
+        on_request_progress()
     messages = retrieval.build_messages(store, cfg, persona.persona_md() or "", now=now)
     reply = ""
     for _ in range(4):  # 工具调用轮数上限
@@ -179,11 +182,18 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
     else:
         reply = "（我这一轮转晕了，再说一遍好吗？）"
-    store.add_turn("assistant", reply or "（沉默）", ts=ts + 1)  # 与用户消息同刻，+1 保持轮内先后
+    reply = reply or "（沉默）"
+    assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id)  # 与用户消息同刻，+1 保持轮内先后
+    if on_request_progress is not None:
+        on_request_progress()
+    if on_persist is not None:
+        on_persist(assistant_id)
     try:
         extraction.extract_pending(store, client, cfg)  # 未到阈值时静默跳过
     except Exception as e:  # 提取失败不影响当轮对话
-        print(f"（记忆提取暂失败：{e}）")
+        print(f"（记忆提取暂失败：{type(e).__name__}）")
+        if on_maintenance_warning is not None:
+            on_maintenance_warning("extraction_failed")
     return reply
 
 

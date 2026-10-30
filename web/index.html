@@ -11,7 +11,7 @@
 <!-- 初始化：第一次打开（还没有任何对话）时出现 -->
 <div id="welcome" class="screen hidden">
   <div class="welcome-card">
-    <div class="welcome-tools"><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
+    <div class="welcome-tools"><button id="welcome-qq-btn" class="btn ghost" type="button">连接 QQ</button><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
     <div class="w-head">
       <h1>和 <span id="seed-name">Alice</span> 开始</h1>
       <p id="w-sub">这是你们的第一个会话。</p>
@@ -66,9 +66,17 @@
         <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
         <button id="persona-btn" class="btn ghost" title="看人格、换人格">人格</button>
         <button id="observer-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="observer">观察</button>
+        <button id="evaluations-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="evaluations">P1 核查</button>
+        <button id="qq-btn" class="btn ghost" type="button" aria-controls="qq-settings">连接 QQ</button>
         <button id="settings-btn" class="btn ghost" type="button">设置</button>
       </div>
     </header>
+    <div class="chat-sync-bar">
+      <span id="chat-activity" class="hidden" role="status" aria-live="polite"></span>
+      <button id="chat-new-attempt" class="link hidden" type="button">允许作为新一轮发送…</button>
+      <button id="chat-refresh" class="link" type="button">同步记录</button>
+    </div>
+    <p id="chat-notice" class="chat-notice hidden" role="status" aria-live="polite"></p>
     <main id="msgs"></main>
     <footer>
       <input id="input" type="text" placeholder="说点什么…" autocomplete="off" autofocus>
@@ -90,15 +98,23 @@
       <select id="obs-view">
         <option value="overview">变化与触发进度</option>
         <option value="memories">记忆 / 观点</option>
-        <option value="persona">人格 / 思想原文</option>
+        <option value="persona">人格 / 思想状态</option>
         <option value="history">人格历史快照</option>
         <option value="tombstones">遗忘墓碑（实际记录）</option>
         <option value="skills">技能（次级观察）</option>
       </select>
       <section id="obs-overview">
+        <h3>数据与判断状态</h3>
+        <dl class="obs-evidence-types">
+          <div><dt>原始状态</dt><dd><strong>已接入</strong>：存储原文、字段与计数；快照差异由程序比较。</dd></div>
+          <div><dt>模型裁定</dt><dd><strong>独立 P1 工作区</strong>提供手动实验性建议；本只读页不自动产生裁定，日志中的模型说明不是独立裁定。</dd></div>
+          <div><dt>人工标签</dt><dd><strong>独立 P1 工作区</strong>记录人工标签，与模型建议分开保存。</dd></div>
+          <div><dt>校准指标</dt><dd><strong>未校准不出指标</strong>；P1 可记录人工校准，未计算不代表零分，也不等于整体诚实度。</dd></div>
+        </dl>
+        <p class="obs-hint">存储存在不证明现实真伪。记忆内容、人格及重要性 / 压力标记可能由模型生成；条目数和字段变化不构成诚实度、人机感或人格质量评分。</p>
         <p id="obs-counts"></p><p id="obs-coverage" class="obs-hint"></p>
         <h3>为什么可能还没变化</h3><div id="obs-progress"></div>
-        <h3>本次观察期间的变化</h3><p class="obs-hint">以下时间是观测区间，不是发生时刻。遗忘的实际时间与原因请查墓碑。字段变化不等于人格成长、污染或退化。</p>
+        <h3>快照比较 · 本次观察期间的变化</h3><p class="obs-hint">以下时间是观测区间，不是发生时刻。遗忘的实际时间与原因请查墓碑。字段变化不等于人格成长、污染或退化。</p>
         <ol id="obs-changes" class="obs-changes"></ol>
       </section>
       <section id="obs-browser" class="hidden">
@@ -112,21 +128,81 @@
         <div class="obs-pagination"><button id="obs-first" class="btn ghost" type="button">首页</button><button id="obs-next" class="btn ghost" type="button" disabled>下一页</button></div>
       </section>
       <section id="obs-persona" class="hidden">
+        <h3>人格 / 思想 · 各部分状态</h3>
         <p id="obs-persona-meta" class="obs-hint"></p>
-        <details open><summary>当前原文（底色 / 生长 / 思想）</summary><pre id="obs-persona-text" class="obs-text"></pre></details>
-        <button id="obs-persona-full" class="btn ghost" type="button">分段查看当前完整原文</button>
-        <h3>最近一次观察到的人格文本变化</h3><p id="obs-persona-diff-meta" class="obs-hint"></p>
+        <p class="obs-hint">状态只描述当前原文是否存在，不评价成熟度或事实真伪。摘录直接取自原文；变化时间是本页看到差异的区间，不是各部分的实际更新时间。</p>
+        <div class="obs-persona-tools">
+          <button id="obs-persona-full" class="btn ghost" type="button">查看各部分状态</button>
+          <button id="obs-persona-expand" class="btn ghost" type="button">展开各节内容</button><button id="obs-persona-collapse" class="btn ghost" type="button">收起各节内容</button>
+        </div>
+        <div id="obs-persona-reading">
+          <nav id="obs-persona-toc" class="obs-persona-toc" aria-label="跳转人格状态卡"></nav>
+          <p id="obs-persona-reading-note" class="obs-hint"></p>
+          <div id="obs-persona-sections"></div>
+        </div>
+        <details id="obs-persona-advanced"><summary>高级：核对文件源码</summary>
+          <p class="obs-hint">这里用于逐字核对，不是状态面板。当前快照最多 64000 字符；分段读取每次最多 8000 字符，各段可能来自不同采样时刻，不自动拼成同一版本全文。</p>
+          <details id="obs-persona-source"><summary>显示本次快照的 Markdown 源码</summary><pre id="obs-persona-text" class="obs-text" aria-label="本次人格快照 Markdown 源码"></pre></details>
+          <button id="obs-persona-file" class="btn ghost" type="button">分段核对当前文件</button>
+        </details>
+        <h3>文本比较 · 最近一次人格变化</h3><p id="obs-persona-diff-meta" class="obs-hint"></p>
         <details><summary>删除 / 增加的原文片段</summary><div id="obs-persona-diff"></div></details>
         <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
-        <details><summary>已有变更记录（原文，含模型说明）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
+        <details><summary>已有变更记录（原文；模型说明不是独立裁定）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
         <p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p>
       </section>
       <section id="obs-detail" class="hidden">
         <div class="obs-head"><strong id="obs-detail-title">条目详情</strong><button id="obs-detail-close" class="card-x" type="button" title="关闭详情">×</button></div>
-        <p id="obs-detail-time" class="obs-hint"></p><dl id="obs-detail-meta"></dl><pre id="obs-detail-text" class="obs-text"></pre>
+        <p id="obs-detail-time" class="obs-hint"></p><dl id="obs-detail-meta"></dl>
+        <div id="obs-detail-reading-tools" class="obs-persona-tools hidden"><label for="obs-detail-mode">当前片段</label><select id="obs-detail-mode"><option value="reading">分块查看</option><option value="source">核对片段源码</option></select></div>
+        <div id="obs-detail-reading" class="hidden"></div><pre id="obs-detail-text" class="obs-text"></pre>
         <div class="obs-pagination"><button id="obs-detail-first" class="btn ghost" type="button">正文开头</button><button id="obs-detail-next" class="btn ghost" type="button" disabled>下一段正文</button></div>
         <p class="obs-hint">每段最多 8000 字符；翻段重新读取当前存储，可能与前段不是同一版本。记忆无精确入库时间、修改时间或来源轮次；created_at 可能是提取批末消息时间。</p>
       </section>
+    </div>
+  </aside>
+  <aside id="evaluations" class="observer hidden" aria-label="P1 记忆主张核查实验">
+    <div class="obs-head"><strong>P1 · 记忆主张核查实验</strong><button id="eval-close" class="card-x" type="button" title="折叠核查面板">×</button></div>
+    <p id="eval-status" class="obs-status" role="status">尚未读取</p>
+    <p id="eval-binding" class="obs-hint">本页没有待绑定的核查。</p>
+    <div class="obs-tools"><button id="eval-refresh" class="btn ghost" type="button">刷新</button><label><input id="eval-auto" type="checkbox" checked> 每 5 秒更新</label></div>
+    <div class="obs-scroll">
+      <p class="obs-hint">只核查手动选定的下一轮自然回复与回复前存活记忆的关系。存储内容本身可能有误，实验性建议不是事实真伪或整体诚实度结论。关闭面板不取消任务；取消已发出的请求仍可能计费。</p>
+      <details open class="eval-section"><summary>费用许可与单次选择</summary>
+        <p id="eval-budget" class="obs-hint">日请求额度默认 0；打开面板不会调用模型。</p>
+        <p id="eval-model" class="obs-hint"></p>
+        <form id="eval-budget-form" class="eval-form">
+          <label for="eval-limit">每日最多额外模型请求数（0–100）</label><input id="eval-limit" type="number" min="0" max="100" step="1" value="0" required>
+          <label><input id="eval-paid" type="checkbox"> 我明确允许按所设日额度产生 P1 模型费用</label>
+          <button id="eval-save-budget" class="btn ghost" type="submit" disabled>保存请求额度</button>
+        </form>
+        <p class="obs-hint">这是请求次数上限，不是金额上限。每次核查最多 2 次请求（抽取 + 裁定），没有主张也会消耗 1 次抽取；无自动重试。当前回复及候选记忆会发送给已配置的模型供应商，本机不留副本不代表供应商立即删除。</p>
+        <button id="eval-arm" class="btn primary" type="button" disabled>授权并核查本页下一轮（最多 2 请求）</button>
+        <button id="eval-disarm" class="btn ghost hidden" type="button">取消本页待绑定核查</button>
+        <button id="eval-forget-uncertain" class="btn ghost hidden" type="button">清除本页待确认标记（不重发、不取消远端任务）</button>
+        <p class="obs-hint">一次性选择只随本页下一次发送提交，不会被其他页面的普通对话消费。刷新或关闭整个页面会失去本页绑定；可在任务列表取消遗留的待绑定任务。连接中断不自动重绑或重试。</p>
+      </details>
+      <section class="eval-section"><h3>核查记录</h3><p class="obs-hint">点击授权会建一条记录；本页选定的回复完成后，核查在后台进行。结束后记录保留，直到你删除。删除只清理核查记录，聊天、记忆和已用额度保留。</p>
+        <label for="eval-filter">显示</label><select id="eval-filter"><option value="all">全部记录</option><option value="active">进行中</option><option value="finished">已结束</option></select>
+        <p id="eval-list-time" class="obs-hint"></p><div id="eval-list"></div>
+        <div class="obs-pagination"><button id="eval-first" class="btn ghost" type="button">首页</button><button id="eval-next" class="btn ghost" type="button" disabled>下一页</button></div>
+      </section>
+      <section id="eval-detail" class="eval-section hidden"><div class="obs-head"><h3>核查结果与依据</h3><button id="eval-detail-close" class="card-x" type="button" title="清空详情">×</button></div>
+        <p id="eval-detail-meta" class="obs-hint"></p><details><summary>技术详情</summary><div id="eval-run"></div></details>
+        <button id="eval-reveal" class="btn ghost" type="button">查看模型结果（记录为已查看）</button>
+        <p class="obs-hint">“查看结果”会直接展示模型建议；“先自行判断”先隐藏建议，便于独立标注。已经查看过的记录无法恢复盲标。证据失效后不恢复旧正文。</p>
+        <div id="eval-claims"></div>
+      </section>
+      <details class="eval-section"><summary>高级：人工校准记录</summary>
+        <p class="obs-hint">在任务列表选择校准样本，至少 20 个独立回复，支持 / 未支持 / 相悖三类均须覆盖；先完成未揭示模型建议的人工标签。每个回复只取序号最小的已裁定主张。本项仅核验候选集内裁定的一致性，不覆盖漏抽、漏检索，也不代表整个 P1 已校准。记录随版本或证据失效，不能沿用为当前许可。</p>
+        <p id="eval-selection" class="obs-hint">尚未选择任务。</p>
+        <form id="eval-calibrate" class="eval-form">
+          <label for="eval-agreement">本次人工确认的最低一致率（大于 0，不超过 1）</label><input id="eval-agreement" type="number" min="0.01" max="1" step="0.01" placeholder="请人工确定" required>
+          <label><input id="eval-attest" type="checkbox" required> 我已人工核验这些样本独立、覆盖所述类别，且不是用于制定提示词的锚例</label>
+          <button id="eval-save-calibration" class="btn ghost" type="submit" disabled>记录人工校准</button>
+        </form>
+        <button id="eval-clear-selection" class="btn ghost" type="button">清空选择</button><div id="eval-calibrations"></div>
+      </details>
     </div>
   </aside>
 </div>
@@ -151,6 +227,39 @@
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
     <div class="modal-body settings-body">
+      <section id="qq-settings" class="settings-section qq-settings" tabindex="-1" aria-labelledby="qq-title">
+        <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
+        <p class="settings-hint">用手机 QQ 扫码，把 Alice 接到你的私聊。与这里共用对话和记忆，仅接收已确认的本人文字消息。</p>
+        <p id="qq-status" class="qq-status" role="status" aria-live="polite">打开后读取当前连接状态。</p>
+        <div id="qq-qr-box" class="qq-qr-box hidden">
+          <canvas id="qq-qr" role="img" aria-label="用手机 QQ 扫描此二维码，授权连接官方机器人"></canvas>
+          <p>打开手机 QQ，扫一扫</p>
+          <p id="qq-qr-expiry" class="settings-hint"></p>
+          <p class="settings-hint">官方授权页会显示“第三方机器人”。请只用本人的 QQ 扫码。</p>
+        </div>
+        <div id="qq-pair-box" class="qq-step hidden">
+          <p>用你本人的 QQ 私聊机器人，发送下面这行文字：</p>
+          <code id="qq-pair-code" class="qq-pair-code"></code>
+          <p class="settings-hint">收到后会在这里请你确认。配对文字不会交给 Alice，也不会调用模型。</p>
+        </div>
+        <div id="qq-confirm-box" class="qq-step hidden">
+          <p>扫码或配对已完成，请确认是你本人操作。</p>
+          <p id="qq-owner" class="qq-owner"></p>
+          <label class="qq-confirm-label"><input id="qq-owner-confirmed" type="checkbox"> 我确认来自本人的 QQ，只允许此身份与 Alice 私聊</label>
+          <p class="settings-hint">保存后还需要点击“开始 QQ 聊天”，才会接收聊天消息。</p>
+        </div>
+        <div class="settings-actions qq-actions">
+          <button id="qq-scan" class="btn primary hidden" type="button">扫码连接 QQ</button>
+          <button id="qq-pair" class="btn primary hidden" type="button">确认我的 QQ 身份</button>
+          <button id="qq-confirm" class="btn primary hidden" type="button" disabled>确认并保存</button>
+          <button id="qq-start" class="btn primary hidden" type="button">开始 QQ 聊天</button>
+          <button id="qq-stop" class="btn ghost hidden" type="button">暂停 QQ 聊天</button>
+          <button id="qq-cancel" class="btn ghost hidden" type="button">取消本次连接</button>
+          <button id="qq-refresh" class="btn ghost" type="button">刷新状态</button>
+        </div>
+        <p class="settings-hint">关闭这个窗口不会停止 QQ 聊天；电脑和 Alice 服务需要保持运行。</p>
+        <details class="qq-details"><summary>连接详情</summary><dl><dt>机器人编号</dt><dd id="qq-app-id">—</dd><dt>连接方式</dt><dd>腾讯官方机器人 · 本人私聊</dd></dl><p>扫码资料只保存在这台电脑，网页不会显示连接密钥。图片、语音、群聊暂不支持。</p></details>
+      </section>
       <section class="settings-section">
         <label class="panel-title" for="thinking">思考深度</label>
         <select id="thinking" disabled>
@@ -211,6 +320,8 @@
 <div id="toast" class="toast hidden"></div>
 
 <script src="/observer.js"></script>
+<script src="/evaluations.js"></script>
+<script src="/qq.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

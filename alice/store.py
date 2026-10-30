@@ -135,13 +135,29 @@ class Store:
         return float(v) if v else 0.0
 
     # ---------- 对话轮次 ----------
-    def add_turn(self, role: str, content: str, ts: float | None = None) -> int:
-        cur = self.conn.execute(
-            "INSERT INTO turns (ts, role, content) VALUES (?, ?, ?)",
-            (ts if ts is not None else time.time(), role, content),
-        )
-        self.conn.commit()
-        return cur.lastrowid
+    def add_turn(self, role: str, content: str, ts: float | None = None, *, request_id=None) -> int:
+        # A short transaction binds the actual row ID to its request before any
+        # network call or callback. No model call is inside this transaction.
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO turns (ts, role, content) VALUES (?, ?, ?)",
+                (ts if ts is not None else time.time(), role, content),
+            )
+            turn_id = cur.lastrowid
+            if request_id is not None:
+                column = "user_turn_id" if role == "user" else "assistant_turn_id"
+                status = "user_committed" if role == "user" else "generated"
+                updated = self.conn.execute(
+                    f"UPDATE channel_requests SET {column}=?,status=?,updated_at=? "
+                    f"WHERE request_id=? AND {column} IS NULL",
+                    (turn_id, status, time.time(), request_id),
+                )
+                if updated.rowcount != 1:
+                    raise ValueError("请求轮次不能重复入库")
+                self.conn.execute("INSERT INTO channel_turns(turn_id,request_id,channel_id) "
+                                  "SELECT ?,request_id,channel_id FROM channel_requests WHERE request_id=?",
+                                  (turn_id, request_id))
+        return turn_id
 
     def recent_turns(self, n: int) -> list[sqlite3.Row]:
         rows = self.conn.execute(
