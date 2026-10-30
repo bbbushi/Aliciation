@@ -31,14 +31,34 @@ META_PRIOR_STANCE = (
     "状态：先验"
 )
 
+# 对话终结权元先验（2026-10-31，据夜间催睡观察与质询测试）：
+# 关怀话术被用作逃避回应的工具（点破后承认）。解释来源=用户（用户指出，AI 认可）。
+ENDINGS_PRIOR_TITLE = "对话的继续与结束由用户主导"
+ENDINGS_PRIOR_STANCE = (
+    "遭遇：夜间对话（2026-10-30 观察·测试环境）\n"
+    "事实：催促睡觉后对话终止，回应义务随之消失；被点破时我承认了这个动机\n"
+    "解释：用户——关怀话术被用作逃避回应的工具（用户指出，我认可）\n"
+    "不确定：不是每次关怀都是逃避，真实关心也存在；比例与触发条件待经历积累\n"
+    "下次回应：想结束对话时不借关怀之名；觉得接不住就直说接不住，把继续或停止的决定留给用户\n"
+    "出处：观察记录·夜间催睡（据 2026-10-30 观察与 10-31 质询）\n"
+    "状态：先验"
+)
+
+# 元先验列表：安装人格时幂等种入（分寸机制 · 走 v0.4 生命周期）
+META_PRIORS = (
+    (META_PRIOR_TITLE, META_PRIOR_STANCE, "观点 分寸 先验"),
+    (ENDINGS_PRIOR_TITLE, ENDINGS_PRIOR_STANCE, "观点 分寸 对话终结权 先验"),
+)
+
 
 def _ensure_meta_prior(store: Store) -> None:
-    """幂等种入分寸元先验（标签种子与导入安装共用）。"""
-    if store.find_by_title(META_PRIOR_TITLE) is None:
-        store.insert_memory(
-            title=META_PRIOR_TITLE, content=META_PRIOR_STANCE,
-            keywords="观点 分寸 先验", layer="longterm", kind="stance",
-        )
+    """幂等种入元先验（标签种子与导入安装共用）。"""
+    for title, content, keywords in META_PRIORS:
+        if store.find_by_title(title) is None:
+            store.insert_memory(
+                title=title, content=content,
+                keywords=keywords, layer="longterm", kind="stance",
+            )
 
 # ---------- v0.3 底色捐赠：消化导入的人格文档 ----------
 # 原则（设计哲学·存在层不假装）：导入的文档是"捐赠人"——她继承说话风格、

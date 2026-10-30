@@ -41,8 +41,7 @@ DELIBERATE_PROMPT = """你是 {name} 的思辨任务：把积累的记忆消化�
 
 输出 JSON：
 {{"views": [{{"claim": "一句话主张（≤24字）", "encounter": "什么处境下形成", "facts": "处境中的事实", "interp": {{"kind": "经历|推断|用户|捐赠", "note": "一句话解释"}}, "missing": "没看见的与不确定", "next_response": "会怎样改变下次回应", "sources": ["出处记忆标题"], "replaces": "被修订的旧观点主张原文，没有则空字符串"}}],
- "verifications": [{{"claim": "已有先验观点的主张原文", "verdict": "证实|证伪|无关", "honored": "兑现|未兑现|无从判断", "note": "一句话说明", "sources": ["依据记忆标题"]}}],
- "narrative": "重写后的「我现在的想法」小节全文（markdown 列点：每条主张一行，先验标注（先验·未验证），附下次回应简注；修订处写明前史）"}}"""
+ "verifications": [{{"claim": "已有先验观点的主张原文", "verdict": "证实|证伪|无关", "honored": "兑现|未兑现|无从判断", "note": "一句话说明", "sources": ["依据记忆标题"]}}]}}"""
 
 PRESSURE_BLOCK_HEADER = (
     "压力窗口的记忆（高压对话的产物，让步可能是屈服而非真实想法；"
@@ -269,16 +268,10 @@ def deliberate(store: Store, client, cfg: Config) -> str:
     summary = "、".join(parts)
 
     changed = added or revised or verified or falsified
-    narrative = str(data.get("narrative", "")).strip()
-    if changed:  # 观点集无实际变化时不动小节——被拒的修订不落进人格
-        if dropped or rejected or verified or falsified:
-            # 本批存在被拒/被丢/状态迁移内容——模型叙事不可信，从库内已接纳观点确定性重建
-            narrative = _render_stances(store)
-        else:
-            lines = narrative.splitlines()
-            while lines and lines[0].lstrip().startswith("#"):  # 模型可能自带标题，统一由 SECTION_TITLE 承担
-                lines.pop(0)
-            narrative = "\n".join(lines).strip()
+    if changed:
+        # 「我现在的想法」恒由库内已接纳观点确定性重建（A01 推广：模型叙事弃用——
+        # 信任模型的全文重写会漏掉库内已有观点与元先验）
+        narrative = _render_stances(store)
         if narrative:
             paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
             new_md = _write_section(current_md or f"# {cfg.persona.name} 的人格\n", narrative)
