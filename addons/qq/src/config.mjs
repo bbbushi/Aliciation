@@ -24,7 +24,7 @@ export function loadConfig(file, { pairing = false, onboarding = false } = {}) {
   object(c, ['qq', 'alice', 'delivery', 'storage'], '配置');
   object(c.qq, ['transport', 'app_id', 'app_secret_file', 'owner_openid', 'allow_groups', 'allow_proactive'], 'qq');
   object(c.alice, ['base_url', 'channel_id', 'machine_token_file'], 'alice');
-  object(c.delivery, ['queue_limit', 'queue_ttl_seconds', 'passive_window_seconds', 'max_reply_segments', 'send_spacing_ms', 'waiting_notice'], 'delivery');
+  object(c.delivery, ['queue_limit', 'queue_ttl_seconds', 'passive_window_seconds', 'max_reply_segments', 'send_spacing_ms', 'waiting_notice', 'reply_split_mode'], 'delivery');
   object(c.storage, ['state_dir', 'log_dir'], 'storage');
   if (c.qq.transport !== 'websocket' || c.qq.allow_groups !== false || c.qq.allow_proactive !== false || c.delivery.waiting_notice !== false) {
     throw new Error('首期仅支持 WebSocket、本人私聊、被动文本；输入提示须关闭');
@@ -45,6 +45,10 @@ export function loadConfig(file, { pairing = false, onboarding = false } = {}) {
   integer(c.delivery.passive_window_seconds, 60, 300, 'passive_window_seconds');
   integer(c.delivery.max_reply_segments, 1, 3, 'max_reply_segments');
   integer(c.delivery.send_spacing_ms, 1000, 60000, 'send_spacing_ms');
+  if (c.delivery.reply_split_mode === undefined) c.delivery.reply_split_mode = 'natural';
+  if (!['natural', 'length'].includes(c.delivery.reply_split_mode)) {
+    throw new Error('reply_split_mode: 仅支持 natural 或 length');
+  }
   for (const [obj, key] of [[c.qq, 'app_secret_file'], [c.alice, 'machine_token_file'], [c.storage, 'state_dir'], [c.storage, 'log_dir']]) {
     obj[key] = path.resolve(path.dirname(configPath), string(obj[key], key));
   }

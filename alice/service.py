@@ -20,6 +20,7 @@ from .channels import ChannelCoordinator, ChannelError
 from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels
 from .llm import make_client, safe_provider_error
 from .evaluation_service import EvaluationCoordinator
+from .discovery import DiscoveryCoordinator
 from .store import Store
 
 ARCHIVE_ROOT = appconfig.DATA_DIR / "archive"  # 初始化时把旧会话整体搬到这里
@@ -92,6 +93,8 @@ class ChatService:
             self._evaluations = EvaluationCoordinator(self)
             self._channels = ChannelCoordinator(self)
             self._channels.set_ready(persona.persona_md() is not None)
+            self._discovery = DiscoveryCoordinator(self)
+            self._discovery.start()
         except BaseException:
             try:
                 self.store.close()
@@ -161,14 +164,32 @@ class ChatService:
     def history(self, limit: int = 60) -> list[dict]:
         with self._lock:
             return [
-                {"role": r["role"], "content": r["content"], "ts": r["ts"]}
+                {"role": r["role"], "content": self.store.turn_display(r["id"], scope="gui"), "ts": r["ts"],
+                 **self._history_source_fields_locked(r["id"])}
                 for r in self.store.recent_turns(limit)
             ]
 
-    def history_page(self, after_id=None, limit=60, session_epoch=None) -> dict:
+    def _history_source_fields_locked(self, turn_id) -> dict:
+        attachment = self.store.conn.execute(
+            "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
+        if attachment is None:
+            return {"source_bound": False, "source_available": True, "source_expires_at": None}
+        available = (attachment["scope"] == "gui" and bool(attachment["content"])
+                     and attachment["expires_at"] > time.time()
+                     and bool(self.store.source_packets_for(self.store.turn_source_ids(turn_id), scope="gui")))
+        return {"source_bound": True, "source_available": bool(available),
+                "source_expires_at": attachment["expires_at"]}
+
+    def history_page(self, after_id=None, limit=60, session_epoch=None, source_turn_ids=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 100 or
                 (after_id is not None and (type(after_id) is not int or after_id < 0))):
             raise ChannelError(400, "invalid_request", "历史游标或数量无效")
+        if source_turn_ids is None:
+            source_turn_ids = []
+        if (not isinstance(source_turn_ids, list) or len(source_turn_ids) > 100
+                or any(type(identity) is not int or not 1 <= identity <= 9007199254740991 for identity in source_turn_ids)):
+            raise ChannelError(400, "invalid_request", "来源轮次列表无效")
+        source_turn_ids = list(dict.fromkeys(source_turn_ids))
         if not self._lock.acquire(blocking=False):
             raise ChannelError(503, "status_unavailable", "Alice 忙碌，稍后刷新历史")
         try:
@@ -190,12 +211,28 @@ class ChatService:
                                                                   (row["request_id"],))]
                     delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
                                     "platform_confirmed" if states else "pending")
-                turns.append({"id": row["id"], "role": row["role"], "content": row["content"], "ts": row["ts"],
+                turns.append({"id": row["id"], "role": row["role"], "content": self.store.turn_display(row["id"], scope="gui"), "ts": row["ts"],
                               "request_id": row["request_id"], "channel": row["channel_id"] or "local",
-                              "sender_label": "所有者", "delivery": delivery})
+                               "sender_label": "所有者", "delivery": delivery,
+                               **self._history_source_fields_locked(row["id"])})
+            source_updates = []
+            if source_turn_ids:
+                from .store import SOURCE_SHADOW
+
+                placeholders = ",".join("?" for _ in source_turn_ids)
+                present = {row["id"] for row in self.store.conn.execute(
+                    f"SELECT id FROM turns WHERE id IN ({placeholders})", source_turn_ids)}
+                for identity in source_turn_ids:
+                    if identity not in present:
+                        source_updates.append({"id": identity, "content": SOURCE_SHADOW,
+                                               "source_bound": True, "source_available": False,
+                                               "source_expires_at": None})
+                        continue
+                    source_updates.append({"id": identity, "content": self.store.turn_display(identity, scope="gui"),
+                                           **self._history_source_fields_locked(identity)})
             return {"turns": turns, "session_epoch": self._channels.epoch,
                     "next_after_id": turns[-1]["id"] if turns else (after_id or 0), "has_more": more,
-                    "memory": self._memory_stats()}
+                    "memory": self._memory_stats(), "source_updates": source_updates}
         finally:
             self._lock.release()
 
@@ -254,9 +291,14 @@ class ChatService:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
         return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)
 
+    def discovery(self, action: str = "status", payload=None) -> dict:
+        """Local GUI discovery controls; channel credentials do not grant this API."""
+        return self._discovery.access(action, payload)
+
     def begin_shutdown(self) -> None:
         self._channels.begin_shutdown()
         self._evaluations.begin_shutdown()
+        self._discovery.begin_shutdown()
 
     # ---------- 写操作（全部持锁） ----------
 
@@ -310,6 +352,7 @@ class ChatService:
         self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
         self._channels.set_ready(False)
         self._evaluations.before_reset()
+        self._discovery.before_reset()
         turns = self._turn_count()
         mem = self._memory_stats()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -334,6 +377,7 @@ class ChatService:
             self.store = Store(appconfig.DB_PATH)
             self._evaluations.bind_store()
             self._channels.bind_store()
+            self._discovery.bind_store()
             return None
         (dest / "note.txt").write_text(
             f"初始化归档：{datetime.now():%Y-%m-%d %H:%M}\n"
@@ -344,6 +388,7 @@ class ChatService:
         self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
         self._evaluations.bind_store()
         self._channels.bind_store()
+        self._discovery.bind_store()
         return dest
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
@@ -395,6 +440,14 @@ class ChatService:
                     evaluation_warning = "P1核查未能绑定本轮（许可过期、配置变化或捕获未完成）；真实聊天继续，请查看核查记录"
             persisted = []
             maintenance_warnings = []
+            source_warning = None
+            try:
+                source_ids, source_explicit = self._discovery.select_for_chat_locked(request)
+            except Exception:
+                self._discovery.chat_accounting_failed()
+                source_ids, source_explicit = [], False
+                source_warning = "资料读取暂失败，已暂停资料共享；本轮聊天继续"
+            source_usage = {}
             try:
                 reply = loop.chat_turn(
                     self.store, self.client, self.cfg, text,
@@ -403,8 +456,17 @@ class ChatService:
                     request_id=request_id,
                     on_request_progress=lambda: self._channels.publish_locked(request_id),
                     on_maintenance_warning=maintenance_warnings.append,
+                    source_packet_ids=source_ids, source_scope=request["channel_id"],
+                    source_allow_external_recall=source_explicit, source_usage_out=source_usage,
                 )
+                try:
+                    self._discovery.record_chat_locked(request, source_usage, explicit=source_explicit)
+                except Exception:
+                    self._discovery.chat_accounting_failed()
+                    source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
                 events = self._watchers_due()
+                if source_warning:
+                    events.append(source_warning)
                 if maintenance_warnings:
                     events.append("记忆提取暂失败；原回复已保存，下次维护可重试")
             except BaseException:
@@ -473,6 +535,7 @@ class ChatService:
                 new_revision = replace_channels(self._config_path, values, self._config_revision)
                 self.cfg.channels = candidate
                 self._config_revision = new_revision
+                self._discovery.model_config_changed()
                 return {"enabled": enabled, "app_id": binding["app_id"], "owner_openid": binding["sender_id"]}
 
     def _check_config_revision_locked(self, supplied: str | None, *, required: bool) -> None:
@@ -625,6 +688,7 @@ class ChatService:
                 self.client = new_client
                 self._client_owned = True
                 self._config_revision = new_revision
+                self._discovery.model_config_changed()
                 published = True
                 result["revision"] = new_revision
         finally:
@@ -675,6 +739,7 @@ class ChatService:
         self.begin_shutdown()
         self._channels.drain()  # HTTP 202 workers outlive their submitting connections.
         self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
+        self._discovery.shutdown()
         with self._lock:
             warning = None
             try:

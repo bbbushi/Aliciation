@@ -1,10 +1,13 @@
 """SQLite 存储层：对话轮次、三层记忆、技能、遗忘墓碑、元信息。"""
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 import time
 from pathlib import Path
+
+from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -88,7 +91,7 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
     return m["mention_count"] * 2 + m["use_count"] + recency
 
 
-class Store:
+class Store(SourceStoreMixin):
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
@@ -96,6 +99,8 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()
+        self.conn.executescript(SOURCE_SCHEMA)
+        self.purge_source_packets()
 
     def _migrate(self) -> None:
         """老库升级：v0.2 思想层补 kind 列，P2 卫生补 pressure 列（压力窗口标记）。"""
@@ -111,6 +116,14 @@ class Store:
                 "ALTER TABLE memories ADD COLUMN pressure INTEGER NOT NULL DEFAULT 0"
             )
             changed = True
+        for name, declaration in (
+            ("origin", "TEXT NOT NULL DEFAULT 'conversation'"),
+            ("scope", "TEXT NOT NULL DEFAULT '[]'"),
+            ("expires_at", "REAL"),
+        ):
+            if name not in cols:
+                self.conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {declaration}")
+                changed = True
         if changed:
             self.conn.commit()
 
@@ -135,15 +148,19 @@ class Store:
         return float(v) if v else 0.0
 
     # ---------- 对话轮次 ----------
-    def add_turn(self, role: str, content: str, ts: float | None = None, *, request_id=None) -> int:
+    def add_turn(self, role: str, content: str, ts: float | None = None, *, request_id=None,
+                 source_packet_ids=(), source_scope="gui") -> int:
         # A short transaction binds the actual row ID to its request before any
         # network call or callback. No model call is inside this transaction.
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO turns (ts, role, content) VALUES (?, ?, ?)",
-                (ts if ts is not None else time.time(), role, content),
+                (ts if ts is not None else time.time(), role,
+                 SOURCE_SHADOW if source_packet_ids else content),
             )
             turn_id = cur.lastrowid
+            if source_packet_ids:
+                self._source_turn_write(turn_id, content, source_packet_ids, source_scope)
             if request_id is not None:
                 column = "user_turn_id" if role == "user" else "assistant_turn_id"
                 status = "user_committed" if role == "user" else "generated"
@@ -154,6 +171,13 @@ class Store:
                 )
                 if updated.rowcount != 1:
                     raise ValueError("请求轮次不能重复入库")
+                if role == "assistant":
+                    # The request receipt binds the actual saved reply, before
+                    # source isolation substitutes a shadow in ordinary turns.
+                    self.conn.execute(
+                        "UPDATE channel_requests SET reply_hash=? WHERE request_id=? AND reply_hash IS NULL",
+                        (hashlib.sha256(content.encode("utf-8")).hexdigest(), request_id),
+                    )
                 self.conn.execute("INSERT INTO channel_turns(turn_id,request_id,channel_id) "
                                   "SELECT ?,request_id,channel_id FROM channel_requests WHERE request_id=?",
                                   (turn_id, request_id))
@@ -195,14 +219,21 @@ class Store:
         self.conn.commit()
         return cur.lastrowid
 
-    def memories_in_layer(self, layer: str, kind: str | None = None) -> list[sqlite3.Row]:
+    def memories_in_layer(self, layer: str, kind: str | None = None, *,
+                          consumer: str = "maintenance") -> list[sqlite3.Row]:
+        # Maintenance must retain the original forgetting path for every origin.
+        # Prompt callers explicitly request conversation-only material.
+        clauses, args = ["layer=?"], [layer]
         if kind:
-            return self.conn.execute(
-                "SELECT * FROM memories WHERE layer=? AND kind=? ORDER BY created_at DESC, id DESC",
-                (layer, kind),
-            ).fetchall()
+            clauses.append("kind=?")
+            args.append(kind)
+        if consumer == "conversation" or kind == "stance":
+            clauses.append("origin='conversation'")
+        elif consumer != "maintenance":
+            raise ValueError("记忆消费者无效")
         return self.conn.execute(
-            "SELECT * FROM memories WHERE layer=? ORDER BY created_at DESC, id DESC", (layer,)
+            "SELECT * FROM memories WHERE " + " AND ".join(clauses)
+            + " ORDER BY created_at DESC,id DESC", args,
         ).fetchall()
 
     def count_in_layer(self, layer: str) -> int:
@@ -216,18 +247,21 @@ class Store:
             "SELECT COUNT(*) AS c FROM memories WHERE pressure=1"
         ).fetchone()["c"]
 
-    def alive_memories(self) -> list[sqlite3.Row]:
-        return self.conn.execute("SELECT * FROM memories ORDER BY created_at DESC").fetchall()
+    def alive_memories(self, *, include_external: bool = False) -> list[sqlite3.Row]:
+        # Thought/persona/skills and extraction all use this default. External
+        # material cannot silently become personality input after a restart.
+        where = "" if include_external else " WHERE origin='conversation'"
+        return self.conn.execute("SELECT * FROM memories" + where + " ORDER BY created_at DESC").fetchall()
 
     def count_memories_since(self, ts: float, kind: str | None = None) -> int:
         """数据触发器的刻度：某时间点之后新产生的记忆条数。可只数事件类。"""
         if kind:
             return self.conn.execute(
-                "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND kind=?",
+                "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND kind=? AND origin='conversation'",
                 (ts, kind),
             ).fetchone()["c"]
         return self.conn.execute(
-            "SELECT COUNT(*) AS c FROM memories WHERE created_at > ?", (ts,)
+            "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND origin='conversation'", (ts,)
         ).fetchone()["c"]
 
     def get_memory(self, memory_id: int) -> sqlite3.Row | None:
@@ -236,7 +270,7 @@ class Store:
     def update_memory_content(self, memory_id: int, content: str) -> None:
         """原位更新记忆正文（v0.4 先验状态迁移用：先验→验证不改身份，只改状态行）。"""
         self.conn.execute(
-            "UPDATE memories SET content=? WHERE id=?", (content.strip(), memory_id)
+            "UPDATE memories SET content=? WHERE id=? AND origin='conversation'", (content.strip(), memory_id)
         )
         self.conn.commit()
 
@@ -268,9 +302,11 @@ class Store:
             return
         self.conn.execute(
             "INSERT INTO memory_tombstones (memory_id, title, expired_at, reason) VALUES (?, ?, ?, ?)",
-            (memory_id, m["title"], time.time(), reason),
+            (memory_id, m["title"] if m["origin"] == "conversation" else "外部见闻已遗忘",
+             time.time(), reason if m["origin"] == "conversation" else "外部记忆按既有分层规则遗忘"),
         )
         self.conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+        self.conn.execute("DELETE FROM source_memory_dependencies WHERE memory_id=?", (memory_id,))
         self.conn.commit()
 
     def find_by_title(self, title: str) -> sqlite3.Row | None:
@@ -278,27 +314,41 @@ class Store:
         if not title:
             return None
         row = self.conn.execute(
-            "SELECT * FROM memories WHERE title=? ORDER BY id DESC LIMIT 1", (title,)
+            "SELECT * FROM memories WHERE title=? AND origin='conversation' ORDER BY id DESC LIMIT 1", (title,)
         ).fetchone()
         if row:
             return row
         return self.conn.execute(
-            "SELECT * FROM memories WHERE title LIKE ? ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM memories WHERE title LIKE ? AND origin='conversation' ORDER BY id DESC LIMIT 1",
             (f"%{title}%",),
         ).fetchone()
 
     def search_memories(
-        self, query: str, layers: tuple[str, ...], top_n: int = 5, min_score: float = 0.12
+        self, query: str, layers: tuple[str, ...], top_n: int | None = 5, min_score: float = 0.12,
+        *, source_scope: str | None = None, include_external_active: bool = False,
+        allowed_source_packet_ids: set[str] | None = None,
+        origins: tuple[str, ...] | None = None,
     ) -> list[tuple[float, sqlite3.Row]]:
         scored = []
-        for m in self.alive_memories():
-            if m["layer"] not in layers:
+        for m in self.alive_memories(include_external=source_scope is not None):
+            if origins is not None and m["origin"] not in origins:
                 continue
+            if m["layer"] not in layers and not (
+                include_external_active and m["origin"] != "conversation" and m["layer"] == "active"
+            ):
+                continue
+            if m["origin"] != "conversation":
+                if m["expires_at"] is None or m["expires_at"] <= time.time():
+                    continue
+                packets = self.external_memory_sources(m["id"], scope=source_scope)
+                if not packets or (allowed_source_packet_ids is not None
+                                   and any(p["id"] not in allowed_source_packet_ids for p in packets)):
+                    continue
             s = text_score(query, f'{m["title"]} {m["keywords"]} {m["content"]}')
             if s >= min_score:
                 scored.append((s, m))
         scored.sort(key=lambda t: (-t[0], -t[1]["use_count"]))
-        return scored[:top_n]
+        return scored if top_n is None else scored[:top_n]
 
     # ---------- 技能 ----------
     def insert_skill(self, title: str, content: str, source_titles: str = "",
