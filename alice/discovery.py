@@ -37,6 +37,7 @@ DEFAULTS = {
     "share_in_qq": False, "save_memories": False, "provider_kind": "native",
     "provider_endpoint": "", "provider_key": "", "provider_engines": "duckduckgo",
     "bilibili_access": "native", "tieba_access": "native", "network_mode": "system", "daily_network": 1000, "daily_response_mib": 1024,
+    "tieba_read_replies": False, "tieba_reply_limit": 20,
     "daily_shares": 20, "daily_memory_writes": 10, "pool_capacity": 100,
     "source_pool_bytes": 200 * 1024 * 1024, "chat_material_limit": 2,
     "chat_dependency_limit": 8, "external_recall_limit": 10,
@@ -64,7 +65,7 @@ POSITIVE_SETTINGS = frozenset({
     "seen_ttl_days", "block_ttl_days", "less_share_days", "discussion_minutes",
     "activity_timeout_seconds", "search_timeout_seconds", "read_timeout_seconds", "model_timeout_seconds",
 })
-POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes"})
+POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes", "tieba_reply_limit"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS discovery_config (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value TEXT NOT NULL);
@@ -72,7 +73,8 @@ CREATE TABLE IF NOT EXISTS discovery_interests (
  id TEXT PRIMARY KEY, topic TEXT NOT NULL, summary TEXT NOT NULL, enabled INTEGER NOT NULL,
  external_allowed INTEGER NOT NULL, origin TEXT NOT NULL, version INTEGER NOT NULL,
  created_at REAL NOT NULL, last_selected REAL NOT NULL DEFAULT 0,
- share_after REAL NOT NULL DEFAULT 0, weight REAL NOT NULL DEFAULT 1);
+ share_after REAL NOT NULL DEFAULT 0, weight REAL NOT NULL DEFAULT 1,
+ preferred_forums TEXT NOT NULL DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS discovery_runs (
  id TEXT PRIMARY KEY, epoch TEXT NOT NULL, revision INTEGER NOT NULL, day TEXT NOT NULL,
  state TEXT NOT NULL, phase TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
@@ -100,6 +102,11 @@ CREATE TABLE IF NOT EXISTS discovery_seen (
  identity TEXT PRIMARY KEY, expires_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS discovery_blocks (
  identity TEXT PRIMARY KEY, platform TEXT NOT NULL, expires_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS discovery_tieba_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1), version TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS discovery_tieba_sources (
+ packet_id TEXT PRIMARY KEY, forum_name TEXT NOT NULL, reply_count INTEGER NOT NULL,
+ replies_requested INTEGER NOT NULL, policy_version TEXT NOT NULL);
 """
 
 
@@ -134,7 +141,7 @@ def _diagnostic(value):
     if "kind" in value:
         return {}
     platform = value.get("platform", "bilibili")
-    stages = _BILI_STAGES if platform == "bilibili" else {"search", "read"} if platform == "tieba" else ()
+    stages = _BILI_STAGES if platform == "bilibili" else {"search", "read", "forum_check"} if platform == "tieba" else ()
     if not isinstance(value.get("stage"), str) or value["stage"] not in stages:
         return {}
     result = {"stage": value["stage"]}
@@ -218,6 +225,74 @@ def _third_party(platform, settings):
             and not (platform == "tieba" and settings["tieba_access"] == "native"))
 
 
+def _tieba_options(settings):
+    return {"preferred_forums": list(settings.get("_tieba_preferred_forums", [])), "read_replies": settings["tieba_read_replies"],
+            "reply_limit": settings["tieba_reply_limit"]}
+
+
+def _tieba_scope_changed(previous, settings):
+    return (previous["tieba_read_replies"] != settings["tieba_read_replies"]
+            or previous["tieba_reply_limit"] != settings["tieba_reply_limit"])
+
+
+def _preferred_forums(row):
+    from .discovery_tieba import normalize_forums
+    try:
+        value = row["preferred_forums"]
+        return normalize_forums(json.loads(value) if isinstance(value, str) else value)
+    except (ValueError, TypeError, KeyError, IndexError):
+        return []
+
+
+def _forum_check_result(data, requested):
+    from .discovery_tieba import normalize_forums
+    if not isinstance(data, dict) or data.get("requested") != requested:
+        raise _Stopped("worker_protocol")
+    name, identity = data.get("forum_name"), data.get("forum_id")
+    count, state = data.get("thread_count"), data.get("status")
+    try:
+        canonical = normalize_forums([name])
+    except ValueError:
+        raise _Stopped("worker_protocol") from None
+    if (canonical != [name] or not isinstance(identity, str) or not re.fullmatch(r"[1-9][0-9]{0,31}", identity)
+            or type(count) is not int or not 0 <= count <= 9007199254740991
+            or not isinstance(state, str) or state not in {"ready", "empty", "mismatch"}
+            or (name != requested) != (state == "mismatch")
+            or state == "ready" and count == 0 or state == "empty" and count != 0):
+        raise _Stopped("worker_protocol")
+    return {"requested": requested, "forum_name": name, "forum_id": identity,
+            "thread_count": count, "status": state, "checked_at": time.time()}
+
+
+def _seen_key(platform, value, settings, *, content=False):
+    if platform != "tieba" or settings["_tieba_policy_version"] == "legacy":
+        return value if content else _identity(value)
+    # A newly approved reading scope may revisit a URL; unrelated settings must
+    # not silently reset dedup. Explicit source blocks remain outside this key.
+    return "tieba:" + settings["_tieba_policy_version"] + (":content:" if content else ":url:") + (value if content else _identity(value))
+
+
+def _validate_tieba_evidence(doc, settings):
+    """Recheck the reader's bounded scope before interpretation and publication."""
+    from .discovery_tieba import normalize_forums
+    forum, count = doc.get("tieba_forum"), doc.get("tieba_reply_count")
+    if not isinstance(forum, str):
+        raise _Stopped("worker_protocol")
+    if forum:
+        try:
+            if normalize_forums([forum]) != [forum]:
+                raise ValueError()
+        except ValueError:
+            raise _Stopped("worker_protocol") from None
+    if (type(doc.get("tieba_page")) is not int or doc["tieba_page"] != 1
+            or type(doc.get("tieba_replies_requested")) is not bool
+            or doc["tieba_replies_requested"] != settings["tieba_read_replies"]
+            or type(count) is not int or not 0 <= count <= settings["tieba_reply_limit"]
+            or count > 0 and not settings["tieba_read_replies"]
+            or doc.get("coverage") != ("forum_thread_excerpt" if count else "forum_main_post_excerpt")):
+        raise _Stopped("worker_protocol")
+
+
 def _string(value, maximum, *, empty=False):
     if (not isinstance(value, str) or len(value) > maximum
             or any(ord(c) < 32 and c not in "\n\t" or 0xD800 <= ord(c) <= 0xDFFF for c in value)):
@@ -252,6 +327,7 @@ class DiscoveryCoordinator:
         self._worker = None
         self._scheduler = None
         self._task = None
+        self._tieba_forum_check = None
         self._pending = None
         self._note = None
         self._generation = 0
@@ -264,19 +340,30 @@ class DiscoveryCoordinator:
         # Startup/reset only; caller holds the service lock on reset.
         self._generation += 1
         self._pending = self._note = None
+        self._tieba_forum_check = None
         self._sharing_failed = False
         conn = self.service.store.conn
         conn.executescript(SCHEMA)
         with conn:
+            if conn.execute("SELECT 1 FROM discovery_tieba_policy WHERE id=1").fetchone() is None:
+                conn.execute("INSERT INTO discovery_tieba_policy VALUES(1,'legacy')")
+                # Before this migration the Tieba reader could only publish the
+                # main post. Keep that proven reading scope; its forum was not
+                # recorded and must not be invented for the source display.
+                conn.execute("INSERT OR IGNORE INTO discovery_tieba_sources "
+                             "SELECT id,'',0,0,'legacy' FROM source_packets WHERE source_id LIKE 'tieba:%'")
             for table in ("discovery_runs", "discovery_attempts"):
                 if "diagnostic" not in {column[1] for column in conn.execute(f"PRAGMA table_info({table})")}:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN diagnostic TEXT NOT NULL DEFAULT '{{}}'")
             if "search_summary" not in {column[1] for column in conn.execute("PRAGMA table_info(discovery_runs)")}:
                 conn.execute("ALTER TABLE discovery_runs ADD COLUMN search_summary TEXT NOT NULL DEFAULT '{}'")
+            if "preferred_forums" not in {column[1] for column in conn.execute("PRAGMA table_info(discovery_interests)")}:
+                conn.execute("ALTER TABLE discovery_interests ADD COLUMN preferred_forums TEXT NOT NULL DEFAULT '[]'")
             conn.execute("INSERT OR IGNORE INTO discovery_config VALUES(1,1,?)", (_json(DEFAULTS),))
             row = conn.execute("SELECT value FROM discovery_config WHERE id=1").fetchone()
             previous = json.loads(row["value"])
             merged = {**copy.deepcopy(DEFAULTS), **previous}
+            merged.pop("tieba_forums", None)  # Replaced by per-interest, non-exclusive preferences.
             previous_platforms = previous.get("platforms", {})
             if not isinstance(previous_platforms, dict):
                 previous_platforms = {}
@@ -314,9 +401,13 @@ class DiscoveryCoordinator:
         self._generation += 1
         self._cancel.set()
         self._pending = self._note = None
+        with self._guard:
+            self._tieba_forum_check = None
         # An archived database has no live TTL collector. Remove bounded external
         # payloads before it leaves the active store, retaining ordinary history.
-        self.service.store.clear_source_material_for_archive()
+        with self.service.store.source_transaction():
+            self.service.store.clear_source_material_for_archive()
+            self.service.store.conn.execute("DELETE FROM discovery_tieba_sources")
 
     def shutdown(self):
         self.begin_shutdown()
@@ -339,12 +430,36 @@ class DiscoveryCoordinator:
         return int(row["revision"]), value
 
     def _write_config_locked(self, revision, value):
-        with self.service.store.conn:
+        with self.service.store.source_transaction():
             changed = self.service.store.conn.execute(
                 "UPDATE discovery_config SET revision=revision+1,value=? WHERE id=1 AND revision=?",
                 (_json(value), revision)).rowcount
             if changed != 1:
                 raise ChannelError(409, "revision_conflict", "设置已更新，请重新载入")
+
+    def _tieba_policy_version_locked(self):
+        return self.service.store.conn.execute("SELECT version FROM discovery_tieba_policy WHERE id=1").fetchone()[0]
+
+    def _restrict_tieba_sources_locked(self, settings):
+        """Revoke out-of-scope evidence, including retired cards' dependencies."""
+        conn = self.service.store.conn
+        packets = []
+        for row in conn.execute(
+                "SELECT p.id,m.forum_name,m.reply_count,m.replies_requested FROM source_packets p "
+                "LEFT JOIN discovery_tieba_sources m ON m.packet_id=p.id "
+                "WHERE p.source_id LIKE 'tieba:%' AND p.revoked=0").fetchall():
+            # A missing record cannot establish the previously read scope.
+            count = row["reply_count"]
+            valid = (type(count) is int and count >= 0 and row["replies_requested"] in (0, 1)
+                     and (count == 0 or row["replies_requested"] == 1)
+                     and (count == 0 or settings["tieba_read_replies"] and count <= settings["tieba_reply_limit"]))
+            if not valid:
+                packets.append(row["id"])
+        if packets:
+            self.service.store.revoke_source_packets(packets)
+            conn.executemany("DELETE FROM discovery_cards WHERE packet_id=?", [(pid,) for pid in packets])
+            conn.executemany("DELETE FROM discovery_tieba_sources WHERE packet_id=?", [(pid,) for pid in packets])
+        return packets
 
     def _bump_revision_locked(self):
         self.service.store.conn.execute("UPDATE discovery_config SET revision=revision+1 WHERE id=1")
@@ -379,6 +494,8 @@ class DiscoveryCoordinator:
             conn.execute("DELETE FROM discovery_attempts WHERE created_at<? AND state!='reserved'", (now - 7 * 86400,))
             conn.execute("DELETE FROM discovery_attempts WHERE id IN (SELECT id FROM discovery_attempts "
                          "WHERE state!='reserved' ORDER BY created_at DESC LIMIT -1 OFFSET 1000)")
+            conn.execute("DELETE FROM discovery_tieba_sources WHERE packet_id IN "
+                         "(SELECT id FROM source_packets WHERE revoked=1)")
             conn.execute("DELETE FROM discovery_runs WHERE started_at<? AND state NOT IN ('queued','running','draining')",
                          (now - 7 * 86400,))
         if self._pending and self._pending["expires_at"] <= now:
@@ -398,7 +515,9 @@ class DiscoveryCoordinator:
                 "wikipedia": ("公开百科条目", ["条目正文节选"]),
                 "bilibili": ("公开视频信息与文字简介，不含视频理解", ["视频信息", "视频简介"]),
                 "zhihu": ("与链接身份对应的公开问题、回答或文章正文", ["问题描述", "指定回答", "文章正文"]),
-                "tieba": ("帖子主楼的公开文字，不采集回复或楼中楼", ["主帖文字节选"]),
+                "tieba": ("主帖及获准的首页回复文字，不采集楼中楼、图片或视频" if settings["tieba_read_replies"]
+                          else "帖子主楼的公开文字，不采集回复或楼中楼",
+                          ["主帖文字节选", "首页回复文字节选"] if settings["tieba_read_replies"] else ["主帖文字节选"]),
             }[identity]
             method = ({"wikipedia": "平台公开接口", "bilibili": "B站站内只读接口", "tieba": "贴吧公开搜索入口"}.get(identity, "")
                       if not _third_party(identity, settings) else settings["provider_kind"])
@@ -408,10 +527,15 @@ class DiscoveryCoordinator:
                               "readable_types": details[1],
                               "requires_third_party": _third_party(identity, settings),
                               "third_party_notice": "" if not _third_party(identity, settings) else "搜索词将交给所选第三方服务"})
+            if identity == "tieba":
+                platforms[-1]["scope_notice"] = "按各兴趣的优先吧排序当前关键词结果页；没有合适材料时可读其它吧，不遍历吧内列表"
+                platforms[-1]["scope_notice"] += (f"；读取主帖及首页最多 {settings['tieba_reply_limit']} 条回复，不翻页、不读楼中楼"
+                                                   if settings["tieba_read_replies"] else "；仅主帖文字，不读取回复")
         interests = []
         for row in self.service.store.conn.execute("SELECT * FROM discovery_interests ORDER BY created_at DESC"):
             item = dict(row)
             item["enabled"], item["external_allowed"] = bool(item["enabled"]), bool(item["external_allowed"])
+            item["preferred_forums"] = _preferred_forums(item)
             interests.append(item)
         cards = []
         for row in self.service.store.conn.execute(
@@ -421,17 +545,30 @@ class DiscoveryCoordinator:
             item = dict(row)
             if self.service.store.get_source_packet(item["packet_id"], scope="gui") is None:
                 continue  # Expired/revoked payloads must not leak through card copies.
-            valid = (not item["disabled"] and item["interest_enabled"] and item["external_allowed"] and item["interest_version"] == item["live_version"]
-                     and settings["platforms"][item["platform"]]["enabled"]
-                     and self.service.store.get_source_packet(item["packet_id"], scope="gui") is not None)
-            item.update(can_discuss=bool(valid), reason="关联兴趣：" + (item["interest_topic"] or "已移除"),
-                        share_state="已提供给对话（是否采用未推断）" if item["used_at"] else "已暂停" if not valid else "待讨论")
+            unavailable = ("", "")
+            if item["live_version"] is None:
+                unavailable = ("interest_removed", "关联兴趣已移除，这条资料已暂停讨论")
+            elif not item["interest_enabled"]:
+                unavailable = ("interest_disabled", "关联兴趣已停用，这条资料已暂停讨论")
+            elif not item["external_allowed"]:
+                unavailable = ("interest_permission_required", "关联兴趣未获准用于外部搜索，这条资料已暂停讨论")
+            elif item["interest_version"] != item["live_version"]:
+                unavailable = ("interest_changed", "关联兴趣已修改，这条资料基于旧兴趣生成，已暂停讨论")
+            elif not settings["platforms"][item["platform"]]["enabled"]:
+                unavailable = ("platform_disabled", "来源平台已停用，这条资料已暂停讨论")
+            elif item["disabled"]:
+                unavailable = ("card_disabled", "这条资料已停用，不能继续用于讨论")
+            valid = not unavailable[0]
+            item.update(can_discuss=valid, unavailable_reason=unavailable[0], discuss_unavailable_reason=unavailable[1],
+                        reason="关联兴趣：" + (item["interest_topic"] or "已移除"),
+                        share_state="已暂停" if not valid else "已提供给对话（是否采用未推断）" if item["used_at"] else "待讨论")
             for key in ("interest_summary", "interest_enabled", "live_version"):
                 item.pop(key, None)
             cards.append(item)
         budget = self._budget_locked()
         with self._guard:
             task = copy.deepcopy(self._task)
+            forum_check = copy.deepcopy(self._tieba_forum_check)
         if task is None:
             row = self.service.store.conn.execute("SELECT * FROM discovery_runs ORDER BY started_at DESC LIMIT 1").fetchone()
             task = dict(row) if row else None
@@ -440,6 +577,7 @@ class DiscoveryCoordinator:
             task["diagnostic"] = _diagnostic(task.get("diagnostic"))
             task["search_summary"] = _search_summary(task.get("search_summary"))
         return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "platforms": platforms,
+                "tieba_forum_check": forum_check,
                 "sharing_warning": "资料共享记录异常，已暂停本次会话的资料注入；普通聊天可继续，重新载入服务后再检查。" if self._sharing_failed else "",
                 "interests": interests, "task": task, "cards": cards,
                 "discuss_card_id": self._pending["card_id"] if self._pending and self._pending["expires_at"] > now else None,
@@ -474,10 +612,10 @@ class DiscoveryCoordinator:
                 raise ChannelError(409, "revision_conflict", "设置已更新，请重新载入后再操作")
             allowed = {
                 "settings": {"settings"}, "platform": {"id", "enabled", "allow_third_party"},
-                "interest": {"id", "topic", "summary", "enabled", "external_allowed"},
+                "interest": {"id", "topic", "summary", "enabled", "external_allowed", "preferred_forums"},
                 "interest_delete": {"id"}, "run": {"interest_id"}, "cancel": {"task_id"},
                 "feedback": {"card_id", "value"}, "delete": {"card_id"}, "clear": {"platform_id"},
-                "discuss": {"card_id"}, "undiscuss": set(),
+                "discuss": {"card_id"}, "undiscuss": set(), "tieba_forum_check": {"forums"},
             }
             if action not in allowed or set(payload) - allowed[action] - {"action", "dataset_id", "revision"}:
                 raise ChannelError(400, "invalid_request", "内容发现操作或字段无效")
@@ -502,6 +640,8 @@ class DiscoveryCoordinator:
                 self._remove_interest_locked(_string(payload.get("id"), 32))
             elif action == "run":
                 self._launch_locked(settings, revision, manual=True, interest_id=payload.get("interest_id"))
+            elif action == "tieba_forum_check":
+                self._launch_tieba_check_locked(settings, revision, payload.get("forums"))
             elif action == "cancel":
                 with self._guard:
                     if self._task and payload.get("task_id") not in (None, self._task["id"]):
@@ -518,7 +658,8 @@ class DiscoveryCoordinator:
                 self._pending = {"card_id": card["id"], "expires_at": min(time.time() + settings["discussion_minutes"] * 60, card["expires_at"])}
             elif action == "undiscuss":
                 self._pending = None
-            self._wake.set()
+            if action != "tieba_forum_check":
+                self._wake.set()
             return self.snapshot_locked()
         finally:
             self.service._lock.release()
@@ -529,7 +670,7 @@ class DiscoveryCoordinator:
             raise ChannelError(400, "invalid_request", "设置字段无效")
         settings = copy.deepcopy(previous)
         for key, value in changes.items():
-            if key in {"enabled", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories"}:
+            if key in {"enabled", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies"}:
                 settings[key] = _bool(value)
             elif key in ("window_start", "window_end"):
                 settings[key] = _clock(value)
@@ -597,12 +738,23 @@ class DiscoveryCoordinator:
             raise ChannelError(400, "cost_permission_required", "请允许后台模型费用，或将后台模型额度设为0")
         self._cancel.set()
         self._pending = self._note = None
-        self._write_config_locked(revision, settings)
-        if previous["share_in_qq"] and not settings["share_in_qq"]:
-            self.service.store.restrict_source_scope("qq-owner")
+        revoked_packets = []
+        scope_changed = _tieba_scope_changed(previous, settings)
+        qq_restricted = previous["share_in_qq"] and not settings["share_in_qq"]
+        with self.service.store.source_transaction():
+            self._write_config_locked(revision, settings)
+            if scope_changed:
+                self.service.store.conn.execute("UPDATE discovery_tieba_policy SET version=? WHERE id=1", (uuid.uuid4().hex,))
+                revoked_packets = self._restrict_tieba_sources_locked(settings)
+                # The new namespace also permits revisiting a policy that was
+                # explicitly left and later re-selected. Blocks are unaffected.
+                self.service.store.conn.execute("DELETE FROM discovery_seen WHERE identity LIKE 'tieba:%'")
+            if qq_restricted:
+                self.service.store.restrict_source_scope("qq-owner")
+            if previous["save_memories"] and not settings["save_memories"]:
+                self.service.store.restrict_source_memory()
+        if qq_restricted or revoked_packets:
             self.service._channels.invalidate_source_cache()
-        if previous["save_memories"] and not settings["save_memories"]:
-            self.service.store.restrict_source_memory()
 
     def _clear_pending_locked(self, *, platform=None, interest_id=None, packet_ids=()):
         def matches(card_id):
@@ -615,7 +767,7 @@ class DiscoveryCoordinator:
 
     def _save_interest_locked(self, payload):
         conn = self.service.store.conn
-        _, settings = self._config_locked()
+        revision, settings = self._config_locked()
         topic = _string(payload.get("topic"), 80)
         summary = _string(payload.get("summary", topic), 240)
         enabled, allowed = _bool(payload.get("enabled", True)), _bool(payload.get("external_allowed", False))
@@ -628,19 +780,49 @@ class DiscoveryCoordinator:
                 raise ChannelError(404, "not_found", "该兴趣已不存在")
         elif _exceeds(conn.execute("SELECT COUNT(*) FROM discovery_interests").fetchone()[0], 1, settings["interest_capacity"]):
             raise ChannelError(409, "interest_capacity", "已达到你设置的兴趣容量，可在设置中调整")
+        from .discovery_tieba import normalize_forums
+        previous_forums = _preferred_forums(old) if old is not None else []
+        try:
+            preferred = normalize_forums(payload.get("preferred_forums", previous_forums))
+        except ValueError:
+            raise ChannelError(400, "invalid_request", "优先吧须为有效吧名列表") from None
+        self._require_forum_checks_locked(preferred, previous_forums, revision)
+        if (old is not None and topic == old["topic"] and summary == old["summary"]
+                and enabled == bool(old["enabled"]) and allowed == bool(old["external_allowed"])):
+            if preferred != previous_forums:
+                # A soft ranking preference changes future work, not the
+                # permission or interest version of already collected material.
+                self._cancel.set()
+                with conn:
+                    conn.execute("UPDATE discovery_interests SET preferred_forums=? WHERE id=?", (_json(preferred), identity))
+                    self._bump_revision_locked()
+            return
         if enabled and allowed and _exceeds(conn.execute(
                 "SELECT COUNT(*) FROM discovery_interests WHERE enabled=1 AND external_allowed=1 AND id!=?", (identity or "",)).fetchone()[0], 1, settings["active_interest_capacity"]):
             raise ChannelError(409, "interest_capacity", "已达到你设置的启用兴趣容量")
         identity = identity or uuid.uuid4().hex
         self._cancel.set()
         with conn:
-            conn.execute("INSERT INTO discovery_interests(id,topic,summary,enabled,external_allowed,origin,version,created_at) "
-                         "VALUES(?,?,?,?,?,'manual',1,?) ON CONFLICT(id) DO UPDATE SET topic=excluded.topic,summary=excluded.summary,"
-                         "enabled=excluded.enabled,external_allowed=excluded.external_allowed,version=discovery_interests.version+1",
-                         (identity, topic, summary, int(enabled), int(allowed), time.time()))
+            conn.execute("INSERT INTO discovery_interests(id,topic,summary,enabled,external_allowed,origin,version,created_at,preferred_forums) "
+                         "VALUES(?,?,?,?,?,'manual',1,?,?) ON CONFLICT(id) DO UPDATE SET topic=excluded.topic,summary=excluded.summary,"
+                         "enabled=excluded.enabled,external_allowed=excluded.external_allowed,preferred_forums=excluded.preferred_forums,"
+                         "version=discovery_interests.version+1",
+                         (identity, topic, summary, int(enabled), int(allowed), time.time(), _json(preferred)))
             conn.execute("UPDATE discovery_cards SET disabled=1 WHERE interest_id=?", (identity,))
             self._bump_revision_locked()
         self._clear_pending_locked(interest_id=identity)
+
+    def _require_forum_checks_locked(self, preferred, previous, revision):
+        added = set(preferred) - set(previous)
+        if not added:
+            return
+        with self._guard:
+            check = self._tieba_forum_check
+            ready = ({row["requested"] for row in check["results"]
+                      if row["status"] == "ready" and row["requested"] == row["forum_name"]}
+                     if check and check["state"] == "completed" and check["revision"] == revision else set())
+        if not added.issubset(ready):
+            raise ChannelError(409, "tieba_forum_check_required", "新增优先吧须先检测并确认有公开帖子；请检测当前吧名后再保存兴趣")
 
     def _remove_interest_locked(self, identity):
         self._cancel.set()
@@ -695,6 +877,7 @@ class DiscoveryCoordinator:
         self.service.store.revoke_source_packets(packets)
         with conn:
             conn.executemany("DELETE FROM discovery_cards WHERE id=?", [(r["id"],) for r in rows])
+            conn.executemany("DELETE FROM discovery_tieba_sources WHERE packet_id=?", [(pid,) for pid in packets])
             self._bump_revision_locked()
         self._clear_pending_locked(packet_ids=packets)
         self.service._channels.invalidate_source_cache()
@@ -829,7 +1012,7 @@ class DiscoveryCoordinator:
             inside = start <= clock < end if start < end else clock >= start or clock < end
             if not inside:
                 return False
-            last = self.service.store.conn.execute("SELECT MAX(started_at) FROM discovery_runs").fetchone()[0]
+            last = self.service.store.conn.execute("SELECT MAX(started_at) FROM discovery_runs WHERE interest_id IS NOT NULL").fetchone()[0]
             if last and now - last < settings["activity_interval_minutes"] * 60:
                 return False
             stock = self.service.store.conn.execute("SELECT COUNT(*) FROM discovery_cards WHERE disabled=0 AND used_at IS NULL AND expires_at>?", (now,)).fetchone()[0]
@@ -863,7 +1046,9 @@ class DiscoveryCoordinator:
                                             "VALUES(?,?,?,?,?,?,?,?)", tuple(task[k] for k in
                                             ("id", "epoch", "revision", "day", "state", "phase", "interest_id", "started_at")))
         cancel = threading.Event()
-        worker = threading.Thread(target=self._run, args=(task, copy.deepcopy(settings), interests, platforms, model, cancel),
+        worker_settings = copy.deepcopy(settings)
+        worker_settings["_tieba_policy_version"] = self._tieba_policy_version_locked()
+        worker = threading.Thread(target=self._run, args=(task, worker_settings, interests, platforms, model, cancel),
                                   name="alice-discovery", daemon=False)
         # Publish under the same admission condition used by foreground reserve.
         with self.service._channels.condition:
@@ -877,6 +1062,120 @@ class DiscoveryCoordinator:
             worker.start()
         return True
 
+    def _launch_tieba_check_locked(self, settings, revision, forums):
+        from .discovery_tieba import normalize_forums
+        try:
+            forums = normalize_forums(forums)
+        except ValueError:
+            raise ChannelError(400, "invalid_request", "请填写有效的优先吧名列表") from None
+        if not forums:
+            raise ChannelError(400, "invalid_request", "请先填写要检测的吧名")
+        if self._stop.is_set() or self._unavailable:
+            raise ChannelError(409, "draining", "后台工作者尚未回收或正在关闭")
+        with self._guard:
+            if self._worker is not None and self._worker.is_alive():
+                raise ChannelError(409, "busy", "已有后台寻找或吧名检测，请等待完成或先停止")
+        if self.service._channels.activity()["status"] != "ready":
+            raise ChannelError(409, "foreground_busy", "请在Alice已初始化且聊天空闲时检测")
+        budget = self._budget_locked()
+        if (_exceeds(budget["network"], 1, settings["daily_network"])
+                or _exceeds(budget["body_bytes"], settings["read_response_bytes"], _response_budget(settings))):
+            raise ChannelError(409, "quota_exceeded", "今日网络或响应量额度不足，暂不能检测")
+        task = {"id": uuid.uuid4().hex, "kind": "tieba_forum_check", "epoch": self.dataset_id,
+                "revision": revision, "day": _day(), "state": "queued", "phase": "tieba_forum_check",
+                "reason": "", "started_at": time.time(), "generation": self._generation,
+                "interest_id": None, "cards": 0}
+        with self.service.store.conn:
+            self.service.store.conn.execute("INSERT INTO discovery_runs(id,epoch,revision,day,state,phase,interest_id,started_at) "
+                                            "VALUES(?,?,?,?,?,?,?,?)", tuple(task[key] for key in
+                                            ("id", "epoch", "revision", "day", "state", "phase", "interest_id", "started_at")))
+        cancel = threading.Event()
+        worker = threading.Thread(target=self._run_tieba_check,
+                                  args=(task, copy.deepcopy(settings), forums, cancel),
+                                  name="alice-tieba-forum-check", daemon=False)
+        with self.service._channels.condition:
+            if self.service._channels.slot is not None or self.service._channels.closing:
+                with self.service.store.conn:
+                    self.service.store.conn.execute("UPDATE discovery_runs SET state='cancelled',reason='foreground_busy',finished_at=? WHERE id=?",
+                                                    (time.time(), task["id"]))
+                raise ChannelError(409, "foreground_busy", "对话刚刚开始，请稍后再检测")
+            self._cancel = cancel
+            with self._guard:
+                self._tieba_forum_check = {
+                    "task_id": task["id"], "state": "queued", "forums": forums, "revision": revision,
+                    "results": [{"requested": name, "forum_name": "", "forum_id": "", "thread_count": 0,
+                                 "status": "unverified", "checked_at": None, "code": "not_checked"} for name in forums],
+                }
+                self._task, self._worker = dict(task), worker
+            worker.start()
+
+    def _run_tieba_check(self, job, settings, forums, cancel):
+        from .discovery_network import NetworkRouteError, resolve_system_proxy
+        deadline = time.monotonic() + settings["activity_timeout_seconds"]
+        state, code = "completed", "tieba_forum_check_finished"
+
+        def publish(index, result):
+            with self._guard:
+                check = self._tieba_forum_check
+                if check and check["task_id"] == job["id"]:
+                    check["results"][index] = result
+
+        def unverified(name, reason):
+            return {"requested": name, "forum_name": "", "forum_id": "", "thread_count": 0,
+                    "status": "unverified", "checked_at": None if reason == "checking" else time.time(), "code": reason}
+
+        try:
+            try:
+                settings["_network_proxy"] = resolve_system_proxy() if settings["network_mode"] == "system" else ""
+            except NetworkRouteError as exc:
+                raise _Stopped(exc.code) from None
+            for index, name in enumerate(forums):
+                self._store_step(job, cancel, lambda: publish(index, unverified(name, "checking")))
+                try:
+                    data = self._execute(job, cancel, settings, "tieba_forum_check", {"forum_name": name}, deadline)
+                    result = _forum_check_result(data, name)
+                except _Stopped as exc:
+                    self._store_step(job, cancel, lambda: publish(index, unverified(name, exc.code)), settle=True)
+                    if (self._unavailable or exc.code.startswith("proxy_") or exc.code in {
+                            "cancelled", "foreground_busy", "session_changed", "quota_exceeded", "timeout",
+                            "tieba_api_error", "verification_required", "http_401", "http_403", "http_429",
+                            "network", "tls", "dns", "dns_resolution", "dns_non_public", "dns_fake_ip", "dns_invalid"}):
+                        raise
+                    # A distinct explicitly requested forum is not a retry of
+                    # the failed one. Missing identity/shape stays unverified.
+                    continue
+                self._store_step(job, cancel, lambda: publish(index, result))
+        except _Stopped as exc:
+            code = exc.code
+            state = "cancelled" if code in ("cancelled", "foreground_busy", "session_changed") else "failed"
+        except Exception:
+            state, code = "failed", "processing_failed"
+        finally:
+            if self._unavailable:
+                state, code = "draining", "worker_not_reaped"
+
+            def finish():
+                nonlocal state, code
+                if state == "completed" and not self._valid_job_locked(job, cancel):
+                    state, code = "cancelled", "cancelled"
+                with self._guard:
+                    check = self._tieba_forum_check
+                    if check and check["task_id"] == job["id"]:
+                        check["state"], check["code"] = state, code
+                        for result in check["results"]:
+                            if result.get("code") in {"not_checked", "checking"}:
+                                result["code"] = code if state != "completed" else "not_checked"
+                self._phase(job, "tieba_forum_check", state=state, reason=code)
+                with self.service.store.conn:
+                    self.service.store.conn.execute("UPDATE discovery_runs SET state=?,phase='tieba_forum_check',reason=?,finished_at=?,diagnostic=? WHERE id=?",
+                                                    (state, code, time.time(), _json(_diagnostic(job.get("diagnostic"))), job["id"]))
+            try:
+                self._store_step(job, cancel, finish, settle=True)
+            except _Stopped as exc:
+                self._phase(job, "tieba_forum_check", state="cancelled", reason=exc.code)
+            except Exception:
+                self._phase(job, "tieba_forum_check", state="failed", reason="processing_failed")
+
     def model_config_changed(self):
         self._generation += 1
         self._cancel.set()
@@ -886,7 +1185,10 @@ class DiscoveryCoordinator:
                 or self.dataset_id != job["epoch"] or _day() != job["day"]):
             return False
         revision, settings = self._config_locked()
-        return revision == job["revision"] and settings["enabled"]
+        with self._guard:
+            check_job = (job.get("kind") == "tieba_forum_check" and self._tieba_forum_check
+                         and self._tieba_forum_check["task_id"] == job["id"])
+        return revision == job["revision"] and (settings["enabled"] or bool(check_job))
 
     def _phase(self, job, phase, *, state="running", reason=""):
         with self._guard:
@@ -895,6 +1197,11 @@ class DiscoveryCoordinator:
                                   reason_message=_reason(reason), cards=job.get("cards", 0),
                                   diagnostic=_diagnostic(job.get("diagnostic")),
                                   search_summary=_search_summary(job.get("search_summary")))
+            if (job.get("kind") == "tieba_forum_check" and self._tieba_forum_check
+                    and self._tieba_forum_check["task_id"] == job["id"]):
+                self._tieba_forum_check["state"] = state
+                if reason:
+                    self._tieba_forum_check["code"] = reason
 
     def _store_step(self, job, cancel, callback, *, settle=False):
         # A foreground writer may be long-lived; it never waits for this worker.
@@ -963,15 +1270,20 @@ class DiscoveryCoordinator:
             pass  # Old store/epoch keeps the reservation; never write into a new session.
 
     def _execute(self, job, cancel, settings, op, data, deadline):
+        if (job.get("kind") == "tieba_forum_check") != (op == "tieba_forum_check"):
+            raise _Stopped("worker_protocol")
         if self._unavailable:
             raise _Stopped("worker_not_reaped")
         diagnostic = _diagnostic({"stage": data["request"]["purpose"]}) if op == "bili_http" else {}
-        tieba_stage = (op in ("search", "read")
+        tieba_stage = (op == "tieba_forum_check" or op in ("search", "read")
                        and (data.get("platform") if op == "search" else data.get("candidate", {}).get("platform")) == "tieba")
+        tieba_stage_name = "forum_check" if op == "tieba_forum_check" else op
         if tieba_stage:
-            diagnostic = _diagnostic({"platform": "tieba", "stage": op})
+            diagnostic = _diagnostic({"platform": "tieba", "stage": tieba_stage_name})
+            if op != "tieba_forum_check":
+                data = {**data, "tieba_options": _tieba_options(settings)}
         job["diagnostic"] = diagnostic
-        phase = "model" if op in ("plan", "interpret") else "read" if (op == "read" or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
+        phase = "model" if op in ("plan", "interpret") else "read" if (op in ("read", "tieba_forum_check") or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
         maximum = settings[phase + "_response_bytes"]
         output_limit = max(192 * 1024, maximum * 2 + 65536)
         remaining = deadline - time.monotonic()
@@ -979,7 +1291,7 @@ class DiscoveryCoordinator:
             raise _Stopped("timeout")
         timeout = min(remaining, settings[phase + "_timeout_seconds"])
         operation_deadline = min(deadline, time.monotonic() + timeout)
-        if op in ("search", "read", "bili_http"):
+        if op in ("search", "read", "bili_http", "tieba_forum_check"):
             data = {**data, "network_proxy": settings.get("_network_proxy", "")}
         encoded = _json({"version": 1, "op": op, "require_admission": True,
                          "timeout_seconds": timeout, "response_bytes": maximum, **data}).encode("utf-8")
@@ -1056,7 +1368,7 @@ class DiscoveryCoordinator:
             if not result["ok"]:
                 if tieba_stage:
                     reported = _diagnostic(result.get("diagnostic"))
-                    if reported.get("platform") == "tieba" and reported.get("stage") == op:
+                    if reported.get("platform") == "tieba" and reported.get("stage") == tieba_stage_name:
                         diagnostic = reported
                         job["diagnostic"] = diagnostic
                 error = result.get("error")
@@ -1160,6 +1472,7 @@ class DiscoveryCoordinator:
             if plan.get("platform") not in platforms or plan.get("interest_id") not in {r["id"] for r in interests}:
                 raise _Stopped("model_scope")
             interest = next(r for r in interests if r["id"] == plan["interest_id"])
+            settings["_tieba_preferred_forums"] = _preferred_forums(interest)
             query = validate_query(plan["query"])
             job["interest_id"] = interest["id"]
             def select_interest():
@@ -1187,14 +1500,16 @@ class DiscoveryCoordinator:
                 if candidate["url"] not in urls:
                     candidates.append(candidate)
                     urls.add(candidate["url"])
-            candidates.sort(key=lambda c: text_score(query, c["title"] + " " + c.get("snippet", "")), reverse=True)
+            preferred = set(settings["_tieba_preferred_forums"]) if plan["platform"] == "tieba" else set()
+            candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
+                                           text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
             if not candidates:
                 code = "search_no_candidates"
             evidence = []
             for candidate in _limit_rows(candidates, settings["read_candidates"]):
                 def seen():
                     conn = self.service.store.conn
-                    return (conn.execute("SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (_identity(candidate["url"]), time.time())).fetchone()
+                    return (conn.execute("SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (_seen_key(plan["platform"], candidate["url"], settings), time.time())).fetchone()
                             or conn.execute("SELECT 1 FROM discovery_blocks WHERE identity=? AND expires_at>?", (_identity(candidate["url"]), time.time())).fetchone())
                 if self._store_step(job, cancel, seen):
                     continue
@@ -1219,9 +1534,11 @@ class DiscoveryCoordinator:
                 normalized = normalize_candidate(data, plan["platform"])
                 if normalized["url"] != candidate["url"] or not isinstance(data.get("text"), str) or not 80 <= len(data["text"]) <= 12000:
                     raise _Stopped("worker_protocol")
+                if plan["platform"] == "tieba":
+                    _validate_tieba_evidence(data, settings)
                 data["content_hash"] = hashlib.sha256(data["text"].encode("utf-8")).hexdigest()
                 hash_seen = self._store_step(job, cancel, lambda: self.service.store.conn.execute(
-                    "SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (data["content_hash"], time.time())).fetchone())
+                    "SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (_seen_key(plan["platform"], data["content_hash"], settings, content=True), time.time())).fetchone())
                 if not hash_seen:
                     evidence.append(data)
                     # A card has one immutable source dependency. Isolate the
@@ -1275,6 +1592,12 @@ class DiscoveryCoordinator:
         conn = self.service.store.conn
         if settings["pool_capacity"] == 0:
             return 0
+        if any(doc.get("platform") == "tieba" for doc in evidence):
+            revision, current = self._config_locked()
+            if (revision != job["revision"] or not current["platforms"]["tieba"]["enabled"]
+                    or _tieba_scope_changed(settings, current)
+                    or settings["_tieba_policy_version"] != self._tieba_policy_version_locked()):
+                raise _Stopped("source_revoked")
         live = conn.execute("SELECT version,enabled,external_allowed FROM discovery_interests WHERE id=?", (interest["id"],)).fetchone()
         if not live or live["version"] != interest["version"] or not live["enabled"] or not live["external_allowed"]:
             raise _Stopped("interest_changed")
@@ -1288,10 +1611,12 @@ class DiscoveryCoordinator:
                 raise _Stopped("model_source")
             seen_indices.add(index)
             doc = evidence[index]
+            if doc["platform"] == "tieba":
+                _validate_tieba_evidence(doc, settings)
             quote = item.get("quote")
             if not isinstance(quote, str) or not 20 <= len(quote) <= 300 or quote not in doc["text"]:
                 raise _Stopped("model_quote")
-            if conn.execute("SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (doc["content_hash"], now)).fetchone():
+            if conn.execute("SELECT 1 FROM discovery_seen WHERE identity=? AND expires_at>?", (_seen_key(doc["platform"], doc["content_hash"], settings, content=True), now)).fetchone():
                 continue
             texts = {key: _utf8(item.get(key, ""), maximum) for key, maximum in (
                 ("summary", 1200), ("author_view", 1800), ("interpretation", 2800), ("uncertainty", 1400), ("question", 600))}
@@ -1300,11 +1625,15 @@ class DiscoveryCoordinator:
             eligible = bool(settings["save_memories"] and doc["platform"] == "wikipedia")
             packet_id, card_id = uuid.uuid4().hex, uuid.uuid4().hex
             title, url = _utf8(doc["title"], 1000), doc["url"]
+            coverage = _coverage(doc.get("coverage"), doc)
+            version = doc["content_hash"] + ":" + str(int(now))
+            if doc["platform"] == "tieba":
+                version = doc["content_hash"] + ":" + settings["_tieba_policy_version"] + ":" + str(int(now))
             source = {"id": packet_id, "source_id": doc["platform"] + ":" + _identity(url),
-                      "version": doc["content_hash"] + ":" + str(int(now)), "title": title, "url": url,
+                      "version": version, "title": title, "url": url,
                       "evidence": quote, "evidence_kind": "page_excerpt", "origin": "external",
                       "author_view": texts["author_view"], "model_interpretation": texts["interpretation"],
-                      "uncertainty": texts["uncertainty"] + " 阅读范围：" + _coverage(doc.get("coverage")),
+                      "uncertainty": "阅读范围：" + coverage + "。" + texts["uncertainty"],
                       "keywords": interest["summary"], "scope": ["gui", "qq-owner"] if settings["share_in_qq"] else ["gui"],
                       "created_at": now, "expires_at": now + settings["memory_ttl_hours" if eligible else "source_ttl_hours"] * 3600,
                       "memory_eligible": eligible}
@@ -1316,16 +1645,22 @@ class DiscoveryCoordinator:
                     # Candidate retirement does not revoke a memory/turn source.
                     conn.execute("DELETE FROM discovery_cards WHERE id=(SELECT id FROM discovery_cards ORDER BY created_at LIMIT 1)")
                 self.service.store.save_source_packet(source)
+                if doc["platform"] == "tieba":
+                    conn.execute("INSERT INTO discovery_tieba_sources VALUES(?,?,?,?,?)",
+                                 (packet_id, doc["tieba_forum"], doc["tieba_reply_count"],
+                                  int(doc["tieba_replies_requested"]), settings["_tieba_policy_version"]))
                 self.service.store._check_source_space(sum(len(v.encode("utf-8")) for v in (title, url, *texts.values())))
                 conn.execute("INSERT INTO discovery_cards(id,packet_id,platform,interest_id,interest_version,title,url,content_hash,"
                              "coverage,summary,author_view,interpretation,uncertainty,question,created_at,expires_at) "
                              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                              (card_id, packet_id, doc["platform"], interest["id"], interest["version"], title, url,
-                              doc["content_hash"], _coverage(doc.get("coverage")), texts["summary"], texts["author_view"],
+                              doc["content_hash"], coverage, texts["summary"], texts["author_view"],
                               texts["interpretation"], texts["uncertainty"], texts["question"], now,
                               min(now + settings["candidate_ttl_hours"] * 3600, source["expires_at"])))
                 conn.executemany("INSERT OR REPLACE INTO discovery_seen VALUES(?,?)",
-                                 [(key, now + settings["seen_ttl_days"] * 86400) for key in (_identity(url), doc["content_hash"])])
+                                 [(key, now + settings["seen_ttl_days"] * 86400) for key in (
+                                     _seen_key(doc["platform"], url, settings),
+                                     _seen_key(doc["platform"], doc["content_hash"], settings, content=True))])
             accepted += 1
             job["cards"] = accepted
             if eligible:
@@ -1352,10 +1687,18 @@ def _utf8(value, maximum):
     return value.encode("utf-8")[:maximum].decode("utf-8", "ignore")
 
 
-def _coverage(value):
+def _coverage(value, doc=None):
+    if doc and doc.get("platform") == "tieba":
+        place = "贴吧「" + doc["tieba_forum"] + "」" if doc["tieba_forum"] else "贴吧（吧归属未取得）"
+        count = doc["tieba_reply_count"]
+        if count:
+            return place + f"主帖及首页 {count} 条回复文字节选，不含楼中楼、图片或视频"
+        return place + ("主帖文字节选；本页未取得可用回复文字，不含楼中楼、图片或视频"
+                        if doc["tieba_replies_requested"] else "主帖文字节选，不含回复、楼中楼、图片或视频")
     return {"page_text_excerpt": "公开正文节选", "static_page_excerpt": "静态页面文字节选",
             "zhihu_answer_excerpt": "知乎指定回答正文节选", "zhihu_article_excerpt": "知乎指定文章正文节选",
             "zhihu_question_excerpt": "知乎问题描述节选，不含回答", "forum_main_post_excerpt": "贴吧主帖文字节选，不含回复",
+            "forum_thread_excerpt": "贴吧主帖及首页回复文字节选，不含楼中楼、图片或视频",
             "video_description_only": "仅视频简介，未观看视频", "page_description_only": "仅页面简介"}.get(value, "有限文本节选")
 
 
@@ -1371,6 +1714,9 @@ def _reason(code):
             "invalid_signature_keys": "B站未提供可用的搜索签名参数",
             "content_unavailable": "该视频没有可读取的公开文字简介",
             "source_mismatch": "返回的正文与所选来源不一致",
+            "tieba_forum_check_finished": "吧名检测已完成，请查看每个吧的结果；检测不会保存兴趣或发起内容寻找",
+            "tieba_forum_check_required": "新增优先吧需要先完成检测并确认有公开帖子",
+            "tieba_forum_unconfirmed": "平台未返回可确认的吧信息，本次保持未验证，不能据此判断吧不存在",
             "adapter_failed": "B站只读组件未能完成本次操作",
             "response_too_large": "响应超过你设置的单次大小",
             "invalid_response": "平台返回的数据格式不符合预期",
@@ -1402,7 +1748,7 @@ def _reason(code):
             "tieba_api_error": "贴吧拒绝了本次匿名请求，本次已停止",
             "tieba_response": "贴吧未返回预期的搜索或主帖结构",
             "tieba_no_text": "贴吧主帖没有可读取文字，图片、视频和回复不在读取范围内",
-            "tieba_short_text": "贴吧主帖文字过少，未生成资料；不以图片或回复补足正文",
+            "tieba_short_text": "贴吧获准范围内的文字不足，未生成资料；不以搜索摘要或媒体补足",
             "zhihu_unreadable": "未取得该知乎问题、回答或文章的公开正文；可能需要登录或验证",
             "zhihu_response": "知乎未返回预期的正文结构",
             "search_response": "搜索服务未返回可识别的有效结果，本次未当作空结果",
