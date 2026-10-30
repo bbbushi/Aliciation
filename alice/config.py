@@ -5,6 +5,7 @@ user/ 是本机专属目录（config + 全部数据，gitignored）——换机�
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,11 +61,52 @@ class MemoryConfig:
 
 
 @dataclass
+class ChannelOwnerConfig:
+    enabled: bool = False
+    token_sha256: str = ""
+    provider: str = "qq-official"
+    app_id: str = ""
+    sender_id: str = ""
+    chat_type: str = "c2c"
+
+
+@dataclass
+class ChannelsConfig:
+    enabled: bool = False
+    protocol_version: int = 1
+    qq_owner: ChannelOwnerConfig = field(default_factory=ChannelOwnerConfig)
+
+
+def _channels(raw: dict) -> ChannelsConfig:
+    if not isinstance(raw, dict) or set(raw) - {"enabled", "protocol_version", "qq_owner"}:
+        raise ValueError("channels 配置字段无效")
+    owner = raw.get("qq_owner", {})
+    if not isinstance(owner, dict) or set(owner) - set(ChannelOwnerConfig.__dataclass_fields__):
+        raise ValueError("channels.qq_owner 配置字段无效")
+    result = ChannelsConfig(raw.get("enabled", False), raw.get("protocol_version", 1),
+                            ChannelOwnerConfig(**owner))
+    if type(result.enabled) is not bool or type(result.qq_owner.enabled) is not bool:
+        raise ValueError("渠道 enabled 必须为布尔值")
+    if type(result.protocol_version) is not int or result.protocol_version != 1:
+        raise ValueError("不支持的渠道协议版本")
+    o = result.qq_owner
+    if result.enabled and o.enabled:
+        if (o.provider != "qq-official" or o.chat_type != "c2c"
+                or not isinstance(o.token_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", o.token_sha256)
+                or any(not isinstance(v, str) or not v.strip() or len(v) > 256 or v == "*"
+                       for v in (o.app_id, o.sender_id))):
+            raise ValueError("QQ 渠道必须配置专用令牌哈希和唯一所有者身份")
+    return result
+
+
+@dataclass
 class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    channels: ChannelsConfig = field(default_factory=ChannelsConfig)
 
 
 def _build(cls, raw: dict):
@@ -83,6 +125,7 @@ def load(path: Path | str | None = None) -> Config:
         persona=_build(PersonaConfig, raw.get("persona", {})),
         context=_build(ContextConfig, raw.get("context", {})),
         memory=_build(MemoryConfig, raw.get("memory", {})),
+        channels=_channels(raw.get("channels", {})),
     )
 
 

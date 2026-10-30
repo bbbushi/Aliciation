@@ -5,12 +5,28 @@ const $ = (s) => document.querySelector(s);
 let busy = false;
 let memory = null;
 let state = null;
+let sessionEpoch = null;
+let historyCursor = 0;
+let historyVersion = 0;
+let syncingHistory = false;
+let shuttingDown = false;
+let activity = null;
+let syncTimer = null;
+let uncertainSend = null;
+let deliveryRefreshIndex = 0;
+const turnNodes = new Map();
+const requestNodes = new Map();
 
-async function api(path, opts) {
-  const r = await fetch(path, opts);
+async function api(path, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  if (!headers.has("X-Alice-Intent")) headers.set("X-Alice-Intent", "gui");
+  const r = await fetch(path, { ...opts, headers, cache: "no-store" });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${r.status}`);
+    const error = new Error(body.error || `HTTP ${r.status}`);
+    error.status = r.status;
+    error.code = body.code;
+    throw error;
   }
   return r.json();
 }
@@ -124,12 +140,214 @@ function scrollBottom() {
 }
 
 function renderMemory(m) {
+  if (!m || !Number.isFinite(m.active)) return;
   memory = m;
-  if (!m) return;
   $("#memory").textContent =
     `活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`
     + (m.pressure ? ` · 高压隔离 ${m.pressure}` : "")
     + ` · 已忘 ${m.forgotten} · 技能 ${m.skills}`;
+}
+
+/* 稳定行 ID 与请求 ID 只用于界面合并；不将 QQ 身份拼进对话正文。 */
+function requestKey(requestId, role) {
+  return requestId ? `${requestId}:${role}` : null;
+}
+
+function noteRequestNode(node, requestId, role) {
+  const key = requestKey(requestId, role);
+  if (key) {
+    node.dataset.requestId = requestId;
+    requestNodes.set(key, node);
+  }
+}
+
+const DELIVERY_LABELS = {
+  ready: "等待发送到 QQ", pending: "等待发送到 QQ", sending: "正在提交到 QQ",
+  platform_confirmed: "QQ 平台已接收", confirmed: "QQ 平台已接收",
+  failed: "QQ 发送失败 · 请查看本机桥记录", send_failed: "QQ 发送失败 · 请查看本机桥记录",
+  unknown: "QQ 发送结果未知 · 请先在 QQ 核对", send_unknown: "QQ 发送结果未知 · 请先在 QQ 核对",
+  expired: "QQ 回复窗口已过 · 完整回复保留在这里",
+  partial: "QQ 仅部分发送 · 请先核对", partial_confirmed: "QQ 仅部分发送 · 请先核对",
+};
+// failed/unknown 可在人工核对后更新，不能永久停止刷新它们。
+const DELIVERY_FINAL = new Set(["platform_confirmed", "confirmed", "expired"]);
+
+function markTurn(node, turn) {
+  if (Number.isSafeInteger(turn.id) && turn.id > 0) {
+    const duplicate = turnNodes.get(turn.id);
+    if (duplicate && duplicate !== node) duplicate.remove();
+    turnNodes.set(turn.id, node);
+    node.dataset.turnId = String(turn.id);
+  }
+  noteRequestNode(node, turn.request_id, turn.role);
+  const channel = turn.channel || node.dataset.channel || "gui";
+  node.dataset.channel = channel;
+  const fromQQ = channel.startsWith("qq");
+  let meta = node.querySelector(".message-meta");
+  if (!meta) {
+    meta = document.createElement("div");
+    meta.className = "message-meta";
+    node.appendChild(meta);
+  }
+  const delivery = typeof turn.delivery === "string" ? turn.delivery : turn.delivery_status;
+  const source = fromQQ ? (turn.role === "user" ? "QQ · 所有者" : "回复 QQ")
+    : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
+  meta.textContent = source;
+  if (fromQQ && turn.role === "assistant") {
+    node.dataset.delivery = delivery || "pending";
+    meta.textContent += ` · ${DELIVERY_LABELS[delivery] || "QQ 发送状态待确认"}`;
+    meta.title = "平台接收不代表对方已读；发送失败不会重新生成答案。";
+  }
+  node.classList.toggle("from-qq", fromQQ);
+}
+
+function mergeTurn(turn) {
+  if (!["user", "assistant"].includes(turn.role) || !Number.isSafeInteger(turn.id)) return;
+  const key = requestKey(turn.request_id, turn.role);
+  let node = turnNodes.get(turn.id) || (key && requestNodes.get(key));
+  if (!node || !node.isConnected) node = bubble(turn.role, "");
+  const txt = node.querySelector(".txt");
+  if (turn.role === "assistant") setBubbleText(txt, turn.content || "（沉默）");
+  else txt.textContent = turn.content || "";
+  markTurn(node, turn);
+  const later = [...$("#msgs").querySelectorAll(".msg[data-turn-id]")]
+    .find((other) => Number(other.dataset.turnId) > turn.id);
+  if (later && later !== node) $("#msgs").insertBefore(node, later);
+  if (uncertainSend?.requestId === turn.request_id && turn.role === "assistant") {
+    uncertainSend = null;
+    setChatNotice("");
+  }
+}
+
+function setChatNotice(message) {
+  $("#chat-notice").textContent = message;
+  $("#chat-notice").classList.toggle("hidden", !message);
+  if (!message) $("#chat-new-attempt").classList.add("hidden");
+}
+
+function renderActivity() {
+  const el = $("#chat-activity");
+  if (!activity) return;
+  const fromQQ = String(activity.channel || activity.active_channel || "").startsWith("qq");
+  el.textContent = activity.status === "draining" ? "服务正在关闭，暂停接收新消息"
+    : activity.status === "busy" ? (fromQQ ? "QQ 消息处理中；你可以先写好下一句话" : "Alice 正在处理消息；输入会保留")
+      : activity.channels_enabled ? "QQ 与本机共用同一段对话" : "";
+  el.classList.toggle("hidden", !el.textContent);
+  $("#send").disabled = busy || shuttingDown || activity.status === "busy" || activity.status === "draining";
+}
+
+async function refreshActivity() {
+  if (shuttingDown) return;
+  activity = await api("/api/chat/activity");
+  renderActivity();
+  return activity;
+}
+
+function resetHistory(epoch) {
+  historyVersion += 1;
+  sessionEpoch = epoch || null;
+  historyCursor = 0;
+  turnNodes.clear();
+  requestNodes.clear();
+  uncertainSend = null;
+  $("#msgs").textContent = "";
+}
+
+async function syncHistory({ reset = false } = {}) {
+  if (syncingHistory || busy || shuttingDown || document.hidden) return;
+  syncingHistory = true;
+  const version = historyVersion;
+  const box = $("#msgs");
+  const oldScroll = box.scrollTop;
+  const stickToBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+  try {
+    const info = await refreshActivity();
+    if (busy || version !== historyVersion || shuttingDown) return;
+    if (sessionEpoch && info?.session_epoch && info.session_epoch !== sessionEpoch) {
+      resetHistory(info.session_epoch);
+      setChatNotice("会话已经更换，旧消息已从当前页面移除。输入框中的草稿仍保留，请确认后再发送。");
+      return;
+    }
+    if (info?.status === "busy" || info?.status === "draining") return;
+    let after = reset || !sessionEpoch ? null : historyCursor;
+    for (let page = 0; page < 3; page++) {
+      const params = new URLSearchParams({ limit: "100" });
+      if (after !== null) params.set("after_id", String(after));
+      if (sessionEpoch) params.set("session_epoch", sessionEpoch);
+      const h = await api(`/api/history?${params}`);
+      if (busy || version !== historyVersion || shuttingDown) return;
+      if (sessionEpoch && h.session_epoch && h.session_epoch !== sessionEpoch) {
+        resetHistory(h.session_epoch);
+        setChatNotice("会话已经更换；输入框中的草稿仍保留，请确认后再发送。");
+        return;
+      }
+      sessionEpoch = h.session_epoch || sessionEpoch;
+      (h.turns || []).forEach(mergeTurn);
+      if (h.memory) renderMemory(h.memory);
+      const next = h.next_after_id;
+      if (Number.isSafeInteger(next)) historyCursor = Math.max(historyCursor, next);
+      else for (const turn of h.turns || []) {
+        if (Number.isSafeInteger(turn.id)) historyCursor = Math.max(historyCursor, turn.id);
+      }
+      if (!h.has_more || !Number.isSafeInteger(next) || next === after) break;
+      after = next;
+    }
+    // 发送回执可能晚于助手正文：按原行 ID 更新，避免把状态变化误作新消息。
+    const pending = [...turnNodes.values()].filter((n) => n.classList.contains("assistant")
+      && n.dataset.channel?.startsWith("qq") && !DELIVERY_FINAL.has(n.dataset.delivery));
+    if (pending.length) {
+      const node = pending[deliveryRefreshIndex++ % pending.length];
+      const id = Number(node.dataset.turnId);
+      const h = await api(`/api/history?${new URLSearchParams({ after_id: String(id - 1), limit: "1", session_epoch: sessionEpoch })}`);
+      if (!busy && version === historyVersion && h.session_epoch === sessionEpoch) {
+        const turn = h.turns?.find((t) => t.id === id);
+        if (turn) mergeTurn(turn);
+      }
+    }
+    if (stickToBottom) scrollBottom();
+    else box.scrollTop = oldScroll;
+  } catch (e) {
+    if (e.code === "session_changed") {
+      resetHistory(null);
+      setChatNotice("会话已经更换，正在重新读取；草稿保留，请确认后再发送。");
+    } else if (e.code !== "status_unavailable" && e.code !== "busy") {
+      $("#chat-activity").textContent = "暂时无法同步对话；页面保留上次记录";
+      $("#chat-activity").classList.remove("hidden");
+    }
+  } finally {
+    syncingHistory = false;
+  }
+}
+
+function startHistorySync() {
+  clearInterval(syncTimer);
+  syncTimer = setInterval(() => {
+    if (!document.hidden && !$("#app").classList.contains("hidden")) syncHistory();
+  }, 3000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !$("#app").classList.contains("hidden")) syncHistory();
+});
+window.addEventListener("pagehide", () => clearInterval(syncTimer));
+$("#chat-refresh").onclick = () => syncHistory();
+$("#chat-new-attempt").onclick = () => {
+  if (busy || !uncertainSend?.canStartNew) return;
+  if (!window.confirm("原请求已经失败或中断，但用户消息或部分记忆操作可能已保存。作为新的一轮发送可能重复这些操作，并再次产生模型费用。\n确认允许新建一轮吗？")) return;
+  const text = uncertainSend.text;
+  uncertainSend = null;
+  if (!$("#input").value.trim()) $("#input").value = text;
+  $("#chat-new-attempt").classList.add("hidden");
+  setChatNotice("已允许新建一轮。请核对输入，再点击发送；本次没有自动发送或重跑。");
+  $("#input").focus();
+};
+
+async function confirmQQReset() {
+  try { await refreshActivity(); } catch (_) { /* 后端仍检查重置与在途任务。 */ }
+  if (activity?.channels_enabled) {
+    return window.confirm("已启用 QQ 接入。重置前请先暂停 QQ 桥，并核对待发送或发送结果未知的回复。\n重置后旧 QQ 队列不能进入新会话；已经提交 QQ 的消息仍可能晚到。已完成这些操作，继续吗？");
+  }
+  return true;
 }
 
 /* ---------- 启动 ---------- */
@@ -148,10 +366,9 @@ async function startChat(s) {
   $("#name").textContent = s.name;
   document.title = s.name;
   renderMemory(s.memory);
-  sysline(s.continuity);
-  const h = await api("/api/history");
-  $("#msgs").textContent = "";
-  h.turns.forEach((t) => bubble(t.role, t.content));
+  resetHistory(null);
+  await syncHistory({ reset: true });
+  startHistorySync();
   scrollBottom();
   $("#input").focus();
 }
@@ -215,6 +432,7 @@ function showWelcome(s, reseting = false) {
     list.appendChild(el);
   });
   $("#seed-go").onclick = async () => {
+    if (!await confirmQQReset()) return;
     const btn = $("#seed-go");
     btn.disabled = true;
     btn.textContent = "生成底色中…";
@@ -243,6 +461,7 @@ function showWelcome(s, reseting = false) {
       back: () => closeModal(),
     },
     async (md, src) => {
+      if (!await confirmQQReset()) throw new Error("已取消初始化；请先处理 QQ 桥的待发送回复。");
       const st = await postJSON("/api/persona", { persona_md: md, source: src, reset: true });
       await startChat(st);
     },
@@ -402,6 +621,7 @@ async function openPersonaView() {
             "旧数据会先归档到 data/archive/，之后还能找回。确定吗？",
         );
         if (!ok) return;
+        if (!await confirmQQReset()) return;
         try {
           await postJSON("/api/reset", {});
           location.href = "/?setup";
@@ -511,6 +731,7 @@ async function loadSettings() {
 
 function openSettings() {
   $("#settings-modal").classList.remove("hidden");
+  window.AliceQQ?.open();
   loadSettings();
   loadModelSettings();
   loadRuntimeInfo();
@@ -518,7 +739,17 @@ function openSettings() {
 
 function closeSettings() {
   $("#settings-modal").classList.add("hidden");
+  window.AliceQQ?.close();
 }
+
+function openQQSettings() {
+  openSettings();
+  $("#qq-settings").scrollIntoView({ block: "start" });
+  $("#qq-settings").focus({ preventScroll: true });
+}
+
+$("#qq-btn").onclick = openQQSettings;
+$("#welcome-qq-btn").onclick = openQQSettings;
 
 $("#settings-btn").onclick = openSettings;
 $("#welcome-settings-btn").onclick = openSettings;
@@ -667,10 +898,17 @@ $("#model-save").onclick = async () => {
 };
 
 $("#shutdown-btn").onclick = async () => {
-  const ok = window.confirm("确定关闭 Alice 服务吗？\n正在进行的回复与记忆整理会完成，然后服务进程退出。关闭浏览器标签页本身不会退出服务。");
+  try { await refreshActivity(); } catch (_) { /* 关闭接口会再核验生命周期。 */ }
+  const qqHint = activity?.channels_enabled
+    ? "\nQQ 桥会暂停提交；尚未发送或发送结果未知的回复需在桥记录中核对。建议先暂停 QQ 桥。" : "";
+  const ok = window.confirm("确定关闭 Alice 服务吗？\n正在进行的回复与记忆整理会完成，然后服务进程退出。关闭浏览器标签页本身不会退出服务。" + qqHint);
   if (!ok) return;
+  shuttingDown = true;
+  clearInterval(syncTimer);
   $("#settings-modal").classList.add("hidden");
+  window.AliceQQ?.close();
   window.AliceObserver?.shutdown();
+  window.AliceEvaluations?.shutdown();
   $("#shutdown-screen").classList.remove("hidden");
   $("#shutdown-title").textContent = "正在关闭 Alice";
   $("#shutdown-state").textContent = "正在等待当前回复完成，并整理本机记忆…";
@@ -725,10 +963,17 @@ function ensureThinking(node) {
   return d.querySelector(".r-txt");
 }
 
-function handleEvent(ev, node) {
+function handleEvent(ev, node, userNode, requestId) {
   const txt = node.querySelector(".txt");
   const raw = () => txt.dataset.raw || "";
-  if (ev.type === "reasoning") {
+  if (ev.type === "start" || ev.type === "accepted") {
+    if (ev.session_epoch) {
+      sessionEpoch = ev.session_epoch;
+      if (uncertainSend?.requestId === (ev.request_id || requestId)) uncertainSend.epoch = ev.session_epoch;
+    }
+    noteRequestNode(userNode, ev.request_id || requestId, "user");
+    noteRequestNode(node, ev.request_id || requestId, "assistant");
+  } else if (ev.type === "reasoning") {
     ensureThinking(node).textContent += ev.text;
     scrollBottom();
   } else if (ev.type === "delta") {
@@ -742,10 +987,17 @@ function handleEvent(ev, node) {
     if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
     if (!raw().trim()) txt.textContent = "（沉默）";
     renderMemory(ev.memory);
+    if (ev.session_epoch) sessionEpoch = ev.session_epoch;
+    const id = ev.request_id || requestId;
+    markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui" });
+    markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
+    if (uncertainSend?.requestId === id) uncertainSend = null;
+    setChatNotice("");
     window.AliceObserver?.refreshAfterTurn();
   } else if (ev.type === "error") {
     if (!raw().trim() && !txt.textContent.trim()) node.remove();
     sysline(ev.message);
+    setChatNotice("本次处理未能完成确认；请先同步历史记录。再次发送相同文字会沿用原请求，不自动重新生成。");
     window.AliceObserver?.refreshAfterTurn();
   }
 }
@@ -754,18 +1006,74 @@ async function send() {
   const input = $("#input");
   const text = input.value.trim();
   if (!text || busy) return;
+  if (!sessionEpoch) {
+    setChatNotice("请先同步当前会话，核对记录后再点击发送；草稿与本页 P1 许可已保留。");
+    await syncHistory();
+    return;
+  }
+  if (window.AliceEvaluations?.canSend() === false) {
+    toast("核查许可正在登记，请等待登记完成再发送。", 4000);
+    return;
+  }
   busy = true;
-  input.value = "";
+  const retry = uncertainSend?.text === text && uncertainSend.epoch === sessionEpoch ? uncertainSend : null;
+  const requestId = retry?.requestId || crypto.randomUUID().replaceAll("-", "");
+  // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
+  const evaluationId = retry ? retry.evaluationId : window.AliceEvaluations?.peekForSend();
+  const payload = { text, request_id: requestId,
+    ...(sessionEpoch ? { session_epoch: sessionEpoch } : {}),
+    ...(evaluationId ? { evaluation_id: evaluationId } : {}) };
+  const epochAtSend = sessionEpoch;
+  uncertainSend = { requestId, text, evaluationId, epoch: epochAtSend };
+  $("#chat-new-attempt").classList.add("hidden");
   input.disabled = true;
-  bubble("user", text);
-  const node = bubble("assistant", "");
+  $("#send").disabled = true;
+  let node = null;
+  let userNode = null;
+  let accepted = false;
+  let terminal = false;
+  let rejected = false;
   try {
     const r = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      headers: { "Content-Type": "application/json", "X-Alice-Intent": evaluationId ? "evaluations" : "gui" },
+      body: JSON.stringify(payload),
     });
-    if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      const error = await r.json().catch(() => ({}));
+      const existing = /^request_(accepted|running|user_committed|interrupted|failed|generated|completed)/.test(error.code || "");
+      rejected = !existing && ((error.code !== "status_unavailable" && r.status < 500)
+        || ["busy", "draining", "not_ready"].includes(error.code));
+      // 明确拒绝（尤其 busy）不消费 P1 的本页下一轮许可，也不清空草稿。
+      // busy 只表示本次没新接单，仍保留原请求 ID，避免重试时漏掉已有记录。
+      if (rejected && error.code !== "busy") uncertainSend = null;
+      if (existing) {
+        setChatNotice("这条请求已有处理记录。请先同步历史；再次点发送只会查询原请求，不会自动重跑。");
+        if (["request_failed", "request_interrupted"].includes(error.code)) {
+          uncertainSend.canStartNew = true;
+          $("#chat-new-attempt").classList.remove("hidden");
+        }
+        return;
+      }
+      if (error.code === "session_changed") {
+        resetHistory(null);
+        setChatNotice("会话已更换，草稿已保留；请同步记录后确认是否发送到新会话。");
+      } else {
+        setChatNotice(error.error || `未能接收本条消息（HTTP ${r.status}）；草稿已保留。`);
+      }
+      return;
+    }
+    accepted = true;
+    window.AliceEvaluations?.consumeForSend(evaluationId);
+    input.value = "";
+    setChatNotice("");
+    userNode = requestNodes.get(requestKey(requestId, "user"));
+    if (!userNode?.isConnected) userNode = bubble("user", text);
+    node = requestNodes.get(requestKey(requestId, "assistant"));
+    if (!node?.isConnected) node = bubble("assistant", "");
+    noteRequestNode(userNode, requestId, "user");
+    noteRequestNode(node, requestId, "assistant");
+    if (!r.body) throw new Error("没有收到回复数据流");
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -777,19 +1085,30 @@ async function send() {
       while ((i = buf.indexOf("\n\n")) >= 0) {
         const frame = buf.slice(0, i);
         buf = buf.slice(i + 2);
-        const line = frame.split("\n").find((l) => l.startsWith("data: "));
-        if (!line) continue;
-        handleEvent(JSON.parse(line.slice(6)), node);
+        const data = frame.split("\n").filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        const event = JSON.parse(data);
+        if (event.type === "done" || event.type === "error") terminal = true;
+        handleEvent(event, node, userNode, requestId);
       }
     }
+    if (!terminal) throw new Error("连接结束，但尚未收到处理结果");
   } catch (e) {
-    sysline(`连接中断：${e.message}`);
+    setChatNotice("连接中断，结果尚未确认。请先同步记录；不要把断线当成没有处理。再次发送相同文字会沿用原请求。");
     window.AliceObserver?.refreshAfterTurn();
-    if (!node.querySelector(".txt").textContent.trim()) node.remove();
+    if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
   } finally {
+    // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
+    if (!accepted && !rejected) window.AliceEvaluations?.consumeForSend(evaluationId);
     busy = false;
-    input.disabled = false;
-    input.focus();
+    window.AliceEvaluations?.afterTurn();
+    if (!shuttingDown) {
+      input.disabled = false;
+      $("#send").disabled = false;
+      input.focus();
+      await syncHistory();
+    }
   }
 }
 
