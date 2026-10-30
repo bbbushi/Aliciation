@@ -233,6 +233,13 @@ class Store:
     def get_memory(self, memory_id: int) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
 
+    def update_memory_content(self, memory_id: int, content: str) -> None:
+        """原位更新记忆正文（v0.4 先验状态迁移用：先验→验证不改身份，只改状态行）。"""
+        self.conn.execute(
+            "UPDATE memories SET content=? WHERE id=?", (content.strip(), memory_id)
+        )
+        self.conn.commit()
+
     def bump_mention(self, memory_id: int) -> None:
         self.conn.execute(
             "UPDATE memories SET mention_count=mention_count+1 WHERE id=?", (memory_id,)
