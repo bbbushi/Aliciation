@@ -87,6 +87,7 @@
 - **Gemini CLI**（Google）：开源 + 免费额度大，沙箱路线
 - **OpenCode**：Claude Code 开源复刻派代表（换模型不换交互）
 - **Aider / Goose**：git 深度集成型 / 可组合工具型
+- **dsh-bili-humanism**（DSH 插件）：非 harness 而是插件样本——"用人类世界喂人格"的**经历供给线**（取稿→认识论手账→日摘一句→人格文件），深析见 [参考-dsh-bili-humanism.md](./参考-dsh-bili-humanism.md)；活动周期"带她看世界"的完整参考
 
 ## 来源
 
