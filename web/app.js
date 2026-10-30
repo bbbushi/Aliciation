@@ -114,7 +114,7 @@ function setBubbleText(txt, raw) {
   if (msg) msg.classList.toggle("silence", !(raw || "").trim());
 }
 
-function bubble(role, text, opts = {}) {
+function bubble(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   const txt = document.createElement("div");
@@ -122,9 +122,6 @@ function bubble(role, text, opts = {}) {
   if (text) setBubbleText(txt, text);
   div.appendChild(txt);
   $("#msgs").appendChild(div);
-  // 动效策略：历史加载/合并回填的消息直接 settled（不重播入场动画），
-  // 只有实时新建的消息（发送/流式）播放 msg-in。
-  if (opts.settled) div.classList.add("settled");
   scrollBottom();
   return div;
 }
@@ -208,7 +205,7 @@ function mergeTurn(turn) {
   if (!["user", "assistant"].includes(turn.role) || !Number.isSafeInteger(turn.id)) return;
   const key = requestKey(turn.request_id, turn.role);
   let node = turnNodes.get(turn.id) || (key && requestNodes.get(key));
-  if (!node || !node.isConnected) node = bubble(turn.role, "", { settled: true });
+  if (!node || !node.isConnected) node = bubble(turn.role, "");
   const txt = node.querySelector(".txt");
   if (turn.role === "assistant") setBubbleText(txt, turn.content || "（沉默）");
   else txt.textContent = turn.content || "";
@@ -989,8 +986,6 @@ function handleEvent(ev, node, userNode, requestId) {
   } else if (ev.type === "done") {
     if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
     if (!raw().trim()) txt.textContent = "（沉默）";
-    node.classList.add("settled");  // 流式结束：本轮动画完成，后续增量不再重播入场
-    userNode?.classList.add("settled");
     renderMemory(ev.memory);
     if (ev.session_epoch) sessionEpoch = ev.session_epoch;
     const id = ev.request_id || requestId;
