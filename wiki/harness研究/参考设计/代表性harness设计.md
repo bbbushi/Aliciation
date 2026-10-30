@@ -87,6 +87,10 @@
 - **Gemini CLI**（Google）：开源 + 免费额度大，沙箱路线
 - **OpenCode**：Claude Code 开源复刻派代表（换模型不换交互）
 - **Aider / Goose**：git 深度集成型 / 可组合工具型
+- **dsh-bili-humanism**（DSH 插件）：非 harness 而是插件样本——"用人类世界喂人格"的**经历供给线**（取稿→认识论手账→日摘一句→人格文件），深析见 [参考-dsh-bili-humanism.md](./参考-dsh-bili-humanism.md)；活动周期"带她看世界"的完整参考
+- **dsh-im**（DSH 插件）：十余个 IM 平台的**渠道接入层**完整工程样本（协议适配层/共享语义层/双通道 HarnessClient/排队插话/稳定寻址主动投递），深析见 [参考-dsh-im.md](./参考-dsh-im.md)；Alice 渠道方向的分层参考
+- **dsh-bili-scroll**（DSH 插件）：**无人值守值日生**样本——最小权限 headless 轮次跑章程、判重表、风格闸门、谷时定时与省钱纪律，深析见 [参考-dsh-bili-scroll.md](./参考-dsh-bili-scroll.md)；活动周期"自主时段"的纪律参考
+- **dsh-heartbeat**（DSH 插件）：**活动周期的先行实现**——七相心跳循环、零 token 分寸闸门、心事匣（没说完的话带过下一拍）、素材池双仓四淘汰、画像 journal，深析见 [参考-dsh-heartbeat.md](./参考-dsh-heartbeat.md)；与蓝图重合度最高的样本
 
 ## 来源
 
