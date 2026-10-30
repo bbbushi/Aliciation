@@ -14,6 +14,9 @@ let activity = null;
 let syncTimer = null;
 let uncertainSend = null;
 let deliveryRefreshIndex = 0;
+let followingLatest = true;
+let historyLoaded = false;
+let composing = false;
 const turnNodes = new Map();
 const requestNodes = new Map();
 
@@ -122,6 +125,7 @@ function bubble(role, text) {
   if (text) setBubbleText(txt, text);
   div.appendChild(txt);
   $("#msgs").appendChild(div);
+  updateChatEmpty();
   scrollBottom();
   return div;
 }
@@ -134,9 +138,41 @@ function sysline(text) {
   scrollBottom();
 }
 
-function scrollBottom() {
+function updateChatEmpty() {
+  const empty = $("#chat-empty");
+  if (empty) empty.classList.toggle("hidden", !historyLoaded || !!$("#msgs").querySelector(".msg"));
+}
+
+function updateLatestButton() {
+  $("#chat-latest")?.classList.toggle("hidden", followingLatest || !$("#msgs").querySelector(".msg"));
+}
+
+function scrollBottom(force = false) {
   const box = $("#msgs");
-  box.scrollTop = box.scrollHeight;
+  if (force) followingLatest = true;
+  if (followingLatest) box.scrollTop = box.scrollHeight;
+  updateLatestButton();
+}
+
+$("#msgs").addEventListener("scroll", () => {
+  const box = $("#msgs");
+  followingLatest = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+  updateLatestButton();
+}, { passive: true });
+$("#chat-latest")?.addEventListener("click", () => scrollBottom(true));
+
+function resizeComposer() {
+  const input = $("#input");
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+  input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+}
+
+function connectionStatus(message, kind = "ready") {
+  const status = $("#connection-status");
+  if (!status) return;
+  status.textContent = message;
+  status.dataset.state = kind;
 }
 
 function renderMemory(m) {
@@ -217,6 +253,7 @@ function mergeTurn(turn) {
     uncertainSend = null;
     setChatNotice("");
   }
+  scrollBottom();
 }
 
 function setChatNotice(message) {
@@ -228,6 +265,9 @@ function setChatNotice(message) {
 function renderActivity() {
   const el = $("#chat-activity");
   if (!activity) return;
+  connectionStatus(activity.status === "draining" ? "正在关闭"
+    : activity.status === "busy" ? "正在处理" : "本机已连接",
+  activity.status === "draining" ? "waiting" : activity.status === "busy" ? "busy" : "ready");
   const fromQQ = String(activity.channel || activity.active_channel || "").startsWith("qq");
   el.textContent = activity.status === "draining" ? "服务正在关闭，暂停接收新消息"
     : activity.status === "busy" ? (fromQQ ? "QQ 消息处理中；你可以先写好下一句话" : "Alice 正在处理消息；输入会保留")
@@ -250,15 +290,19 @@ function resetHistory(epoch) {
   turnNodes.clear();
   requestNodes.clear();
   uncertainSend = null;
-  $("#msgs").textContent = "";
+  historyLoaded = false;
+  followingLatest = true;
+  // Preserve the interface's empty-state element if it lives inside the transcript.
+  $("#msgs").querySelectorAll(".msg, .sys").forEach((node) => node.remove());
+  updateChatEmpty();
+  updateLatestButton();
 }
 
 async function syncHistory({ reset = false } = {}) {
-  if (syncingHistory || busy || shuttingDown || document.hidden) return;
+  if (!state || syncingHistory || busy || shuttingDown || document.hidden) return;
   syncingHistory = true;
   const version = historyVersion;
   const box = $("#msgs");
-  const oldScroll = box.scrollTop;
   const stickToBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
   try {
     const info = await refreshActivity();
@@ -282,7 +326,9 @@ async function syncHistory({ reset = false } = {}) {
         return;
       }
       sessionEpoch = h.session_epoch || sessionEpoch;
+      historyLoaded = true;
       (h.turns || []).forEach(mergeTurn);
+      updateChatEmpty();
       if (h.memory) renderMemory(h.memory);
       const next = h.next_after_id;
       if (Number.isSafeInteger(next)) historyCursor = Math.max(historyCursor, next);
@@ -304,15 +350,20 @@ async function syncHistory({ reset = false } = {}) {
         if (turn) mergeTurn(turn);
       }
     }
-    if (stickToBottom) scrollBottom();
-    else box.scrollTop = oldScroll;
+    if (stickToBottom && followingLatest) scrollBottom();
+    // Appending while reading does not scroll. In particular, do not restore a
+    // position captured before the requests: the reader may have moved meanwhile.
+    updateLatestButton();
   } catch (e) {
     if (e.code === "session_changed") {
       resetHistory(null);
       setChatNotice("会话已经更换，正在重新读取；草稿保留，请确认后再发送。");
     } else if (e.code !== "status_unavailable" && e.code !== "busy") {
+      connectionStatus("连接待确认", "error");
       $("#chat-activity").textContent = "暂时无法同步对话；页面保留上次记录";
       $("#chat-activity").classList.remove("hidden");
+    } else {
+      connectionStatus("状态暂不可用", "waiting");
     }
   } finally {
     syncingHistory = false;
@@ -330,13 +381,14 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !$("#app").classList.contains("hidden")) syncHistory();
 });
 window.addEventListener("pagehide", () => clearInterval(syncTimer));
-$("#chat-refresh").onclick = () => syncHistory();
+$("#chat-refresh").onclick = () => state ? syncHistory() : boot().catch(showStartupError);
 $("#chat-new-attempt").onclick = () => {
   if (busy || !uncertainSend?.canStartNew) return;
   if (!window.confirm("原请求已经失败或中断，但用户消息或部分记忆操作可能已保存。作为新的一轮发送可能重复这些操作，并再次产生模型费用。\n确认允许新建一轮吗？")) return;
   const text = uncertainSend.text;
   uncertainSend = null;
   if (!$("#input").value.trim()) $("#input").value = text;
+  resizeComposer();
   $("#chat-new-attempt").classList.add("hidden");
   setChatNotice("已允许新建一轮。请核对输入，再点击发送；本次没有自动发送或重跑。");
   $("#input").focus();
@@ -353,7 +405,11 @@ async function confirmQQReset() {
 /* ---------- 启动 ---------- */
 
 async function boot() {
+  connectionStatus("正在连接", "waiting");
   state = await api("/api/state");
+  $("#boot-status")?.classList.add("hidden");
+  connectionStatus("本机已连接");
+  setChatNotice("");
   const forceSetup = new URLSearchParams(location.search).has("setup");  // ?setup 可主动回到初始化页
   if (state.turns > 0 && !forceSetup) await startChat(state);
   else showWelcome(state, forceSetup);
@@ -370,6 +426,8 @@ async function startChat(s) {
   await syncHistory({ reset: true });
   startHistorySync();
   scrollBottom();
+  $("#input").disabled = false;
+  resizeComposer();
   $("#input").focus();
 }
 
@@ -383,6 +441,7 @@ function personaMeta(p) {
 
 function showWelcome(s, reseting = false) {
   state = s;
+  $("#app").classList.add("hidden");
   $("#welcome").classList.remove("hidden");
   $("#seed-name").textContent = s.name;
   $("#w-sub").textContent = reseting
@@ -419,14 +478,17 @@ function showWelcome(s, reseting = false) {
   list.textContent = "";
   const picked = new Set();
   s.tags.forEach((tag) => {
-    const el = document.createElement("div");
+    const el = document.createElement("button");
+    el.type = "button";
     el.className = "tag";
+    el.setAttribute("aria-pressed", "false");
     el.textContent = tag;
     el.onclick = () => {
       if (picked.has(tag)) picked.delete(tag);
       else if (picked.size >= 4) return;
       else picked.add(tag);
       el.classList.toggle("on", picked.has(tag));
+      el.setAttribute("aria-pressed", String(picked.has(tag)));
       $("#seed-go").disabled = !(picked.size >= 2);
     };
     list.appendChild(el);
@@ -468,15 +530,38 @@ function showWelcome(s, reseting = false) {
   );
 
   /* 标签页 */
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.onclick = () => {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t === tab));
-      const toImport = tab.dataset.tab === "import";
-      $("#tab-tags").classList.toggle("hidden", toImport);
-      $("#tab-import").classList.toggle("hidden", !toImport);
-      if (toImport) setTimeout(() => $("#import-md").focus(), 30);
+  const welcomeTabs = [...document.querySelectorAll("#welcome .tab")];
+  const chooseTab = (tab, focus = false) => {
+    welcomeTabs.forEach((t) => {
+      const selected = t === tab;
+      t.classList.toggle("on", selected);
+      t.setAttribute("aria-selected", String(selected));
+      t.tabIndex = selected ? 0 : -1;
+    });
+    const toImport = tab.dataset.tab === "import";
+    $("#tab-tags").classList.toggle("hidden", toImport);
+    $("#tab-import").classList.toggle("hidden", !toImport);
+    if (focus) tab.focus();
+  };
+  welcomeTabs.forEach((tab, index) => {
+    tab.id = `welcome-tab-${tab.dataset.tab}`;
+    tab.setAttribute("aria-controls", `tab-${tab.dataset.tab}`);
+    const pane = $(`#tab-${tab.dataset.tab}`);
+    pane.setAttribute("role", "tabpanel");
+    pane.setAttribute("aria-labelledby", tab.id);
+    tab.onclick = () => chooseTab(tab);
+    tab.onkeydown = (event) => {
+      let next = index;
+      if (event.key === "ArrowRight") next = (index + 1) % welcomeTabs.length;
+      else if (event.key === "ArrowLeft") next = (index + welcomeTabs.length - 1) % welcomeTabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = welcomeTabs.length - 1;
+      else return;
+      event.preventDefault();
+      chooseTab(welcomeTabs[next], true);
     };
   });
+  chooseTab(welcomeTabs.find((tab) => tab.classList.contains("on")) || welcomeTabs[0]);
 }
 
 /* ---------- 人格文档导入（初始化页与弹层共用） ---------- */
@@ -506,7 +591,7 @@ function wireImport(els, install) {
     md = text;
     els.box.value = text;
     const v = validateMd(text);
-    els.check.innerHTML = !text.trim() ? "" : (v.ok ? "✓ " : "✗ ") + v.msg;
+    els.check.textContent = !text.trim() ? "" : (v.ok ? "✓ " : "✗ ") + v.msg;
     els.check.className = "check" + (v.ok && !v.warn ? " ok" : "") + (v.warn ? " warn" : "") + (v.note ? " note" : "");
     els.go.disabled = !v.ok;
     els.preview.disabled = !text.trim();
@@ -565,7 +650,7 @@ function wireImport(els, install) {
 
 function openModal(title, meta, bodyHtml, buttons) {
   $("#modal-title").textContent = title;
-  $("#modal-meta").innerHTML = meta || "";
+  $("#modal-meta").textContent = meta || "";
   $("#modal-body").innerHTML = bodyHtml;
   const foot = $("#modal-foot");
   foot.textContent = "";
@@ -614,7 +699,7 @@ async function openPersonaView() {
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
     {
       label: "重新初始化",
-      cls: "btn ghost",
+      cls: "btn danger",
       onClick: async () => {
         const ok = window.confirm(
           `重新初始化＝丢掉这 ${p.turns || 0} 轮对话和全部记忆，从「第一次见面」重新开始。\n` +
@@ -729,8 +814,9 @@ async function loadSettings() {
   }
 }
 
-function openSettings() {
+function openSettings(section = "general") {
   $("#settings-modal").classList.remove("hidden");
+  window.AliceUI?.selectSettings(section);
   window.AliceQQ?.open();
   loadSettings();
   loadModelSettings();
@@ -743,7 +829,7 @@ function closeSettings() {
 }
 
 function openQQSettings() {
-  openSettings();
+  openSettings("qq");
   $("#qq-settings").scrollIntoView({ block: "start" });
   $("#qq-settings").focus({ preventScroll: true });
 }
@@ -751,8 +837,8 @@ function openQQSettings() {
 $("#qq-btn").onclick = openQQSettings;
 $("#welcome-qq-btn").onclick = openQQSettings;
 
-$("#settings-btn").onclick = openSettings;
-$("#welcome-settings-btn").onclick = openSettings;
+$("#settings-btn").onclick = () => openSettings();
+$("#welcome-settings-btn").onclick = () => openSettings();
 $("#settings-x").onclick = closeSettings;
 $("#settings-modal").addEventListener("click", (e) => {
   if (e.target.id === "settings-modal") closeSettings();
@@ -993,6 +1079,7 @@ function handleEvent(ev, node, userNode, requestId) {
     markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
     if (uncertainSend?.requestId === id) uncertainSend = null;
     setChatNotice("");
+    scrollBottom();
     window.AliceObserver?.refreshAfterTurn();
   } else if (ev.type === "error") {
     if (!raw().trim() && !txt.textContent.trim()) node.remove();
@@ -1005,7 +1092,7 @@ function handleEvent(ev, node, userNode, requestId) {
 async function send() {
   const input = $("#input");
   const text = input.value.trim();
-  if (!text || busy) return;
+  if (!state || !text || busy || shuttingDown) return;
   if (!sessionEpoch) {
     setChatNotice("请先同步当前会话，核对记录后再点击发送；草稿与本页 P1 许可已保留。");
     await syncHistory();
@@ -1016,6 +1103,7 @@ async function send() {
     return;
   }
   busy = true;
+  connectionStatus("正在提交", "busy");
   const retry = uncertainSend?.text === text && uncertainSend.epoch === sessionEpoch ? uncertainSend : null;
   const requestId = retry?.requestId || crypto.randomUUID().replaceAll("-", "");
   // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
@@ -1064,8 +1152,10 @@ async function send() {
       return;
     }
     accepted = true;
+    connectionStatus("正在回复", "busy");
     window.AliceEvaluations?.consumeForSend(evaluationId);
     input.value = "";
+    resizeComposer();
     setChatNotice("");
     userNode = requestNodes.get(requestKey(requestId, "user"));
     if (!userNode?.isConnected) userNode = bubble("user", text);
@@ -1095,6 +1185,7 @@ async function send() {
     }
     if (!terminal) throw new Error("连接结束，但尚未收到处理结果");
   } catch (e) {
+    connectionStatus("结果待确认", "error");
     setChatNotice("连接中断，结果尚未确认。请先同步记录；不要把断线当成没有处理。再次发送相同文字会沿用原请求。");
     window.AliceObserver?.refreshAfterTurn();
     if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
@@ -1106,18 +1197,187 @@ async function send() {
     if (!shuttingDown) {
       input.disabled = false;
       $("#send").disabled = false;
-      input.focus();
+      if (!document.querySelector(".modal:not(.hidden)")
+          && [document.body, input, $("#send")].includes(document.activeElement)) input.focus({ preventScroll: true });
       await syncHistory();
     }
   }
 }
 
 $("#send").onclick = send;
+$("#input").addEventListener("input", resizeComposer);
+$("#input").addEventListener("compositionstart", () => { composing = true; });
+$("#input").addEventListener("compositionend", () => { composing = false; resizeComposer(); });
+window.addEventListener("resize", resizeComposer);
 $("#input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !composing && e.keyCode !== 229) {
     e.preventDefault();
     send();
   }
 });
 
-boot().catch((e) => alert(`初始化失败：${e.message}`));
+function showStartupError() {
+  $("#boot-status")?.classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  connectionStatus("连接未完成", "error");
+  setChatNotice("暂时无法读取 Alice 的状态。请确认本机服务正在运行，再点击“同步记录”重试；此时不会发送消息。");
+  $("#send").disabled = true;
+  $("#input").disabled = true;
+  updateChatEmpty();
+}
+
+boot().catch(showStartupError);
+
+/* ---------- 界面布局与焦点：只管理可见性，不接触业务接口 ---------- */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  const app = byId("app");
+  const nav = byId("app-nav");
+  const narrow = matchMedia("(max-width: 900px)");
+  const modals = [byId("modal"), byId("settings-modal")];
+  const shutdownScreen = byId("shutdown-screen");
+  let activeModal = null;
+  let modalReturn = null;
+  let lastTrigger = null;
+  const visible = (el) => !!el && !el.closest(".hidden, [inert]") && el.getClientRects().length > 0;
+  const focusable = (root) => [...root.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')].filter(visible);
+  const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
+
+  function selectSettings(section = "general") {
+    if (!["general", "qq", "service"].includes(section)) section = "general";
+    document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
+    document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
+    byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
+  }
+  window.AliceUI = { selectSettings };
+  document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
+  // Keep one-turn paid permission visible even when developer navigation is closed.
+  function syncEvaluationNotice() {
+    const armed = !byId("eval-disarm").classList.contains("hidden");
+    const uncertain = !byId("eval-forget-uncertain").classList.contains("hidden");
+    const notice = byId("composer-evaluation");
+    notice.classList.toggle("hidden", !armed && !uncertain);
+    notice.textContent = armed ? "P1 已授权 · 下一轮附加核查（最多 2 请求）· 查看"
+      : uncertain ? "P1 授权结果未确认 · 查看与处理" : "";
+  }
+  new MutationObserver(syncEvaluationNotice).observe(byId("eval-binding"), { childList: true, subtree: true, characterData: true });
+  byId("composer-evaluation").addEventListener("click", () => {
+    if (byId("evaluations").classList.contains("hidden")) byId("evaluations-btn").click();
+    focus(byId("eval-close"));
+  });
+  syncEvaluationNotice();
+
+  function setNav(open, returnFocus = true) {
+    open = open && narrow.matches;
+    app.classList.toggle("nav-open", open);
+    byId("nav-backdrop").classList.toggle("hidden", !open);
+    byId("nav-toggle").setAttribute("aria-expanded", String(open));
+    // On a small screen the navigation overlays the page, so its background is inert.
+    for (const id of ["chat", "observer", "evaluations"]) byId(id).inert = open;
+    if (open) focus(byId("nav-close"));
+    else if (returnFocus) focus(byId("nav-toggle"));
+  }
+  byId("nav-toggle").addEventListener("click", () => setNav(!app.classList.contains("nav-open")));
+  byId("nav-close").addEventListener("click", () => setNav(false));
+  byId("nav-backdrop").addEventListener("click", () => setNav(false));
+  narrow.addEventListener("change", () => {
+    const wasOpen = app.classList.contains("nav-open");
+    setNav(false, wasOpen && narrow.matches);
+  });
+  document.addEventListener("click", (e) => {
+    const trigger = e.target.closest("button");
+    if (trigger) lastTrigger = trigger;
+  }, true);
+  nav.addEventListener("click", (e) => {
+    if (!e.target.closest(".nav-item")) return;
+    if (app.classList.contains("nav-open")) setNav(false);
+  });
+  byId("chat-nav").addEventListener("click", () => {
+    window.AliceObserver?.close();
+    window.AliceEvaluations?.close();
+    setNav(false, false);
+    focus(byId("input"));
+  });
+
+  function syncModal() {
+    const next = !shutdownScreen.classList.contains("hidden") ? shutdownScreen
+      : modals.find((el) => !el.classList.contains("hidden")) || null;
+    if (next === activeModal) {
+      if (next && !next.contains(document.activeElement)) focus(focusable(next)[0] || next);
+      return;
+    }
+    if (next) {
+      if (!activeModal) modalReturn = lastTrigger || document.activeElement;
+      setNav(false, false);
+      activeModal = next;
+      app.inert = true;
+      byId("welcome").inert = true;
+      modals.forEach((el) => { el.inert = el !== next; });
+      next.setAttribute("tabindex", "-1");
+      // QQ explicitly focuses its section. Preserve that focus if already set.
+      if (!next.contains(document.activeElement)) focus(focusable(next)[0] || next);
+    } else {
+      activeModal = null;
+      app.inert = false;
+      byId("welcome").inert = false;
+      modals.forEach((el) => { el.inert = false; });
+      if (visible(modalReturn)) focus(modalReturn);
+      else if (!app.classList.contains("hidden")) focus(narrow.matches ? byId("nav-toggle") : byId("input"));
+      modalReturn = null;
+    }
+  }
+  const modalObserver = new MutationObserver(syncModal);
+  modals.forEach((el) => modalObserver.observe(el, { attributes: true, attributeFilter: ["class"] }));
+  modalObserver.observe(byId("modal-body"), { childList: true });
+  modalObserver.observe(byId("modal-foot"), { childList: true });
+  modalObserver.observe(shutdownScreen, { attributes: true, attributeFilter: ["class"] });
+
+  // Desktop developer panels are non-modal. Move focus in/out without trapping it.
+  for (const [panelId, buttonId, closeId] of [["observer", "observer-btn", "obs-close"], ["evaluations", "evaluations-btn", "eval-close"]]) {
+    const panel = byId(panelId);
+    let wasOpen = false;
+    new MutationObserver(() => {
+      const open = !panel.classList.contains("hidden");
+      if (open === wasOpen) return;
+      wasOpen = open;
+      if (open) { byId("developer-nav").open = true; focus(byId(closeId)); }
+      else if (panel.contains(document.activeElement) || document.activeElement === document.body) {
+        focus(narrow.matches ? byId("nav-toggle") : byId(buttonId));
+      }
+    }).observe(panel, { attributes: true, attributeFilter: ["class"] });
+  }
+  document.addEventListener("keydown", (e) => {
+    const navOpen = app.classList.contains("nav-open");
+    const root = activeModal || (navOpen ? nav : null);
+    if (e.key === "Escape") {
+      if (root) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (activeModal === shutdownScreen) return;
+        if (activeModal === byId("settings-modal")) byId("settings-x").click();
+        else if (activeModal) byId("modal-x").click();
+        else setNav(false);
+      } else if (byId("observer").contains(document.activeElement)) byId("obs-close").click();
+      else if (byId("evaluations").contains(document.activeElement)) byId("eval-close").click();
+      return;
+    }
+    if (e.key !== "Tab" || !root) return;
+    const items = focusable(root);
+    const first = items[0], last = items[items.length - 1];
+    if (!first) { e.preventDefault(); root.focus(); }
+    else if (e.shiftKey && (document.activeElement === first || !items.includes(document.activeElement))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || !items.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
+  }, true);
+  document.addEventListener("focusin", (e) => {
+    const root = activeModal || (app.classList.contains("nav-open") ? nav : null);
+    if (root && !root.contains(e.target)) focus(focusable(root)[0] || root);
+  });
+  // Keep the composer above mobile keyboards without reserving an arbitrary overlay.
+  const viewport = window.visualViewport;
+  const fitViewport = () => { app.style.height = `${viewport ? viewport.height : window.innerHeight}px`; };
+  viewport?.addEventListener("resize", fitViewport);
+  window.addEventListener("resize", fitViewport);
+  fitViewport();
+  document.querySelectorAll(".card-x").forEach((button) => {
+    if (!button.hasAttribute("aria-label")) button.setAttribute("aria-label", button.title || "关闭");
+  });
+})();
