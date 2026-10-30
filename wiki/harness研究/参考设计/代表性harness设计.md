@@ -88,6 +88,7 @@
 - **OpenCode**：Claude Code 开源复刻派代表（换模型不换交互）
 - **Aider / Goose**：git 深度集成型 / 可组合工具型
 - **dsh-bili-humanism**（DSH 插件）：非 harness 而是插件样本——"用人类世界喂人格"的**经历供给线**（取稿→认识论手账→日摘一句→人格文件），深析见 [参考-dsh-bili-humanism.md](./参考-dsh-bili-humanism.md)；活动周期"带她看世界"的完整参考
+- **dsh-im**（DSH 插件）：十余个 IM 平台的**渠道接入层**完整工程样本（协议适配层/共享语义层/双通道 HarnessClient/排队插话/稳定寻址主动投递），深析见 [参考-dsh-im.md](./参考-dsh-im.md)；Alice 渠道方向的分层参考
 
 ## 来源
 
