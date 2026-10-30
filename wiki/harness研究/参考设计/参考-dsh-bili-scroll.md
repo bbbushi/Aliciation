@@ -60,3 +60,17 @@
 6. **"替他看一眼，不是替他做决定"**：在别人的 profile 上跑时的身份纪律——多用户时代的人格边界（与底色捐赠的"不扮演任何人"同构）。
 
 **不偷的**：每轮全新会话+文件记忆（Alice 的单一永久会话是核心不变量，值日场景才适合无状态轮次）。
+
+## 2026-10-30 补核：B站直接搜索与 Alice 接入
+
+用户提供仓库后，经 GitHub 只读核查 `main@2c7b3f14f525360f8657b102ec453fd8f02baf3a`（`package.json` 为 2.3.1）。本文早先指向的本地插件 clone 当前并不存在，本次依据固定提交源码，不按旧笔记推断可用性。
+
+- **确有直接搜索实现**：[bili_search](https://github.com/c1overzz/dsh-bili-scroll/blob/2c7b3f14f525360f8657b102ec453fd8f02baf3a/vendor/bilibili-mcp/mcp_server.py#L396) 调用 `bilibili_api.search.search_by_type`，按关键词、排序和页码返回 BV号、标题、作者、简介等。该封装不调用 `get_cred()`，也不向搜索方法传账号凭据；“该路径没有显式登录前置”不能扩写成“所有网络环境匿名搜索均已实测可用”。
+- **字幕与搜索分开**：[bili_subtitle](https://github.com/c1overzz/dsh-bili-scroll/blob/2c7b3f14f525360f8657b102ec453fd8f02baf3a/vendor/bilibili-mcp/mcp_server.py#L520) 先取登录凭据，再取视频信息/cid、字幕索引及字幕正文；没有字幕会返回空说明。视频信息工具也显式要求凭据。插件提供扫码与本机凭据保存，见 [login.mjs](https://github.com/c1overzz/dsh-bili-scroll/blob/2c7b3f14f525360f8657b102ec453fd8f02baf3a/lib/login.mjs)。其设置页“测一下”会先检查登录，不能将完整插件的首次使用要求直接等同于底层搜索接口要求。
+- **不能整包塞进 Alice 核心**：[依赖](https://github.com/c1overzz/dsh-bili-scroll/blob/2c7b3f14f525360f8657b102ec453fd8f02baf3a/vendor/bilibili-mcp/requirements.txt)包含 `bilibili-api-python>=17.4.1,<18`、aiohttp、MCP、二维码和 Pillow；版本范围不是锁文件。Alice 核心保持标准库，可借鉴只读协议，依赖型适配放独立 addon/子进程。只接搜索、视频信息及另行许可的字幕，不把评论、私信、收藏、首页个性化推荐顺带开放。
+- **维护状态必须记录**：依赖上游仓库已发布[停止维护与永久关停声明](https://github.com/Nemo2011/bilibili-api/blob/3798d3b3bd3c3a93678d5a0367637a19262303ef/README.md)，并说明其功能未获平台官方授权。因此不能把这个开源封装称为官方 SDK，亦不能只因源码存在就标成已经可用。
+- **底层请求并非透明的一次HTTP**：本次仅在内存读取并校验 [PyPI 17.4.1 历史发布包](https://pypi.org/project/bilibili-api-python/17.4.1/)，未安装或导入。`search.py:172–184` 的搜索签名不接收 Credential；`utils/network.py:2236–2239` 在相应开关启用时可补设备 Cookie，`2222–2225`、`2357–2378` 有条件签名与配置驱动重试。具体搜索端点配置、该操作是否开启 WBI 和默认重试次数未完整核实。搜索没有传账号凭据，不等于不带任何 Cookie 或只有一次请求；历史包也不代表插件实际安装的版本。该依赖在 PyPI 标注 GPL-3.0-or-later，外层插件的 MIT 不能概括全部依赖许可。
+
+研究结论：Alice 当时把B站绑定到 Brave/SearXNG，是首版接入实现的限制，不是 B站直搜路线不存在。应将“站内只读搜索”作为独立接入候选，先验证搜索/有限视频信息，再处理用户明确开启的登录字幕；每次实际网络请求、响应量、签名/设备初始化及失败都需纳入 Alice 原有预算和取消机制。该次研究只核源码，未安装依赖、运行外部代码、请求B站接口或读取账号凭据。
+
+后续实施：用户授权后，Alice 已另写[标准库只读适配器](../../../addons/bilibili/README.md)，通过宿主逐次监管 HTTP 实现匿名搜索和视频信息/简介读取；没有引入该项目或其 SDK 依赖。登录与字幕尚未接入，平台可达性仍待真实人工验收。额度已改由用户设置，详见[搜索实施报告](../../../docs/搜索功能-实施与人工验收.md)。

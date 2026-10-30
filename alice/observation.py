@@ -28,9 +28,25 @@ FILE_DETAIL_LIMIT = 4 * 1024 * 1024
 HISTORY_NAME = re.compile(r"v[0-9]{3,12}_[0-9]{8}\.md\Z")
 MEMORY_META = (
     "id, created_at, layer, kind, salience, pressure, mention_count, "
-    "use_count, last_used_at, promoted_at"
+    "use_count, last_used_at, promoted_at, origin, scope, expires_at"
 )
 SKILL_META = "id, created_at, use_count, last_used_at"
+
+# These scope fields are host-written JSON arrays of fixed channel IDs. Exact
+# quoted membership works without depending on an optional SQLite JSON module.
+# Every necessary source must still be usable; a valid subset is insufficient.
+GUI_MEMORY = """(
+ memories.origin='conversation' OR (
+  memories.origin IN ('external','external_derived')
+  AND memories.expires_at>? AND instr(memories.scope,'"gui"')>0
+  AND EXISTS(SELECT 1 FROM source_memory_dependencies d WHERE d.memory_id=memories.id)
+  AND NOT EXISTS(
+   SELECT 1 FROM source_memory_dependencies d LEFT JOIN source_packets p ON p.id=d.packet_id
+   WHERE d.memory_id=memories.id AND
+    (p.id IS NULL OR p.revoked!=0 OR p.expires_at<=? OR instr(p.scope_json,'"gui"')=0)
+  )
+ )
+)"""
 
 
 def _number(value, *, default=None, maximum=9223372036854775807) -> int | None:
@@ -100,8 +116,8 @@ def snapshot(store, cfg) -> dict:
         f"SELECT {MEMORY_META}, substr(title,1,?) AS hash_title, "
         "substr(content,1,?) AS hash_content, substr(keywords,1,?) AS hash_keywords, "
         "length(title) AS title_chars, length(content) AS content_chars, "
-        "length(keywords) AS keywords_chars FROM memories ORDER BY id DESC LIMIT ?",
-        (TEXT_HASH_LIMIT, TEXT_HASH_LIMIT, TEXT_HASH_LIMIT, MANIFEST_LIMIT),
+        f"length(keywords) AS keywords_chars FROM memories WHERE {GUI_MEMORY} ORDER BY id DESC LIMIT ?",
+        (TEXT_HASH_LIMIT, TEXT_HASH_LIMIT, TEXT_HASH_LIMIT, sampled_at, sampled_at, MANIFEST_LIMIT),
     )
     for row in rows:
         item = dict(row)
@@ -115,6 +131,8 @@ def snapshot(store, cfg) -> dict:
         item["text_truncated"] = any(n > TEXT_HASH_LIMIT for n in lengths)
         items.append(item)
 
+    visible_total = store.conn.execute(f"SELECT COUNT(*) FROM memories WHERE {GUI_MEMORY}",
+                                       (sampled_at, sampled_at)).fetchone()[0]
     cursor = int(store.meta_get("extract_cursor", "0") or 0)
     pending = store.conn.execute("SELECT COUNT(*) FROM turns WHERE id>?", (cursor,)).fetchone()[0]
     batch = store.conn.execute("SELECT role FROM turns WHERE id>? ORDER BY id LIMIT 80", (cursor,)).fetchall()
@@ -129,7 +147,9 @@ def snapshot(store, cfg) -> dict:
         "sampled_at": sampled_at,
         "memory_counts": counts,
         "manifest": {"items": items, "limit": MANIFEST_LIMIT,
-                     "total": sum(counts.values()), "complete": sum(counts.values()) <= MANIFEST_LIMIT},
+                     "total": sum(counts.values()), "visible_total": visible_total,
+                     "scope_limited": visible_total != sum(counts.values()),
+                     "complete": sum(counts.values()) <= MANIFEST_LIMIT and visible_total == sum(counts.values())},
         "persona": person,
         "changelog": _log_tail(),
         "progress": {
@@ -173,6 +193,9 @@ def list_items(store, *, view="memories", layer="all", kind="all", q="", before=
         conditions.append("id<?")
         args.append(before)
     if view == "memories":
+        sampled_at = time.time()
+        conditions.append(GUI_MEMORY)
+        args.extend((sampled_at, sampled_at))
         if layer != "all":
             conditions.append("layer=?")
             args.append(layer)
@@ -245,16 +268,24 @@ def detail(store, *, view="memories", id=None, offset=0) -> dict:
             raise ObservationError("缺少条目编号")
         fields = MEMORY_META if view == "memories" else SKILL_META
         extra = "keywords" if view == "memories" else "source_titles"
+        where, args = "id=?", [offset + 1, DETAIL_SIZE, identity]
+        if view == "memories":
+            sampled_at = time.time()
+            where += " AND " + GUI_MEMORY
+            args.extend((sampled_at, sampled_at))
         row = store.conn.execute(
             f"SELECT {fields}, substr(title,1,160) AS title, substr({extra},1,16000) AS {extra}, "
             f"(length(title)>160 OR length({extra})>16000) AS truncated, "
-            f"substr(content,?,?) AS text, length(content) AS total_chars FROM {view} WHERE id=?",
-            (offset + 1, DETAIL_SIZE, identity),
+            f"substr(content,?,?) AS text, length(content) AS total_chars FROM {view} WHERE {where}",
+            args,
         ).fetchone()
         if row is None:
-            raise ObservationError("条目已不存在，请刷新列表；删除正文不会恢复")
+            raise ObservationError("条目已不存在、已到期或不允许在此界面查看，请刷新列表")
         metadata = dict(row)
         text, total = metadata.pop("text"), metadata.pop("total_chars")
+        if view == "memories":
+            metadata["source_packet_ids"] = [r[0] for r in store.conn.execute(
+                "SELECT packet_id FROM source_memory_dependencies WHERE memory_id=? ORDER BY packet_id", (identity,))]
     elif view in ("persona", "history"):
         if view == "history":
             name = _filename(id)

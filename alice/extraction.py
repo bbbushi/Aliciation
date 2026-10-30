@@ -46,6 +46,12 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
     pending = store.turns_since(cursor)
     if not pending:
         return 0
+    ordinary = store.ordinary_turns(pending)
+    if not ordinary:
+        # Fixed shadows contain no usable evidence. Advancing the cursor here
+        # prevents force/close/restart from later extracting attachment prose.
+        store.meta_set("extract_cursor", pending[-1]["id"])
+        return 0
     if not force and store.count_user_turns(pending) < cfg.memory.extract_every_turns:
         return 0
 
@@ -54,7 +60,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
 
     prompt = EXTRACT_PROMPT.format(
         recent_titles="、".join(recent_titles) if recent_titles else "（暂无）",
-        conversation=_fmt_turns(pending),
+        conversation=_fmt_turns(ordinary),
     )
     resp = chat(
         client, cfg,

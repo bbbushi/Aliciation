@@ -45,19 +45,22 @@ TOOLS = [
 ]
 
 
-def dispatch_tool(store: Store, name: str, arguments: str) -> str:
+def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=None) -> str:
     try:
         args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         args = {}
+    if not isinstance(args, dict):
+        args = {}
     if name == "recall":
-        return retrieval.tool_recall(store, str(args.get("query", "")))
+        return retrieval.tool_recall(store, str(args.get("query", "")), source_context=source_context)
     if name == "remember":
         return retrieval.tool_remember(
             store,
             str(args.get("title", "")),
             str(args.get("content", "")),
             str(args.get("keywords", "")),
+            source_context=source_context,
         )
     return f"未知工具：{name}"
 
@@ -130,18 +133,59 @@ def _record_usage(usage_out: dict | None, resp) -> None:
         usage_out["completion"] = usage_out.get("completion", 0) + (u.completion_tokens or 0)
 
 
+def _record_source_usage(out: dict | None, context: dict, **fields) -> None:
+    if out is not None:
+        out.update({"packet_ids": list(context["packet_ids"]),
+                    "recalled_ids": list(context["recalled_ids"]),
+                    "recall_queries": list(context["recall_queries"]),
+                    "memory_ids": list(context["memory_ids"]), **fields})
+
+
 def chat_turn(store: Store, client, cfg: Config, user_text: str,
               ts: float | None = None, now: float | None = None,
               on_delta=None, on_tool=None, on_reasoning=None,
               usage_out: dict | None = None, on_persist=None,
-              request_id=None, on_request_progress=None, on_maintenance_warning=None) -> str:
+              request_id=None, on_request_progress=None, on_maintenance_warning=None,
+              source_packet_ids=(), source_scope="gui", source_usage_out: dict | None = None,
+              source_allow_external_recall=False) -> str:
     ts = ts if ts is not None else time.time()
-    store.add_turn("user", user_text, ts=ts, request_id=request_id)
+    if source_usage_out is not None:
+        # Reused output dictionaries must not report a previous successful turn
+        # when source validation or persistence fails before this one starts.
+        source_usage_out.update({"offered_ids": [], "packet_ids": [], "recalled_ids": [],
+                                 "recall_queries": [], "memory_ids": [], "user_turn_id": None,
+                                 "assistant_turn_id": None, "reply_saved": False})
+    # Caller selects explicit/relevant material. Never pick background cards
+    # simply because a permanent conversation happens to be active.
+    source_limits = store.source_limits()
+    packet_ids = list(dict.fromkeys(source_packet_ids))
+    for key in ("chat_material_limit", "chat_dependency_limit"):
+        limit = source_limits[key]
+        if limit is not None and len(packet_ids) > limit:
+            raise ValueError("本轮外部资料数量超过用户配置的限制")
+    packets = store.source_packets_for(packet_ids, scope=source_scope) if packet_ids else []
+    if packet_ids and not packets:
+        raise ValueError("所选资料已过期或不允许在此渠道使用")
+    user_id = store.add_turn("user", user_text, ts=ts, request_id=request_id,
+                             source_packet_ids=packet_ids, source_scope=source_scope)
+    source_context = {"scope": source_scope, "packet_ids": packet_ids, "user_turn_id": user_id,
+                      "recall_queries": [], "recalled_ids": [], "memory_ids": [],
+                      "allow_external_recall": source_allow_external_recall is True,
+                      "limits": source_limits}
+    if source_usage_out is not None:
+        source_usage_out.update({"offered_ids": list(packet_ids), "packet_ids": list(packet_ids),
+                                 "recalled_ids": [], "user_turn_id": user_id, "reply_saved": False})
     if on_request_progress is not None:
         on_request_progress()
-    messages = retrieval.build_messages(store, cfg, persona.persona_md() or "", now=now)
+    messages = retrieval.build_messages(store, cfg, persona.persona_md() or "", now=now,
+                                        source_packets=packets, current_user_text=user_text)
     reply = ""
     for _ in range(4):  # 工具调用轮数上限
+        if source_context["packet_ids"] and not store.source_packets_for(
+            source_context["packet_ids"], scope=source_scope,
+        ):
+            reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
+            break
         if on_delta is None:
             resp = chat(client, cfg, messages, tools=TOOLS)
             msg = resp.choices[0].message
@@ -152,6 +196,11 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
+                if source_context["packet_ids"] and not store.source_packets_for(
+                    source_context["packet_ids"], scope=source_scope,
+                ):
+                    reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
+                    break
                 resp = chat(client, cfg, messages, tools=TOOLS)
                 msg = resp.choices[0].message
                 _record_usage(usage_out, resp)
@@ -178,12 +227,26 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
         for tc in msg.tool_calls:
             if on_tool:
                 on_tool(tc.function.name)
-            result = dispatch_tool(store, tc.function.name, tc.function.arguments)
+            try:
+                result = dispatch_tool(store, tc.function.name, tc.function.arguments,
+                                       source_context=source_context)
+            finally:
+                # A failed recall can have already persisted its source boundary.
+                # Report it even if a later counter/tool operation raises.
+                _record_source_usage(source_usage_out, source_context)
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
     else:
         reply = "（我这一轮转晕了，再说一遍好吗？）"
+    if source_context["packet_ids"] and not store.source_packets_for(
+        source_context["packet_ids"], scope=source_scope,
+    ):
+        # A model response may arrive after the source licence expired. Do not
+        # publish that derived body as a newly saved reply.
+        reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
     reply = reply or "（沉默）"
-    assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id)  # 与用户消息同刻，+1 保持轮内先后
+    assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id,
+                                  source_packet_ids=source_context["packet_ids"], source_scope=source_scope)
+    _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     if on_request_progress is not None:
         on_request_progress()
     if on_persist is not None:
