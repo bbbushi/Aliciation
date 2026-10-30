@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,8 +16,10 @@ from urllib.parse import urlsplit
 from . import config as appconfig
 from . import consolidation, loop, observation, persona, skills, thought
 from .config import Config, load
-from .config_edit import ConfigConflict, revision, replace_llm_values
+from .channels import ChannelCoordinator, ChannelError
+from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels
 from .llm import make_client, safe_provider_error
+from .evaluation_service import EvaluationCoordinator
 from .store import Store
 
 ARCHIVE_ROOT = appconfig.DATA_DIR / "archive"  # 初始化时把旧会话整体搬到这里
@@ -85,6 +89,9 @@ class ChatService:
                 self.cfg.llm.disable_thinking = False
             elif self.cfg.llm.disable_thinking:
                 self.cfg.llm.thinking = "off"  # 旧配置开关在 GUI 中显示真实生效状态
+            self._evaluations = EvaluationCoordinator(self)
+            self._channels = ChannelCoordinator(self)
+            self._channels.set_ready(persona.persona_md() is not None)
         except BaseException:
             try:
                 self.store.close()
@@ -158,6 +165,59 @@ class ChatService:
                 for r in self.store.recent_turns(limit)
             ]
 
+    def history_page(self, after_id=None, limit=60, session_epoch=None) -> dict:
+        if (type(limit) is not int or not 1 <= limit <= 100 or
+                (after_id is not None and (type(after_id) is not int or after_id < 0))):
+            raise ChannelError(400, "invalid_request", "历史游标或数量无效")
+        if not self._lock.acquire(blocking=False):
+            raise ChannelError(503, "status_unavailable", "Alice 忙碌，稍后刷新历史")
+        try:
+            if session_epoch is not None:
+                self._channels.check_epoch(session_epoch)
+            query = ("SELECT t.*,ct.request_id,ct.channel_id FROM turns t "
+                     "LEFT JOIN channel_turns ct ON ct.turn_id=t.id ")
+            if after_id is None:
+                rows = list(reversed(self.store.conn.execute(query + "ORDER BY t.id DESC LIMIT ?", (limit,)).fetchall()))
+                more = False
+            else:
+                rows = self.store.conn.execute(query + "WHERE t.id>? ORDER BY t.id LIMIT ?", (after_id, limit + 1)).fetchall()
+                more, rows = len(rows) > limit, rows[:limit]
+            turns = []
+            for row in rows:
+                delivery = None
+                if row["request_id"] and row["role"] == "assistant" and row["channel_id"] == "qq-owner":
+                    states = [r[0] for r in self.store.conn.execute("SELECT status FROM channel_deliveries WHERE request_id=?",
+                                                                  (row["request_id"],))]
+                    delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
+                                    "platform_confirmed" if states else "pending")
+                turns.append({"id": row["id"], "role": row["role"], "content": row["content"], "ts": row["ts"],
+                              "request_id": row["request_id"], "channel": row["channel_id"] or "local",
+                              "sender_label": "所有者", "delivery": delivery})
+            return {"turns": turns, "session_epoch": self._channels.epoch,
+                    "next_after_id": turns[-1]["id"] if turns else (after_id or 0), "has_more": more,
+                    "memory": self._memory_stats()}
+        finally:
+            self._lock.release()
+
+    def chat_activity(self) -> dict:
+        return self._channels.activity()
+
+    def authenticate_channel(self, token):
+        return self._channels.authenticate(token)
+
+    def channel_status(self, channel_id):
+        self._channels.authorize(channel_id)
+        return self._channels.activity()
+
+    def submit_channel_request(self, channel_id, payload):
+        return self._channels.submit(channel_id, payload)
+
+    def channel_request_status(self, channel_id, request_id):
+        return self._channels.status(channel_id, request_id)
+
+    def record_channel_delivery(self, channel_id, payload):
+        return self._channels.delivery(channel_id, payload)
+
     def _observer_read(self, reader, *, scope=None, **kwargs) -> dict:
         """Read only between writers; busy never queues or accesses the shared Store."""
         if not self._lock.acquire(blocking=False):
@@ -190,12 +250,20 @@ class ChatService:
     def observer_detail(self, *, scope=None, **kwargs) -> dict:
         return self._observer_read(observation.detail, scope=scope, **kwargs)
 
+    def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
+        """P1 public boundary. Opening observer never calls this write-capable surface."""
+        return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)
+
+    def begin_shutdown(self) -> None:
+        self._channels.begin_shutdown()
+        self._evaluations.begin_shutdown()
+
     # ---------- 写操作（全部持锁） ----------
 
     def prepare(self) -> list[str]:
         """启动时的到期维护，对应 CLI 启动段；返回应展示给用户的事件。"""
         events: list[str] = []
-        with self._lock:
+        with self._channels.control(), self._lock:
             summary = consolidation.run_if_due(self.store, self.cfg)
             if summary and any(
                 summary.get(k) for k in ("to_warehouse", "promoted", "expired", "evicted")
@@ -210,7 +278,7 @@ class ChatService:
 
     def seed(self, tags: list[str], reset: bool = False) -> dict:
         """reset=True 表示「初始化」：先归档旧会话（对话/记忆/人格），再装新人格。"""
-        with self._lock:
+        with self._channels.control(), self._lock:
             if reset:
                 # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
                 md = persona.generate_seed_md(self.client, self.cfg, tags)
@@ -219,25 +287,29 @@ class ChatService:
                     self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
             else:
                 persona.seed_from_tags(self.store, self.client, self.cfg, tags)
+            self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
     def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False) -> dict:
-        with self._lock:
+        with self._channels.control(), self._lock:
             if reset:
                 self._archive_locked()
             persona.install_persona(self.store, self.cfg, md_text, source=source,
                                     client=self.client)  # v0.3：传 client 走消化流程
+            self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
     def reset_session(self) -> dict:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
-        with self._lock:
+        with self._channels.control(), self._lock:
             self._archive_locked()
             return self.state()
 
     def _archive_locked(self) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
         self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
+        self._channels.set_ready(False)
+        self._evaluations.before_reset()
         turns = self._turn_count()
         mem = self._memory_stats()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -260,6 +332,8 @@ class ChatService:
         if not moved:
             dest.rmdir()
             self.store = Store(appconfig.DB_PATH)
+            self._evaluations.bind_store()
+            self._channels.bind_store()
             return None
         (dest / "note.txt").write_text(
             f"初始化归档：{datetime.now():%Y-%m-%d %H:%M}\n"
@@ -268,23 +342,138 @@ class ChatService:
             encoding="utf-8",
         )
         self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
+        self._evaluations.bind_store()
+        self._channels.bind_store()
         return dest
 
-    def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None) -> dict:
-        """处理一轮对话；on_delta/on_tool/on_reasoning 为流式回调（见 loop.chat_turn）。"""
+    def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
+             request_id=None, session_epoch=None, nonblocking=False, on_accepted=None) -> dict:
+        """One admitted GUI turn. Existing callers retain blocking admission semantics."""
+        request = self._channels.gui_request(text, request_id, session_epoch)
+        if nonblocking:
+            prior = self._channels.lookup(request)
+            if prior is not None:
+                return self._replayed_result(prior)
+        token = self._channels.reserve("gui", request["request_id"], wait=not nonblocking)
+        try:
+            with self._lock:
+                self._channels.check_epoch(request["session_epoch"])
+                prior = self._channels.lookup(request)
+                if prior is not None:
+                    return self._replayed_result(prior)
+                accepted = self._channels.accept_locked(request)
+                if on_accepted is not None:
+                    try:
+                        on_accepted(accepted)
+                    except Exception:
+                        pass  # Disconnects must not turn acceptance into another generation.
+                try:
+                    return self._send_locked(request, on_delta, on_tool, on_reasoning, evaluation_id=evaluation_id)
+                except BaseException:
+                    try:
+                        self._channels.finish_locked(request["request_id"], error_code="processing_failed")
+                    except Exception:
+                        self._channels.begin_shutdown()
+                    raise
+        finally:
+            self._channels.release(token)
+
+    def _replayed_result(self, prior):
+        if prior["reply"] is None:
+            raise ChannelError(409, "request_" + prior["status"], "该请求已有记录；请查看历史，不要自动重发")
+        return {**prior, "events": [], "memory": {}, "deduplicated": True}
+
+    def _send_locked(self, request, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None) -> dict:
+        text, request_id = request["text"], request["request_id"]
         with self._lock:
-            reply = loop.chat_turn(
-                self.store, self.client, self.cfg, text,
-                on_delta=on_delta, on_tool=on_tool, on_reasoning=on_reasoning,
-            )
-            events = self._watchers_due()
-            return {
+            job = None
+            evaluation_warning = None
+            if evaluation_id is not None:
+                try:
+                    job = self._evaluations.capture(evaluation_id)
+                except Exception:
+                    evaluation_warning = "P1核查未能绑定本轮（许可过期、配置变化或捕获未完成）；真实聊天继续，请查看核查记录"
+            persisted = []
+            maintenance_warnings = []
+            try:
+                reply = loop.chat_turn(
+                    self.store, self.client, self.cfg, text,
+                    on_delta=on_delta, on_tool=on_tool, on_reasoning=on_reasoning,
+                    on_persist=persisted.append if job else None,
+                    request_id=request_id,
+                    on_request_progress=lambda: self._channels.publish_locked(request_id),
+                    on_maintenance_warning=maintenance_warnings.append,
+                )
+                events = self._watchers_due()
+                if maintenance_warnings:
+                    events.append("记忆提取暂失败；原回复已保存，下次维护可重试")
+            except BaseException:
+                if job:
+                    self._evaluations.abort_chat(job)
+                self._channels.finish_locked(request_id, error_code="generation_failed")
+                raise
+            if job:
+                try:
+                    record = self._evaluations.bind_turn(job, persisted[0])
+                except Exception:
+                    self._evaluations.abort_chat(job)
+                    record = {"status": "failed"}
+                queue = record["status"] == "queued"
+            if evaluation_warning:
+                events.append(evaluation_warning)
+            result = {
                 "reply": reply,
                 "events": events,
                 "memory": self._memory_stats(),
             }
+            self._channels.finish_locked(request_id, warning=bool(maintenance_warnings) or any("暂失败" in event for event in events))
+            result.update(self._channels.publish_locked(request_id))
+            if job:
+                result["evaluation_id"] = job["id"]
+        if job and queue:
+            try:
+                self._evaluations.enqueue(job)
+            except Exception:
+                with self._lock:
+                    self._evaluations.abort_chat(job)
+                result["events"].append("P1核查未能排入执行，真实回复已保存；请查看核查记录")
+        return result
 
     # ---------- 设置 ----------
+
+    def configure_local_channel(self, binding: dict, session_epoch: str, *, enabled: bool, guard=None) -> dict:
+        """Trusted local connector host only; never accept browser-supplied bindings.
+
+        The caller has already required an explicit local confirmation. Persist
+        non-secret identity/hash fields only, while the shared admission slot
+        prevents an accepted turn from straddling a configuration publication.
+        """
+        if (not isinstance(binding, dict) or set(binding) != {"app_id", "sender_id", "token_sha256"}
+                or type(enabled) is not bool
+                or not isinstance(binding["token_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", binding["token_sha256"])
+                or any(not isinstance(binding[k], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", binding[k])
+                       for k in ("app_id", "sender_id"))):
+            raise ValueError("本机连接器返回的身份无效")
+        with self._channels.control(), self._lock:
+            self._channels.check_epoch(session_epoch)
+            # The host's operation lock spans disk commit and publication, so a
+            # cancel is ordered wholly before or after this transaction. Acquire
+            # it only after the service reservation/lock; host actions never wait
+            # for the service while holding that operation lock.
+            with guard() if guard is not None else nullcontext():
+                self._check_config_revision_locked(None, required=False)
+                old = self.cfg.channels.qq_owner
+                if old.app_id and (old.app_id != binding["app_id"] or old.sender_id != binding["sender_id"]
+                                   or old.token_sha256 != binding["token_sha256"]):
+                    raise ConfigConflict("已保存另一份 QQ 绑定；请先停用原连接并按说明人工处理，不能直接覆盖")
+                values = {"enabled": enabled, "protocol_version": 1, "qq_owner": {
+                    "enabled": enabled, "provider": "qq-official", "chat_type": "c2c", **binding}}
+                candidate = appconfig._channels(values)
+                new_revision = replace_channels(self._config_path, values, self._config_revision)
+                self.cfg.channels = candidate
+                self._config_revision = new_revision
+                return {"enabled": enabled, "app_id": binding["app_id"], "owner_openid": binding["sender_id"]}
 
     def _check_config_revision_locked(self, supplied: str | None, *, required: bool) -> None:
         if self._config_revision is None:
@@ -425,7 +614,7 @@ class ChatService:
         old_client = None
         old_owned = False
         try:
-            with self._lock:
+            with self._channels.control(), self._lock:
                 self._check_config_revision_locked(payload.get("revision"), required=True)
                 candidate.llm.thinking = self.cfg.llm.thinking
                 candidate.llm.disable_thinking = self.cfg.llm.disable_thinking
@@ -448,7 +637,7 @@ class ChatService:
     def set_thinking(self, value: str) -> str:
         if value not in ("on", "off"):
             raise ValueError("thinking 仅支持 on/off")
-        with self._lock:
+        with self._channels.control(), self._lock:
             self.cfg.llm.thinking = value
             self.cfg.llm.disable_thinking = False
             self.store.meta_set("thinking", value)
@@ -475,14 +664,17 @@ class ChatService:
         for watcher in (persona.evolve_if_due, thought.deliberate_if_due, skills.distill_if_due):
             try:
                 msg = watcher(self.store, self.client, self.cfg)
-            except Exception as e:  # 后台任务失败不影响对话
-                msg = f"{watcher.__name__} 暂失败：{e}"
+            except Exception as e:  # Never return provider exception bodies or credentials.
+                msg = f"{watcher.__name__} 暂失败：{type(e).__name__}"
             if msg:
                 events.append(msg)
         return events
 
     def close(self, *, extract: bool = True) -> str | None:
         """通常先强制提取再关资源；启动失败可用 extract=False 直接释放。"""
+        self.begin_shutdown()
+        self._channels.drain()  # HTTP 202 workers outlive their submitting connections.
+        self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
         with self._lock:
             warning = None
             try:

@@ -5,7 +5,7 @@
   const layers = { active: "活跃", warehouse: "仓库", longterm: "长期" };
   const labels = {
     id: "稳定 ID", title: "标题", layer: "层级", kind: "类型", created_at: "记录时间 created_at",
-    salience: "重要性", pressure: "压力标记", mention_count: "提及次数", use_count: "使用次数",
+    salience: "重要性（存储值）", pressure: "压力标记（存储值）", mention_count: "提及次数", use_count: "使用次数",
     last_used_at: "最近使用", promoted_at: "晋升时间", keywords: "关键词", source_titles: "出处标题（未验证）",
     filename: "快照文件", mtime: "文件修改时间", version: "当前版本计数", seeded_at: "人格安装时间",
     truncated: "元信息有截断", memory_id: "原记忆 ID", expired_at: "实际删除时间", reason: "存储原因",
@@ -17,6 +17,20 @@
   let listRevision = 0, detailRevision = 0, before = null, ceiling = null, nextBefore = null;
   let listSignature = "", detail = null, nextOffset = null;
   let query = "", interrupted = false;
+  let personaFrame = null, personaRenderGeneration = 0, detailReadingSignature = null;
+  let personaFolds = new Map();
+  const personaStandard = new Map([
+    ["底色 · 气质与风格", "（这里写 3~6 条气质与风格要点）"],
+    ["生长 · 我的来历", "（尚未消化——导入文档的来历将写在这里）"],
+    ["生长 · 自我叙事", "（尚未形成——将随共同经历自然生长）"],
+    ["生长 · 我现在的想法", "（尚未形成——将在思辨中从经历里长出观点）"],
+    ["生长 · 与用户的关系", "（尚未形成）"],
+  ]);
+  // Retired by the simplified expression layer; recognize old templates only
+  // when present, without reporting the removed section as missing.
+  const legacyPersonaTemplates = new Map([
+    ["底色 · 情绪词表", "（8~15 个从标签派生的情绪词，【】格式）\n\n（使用注记一行）"],
+  ]);
   const view = () => el("obs-view").value;
   const isList = () => ["memories", "tombstones", "skills", "history"].includes(view());
   const time = (ts) => ts ? new Date(Number(ts) * 1000).toLocaleString("zh-CN", { hour12: false }) : "未记录";
@@ -37,9 +51,12 @@
       : "尚无有效快照；打开观察器不会触发记忆提取。");
   }
   function clearDetail() {
-    detail = null; nextOffset = null; detailRevision++;
+    detail = null; nextOffset = null; detailRevision++; detailReadingSignature = null;
     el("obs-detail").classList.add("hidden");
-    for (const id of ["obs-detail-title", "obs-detail-time", "obs-detail-meta", "obs-detail-text"]) text(id, "");
+    for (const id of ["obs-detail-title", "obs-detail-time", "obs-detail-meta", "obs-detail-text", "obs-detail-reading"]) text(id, "");
+    el("obs-detail-mode").value = "reading";
+    el("obs-detail-reading-tools").classList.add("hidden");
+    setDetailMode();
     el("obs-detail-next").disabled = true;
   }
   function clearData() {
@@ -47,7 +64,9 @@
     before = null; ceiling = null; nextBefore = null; listSignature = ""; listRevision++;
     clearDetail();
     for (const id of ["obs-time", "obs-counts", "obs-coverage", "obs-progress", "obs-changes", "obs-list", "obs-list-time",
-      "obs-persona-meta", "obs-persona-text", "obs-persona-diff-meta", "obs-persona-diff", "obs-persona-compare", "obs-changelog"]) text(id, "");
+      "obs-persona-meta", "obs-persona-text", "obs-persona-toc", "obs-persona-sections", "obs-persona-reading-note", "obs-persona-diff-meta", "obs-persona-diff", "obs-persona-compare", "obs-changelog"]) text(id, "");
+    personaFrame = null; personaRenderGeneration++; personaFolds.clear();
+    el("obs-persona-advanced").open = false; el("obs-persona-source").open = false;
     el("obs-next").disabled = true;
   }
   function schedule() {
@@ -224,7 +243,7 @@
   }
   function renderOverview(d) {
     const m = d.memory_counts, p = d.progress, x = p.extraction;
-    text("obs-counts", `存活记忆：活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`);
+    text("obs-counts", `原始状态 · 存活记忆条数：活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`);
     text("obs-coverage", `差异覆盖 ${d.manifest.items.length} / ${d.manifest.total} 条存活记忆（最近 ID，上限 ${d.manifest.limit}）。${d.manifest.complete ? "当前全部存活 ID 在范围内。" : "范围不完整；未跟踪条目仍可在记忆页检索。"} ${d.manifest.items.some((r) => r.text_truncated) ? "包含超长字段，仅比较前 16000 字与长度。" : ""}`);
     const container = el("obs-progress"); container.replaceChildren();
     const items = [
@@ -248,9 +267,270 @@
       target.appendChild(row);
     });
   }
+  // A bounded Markdown reader. Source text never becomes HTML, URLs or CSS.
+  function mdFence(line) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!m || m[1][0] === "`" && m[2].includes("`")) return null;
+    return { mark: m[1][0], length: m[1].length };
+  }
+  function mdFenceEnd(line, fence) {
+    const m = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+    return !!m && m[1][0] === fence.mark && m[1].length >= fence.length;
+  }
+  function mdHeading(line) {
+    const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$/.exec(line);
+    if (!m) return null;
+    let title = (m[2] || "").trimEnd(), end = title.length;
+    while (end > 0 && title[end - 1] === "#") end--;
+    if (end < title.length && (end === 0 || title[end - 1] === " " || title[end - 1] === "\t")) title = title.slice(0, end).trimEnd();
+    return { level: m[1].length, title: title.trimStart() };
+  }
+  function personaSections(source) {
+    // Keep exact source slices for excerpts and source inspection, including line endings.
+    const rawLines = source.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g) || [], sections = [];
+    let current = { title: null, lines: [], start: 0, bodyStart: 0 }, fence = null, offset = 0;
+    const finish = (end) => {
+      if (current.lines.some((s) => s.trim()) || current.title !== null) {
+        current.raw = source.slice(current.start, end); current.body = source.slice(current.bodyStart, end);
+        sections.push(current);
+      }
+    };
+    for (let i = 0; i < rawLines.length; i++) {
+      const raw = rawLines[i], line = raw.replace(/[\r\n]+$/, ""), heading = !fence && mdHeading(line);
+      if (heading && heading.level === 2) {
+        if (sections.length >= 199) {
+          finish(offset);
+          const remainder = source.slice(offset);
+          sections.push({ title: null, lines: remainder.replace(/\r\n?/g, "\n").split("\n"), raw: remainder, body: remainder, literal: true });
+          return sections;
+        }
+        finish(offset);
+        current = { title: heading.title, lines: [], start: offset, bodyStart: offset + raw.length };
+      } else current.lines.push(line);
+      if (fence) { if (mdFenceEnd(line, fence)) fence = null; }
+      else fence = mdFence(line);
+      offset += raw.length;
+    }
+    finish(source.length);
+    return sections;
+  }
+  function mdElement(tag, value, budget) {
+    budget.nodes--;
+    return node(tag, value);
+  }
+  function mdLiteral(target, source, budget, pre = false) {
+    budget.nodes--; budget.fallback = true;
+    target.appendChild(node(pre ? "pre" : "span", source, pre ? "obs-md-fallback" : undefined));
+  }
+  function mdInline(target, source, budget, depth = 0) {
+    if (source.length > 8000 || depth >= 4 || budget.nodes < 2 || budget.steps <= 0) {
+      mdLiteral(target, source, budget); return;
+    }
+    const tokens = /\\[\\`*_\[\]{}()#+.!>|~-]|`+|\*\*\*|___|\*\*|__|\*|_/g;
+    let cursor = 0, match;
+    const plain = (s) => { if (s) { target.appendChild(document.createTextNode(s)); budget.nodes--; } };
+    while ((match = tokens.exec(source))) {
+      if (--budget.steps <= 0 || budget.nodes < 3) { mdLiteral(target, source.slice(cursor), budget); return; }
+      const token = match[0], start = match.index;
+      if (token[0] === "\\") {
+        plain(source.slice(cursor, start)); plain(token.slice(1)); cursor = tokens.lastIndex; continue;
+      }
+      const from = start + token.length, end = source.indexOf(token, from);
+      if (end < 0 || end === from) continue;
+      const contents = source.slice(from, end), code = token[0] === "`";
+      if (!code && (!contents.trim() || token[0] === "_" && /[\p{L}\p{N}]/u.test(source[start - 1] || ""))) continue;
+      // A longer backtick run is a different delimiter; unknown forms remain source text.
+      if (code && (source[end - 1] === "`" || source[end + token.length] === "`")) continue;
+      plain(source.slice(cursor, start));
+      const formatted = mdElement(code ? "code" : token.length >= 2 ? "strong" : "em", undefined, budget);
+      if (code) formatted.textContent = contents;
+      else if (token.length === 3) {
+        const emphasis = mdElement("em", undefined, budget); mdInline(emphasis, contents, budget, depth + 1); formatted.appendChild(emphasis);
+      } else mdInline(formatted, contents, budget, depth + 1);
+      target.appendChild(formatted); cursor = end + token.length; tokens.lastIndex = cursor;
+    }
+    plain(source.slice(cursor));
+  }
+  function mdTableCells(line) {
+    if (!line.includes("|") || /[`\\]/.test(line)) return null;
+    return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((s) => s.trim());
+  }
+  function mdListItem(line) {
+    const m = /^( {0,3})([-+*]|\d{1,9}[.)])[ \t]+(.*)$/.exec(line);
+    return m ? { indent: m[1].length, ordered: /^\d/.test(m[2]), number: parseInt(m[2], 10), body: m[3] } : null;
+  }
+  function mdBlocks(lines, target, budget, depth = 0) {
+    let i = 0;
+    while (i < lines.length) {
+      if (budget.nodes < 8 || budget.steps <= 0 || depth >= 5) { mdLiteral(target, lines.slice(i).join("\n"), budget, true); return; }
+      if (!lines[i].trim()) { i++; continue; }
+      const fence = mdFence(lines[i]);
+      if (fence) {
+        const content = []; i++;
+        while (i < lines.length && !mdFenceEnd(lines[i], fence)) content.push(lines[i++]);
+        if (i < lines.length) i++;
+        const pre = mdElement("pre", undefined, budget), code = mdElement("code", content.join("\n"), budget);
+        pre.appendChild(code); target.appendChild(pre); continue;
+      }
+      const heading = mdHeading(lines[i]);
+      if (heading) {
+        const h = mdElement(`h${Math.min(heading.level + 1, 6)}`, undefined, budget);
+        mdInline(h, heading.title, budget); target.appendChild(h); i++; continue;
+      }
+      const header = mdTableCells(lines[i]), divider = i + 1 < lines.length && mdTableCells(lines[i + 1]);
+      if (header && divider && header.length === divider.length && divider.every((s) => /^:?-{3,}:?$/.test(s))) {
+        let end = i + 2;
+        while (end < lines.length && mdTableCells(lines[end])) end++;
+        if (header.length > 16 || end - i > 100 || (end - i) * header.length * 3 > budget.nodes) {
+          mdLiteral(target, lines.slice(i, end).join("\n"), budget, true); i = end; continue;
+        }
+        const wrap = mdElement("div", undefined, budget); wrap.className = "obs-md-table";
+        const table = mdElement("table", undefined, budget), thead = mdElement("thead", undefined, budget), row = mdElement("tr", undefined, budget);
+        for (const value of header) { const cell = mdElement("th", undefined, budget); cell.scope = "col"; mdInline(cell, value, budget); row.appendChild(cell); }
+        thead.appendChild(row); table.appendChild(thead);
+        const tbody = mdElement("tbody", undefined, budget);
+        for (let n = i + 2; n < end; n++) {
+          const cells = mdTableCells(lines[n]);
+          // Keep malformed rows intact instead of dropping surplus cells.
+          if (cells.length !== header.length) { const tr = mdElement("tr", undefined, budget), td = mdElement("td", lines[n], budget); td.colSpan = header.length; tr.appendChild(td); tbody.appendChild(tr); continue; }
+          const tr = mdElement("tr", undefined, budget);
+          for (const value of cells) { const cell = mdElement("td", undefined, budget); mdInline(cell, value, budget); tr.appendChild(cell); }
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody); wrap.appendChild(table); target.appendChild(wrap); i = end; continue;
+      }
+      if (/^ {0,3}>/.test(lines[i])) {
+        const quoted = [];
+        while (i < lines.length && /^ {0,3}>/.test(lines[i])) quoted.push(lines[i++].replace(/^ {0,3}> ?/, ""));
+        const quote = mdElement("blockquote", undefined, budget); mdBlocks(quoted, quote, budget, depth + 1); target.appendChild(quote); continue;
+      }
+      const firstItem = mdListItem(lines[i]);
+      if (firstItem) {
+        const list = mdElement(firstItem.ordered ? "ol" : "ul", undefined, budget);
+        if (firstItem.ordered) list.start = firstItem.number;
+        while (i < lines.length) {
+          const item = mdListItem(lines[i]);
+          if (!item || item.ordered !== firstItem.ordered || item.indent !== firstItem.indent || budget.nodes < 8) break;
+          const li = mdElement("li", undefined, budget); mdInline(li, item.body, budget); i++;
+          const nested = [];
+          while (i < lines.length && lines[i].trim() && lines[i].startsWith(" ".repeat(firstItem.indent + 2))) nested.push(lines[i++].slice(firstItem.indent + 2));
+          if (nested.length) mdBlocks(nested, li, budget, depth + 1);
+          list.appendChild(li);
+        }
+        target.appendChild(list); continue;
+      }
+      const paragraph = [lines[i++]];
+      while (i < lines.length && lines[i].trim() && !mdFence(lines[i]) && !mdHeading(lines[i]) && !mdListItem(lines[i]) && !/^ {0,3}>/.test(lines[i])) {
+        const nextDivider = i + 1 < lines.length && mdTableCells(lines[i + 1]);
+        if (mdTableCells(lines[i]) && nextDivider && nextDivider.every((s) => /^:?-{3,}:?$/.test(s))) break;
+        paragraph.push(lines[i++]);
+      }
+      const p = mdElement("p", undefined, budget); mdInline(p, paragraph.join("\n"), budget); target.appendChild(p);
+    }
+  }
+  function sectionLabel(section) {
+    return section.literal ? "其余原文（分块上限）" : section.title === null ? "文档开头" : section.title || "空标题（原文）";
+  }
+  function sectionStatus(section) {
+    if (section.missing) return section.complete ? "未见标准标题" : "未知 · 本次范围未见";
+    if (!section.complete) return "未知 · 本节可能不完整";
+    const body = section.body.replace(/\r\n?/g, "\n").trim();
+    if (!body) return "空白";
+    if ((personaStandard.has(section.title) && body === personaStandard.get(section.title))
+      || (legacyPersonaTemplates.has(section.title) && body === legacyPersonaTemplates.get(section.title))) return "仅占位 · 模板原文";
+    return "已有内容 · 有原文";
+  }
+  function sectionExcerpt(card, section, budget) {
+    const content = section.body.trim(), chars = Array.from(content);
+    if (!chars.length) {
+      card.appendChild(node("p", section.missing ? "本次没有可摘录的原文。" : "本节没有非空白正文可摘录。", "obs-hint"));
+      return;
+    }
+    const excerpt = node("blockquote", undefined, "obs-persona-excerpt");
+    mdInline(excerpt, chars.slice(0, 180).join(""), budget);
+    card.append(node("p", `原文摘录 · 已排版${chars.length > 180 ? " · 前 180 字符，后文已省略" : " · 本节可见正文"}`, "obs-excerpt-label"), excerpt);
+  }
+  function sectionContent(section, budget, open = false) {
+    const content = node("details", undefined, "obs-persona-content"); content.open = open;
+    content.appendChild(node("summary", "查看本节内容"));
+    const body = node("div", undefined, "obs-markdown");
+    if (section.literal || budget.nodes < 8) mdLiteral(body, section.body, budget, true);
+    else mdBlocks(section.lines, body, budget);
+    if (!section.body.trim()) body.appendChild(node("p", "（空白正文）", "obs-hint"));
+    const source = node("details", undefined, "obs-section-source");
+    source.append(node("summary", "核对本节 Markdown 原文"), node("pre", section.raw, "obs-text"));
+    content.append(body, source);
+    return content;
+  }
+  function sectionChange(section, previous, sampledAt, ambiguous, complete) {
+    if (ambiguous) return "同名多节，无法唯一对应前后正文；不推断逐节变化。";
+    if (!complete || !section.complete) return "本次范围不完整，无法确认逐节对应或变化。";
+    if (!previous) return `观察基线 · ${time(sampledAt)}；本次观察尚未见变化，此前未知。`;
+    if (!previous.complete) return `前次范围不完整；${time(sampledAt)} 重新建立比较基线，不推断新增或变化。`;
+    const prior = previous.records.get(section.title);
+    if (prior?.ambiguous || prior && !prior.complete) return `前次无法唯一、完整对应；${time(sampledAt)} 重新建立比较基线。`;
+    if (prior && prior.missing === section.missing && prior.raw === section.raw) return prior.change;
+    const interval = `${time(previous.sampledAt)} → ${time(sampledAt)}（观测区间）`;
+    if (section.missing) return `上次可见、本次未见标准标题 · ${interval}；可能改名，不能推断删除。`;
+    if (!prior || prior.missing) return `本次首次看到此标题 · ${interval}；不代表内容创建时间。`;
+    return `观察到原文变化 · ${interval}；实际更新时间未知。`;
+  }
+  function renderPersonaReading(source, truncated, sampledAt) {
+    if (personaFrame && source === personaFrame.source && truncated === personaFrame.truncated) {
+      personaFrame.sampledAt = sampledAt;
+      return;
+    }
+    const previous = personaFrame, revision = ++personaRenderGeneration;
+    const sectionNodes = el("obs-persona-sections"), toc = el("obs-persona-toc");
+    sectionNodes.replaceChildren(); toc.replaceChildren();
+    const sections = personaSections(source), total = new Map(), counts = new Map(), nextFolds = new Map(), records = new Map();
+    const complete = !truncated && !sections.some((s) => s.literal);
+    sections.forEach((s, index) => {
+      s.complete = !s.literal && !(truncated && index === sections.length - 1);
+      total.set(s.title, (total.get(s.title) || 0) + 1);
+    });
+    for (const title of personaStandard.keys()) {
+      if (!total.has(title)) sections.push({ title, body: "", raw: "", lines: [], missing: true, complete });
+    }
+    const budget = { nodes: 4000, steps: 4000, fallback: false };
+    if (!source.trim()) sectionNodes.appendChild(node("p", truncated ? "可见范围内没有正文；文件完整状态未知。" : "本次未读到非空白人格正文；可能尚未建立或为空白。", "obs-hint"));
+    sections.forEach((section, index) => {
+      const label = sectionLabel(section), keyBase = JSON.stringify([section.title, !!section.literal]);
+      const count = (counts.get(keyBase) || 0) + 1; counts.set(keyBase, count);
+      const key = `${keyBase}:${count}`, card = node("article", undefined, "obs-persona-section");
+      const heading = node("h4"); mdInline(heading, label, budget);
+      card.append(heading, node("p", sectionStatus(section), "obs-persona-state"));
+      if (section.missing) card.appendChild(node("p", section.complete
+        ? "完整快照中未找到这个标准标题；内容可能写在其他标题下。"
+        : "快照被截断或分块达到上限；不能判断文件是否包含这个部分。", "obs-hint"));
+      else if (!section.complete) card.appendChild(node("p", section.literal ? "章节较多，余下原文合并保留；不推断其中各部分状态。" : "本节尾部被快照上限截断；只展示可见原文。", "obs-hint"));
+      else if (section.title !== null && !personaStandard.has(section.title)) card.appendChild(node("p", "自定义小节 · 沿用原文标题", "obs-hint"));
+      section.ambiguous = (total.get(section.title) || 0) > 1;
+      section.change = sectionChange(section, previous, sampledAt, section.ambiguous, complete);
+      card.appendChild(node("p", section.change, "obs-persona-change"));
+      sectionExcerpt(card, section, budget);
+      if (!section.missing) {
+        const content = sectionContent(section, budget, personaFolds.get(key) || false);
+        content.dataset.personaKey = key; nextFolds.set(key, content.open);
+        content.addEventListener("toggle", () => {
+          if (revision === personaRenderGeneration && content.isConnected) personaFolds.set(key, content.open);
+        });
+        card.appendChild(content);
+      }
+      records.set(section.title, section);
+      const jump = node("button", `${index + 1}. ${label}`, "btn ghost"); jump.type = "button";
+      jump.onclick = () => card.scrollIntoView({ block: "nearest" });
+      toc.appendChild(jump); sectionNodes.appendChild(card);
+    });
+    personaFolds = nextFolds;
+    personaFrame = { source, truncated, sampledAt, complete, records };
+    text("obs-persona-reading-note", "卡片按实际二级标题顺序展示；末尾补充未见的标准标题，同名小节分别保留。" +
+      (budget.fallback ? "部分复杂排版在展开后按原文保留；无文字被丢弃。" : "每卡可展开排版内容或逐字核对原文。"));
+  }
   function renderPersona(d) {
-    text("obs-persona-meta", `当前版本计数 ${d.persona.version} · 安装 ${time(d.persona.seeded_at)} · ${d.persona.truncated ? "当前原文仅显示前 64000 字符，尾部变化不可见" : "当前原文完整"}`);
+    text("obs-persona-meta", `最近核对 ${time(d.sampled_at)} · 全局版本计数 ${d.persona.version} · 全局安装时间 ${time(d.persona.seeded_at)} · ${d.persona.truncated ? "仅前 64000 字符，尾部状态未知" : "本次快照原文完整"}；这些不是各节更新时间。`);
     text("obs-persona-text", d.persona.text || "尚无人格正文");
+    renderPersonaReading(d.persona.text || "", !!d.persona.truncated, d.sampled_at);
     text("obs-changelog", (d.changelog.truncated ? "（仅显示记录尾部，历史可能被截断）\n" : "") + (d.changelog.text || "无已有变更记录"));
     if (!personaChange) text("obs-persona-diff-meta", "尚未观察到人格正文变化；第一次快照只建立基线。");
   }
@@ -291,7 +571,7 @@
       } else {
         card.append(node("strong", `#${r.id} ${r.title}`), node("p", r.preview || "（空正文）", "obs-preview"));
         card.appendChild(node("p", type === "memories"
-          ? `${format("layer", r.layer)} · ${format("kind", r.kind)} · 重要 ${r.salience} · 压力 ${r.pressure} · 提及 ${r.mention_count} · 使用 ${r.use_count}`
+          ? `${format("layer", r.layer)} · ${format("kind", r.kind)} · 重要性存储值 ${r.salience} · 压力存储值 ${r.pressure} · 提及 ${r.mention_count} · 使用 ${r.use_count}`
           : `使用 ${r.use_count} · 创建 ${time(r.created_at)}`, "obs-hint"));
       }
       if (type !== "tombstones") {
@@ -306,9 +586,38 @@
     clearDetail();
     detail = { view: type, id, offset: 0, dirty: true };
     el("obs-detail").classList.remove("hidden");
-    text("obs-detail-title", type === "persona" ? "当前人格完整原文" : `详情 ${id}`);
+    text("obs-detail-title", type === "persona" ? "当前人格文件 · 当前片段" : type === "history" ? `历史文件 · ${id} · 当前片段` : `详情 ${id}`);
     text("obs-detail-time", "正在读取…");
+    setDetailMode();
     pending.detail = true; pump();
+  }
+  function setDetailMode() {
+    const file = detail && ["persona", "history"].includes(detail.view);
+    const reading = file && el("obs-detail-mode").value === "reading";
+    el("obs-detail-reading-tools").classList.toggle("hidden", !file);
+    el("obs-detail-reading").classList.toggle("hidden", !reading);
+    el("obs-detail-text").classList.toggle("hidden", !!reading);
+  }
+  function renderDetailReading(d, selected) {
+    const signature = JSON.stringify([selected.view, selected.id, d.offset, d.text]);
+    if (signature === detailReadingSignature) return;
+    detailReadingSignature = signature;
+    const target = el("obs-detail-reading"); target.replaceChildren();
+    target.appendChild(node("p", "只按当前片段可见结构分块，不代表完整章节或全文件状态。片段可能从代码、列表或标题中间开始；不跨段拼接，也不判断缺节、占位或变化。", "obs-hint"));
+    const sections = personaSections(d.text), budget = { nodes: 4000, steps: 4000, fallback: false };
+    if (!sections.length) target.appendChild(node("p", "当前片段为空白。", "obs-hint"));
+    sections.forEach((section) => {
+      const card = node("article", undefined, "obs-persona-section obs-persona-fragment");
+      const heading = node("h4");
+      mdInline(heading, section.title === null && !section.literal ? "片段开头 · 所属小节未知" : sectionLabel(section), budget);
+      card.append(heading, node("p", "本段可见结构 · 完整性未知", "obs-persona-state"));
+      sectionExcerpt(card, section, budget);
+      const content = sectionContent(section, budget);
+      content.querySelector("summary").textContent = "展开本段排版内容";
+      content.querySelector(".obs-section-source > summary").textContent = "核对本块 Markdown 原文";
+      card.appendChild(content); target.appendChild(card);
+    });
+    if (budget.fallback) target.appendChild(node("p", "复杂格式已按原文保留，可展开或切换片段源码核对。", "obs-hint"));
   }
   function renderDetail(d, selected) {
     detail.dirty = false;
@@ -318,6 +627,8 @@
     const chars = Array.from(d.text).length;
     text("obs-detail-time", `采样 ${time(d.sampled_at)} · 字符 ${chars ? d.offset + 1 : d.offset}–${d.offset + chars} / ${d.total_chars}（本段替换上一段）`);
     text("obs-detail-text", d.text || "（空正文）");
+    if (["persona", "history"].includes(selected.view)) renderDetailReading(d, selected);
+    setDetailMode();
     const meta = el("obs-detail-meta"); meta.replaceChildren();
     Object.entries(d.metadata || {}).forEach(([key, value]) => {
       if (!labels[key]) return;
@@ -354,6 +665,7 @@
   }
   el("observer-btn").onclick = () => {
     if (opened) { close(); return; }
+    window.AliceEvaluations?.close();
     opened = true; stopped = false; generation++;
     el("observer").classList.remove("hidden"); el("observer-btn").setAttribute("aria-expanded", "true");
     el("app").classList.add("observing");
@@ -387,7 +699,19 @@
     text("obs-list-time", "正在读取下一页；失败可点首页或刷新到最新重试，旧页尚未更新。");
     clearDetail(); pending.list = true; pump();
   };
-  el("obs-persona-full").onclick = () => openDetail("persona");
+  el("obs-persona-full").onclick = () => {
+    el("obs-view").value = "persona"; changeView();
+    el("obs-persona-reading").scrollIntoView({ block: "nearest" });
+  };
+  el("obs-persona-file").onclick = () => openDetail("persona");
+  el("obs-detail-mode").onchange = setDetailMode;
+  function foldPersonaSections(open) {
+    el("obs-persona-sections").querySelectorAll("details.obs-persona-content").forEach((card) => {
+      card.open = open; personaFolds.set(card.dataset.personaKey, open);
+    });
+  }
+  el("obs-persona-expand").onclick = () => foldPersonaSections(true);
+  el("obs-persona-collapse").onclick = () => foldPersonaSections(false);
   el("obs-detail-close").onclick = clearDetail;
   el("obs-detail-first").onclick = () => { if (detail) { detail.offset = 0; detail.dirty = true; detailRevision++; pending.detail = true; pump(); } };
   el("obs-detail-next").onclick = () => {
@@ -398,6 +722,7 @@
   };
   window.addEventListener("pagehide", close);
   window.AliceObserver = {
+    close,
     refreshAfterTurn() { if (el("obs-auto").checked) requestSnapshot(); },
     shutdown() { stopped = true; close(); },
   };

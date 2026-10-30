@@ -1,0 +1,27 @@
+{
+  "qq": {
+    "transport": "websocket",
+    "app_id": "<APP_ID>",
+    "app_secret_file": "credentials/app-secret.txt",
+    "owner_openid": "",
+    "allow_groups": false,
+    "allow_proactive": false
+  },
+  "alice": {
+    "base_url": "http://127.0.0.1:8800",
+    "channel_id": "qq-owner",
+    "machine_token_file": "credentials/alice-token.txt"
+  },
+  "delivery": {
+    "queue_limit": 3,
+    "queue_ttl_seconds": 120,
+    "passive_window_seconds": 300,
+    "max_reply_segments": 3,
+    "send_spacing_ms": 1000,
+    "waiting_notice": false
+  },
+  "storage": {
+    "state_dir": "../data/qq-bridge",
+    "log_dir": "../data/logs/qq"
+  }
+}

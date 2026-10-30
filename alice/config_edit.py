@@ -1,4 +1,4 @@
-"""只修改 config.toml 的 [llm] 目标值，保留其余源文本。"""
+"""只修改 config.toml 的指定配置，校验其余语义与源文本保持不变。"""
 from __future__ import annotations
 
 import copy
@@ -166,6 +166,63 @@ def replace_llm_values(path: Path, changes: dict[str, str], expected_revision: s
         raise
     except OSError as exc:
         raise ConfigEditError("保存配置失败，请检查文件权限和磁盘空间；原配置仍可使用") from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return hashlib.sha256(output).hexdigest()
+
+
+def replace_channels(path: Path, channels: dict, expected_revision: str) -> str:
+    """Replace only ordinary channel tables; never rewrite model credentials."""
+    from .config import _channels
+
+    _channels(channels)
+    source = _read(path)
+    if hashlib.sha256(source).hexdigest() != expected_revision:
+        raise ConfigConflict("配置文件已被其他操作修改，请刷新设置后重试")
+    text, old = _parse(source)
+    eol = "\r\n" if "\r\n" in text else "\n"
+    kept = []
+    removing = False
+    for line in text.splitlines(keepends=True):
+        body, _ = _split_eol(line)
+        if _HEADER.fullmatch(body):
+            removing = bool(re.fullmatch(r"[ \t]*\[channels(?:\.qq_owner)?\][ \t]*(?:#.*)?", body))
+        if not removing:
+            kept.append(line)
+    patched = "".join(kept).rstrip("\r\n") + eol + eol
+    patched += "[channels]" + eol
+    for key in ("enabled", "protocol_version"):
+        patched += f"{key} = {json.dumps(channels[key])}{eol}"
+    patched += eol + "[channels.qq_owner]" + eol
+    for key, value in channels["qq_owner"].items():
+        patched += f"{key} = {json.dumps(value, ensure_ascii=False)}{eol}"
+    output = patched.encode("utf-8")
+    _, parsed = _parse(output)
+    expected = copy.deepcopy(old)
+    expected["channels"] = channels
+    if parsed != expected:
+        raise ConfigEditError("渠道配置使用了复杂 TOML 写法，无法安全保存，请先手工调整")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix="config.toml.", suffix=".tmp",
+                                         dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            os.chmod(temporary, 0o600)
+            stream.write(output)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if revision(path) != expected_revision:
+            raise ConfigConflict("配置文件已被其他操作修改，请刷新设置后重试")
+        os.replace(temporary, path)
+        temporary = None
+    except ConfigConflict:
+        raise
+    except OSError as exc:
+        raise ConfigEditError("渠道配置未能保存，请检查文件权限和磁盘空间") from exc
     finally:
         if temporary is not None:
             try:

@@ -24,3 +24,17 @@ longterm_capacity = 2000       # 长期层容量上限
 [memory]
 extract_every_turns = 10       # 每累计多少用户轮跑一次记忆提取
 distill_every_memories = 30    # 数据触发：每累计 N 条新记忆提炼一次技能
+
+# QQ 仅本人私聊；初始关闭。配置变更须排空并重启 Alice 后生效。
+# 令牌不同于 QQ AppSecret 和模型 API Key，核心仅保存其 SHA-256。
+[channels]
+enabled = false
+protocol_version = 1
+
+[channels.qq_owner]
+enabled = false
+token_sha256 = ""
+provider = "qq-official"
+app_id = ""
+sender_id = ""
+chat_type = "c2c"
