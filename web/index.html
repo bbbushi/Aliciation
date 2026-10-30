@@ -7,12 +7,16 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<a class="skip-link" href="#input">跳到输入框</a>
+<div id="boot-status" class="boot-status" role="status">正在连接 Alice…</div>
 
 <!-- 初始化：第一次打开（还没有任何对话）时出现 -->
 <div id="welcome" class="screen hidden">
   <div class="welcome-card">
     <div class="welcome-tools"><button id="welcome-qq-btn" class="btn ghost" type="button">连接 QQ</button><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
     <div class="w-head">
+      <span class="brand-mark welcome-mark" aria-hidden="true">a_</span>
+      <p class="eyebrow">ALICE / HELLO, WORLD</p>
       <h1>和 <span id="seed-name">Alice</span> 开始</h1>
       <p id="w-sub">这是你们的第一个会话。</p>
       <p id="w-warn" class="warn-line hidden"></p>
@@ -59,17 +63,35 @@
 </div>
 
 <div id="app" class="hidden">
+  <div class="terminal-bar"><span class="terminal-wordmark">ALICE<span class="terminal-slash"> / </span>WORLD</span><span class="signal-line" aria-hidden="true"></span><span class="terminal-session">永久会话</span><p id="connection-status" class="connection-status" role="status">正在连接</p></div>
+  <button id="nav-backdrop" class="nav-backdrop hidden" type="button" aria-label="关闭导航"></button>
+  <nav id="app-nav" class="app-nav" aria-label="主导航">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a_</span><div><strong>Alice</strong><span>与你，同一个世界</span></div><button id="nav-close" class="card-x mobile-only" type="button" aria-label="关闭导航">×</button></div>
+    <div class="nav-group"><p class="nav-caption">01 / CONNECTION</p>
+      <button id="chat-nav" class="nav-item selected" type="button" aria-current="page"><span class="nav-symbol" aria-hidden="true">◌</span>我们的对话<span class="nav-dot" aria-hidden="true"></span></button>
+      <button id="persona-btn" class="nav-item" type="button" title="查看、导入或替换人格"><span class="nav-symbol" aria-hidden="true">◇</span>人格</button>
+    </div>
+    <div class="nav-note"><span>alice@world:~</span><pre class="ascii-sigil" aria-hidden="true">       . : .
+    . + a l i + .
+  : a l i c e a l :
+ . a l i c e a l i .
+  : l i c e a l i :
+    ' + i c e + '
+       ' : '</pre><p>从一句「你好」，<br>到一个有你的世界。</p><span class="nav-cursor" aria-hidden="true">▌</span></div>
+    <details id="developer-nav" class="developer-nav"><summary>开发者工具</summary><div class="nav-group">
+      <button id="observer-btn" class="nav-item" type="button" aria-expanded="false" aria-controls="observer">记忆观察器</button>
+      <button id="evaluations-btn" class="nav-item" type="button" aria-expanded="false" aria-controls="evaluations">P1 核查</button>
+    </div></details>
+    <div class="nav-bottom">
+      <button id="qq-btn" class="nav-item" type="button" aria-controls="qq-settings"><span class="nav-symbol" aria-hidden="true">↗</span>连接 QQ</button>
+      <button id="settings-btn" class="nav-item" type="button"><span class="nav-symbol" aria-hidden="true">⚙</span>设置</button>
+      <span class="nav-caption">LOCAL / ALICE</span>
+    </div>
+  </nav>
   <div id="chat" class="chat">
     <header>
-      <div class="who" id="name">Alice</div>
-      <div class="head-right">
-        <div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能"></div>
-        <button id="persona-btn" class="btn ghost" title="看人格、换人格">人格</button>
-        <button id="observer-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="observer">观察</button>
-        <button id="evaluations-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="evaluations">P1 核查</button>
-        <button id="qq-btn" class="btn ghost" type="button" aria-controls="qq-settings">连接 QQ</button>
-        <button id="settings-btn" class="btn ghost" type="button">设置</button>
-      </div>
+      <div class="chat-heading"><button id="nav-toggle" class="card-x mobile-only" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="app-nav">☰</button><span class="chat-avatar" aria-hidden="true">a</span><div><div class="who" id="name">Alice</div><span class="chat-subtitle">conversation / 我们的对话</span></div></div>
+      <details class="memory-summary"><summary>记忆概览</summary><div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能">尚未读取</div></details>
     </header>
     <div class="chat-sync-bar">
       <span id="chat-activity" class="hidden" role="status" aria-live="polite"></span>
@@ -77,10 +99,13 @@
       <button id="chat-refresh" class="link" type="button">同步记录</button>
     </div>
     <p id="chat-notice" class="chat-notice hidden" role="status" aria-live="polite"></p>
-    <main id="msgs"></main>
+    <div id="chat-empty" class="chat-empty hidden"><span class="brand-mark" aria-hidden="true">a_</span><span class="eyebrow">HELLO, WORLD_</span><h1>你的消息，就是此刻的世界。</h1><p>一句近况，一个念头，都可以。</p></div>
+    <main id="msgs" aria-label="对话记录" tabindex="0"></main>
+    <div class="latest-wrap"><button id="chat-latest" class="btn ghost hidden" type="button">↓ 回到最新消息</button></div>
     <footer>
-      <input id="input" type="text" placeholder="说点什么…" autocomplete="off" autofocus>
-      <button id="send" class="btn primary">发送</button>
+      <div class="composer-permission" role="status"><button id="composer-evaluation" class="link hidden" type="button" aria-controls="evaluations"></button></div>
+      <div class="composer"><label class="sr-only" for="input">给 Alice 的消息</label><textarea id="input" rows="1" placeholder="把此刻的想法告诉 Alice…" autocomplete="off" aria-describedby="composer-hint"></textarea><button id="send" class="btn primary" type="button">发送 <span aria-hidden="true">↑</span></button></div>
+      <div class="composer-foot"><span>alice / 对话继续</span><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span></div>
     </footer>
   </div>
   <aside id="observer" class="observer hidden" aria-label="开发者观察器">
@@ -205,10 +230,11 @@
       </details>
     </div>
   </aside>
+  <div class="terminal-foot"><span><b aria-hidden="true">&gt;_</b> 每一句话，都留下一点回声。</span><span class="terminal-foot-right">ALICE / 你的窗口，她的世界</span></div>
 </div>
 
 <!-- 人格弹层：查看当前人格 / 替换 -->
-<div id="modal" class="modal hidden">
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
   <div class="modal-card">
     <div class="modal-head">
       <div class="modal-title" id="modal-title">当前人格</div>
@@ -226,9 +252,11 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
     <div class="modal-body settings-body">
-      <section id="qq-settings" class="settings-section qq-settings" tabindex="-1" aria-labelledby="qq-title">
+      <section id="qq-settings" class="settings-section qq-settings hidden" data-settings-section="qq" tabindex="-1" aria-labelledby="qq-title">
         <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
+        <ol class="qq-flow" aria-label="连接步骤"><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
         <p class="settings-hint">用手机 QQ 扫码，把 Alice 接到你的私聊。与这里共用对话和记忆，仅接收已确认的本人文字消息。</p>
         <p id="qq-status" class="qq-status" role="status" aria-live="polite">打开后读取当前连接状态。</p>
         <div id="qq-qr-box" class="qq-qr-box hidden">
@@ -260,7 +288,7 @@
         <p class="settings-hint">关闭这个窗口不会停止 QQ 聊天；电脑和 Alice 服务需要保持运行。</p>
         <details class="qq-details"><summary>连接详情</summary><dl><dt>机器人编号</dt><dd id="qq-app-id">—</dd><dt>连接方式</dt><dd>腾讯官方机器人 · 本人私聊</dd></dl><p>扫码资料只保存在这台电脑，网页不会显示连接密钥。图片、语音、群聊暂不支持。</p></details>
       </section>
-      <section class="settings-section">
+      <section class="settings-section" data-settings-section="general">
         <label class="panel-title" for="thinking">思考深度</label>
         <select id="thinking" disabled>
           <option value="on">开（默认）</option>
@@ -268,7 +296,7 @@
         </select>
         <div class="settings-hint">关：跳过对话的思考过程，回复更快；随时可切回。</div>
       </section>
-      <section id="model-settings" class="settings-section">
+      <section id="model-settings" class="settings-section" data-settings-section="general">
         <div class="panel-title">模型接口</div>
         <div class="settings-hint">预设只填入可编辑的建议值；打开设置不会改变当前配置。保存时会验证候选配置，可能产生少量模型费用。</div>
         <label for="model-provider">供应商</label>
@@ -297,19 +325,19 @@
         </div>
         <div id="model-result" class="settings-result" role="status"></div>
       </section>
-      <section id="shutdown-settings" class="settings-section">
+      <section id="shutdown-settings" class="settings-section hidden" data-settings-section="service">
         <div class="panel-title">关闭服务</div>
         <div class="settings-hint">关闭浏览器标签页不会结束服务。点击关闭后，会等待正在进行的回复与记忆整理完成。</div>
-        <button id="shutdown-btn" class="btn ghost" type="button">关闭 Alice 服务…</button>
+        <button id="shutdown-btn" class="btn danger" type="button">关闭 Alice 服务…</button>
       </section>
     </div>
   </div>
 </div>
 
-<div id="shutdown-screen" class="screen shutdown-screen hidden" role="status">
+<div id="shutdown-screen" class="screen shutdown-screen hidden" role="dialog" aria-modal="true" aria-labelledby="shutdown-title" aria-describedby="shutdown-state" tabindex="-1">
   <div class="seed-card shutdown-card">
     <h1 id="shutdown-title">正在关闭 Alice</h1>
-    <p id="shutdown-state">正在等待当前回复完成，并整理本机记忆…</p>
+    <p id="shutdown-state" role="status" aria-live="polite">正在等待当前回复完成，并整理本机记忆…</p>
     <p>对话和记忆保存在这台电脑的 Alice 项目目录中。</p>
     <p>需要重新启动时，在 PowerShell 执行以下命令：</p>
     <code id="restart-command">正在读取本次启动命令…</code>
@@ -317,7 +345,7 @@
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
 <script src="/observer.js"></script>
 <script src="/evaluations.js"></script>
