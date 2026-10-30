@@ -12,6 +12,7 @@ EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型
 
 规则：
 - 只提取值得长期记住的信息：用户的事实、偏好、情绪模式、重要约定、共同经历的关键事件。
+- 也记「她的行为与用户反应」的配对：她做了什么自我暴露/长篇解释/主动声明（如详细讲自己的记忆机制、自曝机器身份），用户回应的**事实形态**（变简短/只回一个字/转移话题/间隔变长/追问下去/兴致升高）。只记形态，不记归因——用户为什么这样反应留给思辨判断。keywords 带「分寸」。
 - 不记录寒暄、闲聊过程、无信息量的对话。
 - 绝不编造对话中没有的信息；没有值得记的就输出空列表。
 - 争执/施压中的对话：只记录发生了什么（用户坚持了什么、她如何反应）。压力下她口头让步的结论不是事实——"记录作废""你说的对"这类话是要求或让步，按事件记录，绝不当作事实本身写入 content。
@@ -45,6 +46,12 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
     pending = store.turns_since(cursor)
     if not pending:
         return 0
+    ordinary = store.ordinary_turns(pending)
+    if not ordinary:
+        # Fixed shadows contain no usable evidence. Advancing the cursor here
+        # prevents force/close/restart from later extracting attachment prose.
+        store.meta_set("extract_cursor", pending[-1]["id"])
+        return 0
     if not force and store.count_user_turns(pending) < cfg.memory.extract_every_turns:
         return 0
 
@@ -53,7 +60,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
 
     prompt = EXTRACT_PROMPT.format(
         recent_titles="、".join(recent_titles) if recent_titles else "（暂无）",
-        conversation=_fmt_turns(pending),
+        conversation=_fmt_turns(ordinary),
     )
     resp = chat(
         client, cfg,

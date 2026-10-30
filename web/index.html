@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-motion="off" data-texture="scanlines">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Alice</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/discovery.css">
 </head>
 <body>
 <a class="skip-link" href="#input">跳到输入框</a>
@@ -69,6 +70,7 @@
     <div class="brand"><span class="brand-mark" aria-hidden="true">a_</span><div><strong>Alice</strong><span>与你，同一个世界</span></div><button id="nav-close" class="card-x mobile-only" type="button" aria-label="关闭导航">×</button></div>
     <div class="nav-group"><p class="nav-caption">01 / CONNECTION</p>
       <button id="chat-nav" class="nav-item selected" type="button" aria-current="page"><span class="nav-symbol" aria-hidden="true">◌</span>我们的对话<span class="nav-dot" aria-hidden="true"></span></button>
+      <button id="discovery-btn" class="nav-item" type="button" aria-expanded="false" aria-controls="discovery"><span class="nav-symbol" aria-hidden="true">⌕</span>内容发现</button>
       <button id="persona-btn" class="nav-item" type="button" title="查看、导入或替换人格"><span class="nav-symbol" aria-hidden="true">◇</span>人格</button>
     </div>
     <div class="nav-note"><span>alice@world:~</span><pre class="ascii-sigil" aria-hidden="true">       . : .
@@ -89,6 +91,32 @@
     </div>
   </nav>
   <div id="chat" class="chat">
+    <div class="chat-atmosphere" aria-hidden="true">
+      <div class="atmosphere-haze"></div>
+      <div class="atmosphere-plane atmosphere-far"><div class="atmosphere-grid"></div></div>
+      <div class="atmosphere-plane atmosphere-middle">
+        <svg class="atmosphere-thoughts" viewBox="0 0 1000 800" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg>
+        <div class="atmosphere-motes"></div>
+        <div class="atmosphere-grains"></div>
+      </div>
+      <div class="atmosphere-plane atmosphere-near">
+        <div class="atmosphere-noise"></div>
+        <div class="atmosphere-dust">
+        <span style="--x:7%;--y:20%;--drift:23s;--phase:-7s">+</span>
+        <span style="--x:17%;--y:42%;--drift:29s;--phase:-19s">: ·</span>
+        <span style="--x:5%;--y:76%;--drift:26s;--phase:-4s">·</span>
+        <span style="--x:27%;--y:87%;--drift:31s;--phase:-23s">_</span>
+        <span style="--x:38%;--y:26%;--drift:28s;--phase:-12s">·</span>
+        <span style="--x:47%;--y:64%;--drift:32s;--phase:-3s">+</span>
+        <span style="--x:61%;--y:38%;--drift:27s;--phase:-17s">:</span>
+        <span style="--x:72%;--y:79%;--drift:30s;--phase:-9s">·</span>
+        <span style="--x:83%;--y:22%;--drift:24s;--phase:-14s">· +</span>
+        <span style="--x:94%;--y:48%;--drift:28s;--phase:-6s">:</span>
+        <span style="--x:87%;--y:67%;--drift:22s;--phase:-16s">_</span>
+        <span style="--x:96%;--y:85%;--drift:33s;--phase:-21s">·</span>
+        </div>
+      </div>
+    </div>
     <header>
       <div class="chat-heading"><button id="nav-toggle" class="card-x mobile-only" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="app-nav">☰</button><span class="chat-avatar" aria-hidden="true">a</span><div><div class="who" id="name">Alice</div><span class="chat-subtitle">conversation / 我们的对话</span></div></div>
       <details class="memory-summary"><summary>记忆概览</summary><div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能">尚未读取</div></details>
@@ -230,6 +258,7 @@
       </details>
     </div>
   </aside>
+  <section id="discovery" class="discovery-panel hidden" aria-labelledby="discovery-title"></section>
   <div class="terminal-foot"><span><b aria-hidden="true">&gt;_</b> 每一句话，都留下一点回声。</span><span class="terminal-foot-right">ALICE / 你的窗口，她的世界</span></div>
 </div>
 
@@ -252,8 +281,25 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
     <div class="modal-body settings-body">
+      <section class="settings-section hidden" data-settings-section="appearance">
+        <label class="panel-title" for="ui-texture">屏幕纹理</label>
+        <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">
+          <option value="scanlines">标准扫描线</option>
+          <option value="soft">柔和扫描线</option>
+          <option value="off">关闭（清晰显示）</option>
+        </select>
+        <div id="ui-texture-hint" class="settings-hint">细密的水平横纹，让文字与背景带上旧式屏幕的质感。纹理保持静止，独立于界面动效；选择仅保存在此浏览器。</div>
+        <div id="ui-texture-state" class="settings-result" role="status"></div>
+        <label class="panel-title" for="ui-motion">界面动效</label>
+        <select id="ui-motion" aria-describedby="ui-motion-hint ui-motion-state">
+          <option value="system">自动（跟随系统）</option>
+          <option value="off">关闭</option>
+        </select>
+        <div id="ui-motion-hint" class="settings-hint">细噪点随机浮动、淡入淡出，分层背景随鼠标轻微位移与倾斜；细光在节点间传递，收到回复时稍微活跃。选择立即生效，仅保存在此浏览器；系统的“减少动态效果”设置优先。</div>
+        <div id="ui-motion-state" class="settings-result" role="status"></div>
+      </section>
       <section id="qq-settings" class="settings-section qq-settings hidden" data-settings-section="qq" tabindex="-1" aria-labelledby="qq-title">
         <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
         <ol class="qq-flow" aria-label="连接步骤"><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
@@ -351,5 +397,6 @@
 <script src="/evaluations.js"></script>
 <script src="/qq.js"></script>
 <script src="/app.js"></script>
+<script src="/discovery.js"></script>
 </body>
 </html>

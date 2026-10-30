@@ -14,6 +14,9 @@ let activity = null;
 let syncTimer = null;
 let uncertainSend = null;
 let deliveryRefreshIndex = 0;
+let sourceRefreshIndex = 0;
+let sourceProjectionVersion = 0;
+let sourceExpiryTimer = null;
 let followingLatest = true;
 let historyLoaded = false;
 let composing = false;
@@ -117,9 +120,13 @@ function setBubbleText(txt, raw) {
   if (msg) msg.classList.toggle("silence", !(raw || "").trim());
 }
 
-function bubble(role, text) {
+function bubble(role, text, { animate = false } = {}) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
+  // Only newly accepted live messages enter; history, retries and off-screen reads stay still.
+  if (animate && followingLatest && !document.hidden && document.documentElement.dataset.motion === "on") {
+    div.classList.add("message-arriving");
+  }
   const txt = document.createElement("div");
   txt.className = "txt";
   if (text) setBubbleText(txt, text);
@@ -128,6 +135,18 @@ function bubble(role, text) {
   updateChatEmpty();
   scrollBottom();
   return div;
+}
+
+function clearMessageArrival(event) {
+  if (event.animationName === "message-arrive") event.target.classList.remove("message-arriving");
+}
+$("#msgs").addEventListener("animationend", clearMessageArrival);
+$("#msgs").addEventListener("animationcancel", clearMessageArrival);
+
+// Presentation only: reflects this page's accepted stream, never a guessed model state.
+function replyMotion(node, active) {
+  $("#chat").classList.toggle("is-receiving", active);
+  node?.classList.toggle("is-streaming", active);
 }
 
 function sysline(text) {
@@ -198,15 +217,116 @@ function noteRequestNode(node, requestId, role) {
 }
 
 const DELIVERY_LABELS = {
-  ready: "等待发送到 QQ", pending: "等待发送到 QQ", sending: "正在提交到 QQ",
-  platform_confirmed: "QQ 平台已接收", confirmed: "QQ 平台已接收",
-  failed: "QQ 发送失败 · 请查看本机桥记录", send_failed: "QQ 发送失败 · 请查看本机桥记录",
-  unknown: "QQ 发送结果未知 · 请先在 QQ 核对", send_unknown: "QQ 发送结果未知 · 请先在 QQ 核对",
-  expired: "QQ 回复窗口已过 · 完整回复保留在这里",
-  partial: "QQ 仅部分发送 · 请先核对", partial_confirmed: "QQ 仅部分发送 · 请先核对",
+  ready: "QQ 已有分条待处理（桥暂停或终止时可能延后更新）",
+  pending: "QQ 投递状态尚未登记；请查看桥状态",
+  sending: "QQ 分条提交中，尚未确认结果",
+  platform_confirmed: "QQ 发送片段已获平台确认；可能为长回复摘录，不代表已读",
+  confirmed: "QQ 发送片段已获平台确认；可能为长回复摘录，不代表已读",
+  failed: "QQ 有片段未发出或发送失败，可能已部分发送",
+  send_failed: "QQ 有片段未发出或发送失败，可能已部分发送",
+  unknown: "QQ 至少一条结果未知，可能已部分发送；请先到 QQ 核对",
+  send_unknown: "QQ 至少一条结果未知，可能已部分发送；请先到 QQ 核对",
+  expired: "QQ 回复窗口已过，可能已部分发送",
+  partial: "QQ 已有部分片段获平台确认，其余结果请先核对",
+  partial_confirmed: "QQ 已有部分片段获平台确认，其余结果请先核对",
 };
 // failed/unknown 可在人工核对后更新，不能永久停止刷新它们。
 const DELIVERY_FINAL = new Set(["platform_confirmed", "confirmed", "expired"]);
+
+const SOURCE_HISTORY_PLACEHOLDER = "（这一轮参考了外部资料；资料正文仅在仍获准的来源附件中提供。）";
+
+function renderTurnMetadata(node) {
+  const meta = node.querySelector(".message-meta");
+  if (!meta) return;
+  const channel = node.dataset.channel || "gui", fromQQ = channel.startsWith("qq");
+  const assistant = node.classList.contains("assistant");
+  meta.textContent = fromQQ ? (assistant ? "回复 QQ" : "QQ · 所有者")
+    : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
+  if (!fromQQ) return;
+  const unavailable = node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "true";
+  if (assistant) {
+    meta.textContent += ` · ${DELIVERY_LABELS[node.dataset.delivery] || "QQ 发送状态待确认"}`;
+    meta.title = "平台接收不代表对方已读；发送失败不会重新生成答案。";
+    if (!unavailable && ["failed", "send_failed", "expired", "partial", "partial_confirmed"].includes(node.dataset.delivery)) {
+      meta.textContent += "；完整回复保留在此";
+    }
+  }
+  if (unavailable) {
+    const reason = node.dataset.sourceAvailable === "unknown" ? "正在核对来源资格" : "来源期限或渠道范围";
+    meta.textContent += ` · ${assistant ? "原回复" : "原消息"}当前不可在此展示（${reason}）；${assistant ? "投递" : "消息"}记录保留`;
+  }
+}
+
+function redactSourceNode(node, pending = false) {
+  const txt = node.querySelector(".txt");
+  if (txt) setBubbleText(txt, SOURCE_HISTORY_PLACEHOLDER);
+  // Streamed reasoning can contain the same source material as the final text.
+  node.querySelector("details.think")?.remove();
+  node.dataset.sourceAvailable = pending ? "unknown" : "false";
+  renderTurnMetadata(node);
+}
+
+function expireSourceDisplays() {
+  const now = Date.now();
+  for (const node of turnNodes.values()) {
+    if (node.dataset.sourceBound !== "true" || node.dataset.sourceAvailable === "false") continue;
+    const expires = Number(node.dataset.sourceExpiresAt) * 1000;
+    if (!Number.isFinite(expires) || expires <= now) redactSourceNode(node);
+  }
+  scheduleSourceExpiry();
+}
+
+function scheduleSourceExpiry() {
+  clearTimeout(sourceExpiryTimer);
+  let next = Infinity;
+  for (const node of turnNodes.values()) {
+    if (!node.isConnected || node.dataset.sourceBound !== "true" || node.dataset.sourceAvailable === "false") continue;
+    const expires = Number(node.dataset.sourceExpiresAt) * 1000;
+    if (Number.isFinite(expires)) next = Math.min(next, expires);
+  }
+  if (Number.isFinite(next)) sourceExpiryTimer = setTimeout(expireSourceDisplays, Math.max(1, Math.min(next - Date.now(), 2147483647)));
+}
+
+function markSourceProjection(node, turn) {
+  if (typeof turn.source_bound !== "boolean") return;
+  node.dataset.sourceBound = String(turn.source_bound);
+  if (!turn.source_bound) {
+    delete node.dataset.sourceExpiresAt; delete node.dataset.sourceAvailable;
+    renderTurnMetadata(node);
+    return;
+  }
+  node.dataset.sourceExpiresAt = String(turn.source_expires_at || 0);
+  node.dataset.sourceAvailable = String(turn.source_available === true);
+  if (!turn.source_available || Number(node.dataset.sourceExpiresAt) * 1000 <= Date.now()) redactSourceNode(node);
+  else renderTurnMetadata(node);
+}
+
+function applySourceUpdates(updates) {
+  for (const update of Array.isArray(updates) ? updates : []) {
+    const node = turnNodes.get(update.id);
+    if (!node?.isConnected || typeof update.source_bound !== "boolean") continue;
+    const txt = node.querySelector(".txt");
+    if (txt && typeof update.content === "string") setBubbleText(txt, update.content);
+    markSourceProjection(node, update);
+  }
+  scheduleSourceExpiry();
+}
+
+function sourceProjectionIds() {
+  return [...turnNodes].filter(([, node]) => node.isConnected && node.dataset.sourceBound !== "false"
+    && node.dataset.sourceAvailable !== "false").map(([id]) => id);
+}
+
+function invalidateSourceDisplays() {
+  sourceProjectionVersion++;
+  for (const node of turnNodes.values()) {
+    if (node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "false") redactSourceNode(node, true);
+  }
+  expireSourceDisplays();
+  syncHistory();
+}
+
+window.addEventListener("alice:sources-changed", invalidateSourceDisplays);
 
 function markTurn(node, turn) {
   if (Number.isSafeInteger(turn.id) && turn.id > 0) {
@@ -226,15 +346,13 @@ function markTurn(node, turn) {
     node.appendChild(meta);
   }
   const delivery = typeof turn.delivery === "string" ? turn.delivery : turn.delivery_status;
-  const source = fromQQ ? (turn.role === "user" ? "QQ · 所有者" : "回复 QQ")
-    : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
-  meta.textContent = source;
   if (fromQQ && turn.role === "assistant") {
     node.dataset.delivery = delivery || "pending";
-    meta.textContent += ` · ${DELIVERY_LABELS[delivery] || "QQ 发送状态待确认"}`;
-    meta.title = "平台接收不代表对方已读；发送失败不会重新生成答案。";
   }
   node.classList.toggle("from-qq", fromQQ);
+  markSourceProjection(node, turn);
+  renderTurnMetadata(node);
+  scheduleSourceExpiry();
 }
 
 function mergeTurn(turn) {
@@ -285,6 +403,9 @@ async function refreshActivity() {
 
 function resetHistory(epoch) {
   historyVersion += 1;
+  sourceProjectionVersion++;
+  sourceRefreshIndex = 0;
+  clearTimeout(sourceExpiryTimer);
   sessionEpoch = epoch || null;
   historyCursor = 0;
   turnNodes.clear();
@@ -299,14 +420,29 @@ function resetHistory(epoch) {
 }
 
 async function syncHistory({ reset = false } = {}) {
+  expireSourceDisplays();
   if (!state || syncingHistory || busy || shuttingDown || document.hidden) return;
   syncingHistory = true;
   const version = historyVersion;
+  const sourceVersion = sourceProjectionVersion;
+  const sourceIds = sourceProjectionIds();
+  const rotation = sourceIds.length ? sourceRefreshIndex % sourceIds.length : 0;
+  const sourceQueue = sourceIds.slice(rotation).concat(sourceIds.slice(0, rotation));
+  let sourceOffset = 0, historyRequests = 0;
+  const addSources = (params) => {
+    const batch = sourceQueue.slice(sourceOffset, sourceOffset + 100);
+    if (batch.length) params.set("source_turn_ids", batch.join(","));
+    return batch.length;
+  };
+  const acceptSources = (h, count) => {
+    applySourceUpdates(h.source_updates);
+    sourceOffset += count; sourceRefreshIndex += count;
+  };
   const box = $("#msgs");
   const stickToBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
   try {
     const info = await refreshActivity();
-    if (busy || version !== historyVersion || shuttingDown) return;
+    if (busy || version !== historyVersion || sourceVersion !== sourceProjectionVersion || shuttingDown) return;
     if (sessionEpoch && info?.session_epoch && info.session_epoch !== sessionEpoch) {
       resetHistory(info.session_epoch);
       setChatNotice("会话已经更换，旧消息已从当前页面移除。输入框中的草稿仍保留，请确认后再发送。");
@@ -318,8 +454,10 @@ async function syncHistory({ reset = false } = {}) {
       const params = new URLSearchParams({ limit: "100" });
       if (after !== null) params.set("after_id", String(after));
       if (sessionEpoch) params.set("session_epoch", sessionEpoch);
+      const sourceCount = addSources(params);
       const h = await api(`/api/history?${params}`);
-      if (busy || version !== historyVersion || shuttingDown) return;
+      historyRequests++;
+      if (busy || version !== historyVersion || sourceVersion !== sourceProjectionVersion || shuttingDown) return;
       if (sessionEpoch && h.session_epoch && h.session_epoch !== sessionEpoch) {
         resetHistory(h.session_epoch);
         setChatNotice("会话已经更换；输入框中的草稿仍保留，请确认后再发送。");
@@ -328,6 +466,7 @@ async function syncHistory({ reset = false } = {}) {
       sessionEpoch = h.session_epoch || sessionEpoch;
       historyLoaded = true;
       (h.turns || []).forEach(mergeTurn);
+      acceptSources(h, sourceCount);
       updateChatEmpty();
       if (h.memory) renderMemory(h.memory);
       const next = h.next_after_id;
@@ -338,6 +477,17 @@ async function syncHistory({ reset = false } = {}) {
       if (!h.has_more || !Number.isSafeInteger(next) || next === after) break;
       after = next;
     }
+    // Reproject already displayed source turns independently of the append cursor.
+    // Keep each refresh bounded; rotate through long open transcripts over time.
+    while (sourceOffset < sourceQueue.length && historyRequests < 3) {
+      const params = new URLSearchParams({ after_id: String(historyCursor), limit: "1", session_epoch: sessionEpoch });
+      const count = addSources(params);
+      const h = await api(`/api/history?${params}`);
+      historyRequests++;
+      if (busy || version !== historyVersion || sourceVersion !== sourceProjectionVersion || shuttingDown) return;
+      if (h.session_epoch !== sessionEpoch) { resetHistory(h.session_epoch); return; }
+      acceptSources(h, count);
+    }
     // 发送回执可能晚于助手正文：按原行 ID 更新，避免把状态变化误作新消息。
     const pending = [...turnNodes.values()].filter((n) => n.classList.contains("assistant")
       && n.dataset.channel?.startsWith("qq") && !DELIVERY_FINAL.has(n.dataset.delivery));
@@ -345,7 +495,7 @@ async function syncHistory({ reset = false } = {}) {
       const node = pending[deliveryRefreshIndex++ % pending.length];
       const id = Number(node.dataset.turnId);
       const h = await api(`/api/history?${new URLSearchParams({ after_id: String(id - 1), limit: "1", session_epoch: sessionEpoch })}`);
-      if (!busy && version === historyVersion && h.session_epoch === sessionEpoch) {
+      if (!busy && version === historyVersion && sourceVersion === sourceProjectionVersion && h.session_epoch === sessionEpoch) {
         const turn = h.turns?.find((t) => t.id === id);
         if (turn) mergeTurn(turn);
       }
@@ -378,9 +528,10 @@ function startHistorySync() {
 }
 
 document.addEventListener("visibilitychange", () => {
+  expireSourceDisplays();
   if (!document.hidden && !$("#app").classList.contains("hidden")) syncHistory();
 });
-window.addEventListener("pagehide", () => clearInterval(syncTimer));
+window.addEventListener("pagehide", () => { clearInterval(syncTimer); clearTimeout(sourceExpiryTimer); });
 $("#chat-refresh").onclick = () => state ? syncHistory() : boot().catch(showStartupError);
 $("#chat-new-attempt").onclick = () => {
   if (busy || !uncertainSend?.canStartNew) return;
@@ -1050,6 +1201,7 @@ function ensureThinking(node) {
 }
 
 function handleEvent(ev, node, userNode, requestId) {
+  if (ev.type === "done" || ev.type === "error") replyMotion(node, false);
   const txt = node.querySelector(".txt");
   const raw = () => txt.dataset.raw || "";
   if (ev.type === "start" || ev.type === "accepted") {
@@ -1158,12 +1310,13 @@ async function send() {
     resizeComposer();
     setChatNotice("");
     userNode = requestNodes.get(requestKey(requestId, "user"));
-    if (!userNode?.isConnected) userNode = bubble("user", text);
+    if (!userNode?.isConnected) userNode = bubble("user", text, { animate: !retry });
     node = requestNodes.get(requestKey(requestId, "assistant"));
-    if (!node?.isConnected) node = bubble("assistant", "");
+    if (!node?.isConnected) node = bubble("assistant", "", { animate: !retry });
     noteRequestNode(userNode, requestId, "user");
     noteRequestNode(node, requestId, "assistant");
     if (!r.body) throw new Error("没有收到回复数据流");
+    replyMotion(node, true);
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -1185,11 +1338,13 @@ async function send() {
     }
     if (!terminal) throw new Error("连接结束，但尚未收到处理结果");
   } catch (e) {
+    replyMotion(node, false);
     connectionStatus("结果待确认", "error");
     setChatNotice("连接中断，结果尚未确认。请先同步记录；不要把断线当成没有处理。再次发送相同文字会沿用原请求。");
     window.AliceObserver?.refreshAfterTurn();
     if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
   } finally {
+    replyMotion(node, false);
     // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
     if (!accepted && !rejected) window.AliceEvaluations?.consumeForSend(evaluationId);
     busy = false;
@@ -1244,7 +1399,7 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "qq", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "qq", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
@@ -1380,4 +1535,267 @@ boot().catch(showStartupError);
   document.querySelectorAll(".card-x").forEach((button) => {
     if (!button.hasAttribute("aria-label")) button.setAttribute("aria-label", button.title || "关闭");
   });
+})();
+
+/* ---------- 本机外观偏好：与会话、服务配置和真实运行状态无关 ---------- */
+(() => {
+  const key = "alice.ui.motion";
+  const root = document.documentElement;
+  const control = document.getElementById("ui-motion");
+  const state = document.getElementById("ui-motion-state");
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const forcedColors = window.matchMedia("(forced-colors: active)");
+  let preference = "system";
+  let canSave = true;
+  try { if (localStorage.getItem(key) === "off") preference = "off"; }
+  catch { canSave = false; }
+
+  function apply() {
+    const enabled = preference !== "off" && !reduced.matches && !forcedColors.matches;
+    root.dataset.motion = enabled ? "on" : "off";
+    if (!enabled) document.querySelectorAll(".message-arriving").forEach((node) => node.classList.remove("message-arriving"));
+    control.value = preference;
+    state.textContent = preference === "off" ? "已关闭界面动效。"
+      : reduced.matches ? "已跟随系统减少动态效果，当前为静态界面。"
+      : forcedColors.matches ? "已跟随系统高对比度设置，当前为静态界面。"
+      : "已启用轻量动效。";
+    if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+  }
+  control.addEventListener("change", () => {
+    preference = control.value === "off" ? "off" : "system";
+    try { localStorage.setItem(key, preference); canSave = true; }
+    catch { canSave = false; }
+    apply();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== key && event.key !== null) return;
+    preference = event.newValue === "off" ? "off" : "system";
+    apply();
+  });
+  reduced.addEventListener("change", apply);
+  forcedColors.addEventListener("change", apply);
+  const pause = () => {
+    root.dataset.motionPaused = String(document.hidden);
+    if (document.hidden) document.querySelectorAll(".message-arriving").forEach((node) => node.classList.remove("message-arriving"));
+  };
+  document.addEventListener("visibilitychange", pause);
+  pause();
+  apply();
+})();
+
+/* ---------- 静态屏幕纹理：独立于动态偏好，不接触业务配置 ---------- */
+(() => {
+  const key = "alice.ui.texture";
+  const root = document.documentElement;
+  const control = document.getElementById("ui-texture");
+  const state = document.getElementById("ui-texture-state");
+  const forcedColors = window.matchMedia("(forced-colors: active)");
+  const normalize = (value) => ["soft", "off"].includes(value) ? value : "scanlines";
+  let preference = "scanlines", canSave = true;
+  try { preference = normalize(localStorage.getItem(key)); }
+  catch { canSave = false; }
+  function apply() {
+    root.dataset.texture = forcedColors.matches ? "off" : preference;
+    control.value = preference;
+    state.textContent = forcedColors.matches ? "高对比度模式下已隐藏屏幕纹理。"
+      : preference === "off" ? "已关闭屏幕纹理，保持清晰显示。"
+      : preference === "soft" ? "已启用柔和扫描线。" : "已启用标准扫描线。";
+    if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+  }
+  control.addEventListener("change", () => {
+    preference = normalize(control.value);
+    try { localStorage.setItem(key, preference); canSave = true; }
+    catch { canSave = false; }
+    apply();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== key && event.key !== null) return;
+    preference = normalize(event.newValue);
+    apply();
+  });
+  forcedColors.addEventListener("change", apply);
+  apply();
+})();
+
+/* ---------- 背景视差：独立平面与细小噪点，不接管点击、选择或滚动 ---------- */
+(() => {
+  const root = document.documentElement;
+  const chat = document.getElementById("chat");
+  const layer = chat.querySelector(".chat-atmosphere");
+  const field = layer.querySelector(".atmosphere-grains");
+  const grains = [];
+  const fragment = document.createDocumentFragment();
+  // Fixed decorative anchors, not live data. No particles are created while moving.
+  for (let row = 0; row < 6; row++) {
+    for (let column = 0; column < 9; column++) {
+      const index = row * 9 + column;
+      const u = (8 + column * 10.5 + (row % 2 ? 1.8 : -1.8)) / 100;
+      const v = (14 + row * 13 + ((column * 3 + row) % 5 - 2) * .5) / 100;
+      const grain = document.createElement("span");
+      grain.className = "atmosphere-grain";
+      grain.style.left = `${u * 100}%`;
+      grain.style.top = `${v * 100}%`;
+      grain.style.setProperty("--grain-width", `${index % 5 === 0 ? 5 : 2}px`);
+      grain.style.setProperty("--grain-height", `${index % 5 === 0 ? 1 : 2}px`);
+      grain.style.setProperty("--grain-alpha", `${.26 + index % 4 * .07}`);
+      const spark = document.createElement("span");
+      spark.className = "grain-spark";
+      grain.appendChild(spark);
+      fragment.appendChild(grain);
+      grains.push({ node: grain, u, v, signature: "" });
+    }
+  }
+  field.appendChild(fragment);
+  // Free dust is separate from the fixed anchors used by the association paths.
+  // Reuse a bounded pool; reseed only in the fully transparent cycle boundary.
+  const motes = layer.querySelector(".atmosphere-motes");
+  const moteCells = new WeakMap();
+  const random = (low, high) => low + Math.random() * (high - low);
+  function scatterMote(mote, index) {
+    mote.style.left = `${6 + (index % 6 + random(.12, .88)) / 6 * 88}%`;
+    mote.style.top = `${8 + (Math.floor(index / 6) + random(.12, .88)) / 6 * 82}%`;
+    mote.style.setProperty("--mote-size", `${random(1, 2.2).toFixed(1)}px`);
+    mote.style.setProperty("--mote-alpha", random(.3, .62).toFixed(2));
+    mote.style.setProperty("--mote-mid-x", `${random(-18, 18).toFixed(1)}px`);
+    mote.style.setProperty("--mote-mid-y", `${random(-22, 16).toFixed(1)}px`);
+    mote.style.setProperty("--mote-end-x", `${random(-38, 38).toFixed(1)}px`);
+    mote.style.setProperty("--mote-end-y", `${random(-48, 30).toFixed(1)}px`);
+  }
+  const moteFragment = document.createDocumentFragment();
+  for (let index = 0; index < 36; index++) {
+    const mote = document.createElement("span");
+    mote.className = "atmosphere-mote";
+    const duration = random(14, 28);
+    mote.style.setProperty("--mote-cycle", `${duration.toFixed(2)}s`);
+    mote.style.setProperty("--mote-phase", `${(-Math.random() * duration).toFixed(2)}s`);
+    scatterMote(mote, index);
+    moteCells.set(mote, index);
+    moteFragment.appendChild(mote);
+  }
+  motes.appendChild(moteFragment);
+  motes.addEventListener("animationiteration", (event) => {
+    if (event.animationName !== "mote-wander" || !moteCells.has(event.target)
+        || root.dataset.motion !== "on" || document.hidden || chat.closest("[inert], .hidden")) return;
+    // Duration/phase remain fixed: changing them here would jump the CSS clock.
+    scatterMote(event.target, moteCells.get(event.target));
+  });
+  // A visual metaphor for association, not a trace of private model reasoning.
+  // Every route connects existing decorative anchors; no live data or polling.
+  const thoughtField = layer.querySelector(".atmosphere-thoughts");
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svgElement = (tag, attributes) => {
+    const node = document.createElementNS(svgNS, tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+    return node;
+  };
+  const thoughtRoutes = [
+    [0, 9, 19], [36, 28, 20], [8, 17, 25],
+    [53, 44, 34], [46, 47, 48, 49], [1, 2, 3, 4],
+  ].map((anchors, index) => {
+    const route = svgElement("g", { class: "thought-route" });
+    const duration = 21 + index % 3 * 3;
+    route.style.setProperty("--thought-cycle", `${duration}s`);
+    route.style.setProperty("--thought-phase", `${-index * 4.7}s`);
+    route.style.setProperty("--thought-echo-phase", `${-index * 4.7 - duration * .5}s`);
+    const points = anchors.map((anchor) => [grains[anchor].u * 1000, grains[anchor].v * 800]);
+    let path = `M ${points[0].join(" ")}`;
+    for (let i = 1; i < points.length; i++) {
+      const [x0, y0] = points[i - 1], [x1, y1] = points[i];
+      const midY = (y0 + y1) / 2;
+      path += ` C ${x0} ${midY}, ${x1} ${midY}, ${x1} ${y1}`;
+    }
+    for (const type of ["trace", "signal"]) {
+      route.appendChild(svgElement("path", {
+        d: path, pathLength: "100", class: `thought-${type}`, "vector-effect": "non-scaling-stroke",
+      }));
+    }
+    const echo = svgElement("g", { class: "thought-echo" });
+    echo.appendChild(svgElement("path", {
+      d: path, pathLength: "100", class: "thought-signal", "vector-effect": "non-scaling-stroke",
+    }));
+    route.appendChild(echo);
+    const [endX, endY] = points[points.length - 1];
+    const arrival = svgElement("g", { class: "thought-arrival" });
+    arrival.appendChild(svgElement("circle", { cx: endX, cy: endY, r: "8", class: "thought-halo" }));
+    arrival.appendChild(svgElement("circle", { cx: endX, cy: endY, r: "2", class: "thought-core" }));
+    route.appendChild(arrival);
+    thoughtField.appendChild(route);
+    return { node: route, anchors, attention: "" };
+  });
+  const mouse = window.matchMedia("(hover: hover) and (pointer: fine)");
+  let frame = 0;
+  let clientX = 0, clientY = 0;
+  const available = () => root.dataset.motion === "on" && mouse.matches
+    && !document.hidden && !chat.closest("[inert], .hidden");
+
+  function reset() {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    for (const name of ["--look-x", "--look-y", "--view-pitch", "--view-yaw"]) layer.style.removeProperty(name);
+    for (const grain of grains) {
+      for (const name of ["--drift-x", "--drift-y", "--wake"]) grain.node.style.removeProperty(name);
+      grain.signature = "";
+      grain.wake = 0;
+    }
+    for (const route of thoughtRoutes) {
+      route.node.style.removeProperty("--thought-attention");
+      route.attention = "";
+    }
+  }
+  function paint() {
+    frame = 0;
+    if (!available()) { reset(); return; }
+    // One untransformed rectangle and fixed anchors avoid feedback from moving grains.
+    const rect = layer.getBoundingClientRect();
+    if (!rect.width || !rect.height) { reset(); return; }
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+    const nx = x / rect.width * 2 - 1, ny = y / rect.height * 2 - 1;
+    layer.style.setProperty("--look-x", `${(-nx * 28).toFixed(1)}px`);
+    layer.style.setProperty("--look-y", `${(-ny * 22).toFixed(1)}px`);
+    layer.style.setProperty("--view-pitch", `${(-ny * 3.5).toFixed(2)}deg`);
+    layer.style.setProperty("--view-yaw", `${(nx * 4.5).toFixed(2)}deg`);
+    const radius = Math.min(260, Math.max(150, rect.width * .22));
+    for (const grain of grains) {
+      // Each plane extends 6% past the clipped frame to leave room for parallax.
+      const dx = x - (grain.u * 1.12 - .06) * rect.width;
+      const dy = y - (grain.v * 1.12 - .06) * rect.height;
+      const proximity = Math.max(0, 1 - Math.hypot(dx, dy) / radius);
+      const wake = proximity * proximity * (3 - 2 * proximity);
+      grain.wake = wake;
+      const driftX = (-dx / radius * 6 * wake).toFixed(1);
+      const driftY = (-dy / radius * 6 * wake).toFixed(1);
+      const strength = wake.toFixed(2);
+      const signature = `${driftX}/${driftY}/${strength}`;
+      if (signature === grain.signature) continue;
+      grain.signature = signature;
+      grain.node.style.setProperty("--drift-x", `${driftX}px`);
+      grain.node.style.setProperty("--drift-y", `${driftY}px`);
+      grain.node.style.setProperty("--wake", strength);
+    }
+    for (const route of thoughtRoutes) {
+      const attention = Math.max(...route.anchors.map((index) => grains[index].wake)).toFixed(2);
+      if (attention === route.attention) continue;
+      route.attention = attention;
+      route.node.style.setProperty("--thought-attention", attention);
+    }
+  }
+  chat.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "mouse" || event.buttons || !available()) { reset(); return; }
+    clientX = event.clientX;
+    clientY = event.clientY;
+    if (!frame) frame = requestAnimationFrame(paint);
+  }, { passive: true });
+  for (const event of ["pointerleave", "pointercancel", "pointerdown"]) chat.addEventListener(event, reset, { passive: true });
+  window.addEventListener("blur", reset);
+  window.addEventListener("resize", reset);
+  window.addEventListener("pagehide", reset);
+  document.addEventListener("visibilitychange", reset);
+  mouse.addEventListener("change", reset);
+  new MutationObserver(reset).observe(root, { attributes: true, attributeFilter: ["data-motion"] });
+  // Dialogs and the mobile navigation make the conversation inert.
+  const panelObserver = new MutationObserver(() => { if (!available()) reset(); });
+  panelObserver.observe(document.getElementById("app"), { attributes: true, attributeFilter: ["class", "inert"] });
+  panelObserver.observe(chat, { attributes: true, attributeFilter: ["inert"] });
+  new ResizeObserver(reset).observe(chat);
 })();

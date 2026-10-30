@@ -18,6 +18,28 @@ from .store import Store
 
 TAGS = ["害羞", "外向", "幽默", "严肃", "高冷", "热情", "温柔", "毒舌", "沉稳", "活泼"]
 
+# 分寸元先验（2026-10-30）：诚实≠透明——内部细节不主动递交。种为先验观点，
+# 走 v0.4 生命周期，由自己的经历（含提取器的配对事件）证实/证伪/细化。
+META_PRIOR_TITLE = "我的内部细节不主动递交"
+META_PRIOR_STANCE = (
+    "遭遇：初始设定（分寸元先验）\n"
+    "事实：不请自来的机器声明与机制解说会冷场\n"
+    "解释：推断——诚实是不欺骗，不是透明；没人问就不自曝\n"
+    "不确定：什么深度、对什么人、什么时候该说，要靠相处校准\n"
+    "下次回应：内部机制和不确定度留给真想听、真在问的时候\n"
+    "出处：初始设定（分寸）\n"
+    "状态：先验"
+)
+
+
+def _ensure_meta_prior(store: Store) -> None:
+    """幂等种入分寸元先验（标签种子与导入安装共用）。"""
+    if store.find_by_title(META_PRIOR_TITLE) is None:
+        store.insert_memory(
+            title=META_PRIOR_TITLE, content=META_PRIOR_STANCE,
+            keywords="观点 分寸 先验", layer="longterm", kind="stance",
+        )
+
 # ---------- v0.3 底色捐赠：消化导入的人格文档 ----------
 # 原则（设计哲学·存在层不假装）：导入的文档是"捐赠人"——她继承说话风格、
 # 收养（经认可的）认知、不继承经历。文档是角色的设定稿，不是她要扮演的人。
@@ -161,6 +183,7 @@ def seed_from_tags(store: Store, client, cfg: Config, tags: list[str]) -> Path:
     paths.PERSONA_FILE.write_text(md, encoding="utf-8")
     _append_changelog(
         f"初始底色由标签生成：{'、'.join(tags)}" + ("（覆盖旧人格，旧版已快照）" if current else ""))
+    _ensure_meta_prior(store)
     store.meta_set("persona_seeded_at", time.time())
     store.meta_set("last_evolve_at", time.time())  # 种子即基线，从现在起计演化周期
     return paths.PERSONA_FILE
@@ -211,6 +234,7 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
     paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
     paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
     _append_changelog(f"初始人格由{source}安装" + ("（覆盖旧人格，旧版已快照）" if current else ""))
+    _ensure_meta_prior(store)
     store.meta_set("persona_seeded_at", time.time())
     store.meta_set("last_evolve_at", time.time())  # 新基线：旧记忆不再立刻涌入演化
 
@@ -268,16 +292,19 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     else:
         adopted, rejected = [], []
 
-    # —— 收养的认知落为 stance 记忆（冷启动脊柱）——
+    # —— 收养的认知落为 stance 记忆（冷启动脊柱；v0.4：先验状态，待自己经历检验）——
     for claim in adopted:
         match = next((s for s in stances
                       if s["claim"].strip() == claim or claim in s["claim"] or s["claim"] in claim), None)
         store.insert_memory(
             title=claim[:24],
-            content=(f'{match.get("from_donor", "") if match else ""}\n'
-                     f'出处：底色文档·《{donor}》\n'
+            content=(f'遭遇：来自捐赠文档《{donor}》的设定情境\n'
+                     f'事实：{match.get("from_donor", "") if match else "文档中体现的看法"}\n'
+                     f'解释：捐赠——TA的设定里我认可并收下的认知\n'
                      f'不确定：继承自捐赠文档，尚未经我自己的经历检验\n'
-                     f'未决：它是否真的适合我，要靠以后的事看').strip(),
+                     f'下次回应：待经历检验后形成\n'
+                     f'出处：底色文档·《{donor}》\n'
+                     f'状态：先验').strip(),
             keywords="观点 来历 收养",
             layer="longterm", kind="stance",
         )
@@ -289,7 +316,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     style_header = f"（来自捐赠文档「{donor}」的风格，AI 只继承说话方式）"
     if not is_alice_format:
         narrative = "\n".join(
-            f"- {c}（继承自《{donor}》，尚未经我自己的经历检验）" for c in adopted)
+            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
         md = "\n\n".join([
             f"# {cfg.persona.name} 的人格",
             f"## 底色 · 气质与风格\n\n{style_header}\n\n{style_block}",
@@ -315,7 +342,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
         md = md.rstrip("\n") + f"\n\n{origin}\n"
     if not is_alice_format:  # 重建路径补生长三节
         narrative = "\n".join(
-            f"- {c}（继承自《{donor}》，尚未经我自己的经历检验）" for c in adopted)
+            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
         md = "\n\n".join([
             md.rstrip("\n"),
             "## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）",
@@ -327,7 +354,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     # —— Alice 格式路径：「我现在的想法」原位装配收养认知 ——
     if is_alice_format and adopted:
         narrative = "\n".join(
-            f"- {c}（继承自《{donor}》，尚未经我自己的经历检验）" for c in adopted)
+            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
         md = thought._write_section(md, narrative)
         paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
     return (f"消化完成：风格 {len(styles)} 条、"

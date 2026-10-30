@@ -237,6 +237,31 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         def _channel_error(self, exc: ChannelError) -> None:
             self._json({"error": str(exc), "code": exc.code}, exc.status)
 
+        def _discovery_route(self) -> None:
+            posting = self.command == "POST"
+            if (not self._trusted_intent("discovery", json_body=posting)
+                    or len(self.headers.get_all("X-Alice-Intent", [])) != 1
+                    or len(self.headers.get_all("Origin", [])) > 1):
+                self._json({"error": "请从本机网页管理内容发现", "code": "gui_only"}, 403)
+                return
+            if urlparse(self.path).query:
+                self._json({"error": "内容发现不接受查询参数", "code": "invalid_request"}, 400)
+                return
+            try:
+                if not posting:
+                    self._json(svc.discovery())
+                else:
+                    body = self._bounded_body(16384)
+                    if not isinstance(body.get("action"), str):
+                        raise ValueError("缺少操作")
+                    self._json(svc.discovery(body["action"], body))
+            except ChannelError as exc:
+                self._channel_error(exc)
+            except ValueError:
+                self._json({"error": "内容发现参数无效", "code": "invalid_request"}, 400)
+            except Exception:
+                self._json({"error": "内容发现暂不可用，请刷新后查看", "code": "discovery_unavailable"}, 503)
+
         def _connector_route(self) -> None:
             """Local GUI controls a fixed helper; request data never selects code or paths."""
             posting = self.command == "POST"
@@ -320,15 +345,22 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             query = urlparse(self.path).query
             if len(query) > 2048:
                 raise ValueError("历史查询参数过长")
-            parsed = parse_qs(query, keep_blank_values=True, max_num_fields=3)
-            if set(parsed) - {"after_id", "limit", "session_epoch"} or any(len(v) != 1 for v in parsed.values()):
+            parsed = parse_qs(query, keep_blank_values=True, max_num_fields=4)
+            if set(parsed) - {"after_id", "limit", "session_epoch", "source_turn_ids"} or any(len(v) != 1 for v in parsed.values()):
                 raise ValueError("历史查询参数无效")
             after = int(parsed["after_id"][0]) if "after_id" in parsed else None
             limit = int(parsed.get("limit", ["60"])[0])
             if (after is not None and after < 0) or not 1 <= limit <= 100:
                 raise ValueError("历史查询范围无效")
+            source_turn_ids = None
+            if "source_turn_ids" in parsed:
+                values = parsed["source_turn_ids"][0].split(",")
+                if not 1 <= len(values) <= 100 or any(not re.fullmatch(r"[1-9][0-9]{0,15}", value) for value in values):
+                    raise ValueError("来源轮次列表无效")
+                source_turn_ids = [int(value) for value in values]
             self._json(svc.history_page(after_id=after, limit=limit,
-                                        session_epoch=parsed.get("session_epoch", [None])[0]))
+                                        session_epoch=parsed.get("session_epoch", [None])[0],
+                                        source_turn_ids=source_turn_ids))
 
         # ---------- 路由 ----------
 
@@ -366,6 +398,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("evaluations.js", "application/javascript; charset=utf-8")
             elif path == "/qq.js":
                 self._file("qq.js", "application/javascript; charset=utf-8")
+            elif path == "/discovery.js":
+                self._file("discovery.js", "application/javascript; charset=utf-8")
+            elif path == "/discovery.css":
+                self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
                 self._file("style.css", "text/css; charset=utf-8")
             elif path == "/api/state":
@@ -376,6 +412,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.chat_activity())
             elif path == "/api/connectors/qq":
                 self._connector_route()
+            elif path == "/api/discovery":
+                self._discovery_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
             elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail"):
@@ -515,6 +553,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
+            if path == "/api/discovery":
+                self._discovery_route()
+                return
             if path == "/api/connectors/qq":
                 self._connector_route()
                 return

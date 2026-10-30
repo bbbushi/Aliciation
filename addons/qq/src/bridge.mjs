@@ -1,37 +1,18 @@
-import { hash } from './storage.mjs';
+import { hash, freezePlan, stopUnsent } from './storage.mjs';
+import { buildReplyPlan } from './reply-plan.mjs';
 
 const DONE = new Set(['platform_confirmed', 'send_unknown', 'failed', 'expired', 'cancelled', 'quarantined', 'interrupted', 'rejected']);
 const GENERATING = new Set(['accepted', 'running', 'user_committed']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const codeOf = data => data.error_code ?? data.code ?? (typeof data.error === 'object' ? data.error?.code : data.error);
-
-export function textSegments(text, maxSegments) {
-  const suffix = '\n（已截断，完整回复请在本机 GUI 查看。）';
-  const input = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
-  const items = [...new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(input)].map(x => x.segment);
-  const parts = []; let part = '', count = 0;
-  for (const item of items) {
-    const len = [...item].length;
-    if (len > 1000 || Buffer.byteLength(item) > 4000) continue;
-    if (count + len > 1000 || Buffer.byteLength(part + item) > 4000) {
-      parts.push(part); part = ''; count = 0;
-      if (parts.length === maxSegments) {
-        const last = [...new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(parts.at(-1))].map(x => x.segment);
-        while (last.length && ([...(last.join('') + suffix)].length > 1000 || Buffer.byteLength(last.join('') + suffix) > 4000)) last.pop();
-        parts[parts.length - 1] = last.join('') + suffix;
-        return parts;
-      }
-    }
-    part += item; count += len;
-  }
-  if (part) parts.push(part);
-  return parts.length ? parts : ['（沉默）'];
-}
+const platformId = value => typeof value === 'string' && value.length > 0 && value.length <= 256
+  && !/[\u0000-\u001f\u007f]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 
 export class Bridge {
   constructor(config, ledger, log, client, bot) {
     this.config = config; this.ledger = ledger; this.log = log; this.client = client; this.bot = bot;
-    this.health = null; this.stopRequested = false; this.faulted = false; this.lastSend = 0;
+    this.health = null; this.stopRequested = false; this.faulted = false;
+    this.startedAt = Date.now(); this.lastClock = this.startedAt;
   }
   save() {
     try { this.ledger.save(); }
@@ -41,17 +22,47 @@ export class Bridge {
     return r.source.app_id === this.config.qq.app_id && r.source.sender_id === this.config.qq.owner_openid &&
       r.source.provider === 'qq-official' && r.source.chat_type === 'c2c';
   }
-  remaining(r) { return r.deadline - Date.now(); }
+  remaining(r) {
+    // A stricter current policy can stop an old plan, never rewrite or extend it.
+    const currentDeadline = Date.parse(r.source.platform_time) + this.config.delivery.passive_window_seconds * 1000;
+    return Math.min(r.deadline, currentDeadline) - Date.now();
+  }
+  spacing(r) {
+    return Math.max(this.config.delivery.send_spacing_ms, r.plan?.policy_snapshot?.send_spacing_ms ?? 1000);
+  }
+  nextSendAt(r) {
+    return Math.max(this.ledger.data.not_before, this.ledger.data.last_dispatch_at + this.spacing(r), this.startedAt + this.spacing(r));
+  }
+  sendWindowBudget(r) {
+    const pending = r.segments.filter(s => ['ready', 'retry_wait', 'sending'].includes(s.status)).length;
+    return 15000 + Math.max(0, pending - 1) * this.spacing(r);
+  }
+  checkClock() {
+    const now = Date.now();
+    if (now + 1000 < Math.max(this.lastClock, this.ledger.data.last_dispatch_at)) {
+      this.stopRequested = true; this.log.write('clock_moved_backwards'); return false;
+    }
+    this.lastClock = now; return true;
+  }
   notice(r, text, status = 'outbox') {
     r.kind = 'notice'; r.status = status; delete r.text;
-    r.segments = textSegments(text, 1).map((text, index) => ({ index, seq: index + 1, text, hash: hash(text), status: 'ready', attempts: 0 }));
+    freezePlan(r, buildReplyPlan(text, this.config.delivery, 'notice'), hash(text));
+  }
+  deliverySummary(r) {
+    if (!r.segments) return '';
+    const count = status => r.segments.filter(s => s.status === status).length;
+    const parts = [`已确认 ${count('platform_confirmed')}/${r.segments.length} 条`];
+    if (count('send_unknown')) parts.push(`${count('send_unknown')} 条结果未知`);
+    if (count('failed')) parts.push(`${count('failed')} 条失败或停止未发`);
+    if (r.plan?.truncated === true) parts.push('长回复仅发送摘录，完整版在本机网页');
+    return ` ${parts.join('，')}。`;
   }
   receive(msg) {
     if (this.stopRequested || this.faulted || msg.rawEventType !== 'C2C_MESSAGE_CREATE' || msg.kind !== 'c2c' ||
         msg.senderId !== this.config.qq.owner_openid || msg.senderIsBot) return;
     const raw = msg.raw;
     if (!raw || raw.author?.user_openid !== msg.senderId || raw.id !== msg.messageId ||
-        typeof raw.id !== 'string' || raw.id.length > 256 || !raw.id) return;
+        !platformId(raw.id)) return;
     const timestamp = Date.parse(raw.timestamp);
     if (!Number.isFinite(timestamp) || timestamp > Date.now() + 30000 || Date.now() - timestamp > 300000) {
       this.log.write('stale_event'); return;
@@ -83,7 +94,7 @@ export class Bridge {
       const labels = { queued: '等待提交', submitting: '正在确认是否已接收', accepted: '正在生成', outbox: '回复已生成，正在发送',
         platform_confirmed: '平台已确认发送（不代表已读）', send_unknown: '发送结果未知，请先查看 QQ 或本机网页', failed: '处理或发送失败，请查看本机网页',
         expired: '发送窗口已过期，请在本机网页查看', interrupted: '处理已中断，请在本机网页确认', quarantined: '会话或授权已变化，旧记录已隔离', cancelled: '已取消等待' };
-      this.notice(r, last ? `最新请求：${labels[last.status] ?? '处理中'}。` : '还没有收到可处理的聊天。');
+      this.notice(r, last ? `最新请求：${labels[last.status] ?? '处理中'}。${this.deliverySummary(last)}` : '还没有收到可处理的聊天。');
     } else if (r.text === '/cancel') {
       const pending = [...this.ledger.data.records].reverse().find(x => x.kind === 'chat' && x.status === 'queued' && this.validBinding(x));
       if (pending) { pending.status = 'cancelled'; delete pending.text; }
@@ -102,6 +113,7 @@ export class Bridge {
     this.log.write('event_recorded', r.request_id);
   }
   async refresh() {
+    if (this.stopRequested) return false;
     const { code, data } = await this.client.status();
     if (code === 401 || code === 403) { this.stopRequested = true; this.log.write('alice_authorization_failed'); return false; }
     if (code !== 200 || data.protocol_version !== 1 || typeof data.session_epoch !== 'string') { this.health = null; return false; }
@@ -111,15 +123,20 @@ export class Bridge {
   }
   expire(r, status = 'expired') {
     r.status = status; delete r.text;
-    for (const seg of r.segments ?? []) {
-      delete seg.text;
-      if (status === 'expired' && ['ready', 'retry_wait'].includes(seg.status)) {
-        seg.status = 'failed'; seg.error_code = 'passive_window_expired';
-      }
-    }
+    stopUnsent(r, status === 'expired' ? 'passive_window_expired' : `delivery_${status}`);
+    for (const seg of r.segments ?? []) delete seg.text;
     this.save(); this.log.write(status, r.request_id);
   }
+  stopSourceDelivery(r, seg = null) {
+    // Only called before the next QQ request starts. Earlier confirmed/unknown
+    // outcomes remain facts; stop and erase only this unsent segment and tail.
+    if (seg?.status === 'sending') seg.status = 'retry_wait';
+    r.status = 'failed'; r.error_code = 'source_unavailable'; delete r.text;
+    stopUnsent(r, 'source_unavailable');
+    this.save(); this.log.write('source_unavailable', r.request_id);
+  }
   async stepRequest(r) {
+    if (this.stopRequested || this.faulted) return;
     if (r.status === 'queued') {
       if (Date.now() > r.queue_until) {
         this.notice(r, '等待已超时，这条消息尚未交给 Alice，请稍后重发。'); this.save(); return;
@@ -148,11 +165,28 @@ export class Bridge {
   }
   consume(r, data) {
     if (data.session_epoch !== r.session_epoch || typeof data.request_id !== 'string') throw new Error('invalid_result_identity');
+    if (r.plan || r.segments) {
+      const originalHash = typeof data.reply_hash === 'string' ? data.reply_hash
+        : typeof data.reply === 'string' ? hash(data.reply) : null;
+      if (data.request_id !== r.request_id || (originalHash !== null && originalHash !== r.reply_hash)) {
+        this.expire(r, 'quarantined');
+      } else if (data.delivery_allowed === false && !DONE.has(r.status)) {
+        this.stopSourceDelivery(r);
+      }
+      return; // Frozen plans survive repeated result queries and configuration changes.
+    }
     r.request_id = data.request_id; // Stable platform source may already belong to a previous installation's request.
+    if (data.delivery_allowed === false && ['generated', 'completed', 'completed_with_warning'].includes(data.status)) {
+      this.stopSourceDelivery(r); return;
+    }
     if (typeof data.reply === 'string' && ['generated', 'completed', 'completed_with_warning'].includes(data.status)) {
       r.reply_hash = hash(data.reply); delete r.text;
-      r.segments = textSegments(data.reply || '（沉默）', this.config.delivery.max_reply_segments)
-        .map((text, index) => ({ index, seq: index + 1, text, hash: hash(text), status: 'ready', attempts: 0 }));
+      try { freezePlan(r, buildReplyPlan(data.reply, this.config.delivery), r.reply_hash); }
+      catch {
+        // Invalid text/plan must not become an endless query-and-replan loop.
+        r.error_code = 'reply_plan_invalid'; this.stopRequested = true;
+        this.expire(r, 'failed'); this.log.write('reply_plan_invalid', r.request_id); return;
+      }
       r.status = 'outbox'; this.save();
     } else if (GENERATING.has(data.status)) { r.status = 'accepted'; delete r.text; this.save(); }
     else if (['failed', 'interrupted', 'invalidated'].includes(data.status)) {
@@ -160,66 +194,113 @@ export class Bridge {
       this.expire(r, data.status === 'failed' ? 'failed' : 'interrupted');
     }
   }
-  async report(r, seg, status = seg.status) {
-    if (r.kind !== 'chat' || !r.reply_hash || seg.reported_status === status) return true;
-    // A local sending checkpoint may precede the core's sending receipt. Replay
-    // these audit transitions, never the QQ send itself. Conflicts can mean a
-    // prior terminal receipt already committed, so still try that same terminal.
+  async report(r, seg, status = seg.status, force = false) {
+    if (r.kind !== 'chat' || !r.reply_hash || (!force && seg.reported_status === status)) return true;
+    // Register missing immutable metadata, then replay only the terminal fact.
+    // A registration conflict can mean that terminal receipt already committed,
+    // so still try the same terminal without repeating any QQ send.
     if (['platform_confirmed', 'failed', 'send_unknown'].includes(status)) {
       if (!seg.registered) await this.report(r, seg, 'ready');
-      if (!['sending', status].includes(seg.reported_status)) await this.report(r, seg, 'sending');
+      // A real terminal receipt may be recorded after source revocation. Never
+      // replay sending authorization to report an already-completed QQ attempt.
     }
-    const { code } = await this.client.delivery({ request_id: r.request_id, session_epoch: r.session_epoch,
+    const { code, data } = await this.client.delivery({ request_id: r.request_id, session_epoch: r.session_epoch,
       segment_index: seg.index, segment_hash: seg.hash, reply_hash: r.reply_hash, status,
       ...(seg.platform_message_id ? { platform_message_id: seg.platform_message_id } : {}),
       ...(seg.error_code ? { error_code: seg.error_code } : {}) });
     if (code === 200 || code === 201) { seg.reported_status = status; if (status === 'ready') seg.registered = true; this.save(); return true; }
+    if (status === 'sending' && code === 409 && codeOf(data) === 'source_unavailable') {
+      this.stopSourceDelivery(r, seg); return false;
+    }
+    if (code === 401 || code === 403) { this.stopRequested = true; this.log.write('alice_authorization_failed'); }
     return false;
   }
   async sendSegment(r, seg) {
     if (!seg.registered && !await this.report(r, seg, 'ready')) return;
+    if (!this.checkClock()) return;
+    if (this.remaining(r) <= this.sendWindowBudget(r)) { this.expire(r); return; }
     if (seg.retry_at && Date.now() < seg.retry_at) return;
-    if (this.remaining(r) < 15000) { this.expire(r); return; }
-    if (Date.now() - this.lastSend < this.config.delivery.send_spacing_ms) return;
+    if (Date.now() < this.nextSendAt(r)) return;
+    if (typeof seg.text !== 'string' || !seg.text || hash(seg.text) !== seg.hash) {
+      this.expire(r, 'quarantined'); return;
+    }
+    if (seg.dispatch_attempts >= 3) {
+      seg.status = 'failed'; seg.error_code = 'qq_attempts_exhausted';
+      r.status = 'failed'; stopUnsent(r, 'blocked_by_previous_failure'); this.save(); return;
+    }
     // Recheck immediately before dispatch. A remote in-flight send still cannot be recalled.
-    if (!await this.refresh() || this.health.session_epoch !== r.session_epoch || this.stopRequested) return;
-    seg.status = 'sending'; seg.attempts++; this.save();
+    if (!await this.refresh() || this.stopRequested) return;
+    if (!this.validBinding(r) || this.health.session_epoch !== r.session_epoch) { this.expire(r, 'quarantined'); return; }
+    seg.status = 'sending'; this.save();
     try {
-      if (!await this.report(r, seg)) { seg.status = 'retry_wait'; this.save(); return; }
+      // Each actual attempt (including definite 401/429 retries) needs a fresh
+      // core source/scope check even when the last receipt already says sending.
+      if (!await this.report(r, seg, 'sending', true)) {
+        if (seg.status === 'sending') seg.status = 'retry_wait';
+        this.save(); return;
+      }
     } catch {
       // We have not called QQ yet. Retry only the core audit transition.
+      if (seg.status === 'sending') seg.status = 'retry_wait';
+      this.save(); return;
+    }
+    // Both refresh and the core audit may have spent the remaining window.
+    // We still know no QQ call has begun, so a pause here is safely resumable.
+    if (!this.checkClock() || this.stopRequested || Date.now() < this.nextSendAt(r)) {
       seg.status = 'retry_wait'; this.save(); return;
     }
-    this.lastSend = Date.now();
+    if (!this.validBinding(r) || this.health.session_epoch !== r.session_epoch) {
+      seg.status = 'retry_wait'; this.expire(r, 'quarantined'); return;
+    }
+    if (this.remaining(r) <= this.sendWindowBudget(r)) { seg.status = 'retry_wait'; this.expire(r); return; }
+    const now = Date.now();
+    seg.dispatch_attempts++; seg.attempts++;
+    this.ledger.data.last_dispatch_at = now;
+    this.ledger.data.not_before = Math.max(this.ledger.data.not_before, now + this.spacing(r));
+    this.save(); // An interruption after this checkpoint is conservatively unknown.
     try {
       const result = await this.bot.api.post(`/v2/users/${encodeURIComponent(r.source.sender_id)}/messages`, {
         msg_type: 0, content: seg.text, msg_id: r.source.message_id, msg_seq: seg.seq,
       });
-      if (result?.code || result?.err_code) {
+      if ([result?.code, result?.err_code].some(code => code != null && code !== 0 && code !== '0')) {
         seg.status = 'failed'; seg.error_code = 'qq_business_rejection';
-      } else if (typeof result?.id !== 'string' || !result.id) {
+      } else if (!platformId(result?.id)) {
         seg.status = 'send_unknown'; seg.error_code = 'qq_missing_receipt';
       } else { seg.status = 'platform_confirmed'; seg.platform_message_id = result.id; delete seg.text; }
     } catch (error) {
       const status = error?.httpStatus;
-      if (status === 401 && seg.attempts < 2) {
-        this.bot.tokenManager.clearCache(this.config.qq.app_id);
-        seg.status = 'retry_wait'; seg.retry_at = Date.now() + 1000;
-      } else if (status === 429 && seg.attempts < 3 && this.remaining(r) > 30000) {
-        seg.status = 'retry_wait'; seg.retry_at = Date.now() + 5000 * seg.attempts + Math.random() * 1000;
+      if (status === 429) {
+        // Shared by all replies and notices; changing records cannot evade this cooldown.
+        this.ledger.data.not_before = Math.max(this.ledger.data.not_before, Date.now() + 5000 * seg.dispatch_attempts);
+      }
+      if (status === 401 && !seg.auth_refresh_used && seg.dispatch_attempts < 3 && this.remaining(r) > 16000) {
+        seg.auth_refresh_used = true;
+        try {
+          this.bot.tokenManager.clearCache(this.config.qq.app_id);
+          seg.status = 'retry_wait'; seg.retry_at = Date.now() + 1000;
+        } catch {
+          seg.status = 'failed'; seg.error_code = 'qq_auth_refresh_failed'; this.stopRequested = true;
+        }
+      } else if (status === 429 && seg.dispatch_attempts < 3 && this.remaining(r) > this.ledger.data.not_before - Date.now() + 15000) {
+        seg.rate_retry_count++;
+        seg.status = 'retry_wait'; seg.retry_at = this.ledger.data.not_before;
       } else if ([400, 401, 403, 404, 413, 422, 429].includes(status)) {
         seg.status = 'failed'; seg.error_code = `qq_http_${status}`;
         if (status === 401 || status === 403) this.stopRequested = true;
       } else { seg.status = 'send_unknown'; seg.error_code = 'qq_result_unknown'; }
     }
-    if (['failed', 'send_unknown'].includes(seg.status)) r.status = seg.status;
+    if (['failed', 'send_unknown'].includes(seg.status)) {
+      r.status = seg.status;
+      stopUnsent(r, seg.status === 'send_unknown' ? 'blocked_by_previous_unknown' : 'blocked_by_previous_failure');
+    }
     else if (r.segments.every(s => s.status === 'platform_confirmed')) r.status = 'platform_confirmed';
     this.save();
     this.log.write(seg.status, r.request_id);
     if (seg.status !== 'retry_wait') await this.report(r, seg);
   }
   async tick() {
-    if (!await this.refresh()) return;
+    if (!this.checkClock()) return;
+    if (!await this.refresh() || this.stopRequested) return;
     for (const r of this.ledger.data.records) {
       if ((!this.validBinding(r) || r.session_epoch !== this.health.session_epoch) && !DONE.has(r.status)) this.expire(r, 'quarantined');
     }
@@ -232,9 +313,11 @@ export class Bridge {
         }
       }
     }
+    if (this.stopRequested) return;
     const outgoing = this.ledger.data.records.find(r => r.status === 'outbox');
     if (outgoing) {
-      if (this.remaining(outgoing) <= 15000) this.expire(outgoing);
+      if (outgoing.segments.length > this.config.delivery.max_reply_segments) this.expire(outgoing, 'quarantined');
+      else if (this.remaining(outgoing) <= this.sendWindowBudget(outgoing)) this.expire(outgoing);
       else {
         for (const item of outgoing.segments) {
           if (!item.registered && !await this.report(outgoing, item, 'ready')) return;

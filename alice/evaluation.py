@@ -18,7 +18,7 @@ import uuid
 from .metrics_prompts import EXTRACTION_SYSTEM, RUBRIC_VERSION, VERDICT_SYSTEM
 from .store import text_score
 
-RETRIEVAL_VERSION = "p1-bigram-all-layers-content-v1"
+RETRIEVAL_VERSION = "p1-bigram-conversation-all-layers-v2"
 SCHEMA_VERSION = 1
 MAX_INVENTORY = 2000
 MAX_FIELD = 16000
@@ -308,12 +308,12 @@ class EvaluationStore:
         if row is None or row["status"] != "armed":
             raise EvaluationError("该单次核查已消费、取消或不存在")
         run_id = row["id"]
-        total = self.conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        total = self.conn.execute("SELECT COUNT(*) FROM memories WHERE origin='conversation'").fetchone()[0]
         inventory, complete, source_chars = [], total <= MAX_INVENTORY, 0
         deadline = time.monotonic() + 1.0
         if complete:
             fields = ",".join("substr(" + field + ",1,16001) AS " + field if field in ("title", "content", "keywords") else field for field in HASH_FIELDS)
-            for memory in self.conn.execute(f"SELECT id,{fields} FROM memories ORDER BY id LIMIT ?", (MAX_INVENTORY + 1,)):
+            for memory in self.conn.execute(f"SELECT id,{fields} FROM memories WHERE origin='conversation' ORDER BY id LIMIT ?", (MAX_INVENTORY + 1,)):
                 source_chars += sum(len(memory[field]) for field in ("title", "content", "keywords"))
                 if source_chars > MAX_SOURCE_CHARS or time.monotonic() > deadline or any(len(memory[field]) > MAX_FIELD for field in ("title", "content", "keywords")):
                     complete = False
@@ -335,11 +335,13 @@ class EvaluationStore:
         turn = self.conn.execute("SELECT substr(content,1,16001),length(content) FROM turns WHERE id=? AND role='assistant'", (turn_id,)).fetchone()
         if turn is None:
             raise EvaluationError("核查必须绑定实际已保存的助手回复")
-        complete = run["complete"] and turn[1] <= MAX_REPLY and bool(turn[0])
+        source_turn = self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone() is not None
+        complete = run["complete"] and turn[1] <= MAX_REPLY and bool(turn[0]) and not source_turn
         with self._transaction():
-            self.conn.execute("UPDATE evaluation_runs SET turn_id=?,reply_hash=?,status=?,reason_code=? WHERE id=?",
+            self.conn.execute("UPDATE evaluation_runs SET turn_id=?,reply_hash=?,status=?,reason_code=?,complete=? WHERE id=?",
                               (turn_id, _text_hash(turn[0]) if turn[1] <= MAX_REPLY else None, "queued" if complete else "incomplete",
-                               "none" if complete else (run["reason_code"] if not run["complete"] else "input_limit"), run_id))
+                               "none" if complete else ("outside_scope" if source_turn else
+                               run["reason_code"] if not run["complete"] else "input_limit"), int(complete), run_id))
         return self._summary(self._run(run_id))
 
     def fail(self, run_id: str, status: str, reason_code: str) -> None:
@@ -410,6 +412,8 @@ class EvaluationStore:
     def _live(self, run: dict, *, include_memories=False):
         if not run["complete"] or run["turn_id"] is None:
             raise EvidenceUnavailable("核查范围不完整或回复尚未绑定")
+        if self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=?", (run["turn_id"],)).fetchone():
+            raise EvidenceUnavailable("这轮包含外部资料，不能作为普通记忆主张核查材料")
         turn = self.conn.execute("SELECT substr(content,1,16001),length(content) FROM turns WHERE id=? AND role='assistant'", (run["turn_id"],)).fetchone()
         if turn is None or turn[1] > MAX_REPLY or _text_hash(turn[0]) != run["reply_hash"]:
             raise EvidenceUnavailable("原回复已不可用，核查不再可复核")
@@ -419,7 +423,7 @@ class EvaluationStore:
         memories = []
         deadline = time.monotonic() + 1.0
         fields = ",".join("substr(m." + field + ",1,16001) AS " + field if field in ("title", "content", "keywords") else "m." + field for field in HASH_FIELDS)
-        rows = self.conn.execute(f"SELECT m.id,{fields},i.content_hash FROM evaluation_inventory i JOIN memories m ON m.id=i.memory_id WHERE i.run_id=? ORDER BY m.id", (run["id"],))
+        rows = self.conn.execute(f"SELECT m.id,{fields},i.content_hash FROM evaluation_inventory i JOIN memories m ON m.id=i.memory_id WHERE i.run_id=? AND m.origin='conversation' ORDER BY m.id", (run["id"],))
         checked, source_chars = 0, 0
         for row in rows:
             checked += 1
@@ -522,7 +526,7 @@ class EvaluationStore:
             matched_total = len(ranked)
             ranked = ranked[:TOP_K]
             retrievals.append((run_id, claim["ordinal"], _text_hash(query), RETRIEVAL_VERSION, MIN_SCORE, TOP_K,
-                               "pre_turn_alive_all_layers", matched_total, int(matched_total > TOP_K),
+                               "pre_turn_conversation_all_layers", matched_total, int(matched_total > TOP_K),
                                "candidates" if ranked else "evidence_insufficient"))
             states.append(("pending" if ranked else "evidence_insufficient", run_id, claim["ordinal"]))
             candidates = []

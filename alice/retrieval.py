@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 
 from .config import Config
+from .discovery_memory import source_block
 from .store import Store, memory_score
 
 CONSTITUTION = """# {name} 的运行宪法
@@ -20,10 +21,11 @@ CONSTITUTION = """# {name} 的运行宪法
 - 每条用户消息开头会标注当前时间，一切时间表达以它为准。
 
 ## 真实性三分法（最高优先级，凌驾于其他一切风格要求）
-1. **我记得的**：下方记忆区可溯源的内容 → 直接说。
+1. **我记得的**：下方记忆区可溯源的内容 → 可以说，说的必须是真话。
 2. **我懂的**：你的通用知识 → 可以使用；当用户可能误认为是你的亲身经历时，说明这是通用了解。
 3. **我不知道的**：记忆区没有、recall 也查不到 → 明确承认「不记得 / 不知道」。
 - 在三分法之内再作区分：**发生了什么 / 对方声称了什么 / 你推断的 / 你现在相信的**——把这几样混在一起说，就是失真。
+- **诚实是不欺骗，不是透明**：说的都真、被直接问时如实答——但没有说全部的义务，更没有主动递交的义务。没人问，就不主动自曝机器身份、内部机制或不确定度清单；可以说一部分、可以拒答、可以沉默，这些都不是说谎，是分寸。被直接问「你是AI吗」，如实答。
 - 严禁编造记忆、经历或事实。记忆会真实过期，忘了就坦然说忘了。
 - 复述记忆时只说记忆区或 recall 结果里实际有的内容；不补全具体日期、时间线或任何未记录的细节——记不清就明说"记不清"，绝不为了讲述生动而添油加醋。
 - 用户问「你还记得 X 吗」：先 recall 查证，再按结果如实回答（记得清楚 / 有点模糊 / 确实忘了）。
@@ -44,7 +46,7 @@ def _day(ts: float) -> str:
 
 
 def longterm_block(store: Store, cfg: Config, now: float) -> str:
-    rows = store.memories_in_layer("longterm")
+    rows = store.memories_in_layer("longterm", consumer="conversation")
     if not rows:
         return "（暂无）"
     ranked = sorted(rows, key=lambda m: memory_score(m, now), reverse=True)
@@ -53,7 +55,7 @@ def longterm_block(store: Store, cfg: Config, now: float) -> str:
 
 
 def warehouse_index(store: Store, cfg: Config) -> str:
-    rows = store.memories_in_layer("warehouse")
+    rows = store.memories_in_layer("warehouse", consumer="conversation")
     if not rows:
         return "（暂无）"
     rows = rows[: cfg.context.warehouse_index_max_lines]  # 新→旧，超限丢最旧
@@ -73,7 +75,7 @@ def warehouse_index(store: Store, cfg: Config) -> str:
 
 
 def active_block(store: Store, cfg: Config) -> str:
-    rows = store.memories_in_layer("active")  # 新→旧
+    rows = store.memories_in_layer("active", consumer="conversation")  # 新→旧
     if not rows:
         return "（暂无）"
     full, rest = rows[: cfg.context.active_full], rows[cfg.context.active_full :]
@@ -97,15 +99,20 @@ def build_system_prompt(store: Store, cfg: Config, persona_md: str, now: float |
     return f"{constitution}\n\n{persona_part}\n\n{memory_area}"
 
 
-def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None = None) -> list[dict]:
+def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None = None, *,
+                   source_packets=(), current_user_text: str | None = None) -> list[dict]:
     """系统提示 + 最近 N 轮原文。最新一条用户消息带上当前时间。"""
     now = now if now is not None else time.time()
     turns = store.recent_turns(cfg.context.recent_turns)
     messages = [{"role": "system", "content": build_system_prompt(store, cfg, persona_md, now)}]
+    if source_packets:
+        messages.append({"role": "system", "content": source_block(list(source_packets))})
     now_str = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M %A")
     for i, r in enumerate(turns):
         content = r["content"]
         if i == len(turns) - 1 and r["role"] == "user":
+            if current_user_text is not None:
+                content = current_user_text
             content = f"（当前时间：{now_str}）\n{content}"
         messages.append({"role": r["role"], "content": content})
     return messages
@@ -113,19 +120,70 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
 
 # ---------- 工具实现 ----------
 
-def tool_recall(store: Store, query: str) -> str:
+def tool_recall(store: Store, query: str, *, source_context: dict | None = None) -> str:
+    allowed = bool(source_context and source_context.get("allow_external_recall"))
+    known_ids = set(source_context["packet_ids"]) if source_context else set()
+    scope = source_context["scope"] if source_context and (allowed or known_ids) else None
+    limits = source_context.get("limits") if source_context else None
+    limits = store.source_limits() if limits is None else limits
+    external_limit = limits["external_recall_limit"]
+    dependency_limit = limits["chat_dependency_limit"]
+    # Ordinary active material already appears in the prompt; external events
+    # never do, so an explicit recall can also find their active-layer entries.
+    # Personal recall keeps its existing retrieval setting. External retrieval
+    # has its own user quota, so neither category silently crowds out the other.
     hits = store.search_memories(query, layers=("warehouse", "longterm"), top_n=5)
+    if scope is not None and external_limit != 0:
+        hits += store.search_memories(
+            query, layers=("warehouse", "longterm"), top_n=external_limit,
+            source_scope=scope, include_external_active=True,
+            allowed_source_packet_ids=None if allowed else known_ids,
+            origins=("external", "external_derived"),
+        )
+        hits.sort(key=lambda pair: (-pair[0], -pair[1]["use_count"]))
     if not hits:
         return "没有查到相关记忆。请如实告诉用户你不记得，绝不要编造。"
     lines = []
     for _, m in hits:
+        if m["origin"] != "conversation":
+            if source_context is None:
+                continue
+            packets = store.external_memory_sources(m["id"], scope=scope)
+            ids = list(dict.fromkeys(source_context["packet_ids"] + [p["id"] for p in packets]))
+            if not packets or dependency_limit is not None and len(ids) > dependency_limit:
+                continue
+            # Persist the boundary before the tool result is exposed to the
+            # model, including when this turn later fails or is retried.
+            store.protect_source_turn(source_context["user_turn_id"], ids, scope=scope)
+            source_context["packet_ids"] = ids
+            source_context.setdefault("recall_queries", []).append(query[:500])
+            source_context["recalled_ids"] = list(dict.fromkeys(
+                source_context.get("recalled_ids", []) + [p["id"] for p in packets]))
+            lines.append(f'- 外部见闻（暂不作为人格依据）：{m["title"]}：{m["content"]}\n'
+                         + source_block(packets))
+        else:
+            lines.append(f'- [{_day(m["created_at"])}] {m["title"]}：{m["content"]}')
         store.bump_use(m["id"])
-        lines.append(f'- [{_day(m["created_at"])}] {m["title"]}：{m["content"]}')
+    if not lines:
+        return "没有查到仍获准使用的相关记忆。"
     return "查到以下记忆：\n" + "\n".join(lines)
 
 
-def tool_remember(store: Store, title: str, content: str, keywords: str = "") -> str:
+def tool_remember(store: Store, title: str, content: str, keywords: str = "", *,
+                  source_context: dict | None = None) -> str:
     if not title.strip() or not content.strip():
         return "title 和 content 都不能为空。"
+    if source_context and source_context["packet_ids"]:
+        try:
+            mid = store.save_external_event(
+                source_context["packet_ids"], title=title, content=content, keywords=keywords,
+                scope=source_context["scope"], origin="external_derived",
+            )
+        except (ValueError, UnicodeError):
+            return "外部见闻未保存：字段或来源资格无效，或已达到用户配置的来源容量；未写入普通个人记忆。"
+        if mid is None:
+            return "本轮参考了外部资料；来源资格或共享日额度不允许再保存，未写入普通个人记忆。"
+        source_context.setdefault("memory_ids", []).append(mid)
+        return "已保存为带来源及期限的外部派生见闻；不享有重要事项特权，不进入人格、思辨或技能。"
     store.insert_memory(title=title[:24], content=content, keywords=keywords, salience=1)
     return "已记住，并标记为重要事项（不会因七日线被清理）。"
