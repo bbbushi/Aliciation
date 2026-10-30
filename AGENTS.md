@@ -19,12 +19,12 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 不碰 `.zcodeignore`、`~/.zcode/`。
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
-- **分支流程（2026-10-29 起）**：改动一律先推 `ytq`，验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。remote 已切 SSH。
+- **分支流程（2026-10-30 用户纠正）**：当前用户的改动推 `trial/windows-v0.2-20261028`；`ytq` 属于其他协作者，不作为当前用户的推送目标。验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。当前 origin 使用 HTTPS。
 
 ## 当前
 
-- 2026-10-30 Codex UI：world.execute(me)深海静态版完成，单会话导航/主聊天/观察器P1/设置QQ保持可达，细线亮角与静态字符；本次提交仅UI及两份实施文档、交接，用户授权先推ytq再继续动效。参考与验收见docs/UI升级-world-execute-me风格.md；旧Codewhale视觉仅作历史。
+- 2026-10-30 Codex 分支纠正：用户明确自己的分支为trial/windows-v0.2-20261028；已用精确lease将误推的ytq从2260950复原760b592，远端无他人新增提交；静态UI提交2260950与本次分支约定修订改推用户分支，不推main。
 - 并行联网规划保留：Kanadego/dsh-heartbeat@329d73f修订入口docs/联网能力-heartbeat参考修订报告.md；重点冲浪活动/分享双闸、素材池/单格待续、来源/保留/记忆资格与送达分账，搜索Q5受限主对话、社交增量inbox；B站先行/参与思辨分期等仍待审核与开发授权，未开发。
-- QQ分条未提交改动保留，见docs/QQ自然分条回复-实施与人工验收.md：natural默认1～3泡/至少1秒、length回退、账本v2固定计划/unknown停轮；仍待受控重启桥与人工验收；本轮不改QQ拆分/账本/投递、核心会话/记忆/P1语义。
-- 分支codex/qq-natural-replies，静态UI以b3c30c6为基线提交后推远端ytq；不直接推main。QQ代码与联网规划留在本地，app.js既有QQ文案按块排除；stash pre-main-sync-20261030-qq-plans保留。本轮未读取/手改user/、未启停Alice或QQ/调用业务模型/发消息/运行自动测试；现有服务此前按用户授权启动。
-- 深海UI已做静态ID/差异和隔离合成桌面/手机视觉查看，真实功能人工验收未执行；GUI三件与既有QQ/P1/观察器已入main但人工仍待。A02、A05（remember压力绕行）、旧匿名HTTP人工SDK边界及tests/pressure的user/路径适配待办；临时合成预览已停，截图见新实施文档。
+- QQ分条未提交改动保留，见docs/QQ自然分条回复-实施与人工验收.md：natural默认1～3泡/至少1秒、length回退、账本v2固定计划/unknown停轮；仍待受控重启桥与人工验收；不改QQ拆分/账本/投递、核心会话/记忆/P1语义。
+- 本地codex/qq-natural-replies；静态UI提交排除了app.js既有QQ文案，QQ代码/联网规划与此前轻量动效仍留工作树；stash pre-main-sync-20261030-qq-plans保留。用户下一步授权截图主聊天区动效，分支纠正后实施；不读/手改user/，不启停Alice或QQ/调用模型/发消息/运行机器测试。
+- 既有轻量动效含顶部缓流/微光/面板入场/外观关闭及减少动态，静态检查与隔离视觉查看已做，真实功能人工未验收；GUI/QQ/P1/观察器人工、A02、A05（remember压力绕行）、旧匿名HTTP人工SDK边界与tests/pressure的user/适配待办。
