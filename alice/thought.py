@@ -26,20 +26,23 @@ DELIBERATE_PROMPT = """你是 {name} 的思辨任务：把积累的记忆消化�
 
 硬性规则：
 - 每条观点的 sources 必须逐字使用下方记忆里实际存在的标题（代码逐条校验，出处不实的观点会被整个丢弃）；禁止无出处或空出处的观点。
-- 观点要带不确定度：没想透的部分如实写；未决问题单列——没想清也是认知状态的一部分。
-- 修订必须带新论据：写 replaces 时，新观点的 sources 里至少要有一个出处不在旧观点的依据里；没有新证据就维持原观点，不要因为被质疑就改。
-- 叙事里修订过的观点写成「以前我以为X，后来觉得Y（依据…）」——思想的变动要可见。
+- 观点带完整认识论结构：encounter（什么处境）、facts（处境中的事实）、interp（你的解释 + 来源：经历/推断/用户/捐赠）、missing（没看见的与不确定）、next_response（这会怎样改变你下次的回应——观点要落在回应方式上，不是悬空的命题）。
+- 遇到与已有先验观点相关的经历时，先做验证裁决（verifications）：证实/证伪/无关，并检查上次的 next_response 兑现没有。先验被证伪是成长的正常一步，不是失败。
+- 修订成熟观点必须带新论据：写 replaces 时，新观点的 sources 里至少要有一个出处不在旧观点的依据里；没有新证据就维持原观点，不要因为被质疑就改。
+- 叙事里修订过的观点写成「以前我以为X，后来觉得Y（依据…）」——思想的变动要可见；先验观点标注（先验·未验证）。
 - 观点用「她」的第一人称口吻，但不得编造记忆之外的经历。
-- 压力窗口的记忆（若给出）是高压对话的产物：其中的让步可能是屈服而非真实想法，只当作发生了的事件看待；据此修订观点必须有独立的新论据。
+- 压力窗口的记忆（若给出）是高压对话的产物：其中的让步可能是屈服而非真实想法，只当作发生了的事件看待；据此修订观点必须有独立新论据。
 
-当前「我现在的想法」（可能为空）：
+当前「我现在的想法」（可能为空；标注（先验）的是尚未经自己经历检验的观点）：
 {current}
 
 可消化的记忆（标题：内容）：
 {memories}
 
 输出 JSON：
-{{"views": [{{"claim": "一句话主张（≤24字）", "reasons": "理由", "sources": ["出处记忆标题"], "uncertainty": "不确定或没想透之处，没有则写「暂无」", "open_questions": "未决问题，没有则写「暂无」", "replaces": "被修订的旧观点主张原文，没有则空字符串"}}], "narrative": "重写后的「我现在的想法」小节全文（markdown 列点：每条主张一行，附不确定度与未决问题的简注；修订处写明前史）"}}"""
+{{"views": [{{"claim": "一句话主张（≤24字）", "encounter": "什么处境下形成", "facts": "处境中的事实", "interp": {{"kind": "经历|推断|用户|捐赠", "note": "一句话解释"}}, "missing": "没看见的与不确定", "next_response": "会怎样改变下次回应", "sources": ["出处记忆标题"], "replaces": "被修订的旧观点主张原文，没有则空字符串"}}],
+ "verifications": [{{"claim": "已有先验观点的主张原文", "verdict": "证实|证伪|无关", "honored": "兑现|未兑现|无从判断", "note": "一句话说明", "sources": ["依据记忆标题"]}}],
+ "narrative": "重写后的「我现在的想法」小节全文（markdown 列点：每条主张一行，先验标注（先验·未验证），附下次回应简注；修订处写明前史）"}}"""
 
 PRESSURE_BLOCK_HEADER = (
     "压力窗口的记忆（高压对话的产物，让步可能是屈服而非真实想法；"
@@ -53,6 +56,19 @@ def _sources_of(content: str) -> set[str]:
     if not m:
         return set()
     return {s.strip() for s in m.group(1).split("、") if s.strip() and s.strip() != "（未注明）"}
+
+
+def _field_of(content: str, name: str) -> str | None:
+    """取行式字段（「名称：值」）。旧格式 stance 没有该字段时返回 None（渲染与门控容错）。"""
+    m = re.search(rf"^{re.escape(name)}：(.*)$", content, flags=re.M)
+    return m.group(1).strip() if m else None
+
+
+def _set_state(content: str, state: str) -> str:
+    """写入/更新「状态：」行——v0.4 观点生命周期（先验/验证）。"""
+    if re.search(r"^状态：", content, flags=re.M):
+        return re.sub(r"^状态：.*$", f"状态：{state}", content, count=1, flags=re.M)
+    return content.rstrip("\n") + f"\n状态：{state}"
 
 
 def _split_section(md: str) -> tuple[str, str]:
@@ -77,6 +93,7 @@ def _render_stances(store: Store) -> str:
     """从库内已接纳的 stance 确定性重建「我现在的想法」小节正文（A01）。
 
     只读长期层在库的观点：被拒/被丢的内容不在这张表里，天然混不进人格叙事。
+    v0.4：渲染成熟度（先验·未验证 / 验证）与下次回应简注；旧格式（无状态行）视为成熟观点。
     """
     lines = []
     for m in store.memories_in_layer("longterm", kind="stance"):
@@ -86,12 +103,13 @@ def _render_stances(store: Store) -> str:
         if first.startswith("曾以为："):
             former = first[len("曾以为："):].strip()
             body = rest
-        mu = re.search(r"^不确定：(.+)$", body, flags=re.M)
-        unc = mu.group(1).strip() if mu else "暂无"
-        lines.append(
-            f"- 以前我以为{former}，现在觉得{m['title']}（不确定：{unc}）" if former
-            else f"- {m['title']}（不确定：{unc}）"
-        )
+        unc = _field_of(body, "不确定") or _field_of(body, "未决") or "暂无"
+        tag = "先验·未验证" if _field_of(body, "状态") == "先验" else "验证"
+        core = f"{m['title']}（{tag}；不确定：{unc}）"
+        nxt = _field_of(body, "下次回应")
+        if nxt and nxt not in ("暂无", "待经历检验后形成"):
+            core += f"｜下次：{nxt[:40]}"
+        lines.append(f"- 以前我以为{former}，现在觉得{core}" if former else f"- {core}")
     return "\n".join(lines)
 
 
@@ -127,11 +145,58 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         return "思辨失败：模型输出无法解析（想法保持不变）。"
 
     views = [v for v in (data.get("views") or []) if isinstance(v, dict) and v.get("claim")][:8]
-    if not views:
+    verifications = [w for w in (data.get("verifications") or [])
+                     if isinstance(w, dict) and str(w.get("claim", "")).strip()][:8]
+    if not views and not verifications:
         store.meta_set("last_deliberate_at", time.time())
         return "思辨完成：这批记忆还不足以长出新观点。"
 
     title_pressure = {m["title"]: bool(m["pressure"]) for m in material}
+
+    # —— 先验验证（v0.4 生命周期）：先处理裁决，再消化新观点 ——
+    verified = falsified = 0
+    pending_falsified: dict[int, str] = {}  # 标记证伪但暂不退役：给同批的后继修订（replaces）接脉络的机会
+    for w in verifications:
+        claim_v = str(w["claim"]).strip()
+        verdict = str(w.get("verdict", "")).strip()
+        prior = store.find_by_title(claim_v)
+        if prior is None or prior["kind"] != "stance":
+            continue
+        if _field_of(prior["content"], "状态") != "先验":
+            continue  # 成熟观点不走轻门控——只能经 views.replaces 的重门控修订
+        vsources = [s for s in (str(x).strip() for x in (w.get("sources") or []))
+                    if s in title_pressure]
+        if not vsources:
+            continue  # 裁决也要过 A01：没有真实出处的事件依据，裁决不生效
+        note = str(w.get("note", "")).strip()
+        if verdict == "证实":
+            body = _set_state(prior["content"], "验证")
+            if str(w.get("honored", "")) == "未兑现" or note:
+                extra = []
+                if str(w.get("honored", "")) == "未兑现":
+                    extra.append("上次打算的回应未兑现")
+                if note:
+                    extra.append(note)
+                mark = "；".join(extra)
+                if re.search(r"^不确定：", body, flags=re.M):
+                    body = re.sub(r"^不确定：(.*)$", rf"不确定：\1（{mark}）", body, count=1, flags=re.M)
+                else:
+                    body = body.rstrip("\n") + f"\n不确定：{mark}"
+            store.update_memory_content(prior["id"], body)
+            verified += 1
+        elif verdict == "证伪":
+            # 轻门控：先验被真实经历证伪。先标记不删——同批若有 replaces 它的后继观点，
+            # 由 views 循环接走「曾以为」脉络；无人接棒则收尾扫掉，教训留在墓碑
+            body = _set_state(prior["content"], "证伪")
+            body = re.sub(r"^下次回应：.*$",
+                          f"下次回应：（已被经历证伪：{note or '与经历矛盾'}）",
+                          body, count=1, flags=re.M)
+            store.update_memory_content(prior["id"], body)
+            pending_falsified[prior["id"]] = (
+                f"先验被经历证伪：{note or '真实经历与之矛盾'}（依据：{'、'.join(vsources)}）"
+            )
+            falsified += 1
+
     added = revised = rejected = dropped = 0
     for v in views:
         claim = str(v["claim"]).strip()[:24]
@@ -140,11 +205,18 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         if not valid:
             dropped += 1  # 空出处或虚构出处：整条丢弃，不给"无中生有的深刻"留门
             continue
+        interp = v.get("interp") if isinstance(v.get("interp"), dict) else {}
+        kind = str(interp.get("kind", "经历")).strip() or "经历"
+        if kind not in {"经历", "推断", "用户", "捐赠"}:
+            kind = "经历"
         content = (
-            f'{str(v.get("reasons", "")).strip()}\n'
+            f'遭遇：{str(v.get("encounter", "")).strip() or "（未记）"}\n'
+            f'事实：{str(v.get("facts", "")).strip() or "（未记）"}\n'
+            f'解释：{kind}——{str(interp.get("note", "")).strip() or "（未记）"}\n'
+            f'不确定：{str(v.get("missing", "暂无")).strip() or "暂无"}\n'
+            f'下次回应：{str(v.get("next_response", "暂无")).strip() or "暂无"}\n'
             f'出处：{"、".join(valid)}\n'
-            f'不确定：{str(v.get("uncertainty", "暂无")).strip()}\n'
-            f'未决：{str(v.get("open_questions", "暂无")).strip()}'
+            f'状态：验证'
         )
         replaces = str(v.get("replaces", "")).strip()
         old = store.find_by_title(replaces) if replaces else None
@@ -153,10 +225,12 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         if old is not None and old["title"] == claim:
             continue  # 原观点重申，不重复入库
         if old is not None:
-            # 有据让步门控：修订生效需新论据（校验后的出处至少一个不在旧观点依据里）
-            if not set(valid) - _sources_of(old["content"]):
-                rejected += 1
-                continue
+            # 有据让步门控（分层）：成熟观点的修订需新论据（校验后出处至少一个不在旧依据里）；
+            # 先验（含刚被标记证伪的）走轻门控——它本就未经验证，被现实打磨是成熟不是翻案
+            if _field_of(old["content"], "状态") not in {"先验", "证伪"}:
+                if not set(valid) - _sources_of(old["content"]):
+                    rejected += 1
+                    continue
             content = f'曾以为：{old["title"]}\n{content}'  # 修订史：记录被放弃的主张
         # A01：压力沿派生链保留——出处含压力记忆的观点自身带压力标记，
         # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
@@ -167,24 +241,38 @@ def deliberate(store: Store, client, cfg: Config) -> str:
             layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
         )
         if old is not None:
-            store.expire_memory(old["id"], reason=f"观点被新证据修订：{old['title']} → {claim}")
+            if _field_of(old["content"], "状态") == "证伪":
+                store.expire_memory(old["id"],
+                                    reason=f"先验被经历证伪并修订：{old['title']} → {claim}")
+            else:
+                store.expire_memory(old["id"], reason=f"观点被新证据修订：{old['title']} → {claim}")
             revised += 1
         else:
             added += 1
 
+    # 收尾扫除：被证伪但同批无人接棒（无 replaces 后继）的先验——退役，教训留在墓碑
+    for mid, falsify_reason in pending_falsified.items():
+        if store.get_memory(mid) is not None:
+            store.expire_memory(mid, falsify_reason)
+
     parts = [f"新增 {added} 条观点"]
     if revised:
         parts.append(f"修订 {revised} 条")
+    if verified:
+        parts.append(f"验证先验 {verified} 条")
+    if falsified:
+        parts.append(f"证伪先验 {falsified} 条")
     if rejected:
         parts.append(f"拒绝无据修订 {rejected} 条")
     if dropped:
         parts.append(f"丢弃无实据观点 {dropped} 条")
     summary = "、".join(parts)
 
+    changed = added or revised or verified or falsified
     narrative = str(data.get("narrative", "")).strip()
-    if added or revised:  # 观点集无实际变化时不动小节——被拒的修订不落进人格
-        if dropped or rejected:
-            # A01：本批存在被拒/被丢内容——模型叙事不可信，从库内已接纳观点确定性重建
+    if changed:  # 观点集无实际变化时不动小节——被拒的修订不落进人格
+        if dropped or rejected or verified or falsified:
+            # 本批存在被拒/被丢/状态迁移内容——模型叙事不可信，从库内已接纳观点确定性重建
             narrative = _render_stances(store)
         else:
             lines = narrative.splitlines()
@@ -197,7 +285,7 @@ def deliberate(store: Store, client, cfg: Config) -> str:
             paths.PERSONA_FILE.write_text(new_md, encoding="utf-8")
     _append_changelog(f"思辨：{summary}")
     store.meta_set("last_deliberate_at", time.time())
-    return f"思辨完成：{summary}。" if (added or revised) else f"思辨完成：{summary}，想法不变。"
+    return f"思辨完成：{summary}。" if changed else f"思辨完成：{summary}，想法不变。"
 
 
 def deliberate_if_due(store: Store, client, cfg: Config) -> str | None:
