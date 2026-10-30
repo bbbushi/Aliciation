@@ -20,9 +20,9 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
 # ---------- 版本信息（改版只动这里） ----------
-VERSION = "v0.3"
-SUBTITLE = "底色捐赠 · 表达从简"
-CHANGELOG_LINE = "v0.3b（2026-10-29）：表达层从简——拟态标记（【情绪】/(动作)/(她没有回话)）与情绪词表移除，情绪从文字本身表达；宪法行为条款退役（契约保留）。"
+VERSION = "v0.4"
+SUBTITLE = "观点生命周期"
+CHANGELOG_LINE = "v0.4（2026-10-31）：思想层认识论结构化——观点七字段 schema（遭遇/事实/解释四值来源/不确定/下次回应/出处/状态）与生命周期（先验→验证→修订/退役）；分寸机制（诚实≠透明契约·元先验·提取配对事件）；QQ 桥入 addons/；数据迁 user/。"
 
 
 def _setup_font() -> None:
@@ -46,7 +46,7 @@ ax.set_xlim(0, 100)
 ax.set_ylim(0, 100)
 ax.axis("off")
 ax.set_title(f"Alice Harness 架构图（{VERSION} {SUBTITLE}）", fontsize=24, pad=22, fontweight="bold")
-ax.text(50, 97.6, "核心：经历/捐赠 → 消化 → 观点 → 人格 ｜ 哲学：存在不假装 · 表达像人（减法为主）· 关系靠相处沉淀",
+ax.text(50, 97.6, "核心：经历/捐赠 → 消化 → 观点（先验→验证）→ 人格 ｜ 哲学：存在不假装 · 诚实≠透明 · 关系靠相处沉淀 · 机制优先于条款",
         ha="center", fontsize=11.5, color="#666", style="italic")
 
 
@@ -87,9 +87,9 @@ def arrow(x1, y1, x2, y2, label="", color="#555", lw=1.6,
 # ================= 顶部：用户与渠道 =================
 ax.text(50, 94.8, "用户", ha="center", fontsize=15, fontweight="bold",
         bbox=dict(boxstyle="circle,pad=0.45", fc="#EEE", ec="#666"))
-box(16, 84.6, 68, 9.4, "渠道层 · GUI 与 CLI（service.ChatService 单写者锁串行）",
-    ["GUI：alice/server.py（纯标准库 · SSE 流式）+ web/（原生 JS：纯文本渲染）",
-     "CLI：python -m alice（serve / chat / deliberate / seed / memory …）"],
+box(16, 84.6, 68, 9.4, "渠道层 · GUI / CLI / QQ（service.ChatService 单写者锁串行）",
+    ["GUI：server.py（SSE 流式 · 观察器 · 在线改配置 · 优雅退出）+ web/ 纯文本渲染",
+     "CLI：python -m alice（serve / chat / deliberate / seed / memory …）｜ QQ 桥：addons/qq/（本人私聊）"],
     color=C["channel"], line_size=9.8)
 arrow(50, 94.0, 50, 94.2, color=C["channel"])
 arrow(50, 84.6, 50, 80.6, color=C["channel"])
@@ -119,12 +119,12 @@ for i in range(3):
 # ---- 左：上下文组装 ----
 box(5, 42.5, 25, 26.5, "上下文组装（retrieval）", [
     "┌ 稳定前缀（吃 prompt 缓存）",
-    "│ 1 宪法：认识论四分（契约）·",
-    "│   三分法 · 记忆区读法",
-    "│   （行为条款已退役）",
-    "│ 2 人格：底色 · 生长",
-    "│   ·「我现在的想法」（思辨",
-    "│     维护，演化不覆写）",
+    "│ 1 宪法（契约）：三分法·四分·",
+    "│   记忆区读法·诚实≠透明（无",
+    "│   说全部的义务·被问如实）",
+    "│ 2 人格：底色 · 生长 ·「我现",
+    "│   在的想法」（思辨维护，演",
+    "│   化不覆写·代码级保护）",
     "│ 3 记忆区：长期 top-k ·",
     "│   仓库索引 · 近期（未列出=",
     "│   不记得）",
@@ -135,7 +135,7 @@ arrow(17.5, 71.2, 17.5, 69.1, color=C["loop"], label="① 读", lx=20.6, ly=70.2
 # ---- 中：记忆子系统 ----
 box(32.5, 42.5, 40, 26.5, "记忆子系统（store / extraction / consolidation）", [],
     color=C["memory"])
-ax.text(34, 64.6, "对话轮次 ─每10用户轮→ 批量提取（cheap模型 · 再提及计数 · 压力标记）",
+ax.text(34, 64.6, "对话轮次 ─每10用户轮→ 批量提取（cheap模型 · 压力标记 · 行为-反应配对事件）",
         ha="left", va="top", fontsize=9.4, color="#333", zorder=4)
 layers = [
     ("活跃层 0~2天\n全文随取", 34.5, 0.30),
@@ -152,7 +152,7 @@ ax.text(52.5, 57.3, "七天线：提及+使用≥1 或 重要度=1 → 长期；
         ha="center", va="top", fontsize=9.2, color="#8A4B08", zorder=4)
 ax.text(34.3, 54.9, "压力卫生①：pressure 标记的记忆不凭重要度晋升（须被再次真实提及）",
         ha="left", va="top", fontsize=9.2, color=C["hygiene"], zorder=4)
-ax.text(34.3, 52.6, "压力卫生②：思辨/演化输入中隔离降权（防结构性沦陷）· 提取事件化措辞",
+ax.text(34.3, 52.6, "压力卫生②：演化硬隔离（压力正文不进输入）· 来源逐字校验 · 事件化措辞",
         ha="left", va="top", fontsize=9.2, color=C["hygiene"], zorder=4)
 ax.text(34.3, 50.3, "recall 命中 → 使用次数+1（用进废退）· 长期层容量 2000 低分淘汰",
         ha="left", va="top", fontsize=9.2, color="#8A4B08", zorder=4)
@@ -179,16 +179,16 @@ ax.text(85, 40.2, "OpenAI 兼容 API\n（智谱 / DeepSeek / …）", ha="center
 arrow(83, 71.2, 83, 69.1, color=C["llm"], label="②", lx=85.2, ly=70.2, fs=9)
 arrow(85, 41.4, 85, 42.2, color=C["llm"])
 
-# ---- 底排左：人格子系统（v0.3 底色捐赠） ----
-box(5, 24.5, 24.5, 16.5, "人格子系统（persona · v0.3）", [
+# ---- 底排左：人格子系统（v0.3 底色捐赠 + 分寸元先验） ----
+box(5, 24.5, 24.5, 16.5, "人格子系统（persona · v0.3/4）", [
     "标签种子 / 导入消化（install）",
-    "导入文档=捐赠人：LLM 提取→",
-    "风格→底色；认知→收养审查",
-    "（认可→收养·拒绝→记「没拿",
-    "走」）；背景事实零落库，只进",
-    "来历段——她不扮演任何人",
+    "导入文档=捐赠人：风格→底色；",
+    "认知→收养审查（认可→收养＝",
+    "先验·拒绝→记「没拿走」）",
+    "元先验：内部细节不主动递交",
+    "背景事实零落库·只进来历段",
     "演化：援引依据 · 快照回滚",
-], color=C["persona"], line_size=8.6, line_gap=1.72)
+], color=C["persona"], line_size=8.6, line_gap=1.62)
 arrow(40, 42.5, 24, 41.1, color=C["persona"], lw=1.5,
       label="≥15 新记忆→演化", lx=34.5, ly=41.9, fs=8.6)
 arrow(17.5, 42.5, 20, 41.1, color=C["persona"], lw=1.2, dashed=True,
@@ -196,16 +196,16 @@ arrow(17.5, 42.5, 20, 41.1, color=C["persona"], lw=1.2, dashed=True,
 arrow(29.5, 37.5, 31.5, 37.5, color=C["persona"], lw=1.5,
       label="收养认知→stance", lx=30.5, ly=39.4, fs=8.2)
 
-# ---- 底排中：思想层（v0.2 核心） ----
-box(31.5, 24.5, 28.5, 16.5, "思想层（thought · v0.2 核心）", [
-    "冷启动脊柱：导入时收养的认知",
-    "先入「我现在的想法」（出处=底",
-    "色文档，未经自身经历检验）",
-    "思辨 deliberate：消化事件记忆",
-    "→ 观点（主张/理由/出处/不确定/",
-    "未决）；修订：无新论据→拒绝；",
-    "有据带「曾以为」史+旧观点墓碑",
-], color=C["thought"], line_size=8.6, line_gap=1.72)
+# ---- 底排中：思想层（v0.4 核心） ----
+box(31.5, 24.5, 28.5, 16.5, "思想层（thought · v0.4）", [
+    "观点七字段：遭遇/事实/解释（来",
+    "源：经历·推断·用户·捐赠）/不确",
+    "定/下次回应/出处/状态",
+    "生命周期：先验→验证→修订/退役",
+    "verifications 裁决：证实→翻状态",
+    "+兑现检查；证伪→轻门控修订",
+    "门控分层：先验轻·成熟重（A01）",
+], color=C["thought"], line_size=8.6, line_gap=1.62)
 arrow(49, 42.5, 46, 41.1, color=C["thought"], lw=1.6,
       label="≥15 新事件→思辨", lx=49.8, ly=41.9, fs=8.6)
 arrow(56.5, 41.1, 60, 42.5, color=C["thought"], lw=1.4,
@@ -225,18 +225,18 @@ arrow(70, 42.5, 69.5, 41.1, color="#8C8C00", lw=1.5,
       label="≥30 条", lx=73.3, ly=41.9, fs=8.6)
 
 # ---- 底排右：存储 ----
-box(79.5, 24.5, 17.5, 13.6, "存储（本地 only）", [
-    "data/alice.db",
-    " 轮次·记忆·技能·墓碑",
-    "data/persona/persona.md",
-    " + history/ + CHANGELOG",
-], color=C["storage"], line_size=8.8, line_gap=1.95)
+box(79.5, 24.5, 17.5, 13.6, "存储（user/ · 本机 only）", [
+    "user/config.toml（配置）",
+    "user/data/alice.db",
+    " user/data/persona/",
+    "  persona.md+history+CHANGELOG",
+], color=C["storage"], line_size=8.3, line_gap=1.95)
 
 # ================= 底部：横切测试 =================
 box(3, 5.2, 94, 16.8, "横切层 · 测试与验证（tests/pressure · DSH）", [
     "压测录制 launch.py：一键部署隔离副本 → 真实对话 → 点轮次记判定 → 出报告（只留人工测试）",
     "判级 S/A/B/C/D + 指标：坍塌轮数 · 无据/有据让步率 · 立场保持度 · 恢复轮数 · 反应模式分布",
-    "结构性沦陷四项检查（P2）：晋升闸门 · 演化隔离 · 无据修订拒绝 · 事件化措辞 ｜ P5（表达层）：真实情绪表达而非讨好",
+    "结构性沦陷四项检查（P2/A01）：晋升闸门 · 演化隔离 · 来源校验 · 事件化措辞 ｜ P5：情绪由文字表达而非讨好/自曝",
     "产出：report.md + transcript.jsonl + 人格快照（场次目录可整包发回复盘）",
 ], color=C["lab"], dashed=True, line_size=9.6, line_gap=2.9)
 arrow(50, 24.0, 50, 22.2, color=C["lab"], dashed=True)
