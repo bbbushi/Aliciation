@@ -161,10 +161,14 @@ sequenceDiagram
 |---|---|
 | `GET /api/channels/v1/status` | token必需；仅protocol_version、instance_id、session_epoch、ready/busy/draining、配置允许的channel_id、功能和输入上限；无历史/密钥/人格 |
 | `POST /api/channels/v1/requests` | Bearer、JSON，限16KiB；只接受 channel_id、session_epoch、request_id、source、text；拒绝未知字段、role、target、evaluation_id；新请求202，重复同payload200/202原状态，不匹配409 conflict；busy409（本次未新登记）、状态不可核实503 status_unavailable、draining503、未绑定403、过大413 |
-| `GET /api/channels/v1/requests/{id}` | token限该channel自己的请求；返回状态、已落盘turn ID、最终正文（已generated且源仍在时）、固定错误类别；仅明确查询不存在才404，Store忙且缓存不能确认则503 status_unavailable；不返回别的渠道内容，不借此读整库 |
-| `POST /api/channels/v1/deliveries` | 仅登记该请求固定分段的结果、平台回执ID、状态和错误类别；首次ready登记reply hash及分段序号/hash，后续必须匹配，目标由原请求来源固定、不接受任意target；无发消息能力、不产生模型调用；重复状态更新幂等，非法回退状态拒绝 |
+| `GET /api/channels/v1/requests/{id}` | token限该channel自己的请求；返回状态、已落盘turn ID、最终正文（已generated且来源资格仍有效时）、固定错误类别；新增可选 `reply_hash` 与 `delivery_allowed`，后者仅表示查询时的资格，不能替代每次sending检查；仅明确查询不存在才404，Store忙且缓存不能确认则503 status_unavailable；不返回别的渠道内容，不借此读整库 |
+| `POST /api/channels/v1/deliveries` | 登记固定分段的状态、平台回执ID和错误类别；首次ready仅登记原reply hash及分段序号/hash，不授权发送。每次sending（含重复状态）重新核验来源期限和QQ范围；失效返回409 `source_unavailable`。终态回执仍核不可变hash，非法回退拒绝；`platform_confirmed`必须提供平台消息ID，已有ID不得变更。目标由原请求固定，无发消息能力、不产生模型调用 |
 | GUI历史扩展 | `/api/history?after_id=...&limit=...&session_epoch=...`，保留无参数旧语义，增加id/request_id/channel/可信sender标签；游标跨epoch返回冲突；上限100、只供GUI或另批准读权限，QQ token不可读 |
 | GUI聊天兼容 | 保留SSE事件旧字段，增加request_id、turn_id、session_epoch、accepted/generated标记；忙可409，新前端保留输入；`start`仅表示流打开。普通send旧调用仍可用，新带身份路径进入统一仲裁 |
+
+**2026-10-30来源功能联动补充（已实现、待人工验收）：** 助手生成提交时，在同一事务保存原始 `reply` UTF-8字节的SHA256；历史显示变为来源占位后不重新计算这个hash。`channel_requests`增量增加可空 `reply_hash` 列，渠道协议/schema版本仍为v1。旧记录优先从既有一致的delivery登记回填，其次才取尚存的原始附件／普通正文；附件已清且无可信登记hash时保留空值，不能用占位文本冒充原回复。
+
+桥每次实际QQ派发前都重新提交sending，明确401／429后的重试也不能因 `reported_status=sending` 跳过。来源失效仅停止尚未派发的本段与尾段，不重切计划、不重发unknown。ready可以在来源失效后仅登记hash，供未发尾段的失败审计使用；已发生的 `platform_confirmed/failed/send_unknown` 可以继续落账，不为回补终态捏造sending。受信任桥提供有效平台消息ID时允许ready直接补确认终态，核心没有因此获得直接核验QQ平台回执的能力。校验后已获准或已进入平台网络的请求无法原子撤回，旧epoch／身份仍按原契约隔离。验收见[搜索实施 S09](搜索功能-实施与人工验收.md#人工验收记录待执行)。
 
 请求例（ID仅示意，实际按规范生成）：
 
@@ -221,8 +225,8 @@ GUI请求与机器请求通过共同仲裁；原有直接send调用应进入同�
 | `user_committed/running` | 用户turn与请求关联原子提交；模型可能已调用 | 模型调用一次、没有工具副作用 |
 | `generated` | 助手turn与请求生成结果关联原子提交 | watcher全部成功、QQ已经发送 |
 | `completed` / `completed_with_warning` | 该轮核心收尾结束、处理槽释放 | QQ送达或已读 |
-| outbox `ready/sending` | 固定文本/目标/分段已登记；正在提交平台API | 平台接受成功 |
-| `platform_confirmed` | 平台API成功并取得回执（如有） | 用户客户端显示或已读 |
+| outbox `ready/sending` | ready仅登记固定计划；每次sending通过当时的来源资格检查，仍不证明平台请求已开始 | 持续发送许可、平台接受成功 |
+| `platform_confirmed` | 受信任桥报告平台API成功并取得有效消息ID | 用户客户端显示或已读、核心独立查询过QQ |
 | `send_unknown` | 超时/断线/重启使提交结果不确定 | 失败、可以安全重发 |
 | `failed/interrupted` | 某阶段失败/重启中断，附用户/助手turn是否存在 | 整轮什么都没发生、可以删掉重来 |
 
@@ -243,7 +247,7 @@ GUI请求与机器请求通过共同仲裁；原有直接send调用应进入同�
 | 存储 | 最小字段 | 建议保留 |
 |---|---|---|
 | core会话身份 | 独立 `session_epoch`、schema版本 | 随会话存续；新库/重置新ID，普通重启不变 |
-| core请求账本 | request/channel/epoch、来源键、payload hash、状态/时间、user_turn_id、assistant_turn_id、错误类别、维护状态 | 正文不重复存；去重墓碑随该会话保留，便于旧重投抑制 |
+| core请求账本 | request/channel/epoch、来源键、payload hash、不可变原reply hash、状态/时间、user_turn_id、assistant_turn_id、错误类别、维护状态 | 正文不重复存；去重及投递核验元数据随该会话保留，来源正文清除不改写原hash |
 | core来源关联 | turn_id、request_id、可信channel、sender内部映射、必要平台ID | 跟随turn生命周期；GUI普通显示“QQ·所有者”，完整平台ID仅高级详情 |
 | bridge等待队列 | 入站身份、epoch、有限正文、接收时间、TTL、状态 | 最多3条；接受后删除正文，过期/取消立即删除 |
 | bridge outbox | request、固定route、reply hash/临时正文、固定分段、seq、发送attempt、平台回执、错误类别 | 确认发送后删除正文；未确认最长24小时后删正文、留unknown标记，人工需从授权的原请求重新取仍存活回复 |

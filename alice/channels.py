@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS channel_requests (
  source_key TEXT NOT NULL UNIQUE, source_json TEXT NOT NULL, payload_hash TEXT NOT NULL,
  status TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
  user_turn_id INTEGER, assistant_turn_id INTEGER, error_code TEXT,
- maintenance_status TEXT NOT NULL DEFAULT 'pending'
+ maintenance_status TEXT NOT NULL DEFAULT 'pending', reply_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS channel_turns (
  turn_id INTEGER PRIMARY KEY, request_id TEXT NOT NULL, channel_id TEXT NOT NULL
@@ -89,6 +89,11 @@ class ChannelCoordinator:
         conn = self.service.store.conn
         conn.executescript(SCHEMA)
         with conn:
+            # Additive v1 migration: a historical receipt binds original reply
+            # bytes, never the scope/expiry-dependent text displayed today.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(channel_requests)")}
+            if "reply_hash" not in columns:
+                conn.execute("ALTER TABLE channel_requests ADD COLUMN reply_hash TEXT")
             conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('channel_schema_version','1')")
             conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('session_epoch',?)", (uuid.uuid4().hex,))
             if conn.execute("SELECT value FROM meta WHERE key='channel_schema_version'").fetchone()[0] != "1":
@@ -143,6 +148,9 @@ class ChannelCoordinator:
                 raise ChannelError(503, "draining", "Alice 正在关闭，未接受新请求")
             token = object()
             self.slot, self.active_channel, self.active_request = token, channel, request_id
+            discovery = getattr(self.service, "_discovery", None)
+            if discovery is not None:
+                discovery.foreground_started()
             return token
 
     def release(self, token):
@@ -222,25 +230,85 @@ class ChannelCoordinator:
                 "text": text, "source": {"provider": "local", "chat_type": "owner"},
                 "source_key": _digest([epoch, "gui", request_id]), "payload_hash": _digest(text)}
 
+    def _reply_hash_locked(self, row):
+        """Freeze legacy metadata without ever hashing an expired source shadow.
+
+        New assistant turns set this hash in their original Store transaction.
+        Existing delivery registrations are authoritative for legacy requests.
+        """
+        if row["reply_hash"]:
+            return row["reply_hash"]
+        conn = self.service.store.conn
+        hashes = [r[0] for r in conn.execute(
+            "SELECT DISTINCT reply_hash FROM channel_deliveries WHERE request_id=?", (row["request_id"],))]
+        if len(hashes) > 1:
+            return None  # Conflicting historical plans cannot establish identity.
+        digest = hashes[0] if hashes else None
+        if digest is None and row["assistant_turn_id"] is not None:
+            attachment = conn.execute("SELECT content FROM source_turns WHERE turn_id=?",
+                                      (row["assistant_turn_id"],)).fetchone()
+            if attachment is not None:
+                original = attachment["content"] or None
+            else:
+                turn = conn.execute("SELECT content FROM turns WHERE id=? AND role='assistant'",
+                                    (row["assistant_turn_id"],)).fetchone()
+                original = turn["content"] if turn else None
+            if original is not None:
+                digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return None
+        with conn:
+            conn.execute("UPDATE channel_requests SET reply_hash=? WHERE request_id=? AND reply_hash IS NULL",
+                         (digest, row["request_id"]))
+        return digest
+
+    def _reply_sendable_locked(self, row):
+        """Live capability check, separate from immutable historical identity."""
+        turn_id = row["assistant_turn_id"]
+        if turn_id is None or not self.service.store.conn.execute(
+                "SELECT 1 FROM turns WHERE id=? AND role='assistant'", (turn_id,)).fetchone():
+            return False
+        attachment = self.service.store.conn.execute("SELECT * FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
+        if attachment is None:
+            return True  # An ordinary reply may itself equal the shadow text.
+        return bool(attachment["content"] and attachment["scope"] == row["channel_id"]
+                    and attachment["expires_at"] > time.time()
+                    and self.service.store.source_packets_for(
+                        json.loads(attachment["source_ids_json"]), scope=row["channel_id"]))
+
     def _view_locked(self, row):
         result = {key: row[key] for key in ("request_id", "session_epoch", "channel_id", "status", "created_at", "updated_at",
                                           "user_turn_id", "assistant_turn_id", "error_code", "maintenance_status")}
         result["reply"] = None
+        result["reply_hash"] = self._reply_hash_locked(row)
+        result["delivery_allowed"] = self._reply_sendable_locked(row)
         if row["assistant_turn_id"] is not None:
             turn = self.service.store.conn.execute("SELECT content FROM turns WHERE id=? AND role='assistant'",
                                                    (row["assistant_turn_id"],)).fetchone()
             if turn:
-                result["reply"] = turn["content"]
+                result["reply"] = self.service.store.turn_display(row["assistant_turn_id"], scope=row["channel_id"])
         return result
+
+    def invalidate_source_cache(self):
+        """Source attachments must never survive revocation through cached replies."""
+        with self.condition:
+            for identity in list(self.cache):
+                if self.cache[identity].get("source_bound"):
+                    del self.cache[identity]
 
     def publish_locked(self, request_id):
         row = self.service.store.conn.execute("SELECT * FROM channel_requests WHERE request_id=?", (request_id,)).fetchone()
         if row is None:
             return None
         view = self._view_locked(row)
+        source_bound = bool(row["assistant_turn_id"] and self.service.store.turn_source_ids(row["assistant_turn_id"]))
+        cached_view = copy.deepcopy(view)
+        if source_bound:
+            cached_view["reply"] = None  # Always hydrate through scope/expiry, never cache source prose.
         with self.condition:
-            self.cache[request_id] = {"view": view, "payload_hash": row["payload_hash"],
-                                      "source_key": row["source_key"], "source": json.loads(row["source_json"])}
+            self.cache[request_id] = {"view": cached_view, "payload_hash": row["payload_hash"],
+                                      "source_key": row["source_key"], "source": json.loads(row["source_json"]),
+                                      "source_bound": source_bound}
             while len(self.cache) > 64:
                 self.cache.pop(next(iter(self.cache)))
         return view
@@ -251,7 +319,7 @@ class ChannelCoordinator:
             cached = self.cache.get(request["request_id"])
             if cached is None:
                 cached = next((r for r in self.cache.values() if r["source_key"] == request["source_key"]), None)
-            if cached:
+            if cached and not cached.get("source_bound"):
                 return self._match(request, cached["view"], cached["payload_hash"])
         if not self.service._lock.acquire(blocking=False):
             raise ChannelError(503, "status_unavailable", "请求状态暂不可确认，请继续查询原请求")
@@ -299,7 +367,7 @@ class ChannelCoordinator:
         _id(request_id)
         with self.condition:
             cached = self.cache.get(request_id)
-            if cached and cached["view"]["channel_id"] == channel_id and self._current_owner(cached["source"]):
+            if cached and not cached.get("source_bound") and cached["view"]["channel_id"] == channel_id and self._current_owner(cached["source"]):
                 return copy.deepcopy(cached["view"])
         if not self.service._lock.acquire(blocking=False):
             raise ChannelError(503, "status_unavailable", "请求状态暂不可确认，请继续查询原请求")
@@ -392,22 +460,38 @@ class ChannelCoordinator:
             if v is not None and (not isinstance(v, str) or len(v) > 256
                                   or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in v)):
                 raise _bad()
+        if state == "platform_confirmed" and not payload.get("platform_message_id"):
+            raise _bad("平台确认回执需要真实消息标识")
         if not self.service._lock.acquire(blocking=False):
             raise ChannelError(503, "status_unavailable", "发送记录暂不可写，请保留本机发送账本后重试")
         try:
             self.check_epoch(payload["session_epoch"])
-            view = self.status(channel_id, payload["request_id"])
-            if view["reply"] is None or hashlib.sha256(view["reply"].encode("utf-8")).hexdigest() != payload["reply_hash"]:
-                raise ChannelError(409, "reply_conflict", "发送记录不匹配原回复")
             conn = self.service.store.conn
+            request = conn.execute("SELECT * FROM channel_requests WHERE request_id=? AND channel_id=?",
+                                   (payload["request_id"], channel_id)).fetchone()
+            if request is None or not self._current_owner(json.loads(request["source_json"])):
+                raise ChannelError(404, "not_found", "本会话中没有该渠道的请求")
+            original_hash = self._reply_hash_locked(request)
+            if original_hash is None or not hmac.compare_digest(original_hash, payload["reply_hash"]):
+                raise ChannelError(409, "reply_conflict", "发送记录不匹配原回复")
+            # ready only registers immutable plan metadata. Every sending call,
+            # including a repeated sending status after QQ 401/429, is a new
+            # authorization check. Terminal receipts record facts, not permission.
+            if state == "sending" and not self._reply_sendable_locked(request):
+                raise ChannelError(409, "source_unavailable", "回复依赖的来源已过期或不再允许用于该渠道，未发分段已停止")
             old = conn.execute("SELECT * FROM channel_deliveries WHERE request_id=? AND segment_index=?",
                                (payload["request_id"], index)).fetchone()
             if old:
                 if old["segment_hash"] != payload["segment_hash"] or old["reply_hash"] != payload["reply_hash"]:
                     raise ChannelError(409, "delivery_conflict", "分段内容不可变更")
+                if (old["platform_message_id"] and payload.get("platform_message_id")
+                        and old["platform_message_id"] != payload["platform_message_id"]):
+                    raise ChannelError(409, "delivery_conflict", "平台消息回执不可变更")
                 # Bridge may crash after persisting local `sending` but before its
                 # HTTP `sending` receipt reaches us. Conservatively preserve unknown.
-                transitions = {"ready": {"sending", "failed", "send_unknown"}, "sending": {"platform_confirmed", "failed", "send_unknown"},
+                # A confirmed message ID is also a historical fact: accepting
+                # ready -> confirmed does not grant a fresh dispatch permission.
+                transitions = {"ready": {"sending", "platform_confirmed", "failed", "send_unknown"}, "sending": {"platform_confirmed", "failed", "send_unknown"},
                                "failed": {"sending"}, "send_unknown": {"platform_confirmed"}, "platform_confirmed": set()}
                 if state != old["status"] and state not in transitions[old["status"]]:
                     raise ChannelError(409, "delivery_conflict", "发送状态不能回退")

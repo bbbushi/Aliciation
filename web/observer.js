@@ -9,8 +9,9 @@
     last_used_at: "最近使用", promoted_at: "晋升时间", keywords: "关键词", source_titles: "出处标题（未验证）",
     filename: "快照文件", mtime: "文件修改时间", version: "当前版本计数", seeded_at: "人格安装时间",
     truncated: "元信息有截断", memory_id: "原记忆 ID", expired_at: "实际删除时间", reason: "存储原因",
+    origin: "来源资格", scope: "允许使用的渠道", expires_at: "证据期限", source_packet_ids: "来源包 ID",
   };
-  const times = new Set(["created_at", "last_used_at", "promoted_at", "seeded_at", "mtime", "expired_at"]);
+  const times = new Set(["created_at", "last_used_at", "promoted_at", "seeded_at", "mtime", "expired_at", "expires_at"]);
   let opened = false, stopped = false, running = false, generation = 0;
   let timer = null, controller = null, scope = null, snapshot = null, personaChange = null;
   let pending = { snapshot: false, list: false, detail: false }, changes = [], firstTime = null;
@@ -239,12 +240,15 @@
     if (value === undefined || value === null) return "未记录";
     if (key === "layer") return layers[value] || value;
     if (key === "kind") return value === "stance" ? "观点" : value === "event" ? "事件" : value;
+    if (key === "origin") return ({ conversation: "普通对话", external: "外部见闻", external_derived: "外部派生" })[value] || value;
+    if (key === "source_packet_ids") return Array.isArray(value) && value.length ? value.join("、") : "无外部来源包";
+    if (key === "scope" && value === "[]") return "沿用普通对话范围";
     return String(value);
   }
   function renderOverview(d) {
     const m = d.memory_counts, p = d.progress, x = p.extraction;
     text("obs-counts", `原始状态 · 存活记忆条数：活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`);
-    text("obs-coverage", `差异覆盖 ${d.manifest.items.length} / ${d.manifest.total} 条存活记忆（最近 ID，上限 ${d.manifest.limit}）。${d.manifest.complete ? "当前全部存活 ID 在范围内。" : "范围不完整；未跟踪条目仍可在记忆页检索。"} ${d.manifest.items.some((r) => r.text_truncated) ? "包含超长字段，仅比较前 16000 字与长度。" : ""}`);
+    text("obs-coverage", `差异覆盖 ${d.manifest.items.length} / ${d.manifest.total} 条存活记忆（最近 ID，上限 ${d.manifest.limit}）。${d.manifest.scope_limited ? `其中 ${d.manifest.visible_total} 条目前允许在GUI查看；其他条目不提供正文。` : d.manifest.complete ? "当前全部存活 ID 在范围内。" : "范围不完整；未跟踪条目仍可在记忆页检索。"} ${d.manifest.items.some((r) => r.text_truncated) ? "包含超长字段，仅比较前 16000 字与长度。" : ""}`);
     const container = el("obs-progress"); container.replaceChildren();
     const items = [
       `记忆提取：游标 ${x.cursor} 后待处理 ${x.pending_messages} 条消息；实际检查的前 ${x.batch_messages} 条中有 ${x.batch_user_messages} 条用户消息，阈值 ${x.threshold}。${x.batch_user_messages >= x.threshold ? "当前满足数量条件；不保证提取成功或产出新记忆。" : "当前批次未达到数量门槛。"}`,
@@ -634,7 +638,10 @@
       if (!labels[key]) return;
       meta.append(node("dt", labels[key]), node("dd", format(key, value)));
     });
-    if (selected.view === "memories") meta.append(node("dt", "来源链"), node("dd", "未记录结构化来源 ID / 轮次；观点出处以原文为准。"));
+    if (selected.view === "memories") meta.append(node("dt", "来源链"), node("dd",
+      d.metadata?.origin && d.metadata.origin !== "conversation"
+        ? "外部来源包及有效期由宿主记录；引用存在不等于陈述可信，首版不作为人格、思辨或技能依据。"
+        : "普通对话记忆尚无结构化来源轮次；观点出处以原文为准。"));
   }
   function resetList() {
     before = null; ceiling = null; nextBefore = null; listSignature = ""; listRevision++;
