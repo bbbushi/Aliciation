@@ -29,14 +29,18 @@ from .store import text_score
 DAY_ZONE = timezone(timedelta(hours=8))
 PLATFORMS = {"wikipedia": "维基百科", "bilibili": "B站", "zhihu": "知乎", "tieba": "贴吧"}
 _BILI_STAGES = frozenset({"device", "wbi_keys", "search", "video_info"})
-_SEARCH_PROVIDERS = frozenset({"native", "bing_rss", "brave", "searxng"})
+_SEARCH_PROVIDERS = frozenset({"native", "bing_rss", "brave", "searxng", "browser"})
 _SEARCH_COUNTS = ("received", "accepted", "returned", "rejected", "duplicates", "unsupported")
 DEFAULTS = {
     "enabled": False, "allow_paid": False, "window_start": "18:00", "window_end": "23:00",
+    "background_enabled": True, "chat_search_enabled": False, "remember_observations": False,
+    "chat_search_calls": None, "chat_search_results": 3, "tool_round_limit": 4,
+    "chat_search_timeout_seconds": 300,
+    "observation_ttl_hours": None,
     "daily_queries": 60, "daily_models": 120, "allow_chat_interests": False,
     "share_in_qq": False, "save_memories": False, "provider_kind": "native",
     "provider_endpoint": "", "provider_key": "", "provider_engines": "duckduckgo",
-    "bilibili_access": "native", "tieba_access": "native", "network_mode": "system", "daily_network": 1000, "daily_response_mib": 1024,
+    "bilibili_access": "native", "zhihu_access": "third_party", "tieba_access": "native", "network_mode": "system", "daily_network": 1000, "daily_response_mib": 1024,
     "tieba_read_replies": False, "tieba_reply_limit": 20,
     "daily_shares": 20, "daily_memory_writes": 10, "pool_capacity": 100,
     "source_pool_bytes": 200 * 1024 * 1024, "chat_material_limit": 2,
@@ -51,9 +55,12 @@ DEFAULTS = {
     "read_timeout_seconds": 30, "model_timeout_seconds": 120,
     "search_response_bytes": 1024 * 1024, "read_response_bytes": 4 * 1024 * 1024,
     "model_response_bytes": 1024 * 1024,
+    "browser_resource_bytes": 8 * 1024 * 1024,
     "platforms": {name: {"enabled": False, "allow_third_party": False} for name in PLATFORMS},
 }
 NULLABLE_LIMITS = frozenset({
+    "chat_search_calls", "chat_search_results", "tool_round_limit",
+    "observation_ttl_hours",
     "daily_queries", "daily_models", "daily_network", "daily_shares", "daily_memory_writes",
     "pool_capacity", "source_pool_bytes", "chat_material_limit", "chat_dependency_limit",
     "external_recall_limit", "stock_target", "interest_capacity", "active_interest_capacity",
@@ -61,11 +68,12 @@ NULLABLE_LIMITS = frozenset({
 })
 NONNEGATIVE_TIMES = frozenset({"activity_interval_minutes", "share_interval_minutes"})
 POSITIVE_SETTINGS = frozenset({
+    "chat_search_timeout_seconds",
     "tick_minutes", "candidate_ttl_hours", "source_ttl_hours", "memory_ttl_hours",
     "seen_ttl_days", "block_ttl_days", "less_share_days", "discussion_minutes",
     "activity_timeout_seconds", "search_timeout_seconds", "read_timeout_seconds", "model_timeout_seconds",
 })
-POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes", "tieba_reply_limit"})
+POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes", "browser_resource_bytes", "tieba_reply_limit"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS discovery_config (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value TEXT NOT NULL);
@@ -91,8 +99,8 @@ CREATE TABLE IF NOT EXISTS discovery_attempts (
  reason TEXT NOT NULL DEFAULT '', input_tokens INTEGER, output_tokens INTEGER, created_at REAL NOT NULL,
  diagnostic TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS discovery_cards (
- id TEXT PRIMARY KEY, packet_id TEXT NOT NULL, platform TEXT NOT NULL, interest_id TEXT NOT NULL,
- interest_version INTEGER NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+ id TEXT PRIMARY KEY, packet_id TEXT NOT NULL, platform TEXT NOT NULL, interest_id TEXT,
+ interest_version INTEGER, title TEXT NOT NULL, url TEXT NOT NULL,
  content_hash TEXT NOT NULL, coverage TEXT NOT NULL, summary TEXT NOT NULL,
  author_view TEXT NOT NULL, interpretation TEXT NOT NULL, uncertainty TEXT NOT NULL,
  question TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL,
@@ -221,7 +229,8 @@ def _response_budget(settings):
 
 def _third_party(platform, settings):
     return (platform != "wikipedia"
-            and not (platform == "bilibili" and settings["bilibili_access"] == "native")
+            and not (platform == "bilibili" and settings["bilibili_access"] in ("native", "browser"))
+            and not (platform == "zhihu" and settings["zhihu_access"] == "browser")
             and not (platform == "tieba" and settings["tieba_access"] == "native"))
 
 
@@ -334,6 +343,8 @@ class DiscoveryCoordinator:
         self._unavailable = False
         self._orphans = []
         self._sharing_failed = False
+        self._browser_results = {}
+        self._chat_session = None
         self.bind_store()
 
     def bind_store(self):
@@ -342,8 +353,11 @@ class DiscoveryCoordinator:
         self._pending = self._note = None
         self._tieba_forum_check = None
         self._sharing_failed = False
+        self._browser_results = {}
         conn = self.service.store.conn
         conn.executescript(SCHEMA)
+        from .dialogue_search import migrate
+        migrate(self)
         with conn:
             if conn.execute("SELECT 1 FROM discovery_tieba_policy WHERE id=1").fetchone() is None:
                 conn.execute("INSERT INTO discovery_tieba_policy VALUES(1,'legacy')")
@@ -392,9 +406,71 @@ class DiscoveryCoordinator:
         # Called under the channel condition. Never take another lock or wait here.
         self._cancel.set()
 
+    def prepare_chat_locked(self, request, token, on_progress=None):
+        from .dialogue_search import SearchSession, search_declined
+        _, settings = self._config_locked()
+        if (request["channel_id"] != "gui" or not settings["enabled"] or not settings["chat_search_enabled"]
+                or search_declined(request["text"])):
+            return None
+        session = SearchSession(self, request, token, on_progress)
+        with self._guard:
+            self._chat_session = session
+        return session
+
+    def finish_chat(self, request_id):
+        with self._guard:
+            if self._chat_session and self._chat_session.request_id == request_id:
+                self._chat_session.finished = True
+                self._chat_session.results.clear()
+                if self._chat_session.progress["phase"] == "idle":
+                    self._chat_session.progress.update(phase="completed", status="not_used", message="本轮未联网查找")
+                    self._chat_session.progress["sequence"] += 1
+
+    def chat_control(self, payload, *, cancel=False):
+        if (not isinstance(payload, dict) or set(payload) != {"request_id", "session_epoch"}
+                or not isinstance(payload["request_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", payload["request_id"])
+                or payload["session_epoch"] != self.dataset_id):
+            raise ChannelError(409, "session_changed", "请刷新后查看本轮检索")
+        with self._guard:
+            session = self._chat_session
+            if session is not None and session.request_id == payload["request_id"]:
+                if cancel and not session.finished:
+                    session.cancel.set()
+                progress = {**copy.deepcopy(session.progress), "stop_requested": session.cancel.is_set()}
+            else:
+                session = None
+        if session is not None:
+            if cancel:
+                return {**progress, "items": []}
+            with self.service._lock:
+                if payload["session_epoch"] != self.dataset_id:
+                    raise ChannelError(409, "session_changed", "会话已更换")
+                return session.hydrate_locked(progress, evidence=False)
+        with self.service._lock:
+            if payload["session_epoch"] != self.dataset_id:
+                raise ChannelError(409, "session_changed", "会话已更换")
+            row = self.service.store.conn.execute(
+                "SELECT result_json,state,reason FROM discovery_runs WHERE parent_request_id=? AND epoch=? ORDER BY started_at DESC LIMIT 1",
+                (payload["request_id"], payload["session_epoch"])).fetchone()
+            if row is None:
+                raise ChannelError(404, "not_found", "未找到这条检索记录，请先同步聊天历史")
+            result = json.loads(row["result_json"])
+            return {**payload, **result, "items": [], "phase": "completed", "status": result.get("status", "interrupted"),
+                    "message": result.get("message", "原检索已中断，没有自动重新搜索")}
+
+    def _foreground_allowed(self, job):
+        channels = self.service._channels
+        if job.get("kind") == "chat_search":
+            return (channels.slot is job.get("owner_token") and channels.slot is not None
+                    and channels.active_channel == "gui" and channels.active_request == job.get("parent_request_id"))
+        return channels.slot is None
+
     def begin_shutdown(self):
         self._stop.set()
         self._cancel.set()
+        with self._guard:
+            if self._chat_session:
+                self._chat_session.cancel.set()
         self._wake.set()
 
     def before_reset(self):
@@ -462,6 +538,8 @@ class DiscoveryCoordinator:
         return packets
 
     def _bump_revision_locked(self):
+        if self._chat_session:
+            self._chat_session.cancel.set()
         self.service.store.conn.execute("UPDATE discovery_config SET revision=revision+1 WHERE id=1")
 
     def _budget_locked(self, day=None):
@@ -470,6 +548,9 @@ class DiscoveryCoordinator:
                                      "body_bytes": 0, "shares": 0}
 
     def _available(self, platform, settings):
+        if platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser":
+            from .browser_transport import availability
+            return availability()
         if platform == "bilibili" and settings["bilibili_access"] == "native" and not (Path(__file__).resolve().parent.parent / "addons" / "bilibili" / "worker.py").is_file():
             return False, "B站只读组件缺失，请保留仓库中的addons/bilibili目录"
         if not _third_party(platform, settings):
@@ -521,12 +602,23 @@ class DiscoveryCoordinator:
             }[identity]
             method = ({"wikipedia": "平台公开接口", "bilibili": "B站站内只读接口", "tieba": "贴吧公开搜索入口"}.get(identity, "")
                       if not _third_party(identity, settings) else settings["provider_kind"])
+            if identity in ("bilibili", "zhihu") and settings[identity + "_access"] == "browser":
+                method = "独立本机浏览器"
+                if identity == "zhihu":
+                    details = ("独立会话搜索并读取指定回答；文章、问题描述尚未开放", ["指定回答正文节选"])
             platforms.append({"id": identity, "name": label, "available": available, "reason": reason,
                               **settings["platforms"][identity],
                               "description": details[0], "discovery_method": method,
                               "readable_types": details[1],
                               "requires_third_party": _third_party(identity, settings),
                               "third_party_notice": "" if not _third_party(identity, settings) else "搜索词将交给所选第三方服务"})
+            if identity in ("bilibili", "zhihu"):
+                from .browser_transport import availability
+                installed, message = availability()
+                with self._guard:
+                    latest = self._browser_results.get(identity)
+                platforms[-1]["browser"] = {"installed": installed, "message": message,
+                    "last_result": latest, "last_message": _reason(latest) if latest else "尚未确认当前浏览器会话的访问状态"}
             if identity == "tieba":
                 platforms[-1]["scope_notice"] = "按各兴趣的优先吧排序当前关键词结果页；没有合适材料时可读其它吧，不遍历吧内列表"
                 platforms[-1]["scope_notice"] += (f"；读取主帖及首页最多 {settings['tieba_reply_limit']} 条回复，不翻页、不读楼中楼"
@@ -546,7 +638,9 @@ class DiscoveryCoordinator:
             if self.service.store.get_source_packet(item["packet_id"], scope="gui") is None:
                 continue  # Expired/revoked payloads must not leak through card copies.
             unavailable = ("", "")
-            if item["live_version"] is None:
+            if item.get("trigger_kind") == "chat":
+                item["interest_topic"] = "本轮查找"
+            elif item["live_version"] is None:
                 unavailable = ("interest_removed", "关联兴趣已移除，这条资料已暂停讨论")
             elif not item["interest_enabled"]:
                 unavailable = ("interest_disabled", "关联兴趣已停用，这条资料已暂停讨论")
@@ -554,14 +648,15 @@ class DiscoveryCoordinator:
                 unavailable = ("interest_permission_required", "关联兴趣未获准用于外部搜索，这条资料已暂停讨论")
             elif item["interest_version"] != item["live_version"]:
                 unavailable = ("interest_changed", "关联兴趣已修改，这条资料基于旧兴趣生成，已暂停讨论")
-            elif not settings["platforms"][item["platform"]]["enabled"]:
+            if not unavailable[0] and not settings["platforms"][item["platform"]]["enabled"]:
                 unavailable = ("platform_disabled", "来源平台已停用，这条资料已暂停讨论")
-            elif item["disabled"]:
+            elif not unavailable[0] and item["disabled"]:
                 unavailable = ("card_disabled", "这条资料已停用，不能继续用于讨论")
             valid = not unavailable[0]
             item.update(can_discuss=valid, unavailable_reason=unavailable[0], discuss_unavailable_reason=unavailable[1],
                         reason="关联兴趣：" + (item["interest_topic"] or "已移除"),
                         share_state="已暂停" if not valid else "已提供给对话（是否采用未推断）" if item["used_at"] else "待讨论")
+            item["memory_links"] = self.service.store.observation_links(item["packet_id"])
             for key in ("interest_summary", "interest_enabled", "live_version"):
                 item.pop(key, None)
             cards.append(item)
@@ -615,7 +710,8 @@ class DiscoveryCoordinator:
                 "interest": {"id", "topic", "summary", "enabled", "external_allowed", "preferred_forums"},
                 "interest_delete": {"id"}, "run": {"interest_id"}, "cancel": {"task_id"},
                 "feedback": {"card_id", "value"}, "delete": {"card_id"}, "clear": {"platform_id"},
-                "discuss": {"card_id"}, "undiscuss": set(), "tieba_forum_check": {"forums"},
+                "discuss": {"card_id"}, "remember_card": {"card_id"}, "undiscuss": set(), "tieba_forum_check": {"forums"}, "browser_open": {"platform"},
+                "remember_user": {"turn_id"},
             }
             if action not in allowed or set(payload) - allowed[action] - {"action", "dataset_id", "revision"}:
                 raise ChannelError(400, "invalid_request", "内容发现操作或字段无效")
@@ -630,6 +726,8 @@ class DiscoveryCoordinator:
                 if enabled and (not self._available(identity, settings)[0] or _third_party(identity, settings) and not third):
                     raise ChannelError(409, "platform_unavailable", "请先配置并允许该平台的发现通道")
                 self._cancel.set()
+                if self._chat_session:
+                    self._chat_session.cancel.set()
                 settings["platforms"][identity] = {"enabled": enabled, "allow_third_party": third}
                 self._write_config_locked(revision, settings)
                 if not enabled:
@@ -642,6 +740,14 @@ class DiscoveryCoordinator:
                 self._launch_locked(settings, revision, manual=True, interest_id=payload.get("interest_id"))
             elif action == "tieba_forum_check":
                 self._launch_tieba_check_locked(settings, revision, payload.get("forums"))
+            elif action == "browser_open":
+                from .browser_transport import BrowserError, open_browser
+                if self._worker and self._worker.is_alive():
+                    raise ChannelError(409, "busy", "请先停止当前寻找，再打开独立浏览器")
+                try:
+                    open_browser(self.service._config_path.parent, payload.get("platform"))
+                except (BrowserError, OSError):
+                    raise ChannelError(409, "browser_missing", "无法打开该平台的独立 Edge 窗口") from None
             elif action == "cancel":
                 with self._guard:
                     if self._task and payload.get("task_id") not in (None, self._task["id"]):
@@ -656,9 +762,21 @@ class DiscoveryCoordinator:
                 if card is None:
                     raise ChannelError(409, "material_unavailable", "资料已过期或已暂停")
                 self._pending = {"card_id": card["id"], "expires_at": min(time.time() + settings["discussion_minutes"] * 60, card["expires_at"])}
+            elif action == "remember_card":
+                card = self._valid_card_locked(payload.get("card_id"), "gui", settings)
+                if card is None:
+                    raise ChannelError(409, "material_unavailable", "资料已失效")
+                packet = self.service.store.get_source_packet(card["packet_id"], scope="gui")
+                mid = self.service.store.save_observation([packet["id"]], title=card["title"][:24],
+                    content="读到《" + card["title"][:80] + "》中的节选：" + packet["evidence"], scope="gui")
+                if mid is None:
+                    raise ChannelError(409, "memory_not_allowed", "请开启择要保存见闻，并确认来源与写入额度仍可用")
+            elif action == "remember_user":
+                memory_id = self.service.store.remember_user_turn(payload.get("turn_id"), scope="gui")
+                return {**self.snapshot_locked(), "remembered_memory_id": memory_id}
             elif action == "undiscuss":
                 self._pending = None
-            if action != "tieba_forum_check":
+            if action not in ("tieba_forum_check", "browser_open"):
                 self._wake.set()
             return self.snapshot_locked()
         finally:
@@ -670,7 +788,7 @@ class DiscoveryCoordinator:
             raise ChannelError(400, "invalid_request", "设置字段无效")
         settings = copy.deepcopy(previous)
         for key, value in changes.items():
-            if key in {"enabled", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies"}:
+            if key in {"enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies"}:
                 settings[key] = _bool(value)
             elif key in ("window_start", "window_end"):
                 settings[key] = _clock(value)
@@ -689,8 +807,10 @@ class DiscoveryCoordinator:
                         or value > 9007199254740991):
                     raise ChannelError(400, "invalid_request", "此配置需要有效的正数；活动和分享间隔可为0")
                 settings[key] = value
-            elif key in ("bilibili_access", "tieba_access"):
-                if value not in ("native", "third_party"):
+            elif key in ("bilibili_access", "zhihu_access", "tieba_access"):
+                options = {"bilibili_access": ("native", "third_party", "browser"),
+                           "zhihu_access": ("third_party", "browser"), "tieba_access": ("native", "third_party")}
+                if value not in options[key]:
                     raise ChannelError(400, "invalid_request", "平台访问方式无效")
                 settings[key] = value
             elif key == "network_mode":
@@ -734,9 +854,11 @@ class DiscoveryCoordinator:
                 settings[key] = ",".join(dict.fromkeys(engines))
             elif key == "clear_provider_key" and _bool(value):
                 settings["provider_key"] = ""
-        if settings["enabled"] and settings["daily_models"] != 0 and not settings["allow_paid"]:
+        if settings["enabled"] and settings["background_enabled"] and settings["daily_models"] != 0 and not settings["allow_paid"]:
             raise ChannelError(400, "cost_permission_required", "请允许后台模型费用，或将后台模型额度设为0")
         self._cancel.set()
+        if self._chat_session:
+            self._chat_session.cancel.set()
         self._pending = self._note = None
         revoked_packets = []
         scope_changed = _tieba_scope_changed(previous, settings)
@@ -746,6 +868,7 @@ class DiscoveryCoordinator:
             if scope_changed:
                 self.service.store.conn.execute("UPDATE discovery_tieba_policy SET version=? WHERE id=1", (uuid.uuid4().hex,))
                 revoked_packets = self._restrict_tieba_sources_locked(settings)
+                self.service.store.restrict_observation_tieba(settings)
                 # The new namespace also permits revisiting a policy that was
                 # explicitly left and later re-selected. Blocks are unaffected.
                 self.service.store.conn.execute("DELETE FROM discovery_seen WHERE identity LIKE 'tieba:%'")
@@ -840,6 +963,8 @@ class DiscoveryCoordinator:
         row = self.service.store.conn.execute("SELECT * FROM discovery_cards WHERE id=?", (payload.get("card_id"),)).fetchone()
         if row is None:
             raise ChannelError(404, "not_found", "资料已不存在")
+        if row["interest_id"] is None and value in {"more", "less", "stop_interest"}:
+            raise ChannelError(400, "interest_required", "本轮查找没有绑定长期兴趣")
         conn = self.service.store.conn
         self._cancel.set()
         with conn:
@@ -874,6 +999,8 @@ class DiscoveryCoordinator:
                 raise ChannelError(404, "not_found", "资料已不存在")
             packets, rows = [row["packet_id"]], [row]
         self._cancel.set()
+        if self._chat_session:
+            self._chat_session.cancel.set()
         self.service.store.revoke_source_packets(packets)
         with conn:
             conn.executemany("DELETE FROM discovery_cards WHERE id=?", [(r["id"],) for r in rows])
@@ -887,13 +1014,17 @@ class DiscoveryCoordinator:
             return None
         row = self.service.store.conn.execute(
             "SELECT c.*,i.enabled AS ie,i.external_allowed AS ia,i.version AS iv,i.topic,i.summary AS interest_summary,"
-            "i.share_after FROM discovery_cards c JOIN discovery_interests i ON i.id=c.interest_id WHERE c.id=?", (identity,)).fetchone()
-        if (row is None or row["disabled"] or row["expires_at"] <= time.time() or not row["ie"] or not row["ia"]
-                or row["interest_version"] != row["iv"] or not settings["platforms"][row["platform"]]["enabled"]
+            "i.share_after FROM discovery_cards c LEFT JOIN discovery_interests i ON i.id=c.interest_id WHERE c.id=?", (identity,)).fetchone()
+        if (row is None or row["disabled"] or row["expires_at"] <= time.time()
+                or row["trigger_kind"] != "chat" and (not row["ie"] or not row["ia"] or row["interest_version"] != row["iv"])
+                or not settings["platforms"][row["platform"]]["enabled"]
                 or scope == "qq-owner" and not settings["share_in_qq"]
                 or self.service.store.get_source_packet(row["packet_id"], scope=scope) is None):
             return None
-        return dict(row)
+        item = dict(row)
+        if item["trigger_kind"] == "chat":
+            item.update(topic="本轮查找", interest_summary="", share_after=0)
+        return item
 
     def select_for_chat_locked(self, request):
         """No extra model call. Explicit selection or conservative topic overlap."""
@@ -919,7 +1050,7 @@ class DiscoveryCoordinator:
         candidates = []
         for row in self.service.store.conn.execute("SELECT id FROM discovery_cards WHERE used_at IS NULL AND disabled=0 ORDER BY created_at DESC"):
             card = self._valid_card_locked(row[0], scope, settings)
-            if not card or card["share_after"] > time.time():
+            if not card or card["share_after"] > time.time() or card["trigger_kind"] == "chat" and not explicit:
                 continue
             score = text_score(card["topic"], text)
             if explicit or score >= 0.55:
@@ -997,6 +1128,8 @@ class DiscoveryCoordinator:
             return reject("draining", "后台工作者尚未回收或正在关闭")
         if not settings["enabled"]:
             return reject("disabled", "请先启用内容发现")
+        if not manual and not settings["background_enabled"]:
+            return False
         if settings["pool_capacity"] == 0 or settings["source_pool_bytes"] == 0 or settings["read_candidates"] == 0:
             return reject("material_disabled", "资料容量或候选读取数为0，请先在设置中调整")
         with self._guard:
@@ -1015,7 +1148,7 @@ class DiscoveryCoordinator:
             last = self.service.store.conn.execute("SELECT MAX(started_at) FROM discovery_runs WHERE interest_id IS NOT NULL").fetchone()[0]
             if last and now - last < settings["activity_interval_minutes"] * 60:
                 return False
-            stock = self.service.store.conn.execute("SELECT COUNT(*) FROM discovery_cards WHERE disabled=0 AND used_at IS NULL AND expires_at>?", (now,)).fetchone()[0]
+            stock = self.service.store.conn.execute("SELECT COUNT(*) FROM discovery_cards WHERE trigger_kind='interest' AND disabled=0 AND used_at IS NULL AND expires_at>?", (now,)).fetchone()[0]
             if settings["stock_target"] is not None and stock >= settings["stock_target"]:
                 return False
         platforms = [identity for identity, policy in settings["platforms"].items()
@@ -1188,7 +1321,11 @@ class DiscoveryCoordinator:
         with self._guard:
             check_job = (job.get("kind") == "tieba_forum_check" and self._tieba_forum_check
                          and self._tieba_forum_check["task_id"] == job["id"])
-        return revision == job["revision"] and (settings["enabled"] or bool(check_job))
+        enabled = settings["enabled"] or bool(check_job)
+        if job.get("kind") == "chat_search":
+            with self.service._channels.condition:
+                enabled = enabled and settings["chat_search_enabled"] and self._foreground_allowed(job)
+        return revision == job["revision"] and enabled
 
     def _phase(self, job, phase, *, state="running", reason=""):
         with self._guard:
@@ -1346,7 +1483,7 @@ class DiscoveryCoordinator:
                     # bytes. Foreground reserve and side-effect admission are ordered
                     # by one condition; no network/model wait happens under it.
                     with self.service._channels.condition:
-                        if (cancel.is_set() or self._stop.is_set() or self.service._channels.slot is not None
+                        if (cancel.is_set() or self._stop.is_set() or not self._foreground_allowed(job)
                                 or self.service._channels.closing or self._generation != job["generation"]
                                 or _day() != job["day"]):
                             raise _Stopped("foreground_busy")
@@ -1448,6 +1585,54 @@ class DiscoveryCoordinator:
         except TransportError as exc:
             raise _Stopped(exc.code) from None
 
+    def _execute_browser(self, job, cancel, settings, operation, platform, payload, deadline):
+        from .browser_transport import BrowserError, run_browser
+        maximum = settings["browser_resource_bytes"]
+        end = min(deadline, time.monotonic() + settings[operation + "_timeout_seconds"])
+        first = True
+        def check():
+            if self._unavailable:
+                raise _Stopped("worker_not_reaped")
+            if (cancel.is_set() or self._stop.is_set() or self._generation != job["generation"]
+                    or self.dataset_id != job["epoch"] or _day() != job["day"]):
+                raise _Stopped("cancelled")
+            with self.service._channels.condition:
+                if not self._foreground_allowed(job) or self.service._channels.closing:
+                    raise _Stopped("foreground_busy")
+        def admit(frame):
+            nonlocal first
+            check()
+            token = self._reserve_step(job, cancel, settings, "browser_resource", maximum,
+                                       query_attempt=operation == "search" and first)
+            first = False
+            return token
+        def authorize(action):
+            with self.service._channels.condition:
+                if (cancel.is_set() or self._stop.is_set() or not self._foreground_allowed(job)
+                        or self.service._channels.closing or self._generation != job["generation"]
+                        or _day() != job["day"]):
+                    raise _Stopped("foreground_busy")
+                action()
+        def settle(token, amount):
+            self._settle_step(job, cancel, token, maximum, {"usage": {"body_bytes": amount}},
+                              "ok" if amount is not None else "browser_transfer_unknown", {})
+        try:
+            job["diagnostic"] = {}
+            self._phase(job, "browser_" + operation)
+            result = run_browser({"op": operation, "platform": platform, "limit": settings["search_results"],
+                                  "response_bytes": maximum, "network_proxy": settings.get("_network_proxy", ""), **payload},
+                                 user_dir=self.service._config_path.parent, deadline=end,
+                                 admit=admit, settle=settle, check=check, unreaped=self._unreaped, authorize=authorize)
+            if operation == "search":
+                job["search_summary"] = _search_summary(result.get("diagnostic"))
+            with self._guard:
+                self._browser_results[platform] = "search_no_candidates" if operation == "search" and not result.get("candidates") else "browser_ready"
+            return result
+        except BrowserError as exc:
+            with self._guard:
+                self._browser_results[platform] = exc.code
+            raise _Stopped(exc.code) from None
+
     def _run(self, job, settings, interests, platforms, model, cancel):
         from .discovery_sources import normalize_candidate, validate_query
         from .discovery_network import NetworkRouteError, resolve_system_proxy
@@ -1486,7 +1671,10 @@ class DiscoveryCoordinator:
                 "endpoint": settings["provider_endpoint"], "allow_loopback": True,
                 "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
             native_bili = plan["platform"] == "bilibili" and settings["bilibili_access"] == "native"
-            if native_bili:
+            browser = plan["platform"] in ("bilibili", "zhihu") and settings[plan["platform"] + "_access"] == "browser"
+            if browser:
+                response = self._execute_browser(job, cancel, settings, "search", plan["platform"], {"query": query}, deadline)
+            elif native_bili:
                 response = self._execute_bilibili(job, cancel, settings, "search", {"query": query, "limit": settings["search_results"]}, deadline)
             else:
                 response = self._execute(job, cancel, settings, "search", {
@@ -1514,7 +1702,13 @@ class DiscoveryCoordinator:
                 if self._store_step(job, cancel, seen):
                     continue
                 try:
-                    if native_bili:
+                    if browser and plan["platform"] == "bilibili":
+                        # Browser session is needed for search; the fixed public
+                        # view endpoint supplies actual descriptions without playback.
+                        data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+                    elif browser:
+                        data = self._execute_browser(job, cancel, settings, "read", plan["platform"], {"url": candidate["url"]}, deadline)
+                    elif native_bili:
                         data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
                     else:
                         data = self._execute(job, cancel, settings, "read", {"candidate": candidate}, deadline)
@@ -1522,6 +1716,7 @@ class DiscoveryCoordinator:
                     if (self._unavailable or exc.code.startswith("proxy_") or exc.code in (
                             "cancelled", "foreground_busy", "session_changed", "quota_exceeded",
                             "platform_rejected", "tieba_api_error", "verification_required", "http_401", "http_403", "http_429",
+                            "browser_login_required", "browser_profile_busy", "browser_missing", "browser_scope", "browser_response_limit",
                             "network", "tls", "dns", "dns_resolution", "dns_non_public", "dns_fake_ip", "dns_invalid")):
                         raise
                     if exc.code == "timeout":
@@ -1622,7 +1817,7 @@ class DiscoveryCoordinator:
                 ("summary", 1200), ("author_view", 1800), ("interpretation", 2800), ("uncertainty", 1400), ("question", 600))}
             # Native Wikipedia text has a known attribution-bearing public licence;
             # no search API snippet is ever persisted as evidence.
-            eligible = bool(settings["save_memories"] and doc["platform"] == "wikipedia")
+            eligible = bool(settings["remember_observations"])
             packet_id, card_id = uuid.uuid4().hex, uuid.uuid4().hex
             title, url = _utf8(doc["title"], 1000), doc["url"]
             coverage = _coverage(doc.get("coverage"), doc)
@@ -1635,8 +1830,11 @@ class DiscoveryCoordinator:
                       "author_view": texts["author_view"], "model_interpretation": texts["interpretation"],
                       "uncertainty": "阅读范围：" + coverage + "。" + texts["uncertainty"],
                       "keywords": interest["summary"], "scope": ["gui", "qq-owner"] if settings["share_in_qq"] else ["gui"],
-                      "created_at": now, "expires_at": now + settings["memory_ttl_hours" if eligible else "source_ttl_hours"] * 3600,
-                      "memory_eligible": eligible}
+                      "created_at": now, "expires_at": now + settings["source_ttl_hours"] * 3600,
+                      "memory_eligible": False}
+            source.update(observation_eligible=True, coverage=coverage,
+                          reading_policy={"tieba_reply_count": doc.get("tieba_reply_count", 0),
+                                          "tieba_replies_requested": doc.get("tieba_replies_requested", False)})
             source["uncertainty"] = _utf8(source["uncertainty"], 1500)
             # Savepoints keep packet/card/dedup publication atomic even though
             # the source store is also used independently by ordinary chat.
@@ -1665,7 +1863,7 @@ class DiscoveryCoordinator:
             job["cards"] = accepted
             if eligible:
                 try:
-                    self.service.store.save_external_event(packet_id, title=title[:24],
+                    self.service.store.save_observation([packet_id], title=title[:24],
                         content="读取来源《" + title[:80] + "》时记下：" + quote[:200], keywords=interest["summary"], scope="gui")
                 except Exception:
                     job["memory_failed"] = True  # A valid temporary card remains useful.
@@ -1704,6 +1902,11 @@ def _coverage(value, doc=None):
 
 def _reason(code):
     return {"ok": "本次资料已整理", "no_new_material": "本轮没有新增资料",
+            "chat_search_disabled": "请在发现设置中开启内容访问和对话内搜索",
+            "chat_search_limit": "本轮已达到你设置的搜索次数",
+            "no_readable_content": "搜索找到了候选，但没有读到可用正文",
+            "source_failed": "本次来源读取未完成，未用搜索摘要替代正文",
+            "material_disabled": "当前资料容量或本轮资料数量设为0，未发起读取",
             "search_no_candidates": "搜索已返回，但没有可读取的页面或帖子候选，尚未进入正文阅读",
             "no_selected_material": "已读取材料，本轮未选入资料卡", "cancelled": "已停止本次活动",
             "bili_missing": "B站只读组件缺失", "bili_scope": "B站请求超出本轮只读范围",
@@ -1718,6 +1921,18 @@ def _reason(code):
             "tieba_forum_check_required": "新增优先吧需要先完成检测并确认有公开帖子",
             "tieba_forum_unconfirmed": "平台未返回可确认的吧信息，本次保持未验证，不能据此判断吧不存在",
             "adapter_failed": "B站只读组件未能完成本次操作",
+            "browser_ready": "本次独立浏览器访问已取得可用内容",
+            "browser_missing": "独立浏览器组件尚未安装或 Edge 不可用",
+            "browser_login_required": "请打开该平台的独立浏览器，亲自登录后关闭窗口再寻找",
+            "browser_profile_busy": "独立浏览器正在使用，请关闭它的窗口后再寻找",
+            "browser_start_failed": "独立浏览器未能启动，请检查 Edge 和组件安装",
+            "browser_content_unavailable": "浏览器未取得可确认的目标正文或搜索结果，未以摘要补足",
+            "browser_navigation_failed": "独立浏览器未能打开目标页面，本次未重试",
+            "browser_response_limit": "浏览器资源超过单次响应大小，请在任务设置中调整",
+            "browser_scope": "浏览器页面转向了当前只读范围之外，本次已停止",
+            "browser_supervision": "无法监督浏览器进程，已停止启动",
+            "browser_protocol": "浏览器组件返回了无效协议，本次已停止",
+            "browser_failed": "独立浏览器读取未完成，请检查平台登录或验证状态",
             "response_too_large": "响应超过你设置的单次大小",
             "invalid_response": "平台返回的数据格式不符合预期",
             "login_required": "该B站内容需要登录，当前只读通道未使用账号",

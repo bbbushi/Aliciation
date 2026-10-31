@@ -220,15 +220,18 @@ class ChannelCoordinator:
                 "text": text, "source": dict(source), "source_key": _digest([epoch, *identity]),
                 "payload_hash": _digest([identity, text]), "timestamp": timestamp}
 
-    def gui_request(self, text, request_id, epoch):
+    def gui_request(self, text, request_id, epoch, *, search_intent=None):
         text = _text(text)
+        from .dialogue_search import normalize_intent
+        intent = normalize_intent(text, search_intent)
         with self.condition:
             epoch = self.epoch if epoch is None else epoch
             self.check_epoch(epoch)
         request_id = _id(request_id) if request_id is not None else uuid.uuid4().hex
         return {"request_id": request_id, "session_epoch": epoch, "channel_id": "gui",
-                "text": text, "source": {"provider": "local", "chat_type": "owner"},
-                "source_key": _digest([epoch, "gui", request_id]), "payload_hash": _digest(text)}
+                "text": text, "search_intent": intent,
+                "source": {"provider": "local", "chat_type": "owner", **({"search_intent": intent} if intent else {})},
+                "source_key": _digest([epoch, "gui", request_id]), "payload_hash": _digest([text, intent]) if intent else _digest(text)}
 
     def _reply_hash_locked(self, row):
         """Freeze legacy metadata without ever hashing an expired source shadow.
@@ -428,7 +431,7 @@ class ChannelCoordinator:
                 with self.condition:
                     if self.slot is not token:
                         raise ChannelError(409, "reservation_lost", "请求已失效")
-                self.service._send_locked(request)
+            self.service._send_locked(request, owner_token=token)
         except BaseException:
             with self.service._lock:
                 if request["session_epoch"] == self.epoch:

@@ -57,7 +57,9 @@
           </details>
           <details id="discovery-settings-box" class="discovery-box"><summary>自动寻找与高级设置</summary>
             <form id="discovery-settings-form" class="discovery-form">
-              <label class="discovery-check"><input id="discovery-enabled" type="checkbox"><span>开启自主内容发现</span></label>
+              <label class="discovery-check"><input id="discovery-enabled" type="checkbox"><span>允许内容访问（总开关）</span></label>
+              <label class="discovery-check"><input id="discovery-background" type="checkbox"><span>按兴趣自动寻找</span></label>
+              <label class="discovery-check"><input id="discovery-chat-search" type="checkbox"><span>允许 Alice 在聊天时按需要自行查找相关资料</span></label>
               <p class="discovery-hint">Alice 运行且聊天空闲时，在所选时段内寻找内容。关闭页面不会停止已开启的活动。</p>
               <div class="discovery-pair"><label class="discovery-field">开始时间（北京时间）<input id="discovery-start" type="time" required></label>
                 <label class="discovery-field">结束时间（北京时间）<input id="discovery-end" type="time" required></label></div>
@@ -80,7 +82,7 @@
               <details class="discovery-policy-section"><summary>聊天取材与记忆</summary>
               <label class="discovery-check"><input id="discovery-chat-interests" type="checkbox"><span>允许从聊天中明确表达的普通兴趣整理候选，供我确认</span></label>
               <label class="discovery-check"><input id="discovery-share-qq" type="checkbox"><span>允许在既有本人 QQ 聊天中使用符合范围的资料，不主动发送</span></label>
-              <label class="discovery-check" title="当前仅维基百科材料符合正式见闻保存条件；条数与证据保留时间由这里的设置决定，其他平台仍作临时资料。"><input id="discovery-save-memories" type="checkbox"><span>允许把符合来源条件的见闻保存为记忆</span></label>
+              <label class="discovery-check"><input id="discovery-remember-observations" type="checkbox"><span>允许择要保存带出处的见闻，随普通记忆遗忘</span></label>
               </details>
               <details class="discovery-policy-section"><summary>活动节奏与库存目标</summary><div id="discovery-rhythm-settings" class="discovery-policy-grid"></div></details>
               <details class="discovery-policy-section"><summary>资料、兴趣与对话容量</summary>
@@ -99,8 +101,10 @@
               <details class="discovery-policy-section"><summary>平台访问与网络</summary>
               <label class="discovery-field">内容发现网络路由<select id="discovery-network-mode" aria-describedby="discovery-network-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="system">跟随本机系统 HTTP 代理</option><option value="direct">直接连接</option></select></label>
               <p id="discovery-network-hint" class="discovery-hint">当前服务尚未提供网络路由设置。</p>
-              <label class="discovery-field">B站访问方式<select id="discovery-bilibili-access" disabled><option value="native">B站原生入口</option><option value="third_party">第三方搜索服务</option></select></label>
+              <label class="discovery-field">B站访问方式<select id="discovery-bilibili-access" disabled><option value="native">B站原生入口</option><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select></label>
               <p id="discovery-bilibili-hint" class="discovery-hint"></p>
+              <label class="discovery-field">知乎访问方式<select id="discovery-zhihu-access" disabled><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select></label>
+              <p id="discovery-zhihu-hint" class="discovery-hint"></p>
               <label class="discovery-field">贴吧访问方式<select id="discovery-tieba-access" aria-describedby="discovery-tieba-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="native">贴吧原生入口</option><option value="third_party">第三方搜索服务</option></select></label>
               <p id="discovery-tieba-hint" class="discovery-hint"></p>
               <label class="discovery-field">第三方搜索服务<select id="discovery-provider"><option value="native">不使用第三方搜索服务</option><option value="bing_rss">Bing RSS（免费，无需密钥）</option><option value="brave">Brave 搜索服务</option><option value="searxng">SearXNG 搜索服务</option></select></label>
@@ -147,6 +151,9 @@
   const taskLabels = { idle: "等待下一次合格活动", queued: "等待开始", starting: "正在准备", running: "正在寻找", plan: "正在选择角度", search: "正在寻找材料", read: "正在读取内容", interpret: "正在整理材料与看法", bili_search: "正在准备 B站搜索", bili_read: "正在准备读取视频信息", bili_http: "正在访问 B站公开接口", planning: "正在选择角度", searching: "正在寻找材料", reading: "正在读取内容", synthesizing: "正在整理材料与看法", committing: "正在保存资料", completed: "本次寻找已完成", succeeded: "本次寻找已完成", skipped: "本次未继续寻找", cancelled: "本次已停止", cancelling: "正在停止", draining: "正在收回本次任务", failed: "本次寻找未完成", unavailable: "发现服务暂不可用", interrupted: "本次寻找已中断" };
   const biliStages = { device: "匿名设备准备", wbi_keys: "搜索参数准备", search: "视频搜索", video_info: "视频信息读取" };
   taskLabels.tieba_forum_check = "正在检测吧名";
+  taskLabels.browser_search = "正在通过独立浏览器搜索";
+  taskLabels.browser_read = "正在读取指定页面正文";
+  taskLabels.browser_resource = "正在加载获准的浏览器资源";
   const reasons = { disabled: "自主发现尚未开启", outside_window: "当前不在活动时段", foreground_busy: "先等当前聊天结束", stock_sufficient: "已有足够的新资料", no_new_material: "本轮没有新增资料", search_no_candidates: "搜索已返回，但没有可读取的页面或帖子候选，尚未进入正文阅读", no_selected_material: "已读取材料，本轮未选入资料卡", quota_exhausted: "今日额度已经用完", source_revoked: "来源许可已关闭", cancelled: "本次任务已停止", no_platforms: "还没有开放平台", no_interests: "还没有可用于寻找内容的兴趣", no_credentials: "所选服务还没有配置可用凭据", timeout: "本次寻找达到时间限制" };
   const policyFields = [
     { key: "daily_queries", label: "每日查询次数", group: "daily", integer: true, nullable: true },
@@ -155,6 +162,10 @@
     { key: "daily_response_mib", label: "每日响应正文（MiB）", group: "daily", nullable: true },
     { key: "daily_shares", label: "每日自动带出资料次数", group: "daily", integer: true, nullable: true },
     { key: "daily_memory_writes", label: "每日正式见闻条数", group: "daily", integer: true, nullable: true },
+    { key: "chat_search_calls", label: "每轮对话搜索调用次数", group: "execution", integer: true, nullable: true, note: "相同请求复用已取得的结果，不重复访问。" },
+    { key: "chat_search_results", label: "每次对话搜索返回材料", group: "execution", integer: true, nullable: true, note: "同时受本轮资料和来源依赖数量约束。" },
+    { key: "tool_round_limit", label: "每轮聊天工具交互轮数", group: "execution", integer: true, nullable: true },
+    { key: "chat_search_timeout_seconds", label: "每次对话搜索等待期限（秒）", group: "execution", positive: true },
     { key: "activity_interval_minutes", label: "两次活动间隔（分钟）", group: "rhythm", note: "0 表示不设最小间隔。" },
     { key: "share_interval_minutes", label: "两次自动分享间隔（分钟）", group: "rhythm", note: "0 表示不设最小间隔。" },
     { key: "tick_minutes", label: "检查活动条件的间隔（分钟）", group: "rhythm", positive: true, note: "须大于 0；检查本身不调用模型。" },
@@ -168,7 +179,7 @@
     { key: "external_recall_limit", label: "每次外部回忆的条目数量", group: "capacity", integer: true, nullable: true },
     { key: "candidate_ttl_hours", label: "候选资料保留（小时）", group: "retention", positive: true },
     { key: "source_ttl_hours", label: "临时来源保留（小时）", group: "retention", positive: true },
-    { key: "memory_ttl_hours", label: "正式见闻证据保留（小时）", group: "retention", positive: true },
+    { key: "observation_ttl_hours", label: "新见闻最长保留（小时）", group: "retention", integer: true, nullable: true, unlimitedLabel: "只按普通遗忘和来源许可", note: "0 暂停新增；修改不延长旧记忆。即使不设期限，普通遗忘与清除来源仍会生效。" },
     { key: "seen_ttl_days", label: "重复内容排除期（天）", group: "retention", positive: true },
     { key: "block_ttl_days", label: "停用来源保留（天）", group: "retention", positive: true },
     { key: "less_share_days", label: "少分享的持续时间（天）", group: "retention", positive: true },
@@ -181,6 +192,7 @@
     { key: "read_timeout_seconds", label: "每份内容读取期限（秒）", group: "execution", positive: true },
     { key: "model_timeout_seconds", label: "每次模型请求期限（秒）", group: "execution", positive: true },
     { key: "search_response_bytes", label: "单次查询响应（MiB）", group: "execution", positive: true, scale: 1048576 },
+    { key: "browser_resource_bytes", label: "浏览器单个资源响应（MiB）", group: "execution", positive: true, scale: 1048576 },
     { key: "read_response_bytes", label: "单份内容响应（MiB）", group: "execution", positive: true, scale: 1048576 },
     { key: "model_response_bytes", label: "单次模型响应（MiB）", group: "execution", positive: true, scale: 1048576 },
   ];
@@ -197,7 +209,7 @@
   function searchSummaryLabel(value) {
     if (!value || value.kind !== "search_results" || value.stage !== "search") return "";
     const platforms = { wikipedia: "维基百科", bilibili: "B站", zhihu: "知乎", tieba: "贴吧" };
-    const providers = { native: "站内搜索", bing_rss: "Bing RSS", brave: "Brave", searxng: "SearXNG" };
+    const providers = { native: "站内搜索", browser: "独立浏览器", bing_rss: "Bing RSS", brave: "Brave", searxng: "SearXNG" };
     const counts = ["received", "accepted", "returned", "rejected", "duplicates", "unsupported"];
     if (!has(platforms, value.platform) || !has(providers, value.provider)
         || counts.some((key) => !Number.isSafeInteger(value[key]) || value[key] < 0)
@@ -450,8 +462,12 @@
       : provider === "brave" ? "使用此通道的平台会把搜索词交给 Brave。请在各平台单独允许此通道，并提供自己的服务密钥；具体费用以服务账单为准。"
       : "使用此通道的平台会把搜索词交给你填写的 SearXNG 服务。请确认服务地址及使用许可，并在各平台单独允许此通道。");
     text("discovery-bilibili-hint", !has(snapshot?.settings, "bilibili_access") ? "读取支持此设置的服务后可选择 B站访问方式。"
+      : $("discovery-bilibili-access").value === "browser" ? "用独立 Edge 会话搜索、读取视频简介；需要时在平台卡中打开浏览器亲自登录，关闭窗口后再寻找。不会读取字幕或观看视频。"
       : $("discovery-bilibili-access").value === "native" ? "原生入口可搜索公开视频、读取视频信息和简介，无需第三方搜索服务。字幕尚未开放，也不表示已观看视频。"
       : "搜索词会交给下面选择的第三方服务；保存后需在 B站平台卡中单独允许该通道。读取范围仍以实际取得的视频信息与简介为准。");
+    text("discovery-zhihu-hint", $("discovery-zhihu-access").value === "browser"
+      ? "用独立 Edge 会话搜索并读取指定回答；需要时亲自登录，关闭窗口后再寻找。文章、问题描述和付费内容暂未开放。"
+      : "使用所选第三方服务发现链接，再尝试普通 HTTP 读取正文；此前本机读取受阻。");
     const tiebaSupported = has(snapshot?.settings, "tieba_access") && ["native", "third_party"].includes(snapshot.settings.tieba_access);
     $("discovery-tieba-access").disabled = !tiebaSupported;
     if (!tiebaSupported) $("discovery-tieba-access").value = "";
@@ -464,15 +480,20 @@
     const s = snapshot?.settings; if (!s || settingsDirty && !force) return;
     settingsDirty = false; settingsRevision = s.revision;
     $("discovery-enabled").checked = !!s.enabled;
+    $("discovery-background").checked = !!s.background_enabled;
+    $("discovery-chat-search").checked = !!s.chat_search_enabled;
+    $("discovery-remember-observations").checked = !!s.remember_observations;
     $("discovery-start").value = s.window_start || ""; $("discovery-end").value = s.window_end || "";
     fillPolicySettings(s);
     $("discovery-paid").checked = !!s.allow_paid;
     $("discovery-chat-interests").checked = !!s.allow_chat_interests;
-    $("discovery-share-qq").checked = !!s.share_in_qq; $("discovery-save-memories").checked = !!s.save_memories;
+    $("discovery-share-qq").checked = !!s.share_in_qq;
     $("discovery-provider").value = ["native", "bing_rss", "brave", "searxng"].includes(s.provider_kind) ? s.provider_kind : "native";
     $("discovery-network-mode").value = ["system", "direct"].includes(s.network_mode) ? s.network_mode : "";
     $("discovery-bilibili-access").disabled = !has(s, "bilibili_access");
-    $("discovery-bilibili-access").value = s.bilibili_access === "third_party" ? "third_party" : "native";
+    $("discovery-bilibili-access").value = ["native", "third_party", "browser"].includes(s.bilibili_access) ? s.bilibili_access : "native";
+    $("discovery-zhihu-access").disabled = !has(s, "zhihu_access");
+    $("discovery-zhihu-access").value = s.zhihu_access === "browser" ? "browser" : "third_party";
     $("discovery-tieba-access").value = ["native", "third_party"].includes(s.tieba_access) ? s.tieba_access : "";
     const tiebaSupport = tiebaScopeSupport();
     $("discovery-tieba-read-replies").checked = tiebaSupport.replies && s.tieba_read_replies;
@@ -482,7 +503,7 @@
     providerFields();
   }
   function renderPlatforms() {
-    const rows = list(snapshot.platforms), signature = JSON.stringify([rows, snapshot.settings.bilibili_access, snapshot.settings.tieba_access, snapshot.settings.tieba_read_replies, snapshot.settings.tieba_reply_limit]);
+    const rows = list(snapshot.platforms), signature = JSON.stringify([rows, snapshot.settings.bilibili_access, snapshot.settings.zhihu_access, snapshot.settings.tieba_access, snapshot.settings.tieba_read_replies, snapshot.settings.tieba_reply_limit]);
     if (signature === platformSignature) return; platformSignature = signature;
     const target = $("discovery-platforms"); target.replaceChildren();
     if (!rows.length) { target.append(node("p", "暂时没有可配置的平台。", "discovery-hint")); return; }
@@ -490,6 +511,7 @@
       const biliNative = p.id === "bilibili" && snapshot.settings.bilibili_access === "native";
       const tiebaNative = p.id === "tieba" && snapshot.settings.tieba_access === "native";
       const needsThirdParty = typeof p.requires_third_party === "boolean" ? p.requires_third_party : !biliNative && !tiebaNative && (p.id !== "wikipedia" || !!p.third_party_notice);
+      const browserAccess = !!p.browser && snapshot.settings[`${p.id}_access`] === "browser";
       const card = node("article", null, "discovery-platform"), head = node("div", null, "discovery-item-head");
       const name = p.name || p.label || "内容平台";
       const detail = node("details"); detail.append(node("summary", "访问方式与资料管理"));
@@ -504,6 +526,22 @@
       if (!p.available && !p.enabled) toggle.dataset.ineligible = "true";
       head.append(node("h3", name), toggle);
       card.append(head, node("p", p.description || "仅使用获准的公开内容。", "discovery-hint"));
+      if (p.browser) {
+        card.append(node("p", browserAccess ? `${p.browser.message}。${p.browser.last_message}` : "也可使用独立本机浏览器，需要登录时由你亲自完成。", "discovery-hint"));
+        const browserActions = node("div", null, "discovery-actions");
+        if (!browserAccess) {
+          const useBrowser = button("使用独立浏览器", () => {
+            if (!resolveDrafts()) return;
+            mutate("settings", { settings: { [`${p.id}_access`]: "browser" } }, "正在设置访问方式…", `${name}已改用独立浏览器，平台开关保持当前选择。`);
+          }, "btn ghost");
+          if (!p.browser.installed) useBrowser.dataset.ineligible = "true";
+          browserActions.append(useBrowser);
+        }
+        browserActions.append(button("打开独立浏览器 / 登录", () => {
+          mutate("browser_open", { platform: p.id }, "正在打开独立浏览器…", "已打开独立窗口。需要时请亲自登录，完成后关闭这个窗口，再点“现在找一轮”。");
+        }, "btn ghost"));
+        card.append(browserActions, node("p", "会话仅保存在本机独立目录，不读取日常浏览器账号。此窗口供你操作；后台只搜索和阅读，遇验证即停止。", "discovery-hint"));
+      }
       if (p.id === "tieba") {
         card.append(node("p", tiebaScopeLabel(snapshot.settings), "discovery-hint"));
         const scope = node("button", "设置回帖阅读", "link"); scope.type = "button";
@@ -512,7 +550,7 @@
       }
       if (words(p.readable_types)) detail.append(node("p", `可读范围：${words(p.readable_types)}`, "discovery-hint"));
       if (p.discovery_method) detail.append(node("p", `发现方式：${({ native: "平台公开入口", bing_rss: "Bing RSS（免费，无需密钥）", brave: "Brave 搜索服务", searxng: "SearXNG 搜索服务" })[p.discovery_method] || words(p.discovery_method)}`, "discovery-hint"));
-      if (p.reason) card.append(node("p", p.reason, "discovery-hint"));
+      if (p.reason && !browserAccess) card.append(node("p", p.reason, "discovery-hint"));
       const third = check("允许所选第三方搜索服务寻找此平台的内容", p.allow_third_party);
       if (needsThirdParty || p.allow_third_party) {
         if (p.third_party_notice) detail.append(node("p", p.third_party_notice, "discovery-hint"));
@@ -534,9 +572,9 @@
       actions.append(button("清除此平台资料", () => {
         if (window.confirm(`清除${p.name || p.label || "此平台"}的资料及依赖判断？相关引用会失效；这不会关闭平台。`)) mutate("clear", { platform_id: p.id }, "正在清除平台资料…", "平台资料已清除，相关引用不再用于聊天。");
       }, "link"));
-      if (["bilibili", "tieba"].includes(p.id)) {
+      if (["bilibili", "zhihu", "tieba"].includes(p.id)) {
         const accessId = `discovery-${p.id}-access`;
-        const chooseAccess = node("button", `设置${p.id === "bilibili" ? " B站" : "贴吧"}访问方式`, "link"); chooseAccess.type = "button";
+        const chooseAccess = node("button", `设置${name}访问方式`, "link"); chooseAccess.type = "button";
         chooseAccess.addEventListener("click", () => showPreferences(true, accessId));
         actions.append(chooseAccess);
       }
@@ -703,6 +741,15 @@
       } else discuss.title = "准备下一轮讨论草稿，消息由你发送";
       const more = button("多找这类", () => feedback(item, "more")); more.title = "提高这类内容之后的寻找优先级，不会立刻发起搜索";
       actions.append(discuss, more);
+      if (item.trigger_kind === "chat") { more.dataset.ineligible = "true"; more.title = "本次查找没有绑定长期兴趣"; }
+      const links = list(item.memory_links);
+      if (links.length) {
+        for (const memory of links) actions.append(button(`查看记忆：${memory.title}`, () => window.AliceChatSearch?.showMemory(memory.id, dataset)));
+      } else {
+        const remember = button("记住这份见闻", () => mutate("remember_card", { card_id: item.id }, "正在保存短证据与出处…", "已保存为普通见闻记忆，可从资料卡或记忆面板查看。"));
+        if (unavailable || !snapshot.settings.remember_observations) { remember.dataset.ineligible = "true"; remember.title = unavailable ? "资料已不可用" : "先在设置中开启择要保存见闻"; }
+        actions.append(remember);
+      }
       card.append(actions);
       if (unavailableNote) card.append(unavailableNote);
       const detail = node("details"); detail.append(node("summary", "看看 Alice 的想法与原始依据"));
@@ -717,8 +764,9 @@
       detail.append(source || node("p", "当前没有可打开的来源链接。", "discovery-hint")); card.append(detail);
       const management = node("details"); management.append(node("summary", "少分享、停用或删除"));
       const secondary = node("div", null, "discovery-actions discovery-secondary");
-      secondary.append(button("少分享", () => feedback(item, "less"), "link"), button("停用相关兴趣", () => feedback(item, "stop_interest"), "link"), button("不再看此来源", () => feedback(item, "stop_source"), "link"), button("删除资料", () => {
-        if (window.confirm("删除这份资料和依赖它的暂时判断？相关聊天引用将失效。")) mutate("delete", { card_id: item.id }, "正在删除资料…", "资料已删除，相关判断与引用不再使用。");
+      if (item.interest_id) secondary.append(button("少分享", () => feedback(item, "less"), "link"), button("停用相关兴趣", () => feedback(item, "stop_interest"), "link"));
+      secondary.append(button("不再看此来源", () => feedback(item, "stop_source"), "link"), button("删除资料", () => {
+        if (window.confirm("删除这份资料及依赖它的见闻和观点？相关聊天引用将失效，独立的用户表达会保留。")) mutate("delete", { card_id: item.id }, "正在删除资料…", "资料已删除，相关判断与引用不再使用。");
       }, "link"));
       management.append(secondary); card.append(management); target.append(card);
     }
@@ -765,6 +813,7 @@
       clearIdentity();
     }
     dataset = data.dataset_id; snapshot = data; fresh = true;
+    window.dispatchEvent(new CustomEvent("alice:discovery-state", { detail: data }));
     const sharingWarning = typeof data.sharing_warning === "string" ? data.sharing_warning : "";
     text("discovery-sharing-warning", sharingWarning); $("discovery-sharing-warning").classList.toggle("hidden", !sharingWarning);
     if (!interestDirty) interestRevision = currentRevision();
@@ -923,26 +972,35 @@
     if (setupIssue()) return;
     mutate("run", {}, "正在请求寻找内容…", "已提交本轮寻找，完成后资料会自动出现在这里。");
   });
-  $("discovery-cancel").addEventListener("click", () => mutate("cancel", { task_id: snapshot?.task?.id }, "正在请求停止…", "已请求停止；收回任务前不会开始另一轮。已发出的请求仍可能计费。"));
+  $("discovery-cancel").addEventListener("click", async () => {
+    if (snapshot?.task?.parent_request_id) {
+      try { await window.AliceChatSearch.stop(snapshot.task.parent_request_id, dataset); status("已请求停止本轮查找，已发生的请求仍计入额度。"); }
+      catch (error) { status(error.message, "error"); }
+      return;
+    }
+    mutate("cancel", { task_id: snapshot?.task?.id }, "正在请求停止…", "已请求停止；收回任务前不会开始另一轮。已发出的请求仍可能计费。");
+  });
   $("discovery-go-chat").addEventListener("click", goChat);
   $("discovery-undiscuss").addEventListener("click", removeDiscussion); composerCancel.addEventListener("click", removeDiscussion);
   $("discovery-settings-form").addEventListener("input", () => { settingsEdit++; settingsDirty = true; updatePolicyControls(); providerFields(); updateControls(); });
   $("discovery-settings-form").addEventListener("invalid", (event) => revealSetting(event.target), true);
   $("discovery-provider").addEventListener("change", providerFields);
   $("discovery-bilibili-access").addEventListener("change", providerFields);
+  $("discovery-zhihu-access").addEventListener("change", providerFields);
   $("discovery-tieba-access").addEventListener("change", providerFields);
   $("discovery-settings-reset").addEventListener("click", () => { fillSettings(true); updateControls(); });
   $("discovery-settings-form").addEventListener("submit", (event) => {
     event.preventDefault(); if (settingsConflict()) { showPreferences(true, "discovery-settings-reset"); return; }
     let policy;
     try { policy = readPolicySettings(); } catch (error) { status(error.message, "waiting"); return; }
-    const settings = { ...policy, enabled: $("discovery-enabled").checked, window_start: $("discovery-start").value, window_end: $("discovery-end").value, allow_paid: $("discovery-paid").checked, allow_chat_interests: $("discovery-chat-interests").checked, share_in_qq: $("discovery-share-qq").checked, save_memories: $("discovery-save-memories").checked, provider_kind: $("discovery-provider").value };
+    const settings = { ...policy, enabled: $("discovery-enabled").checked, background_enabled: $("discovery-background").checked, chat_search_enabled: $("discovery-chat-search").checked, remember_observations: $("discovery-remember-observations").checked, window_start: $("discovery-start").value, window_end: $("discovery-end").value, allow_paid: $("discovery-paid").checked, allow_chat_interests: $("discovery-chat-interests").checked, share_in_qq: $("discovery-share-qq").checked, provider_kind: $("discovery-provider").value };
     if (has(snapshot?.settings, "network_mode") && ["system", "direct"].includes(snapshot.settings.network_mode)) {
       const networkMode = $("discovery-network-mode").value;
       if (!["system", "direct"].includes(networkMode)) { status("请选择服务支持的内容发现网络路由。", "waiting"); return; }
       settings.network_mode = networkMode;
     }
     if (has(snapshot?.settings, "bilibili_access")) settings.bilibili_access = $("discovery-bilibili-access").value;
+    if (has(snapshot?.settings, "zhihu_access")) settings.zhihu_access = $("discovery-zhihu-access").value;
     if (has(snapshot?.settings, "tieba_access") && ["native", "third_party"].includes(snapshot.settings.tieba_access)) {
       const tiebaAccess = $("discovery-tieba-access").value;
       if (!["native", "third_party"].includes(tiebaAccess)) { status("请选择服务支持的贴吧访问方式。", "waiting"); return; }
@@ -966,7 +1024,7 @@
       settings.provider_endpoint = $("discovery-endpoint").value.trim();
       settings.provider_engines = engines.join(",");
     }
-    if (settings.enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请明确允许模型使用，或把每日模型请求设为 0。", "waiting"); return; }
+    if (settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请明确允许后台模型使用，或把每日模型请求设为 0。", "waiting"); return; }
     if (["brave", "searxng"].includes(settings.provider_kind)) {
       if ($("discovery-key").value.trim()) settings.provider_key = $("discovery-key").value.trim();
       if ($("discovery-clear-key").checked) settings.clear_provider_key = true;

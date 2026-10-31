@@ -19,6 +19,8 @@ from .config import Config
 from .llm import chat, parse_json
 from .persona import _append_changelog, persona_md
 from .store import Store
+from .steps import drive
+from .observation_memory import version as memory_version
 
 SECTION_TITLE = "## 生长 · 我现在的想法"
 
@@ -89,14 +91,21 @@ def _write_section(md: str, narrative: str) -> str:
     return rest.rstrip("\n") + "\n\n" + block if rest.strip() else block
 
 
-def _render_stances(store: Store) -> str:
+def _render_stances(store: Store, scope=None, allowed_memory_ids=None) -> str:
     """从库内已接纳的 stance 确定性重建「我现在的想法」小节正文（A01）。
 
     只读长期层在库的观点：被拒/被丢的内容不在这张表里，天然混不进人格叙事。
     v0.4：渲染成熟度（先验·未验证 / 验证）与下次回应简注；旧格式（无状态行）视为成熟观点。
     """
     lines = []
-    for m in store.memories_in_layer("longterm", kind="stance"):
+    rows = (store.memory_rows(purpose="thought", scope=scope, kind="stance") if scope is not None
+            else store.memories_in_layer("longterm", kind="stance"))
+    if allowed_memory_ids is not None:
+        rows = [m for m in rows if m["origin"] == "conversation" or m["id"] in allowed_memory_ids]
+    replaced = {m["content"].split("\n", 1)[0][4:].strip() for m in rows if m["content"].startswith("曾以为：")}
+    for m in rows:
+        if m["title"] in replaced:
+            continue
         body = m["content"]
         former = ""
         first, _, rest = body.partition("\n")
@@ -114,8 +123,12 @@ def _render_stances(store: Store) -> str:
 
 
 def deliberate(store: Store, client, cfg: Config) -> str:
+    return drive(deliberate_steps(store, client, cfg))
+
+
+def deliberate_steps(store: Store, client, cfg: Config):
     anchor = store.meta_get_time("last_deliberate_at") or store.meta_get_time("last_evolve_at")
-    events = [m for m in store.alive_memories() if m["kind"] == "event"]
+    events = store.memory_rows(purpose="thought", scope="gui", kind="event")
     fresh = [m for m in events if m["created_at"] > anchor][:60]
     if fresh:
         material = fresh
@@ -125,7 +138,10 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         return "没有新经历可消化，想法不变。"
 
     current_md = persona_md() or ""
-    _, current_section = _split_section(current_md)
+    current_stances = store.memory_rows(purpose="thought", scope="gui", kind="stance")
+    current_section = _render_stances(store, scope="gui")
+    input_rows = list({m["id"]: m for m in material + current_stances}.values())
+    external_input = any(m["origin"] != "conversation" for m in input_rows)
     normal = [m for m in material if not m["pressure"]]
     heated = [m for m in material if m["pressure"]]
     mem_block = "\n".join(f'- {m["title"]}：{m["content"]}' for m in normal)
@@ -138,7 +154,10 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         current=current_section.strip() or "（尚未形成）",
         memories=mem_block or "（无）",
     )
-    resp = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    resp = yield lambda: chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    available = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui")}
+    if any(m["id"] not in available or memory_version(m) != memory_version(available[m["id"]]) for m in input_rows):
+        return "思辨材料已变化或来源失效，本次未写入观点。"
     try:
         data = parse_json(resp.choices[0].message.content or "")
     except ValueError:
@@ -151,7 +170,9 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         store.meta_set("last_deliberate_at", time.time())
         return "思辨完成：这批记忆还不足以长出新观点。"
 
-    title_pressure = {m["title"]: bool(m["pressure"]) for m in material}
+    title_pressure = {m["title"]: bool(m["pressure"]) for m in material
+                      if sum(other["title"] == m["title"] for other in material) == 1}
+    source_rows = {m["title"]: m for m in material if m["title"] in title_pressure}
 
     # —— 先验验证（v0.4 生命周期）：先处理裁决，再消化新观点 ——
     verified = falsified = 0
@@ -160,6 +181,9 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         claim_v = str(w["claim"]).strip()
         verdict = str(w.get("verdict", "")).strip()
         prior = store.find_by_title(claim_v)
+        if external_input:
+            # A restricted web interpretation cannot mutate a global prior.
+            continue
         if prior is None or prior["kind"] != "stance":
             continue
         if _field_of(prior["content"], "状态") != "先验":
@@ -169,7 +193,7 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         if not vsources:
             continue  # 裁决也要过 A01：没有真实出处的事件依据，裁决不生效
         for s in vsources:  # 裁决引用同样计使用——依据链与观点同寿
-            src = store.find_by_title(s)
+            src = source_rows.get(s)
             if src is not None:
                 store.bump_use(src["id"])
         note = str(w.get("note", "")).strip()
@@ -211,6 +235,8 @@ def deliberate(store: Store, client, cfg: Config) -> str:
             continue
         interp = v.get("interp") if isinstance(v.get("interp"), dict) else {}
         kind = str(interp.get("kind", "经历")).strip() or "经历"
+        if external_input:
+            kind = "见闻"
         if kind not in {"经历", "推断", "用户", "捐赠", "见闻"}:
             kind = "经历"
         content = (
@@ -220,7 +246,7 @@ def deliberate(store: Store, client, cfg: Config) -> str:
             f'不确定：{str(v.get("missing", "暂无")).strip() or "暂无"}\n'
             f'下次回应：{str(v.get("next_response", "暂无")).strip() or "暂无"}\n'
             f'出处：{"、".join(valid)}\n'
-            f'状态：验证'
+            f'状态：{"先验" if external_input else "验证"}'
         )
         replaces = str(v.get("replaces", "")).strip()
         old = store.find_by_title(replaces) if replaces else None
@@ -240,15 +266,22 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
         src_pressure = any(title_pressure[s] for s in valid)
         for s in valid:  # 思辨引用计使用（bump_use）——被消化成观点的见闻/事件与观点同寿
-            src = store.find_by_title(s)
+            src = source_rows.get(s)
             if src is not None:
                 store.bump_use(src["id"])
-        store.insert_memory(
-            title=claim, content=content,
-            keywords="观点 " + " ".join(valid),
-            layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
-        )
-        if old is not None:
+        try:
+            with store.source_transaction():
+                if external_input:
+                    store._check_source_space(len((claim + content + " ".join(valid)).encode("utf-8")))
+                mid = store.insert_memory(
+                    title=claim, content=content, keywords="观点 " + " ".join(valid),
+                    layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
+                )
+                store.bind_derived_memory(mid, input_rows if external_input else [source_rows[s] for s in valid], scope="gui")
+        except ValueError:
+            dropped += 1
+            continue
+        if old is not None and not external_input:
             if _field_of(old["content"], "状态") == "证伪":
                 store.expire_memory(old["id"],
                                     reason=f"先验被经历证伪并修订：{old['title']} → {claim}")
@@ -291,8 +324,12 @@ def deliberate(store: Store, client, cfg: Config) -> str:
 
 
 def deliberate_if_due(store: Store, client, cfg: Config) -> str | None:
+    return drive(deliberate_if_due_steps(store, client, cfg))
+
+
+def deliberate_if_due_steps(store: Store, client, cfg: Config):
     """数据触发：自上次思辨起，新事件类记忆累计到阈值即思辨。安静就不变。"""
     anchor = store.meta_get_time("last_deliberate_at") or store.meta_get_time("last_evolve_at")
-    if store.count_memories_since(anchor, kind="event") >= cfg.memory.deliberate_every_memories:
-        return deliberate(store, client, cfg)
+    if sum(m["created_at"] > anchor for m in store.memory_rows(purpose="thought", scope="gui", kind="event")) >= cfg.memory.deliberate_every_memories:
+        return (yield from deliberate_steps(store, client, cfg))
     return None

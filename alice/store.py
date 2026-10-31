@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
+from .observation_memory import ObservationStoreMixin
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -92,15 +93,22 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
     return m["mention_count"] * 2 + m["use_count"] + recency
 
 
-class Store(SourceStoreMixin):
+class Store(ObservationStoreMixin, SourceStoreMixin):
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'").fetchone():
+            columns = {row[1] for row in self.conn.execute("PRAGMA table_info(memories)")}
+            if "lifecycle" not in columns:
+                backup = db_path.with_name(db_path.name + ".before-dialogue-" + str(time.time_ns()) + ".bak")
+                with sqlite3.connect(backup) as destination:
+                    self.conn.backup(destination)
         self.conn.executescript(SCHEMA)
         self._migrate()
         self.conn.executescript(SOURCE_SCHEMA)
+        self.init_observation_memory()
         self.purge_source_packets()
 
     def _migrate(self) -> None:
@@ -122,6 +130,8 @@ class Store(SourceStoreMixin):
             ("scope", "TEXT NOT NULL DEFAULT '[]'"),
             ("expires_at", "REAL"),
             ("source_url", "TEXT NOT NULL DEFAULT ''"),
+            ("lifecycle", "TEXT NOT NULL DEFAULT 'memory'"),
+            ("provenance_status", "TEXT NOT NULL DEFAULT 'valid'"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {declaration}")
@@ -213,37 +223,20 @@ class Store(SourceStoreMixin):
         pressure: int = 0,
         source_url: str = "",
     ) -> int:
-        cur = self.conn.execute(
-            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind, pressure, source_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (created_at if created_at is not None else time.time(), layer, title.strip(),
-             content.strip(), keywords, int(salience), kind, 1 if pressure else 0, source_url.strip()),
-        )
-        self.conn.commit()
+        with self.source_transaction():
+            cur = self.conn.execute(
+                "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind, pressure, source_url,provenance_status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (created_at if created_at is not None else time.time(), layer, title.strip(),
+                 content.strip(), keywords, int(salience), kind, 1 if pressure else 0, source_url.strip(),
+                 "legacy_unverified" if source_url.strip() else "valid"),
+            )
         return cur.lastrowid
 
     def save_web_seen_memory(self, title: str, content: str, source_url: str,
                              keywords: str = "", salience: int = 0) -> str:
-        """见闻单元（v0.4 P2）：网上读到的信息，经她复述后转正为对话起源的记忆。
-
-        与普通记忆同表同管线（七日线/容量竞争/思辨视野），出处由 source_url 列
-        与 content 内的来源明示承担（「{来源}说：…」措辞即认识论防线）。
-        去重：同 source_url 且同题的见闻不重复落库。返回给模型的确认语。
-        """
-        url = source_url.strip()
-        if not url:
-            return "见闻需要来源链接（source_url），没有出处的不落库。"
-        dup = self.conn.execute(
-            "SELECT id FROM memories WHERE source_url=? AND title=? LIMIT 1",
-            (url, title.strip()[:24]),
-        ).fetchone()
-        if dup:
-            return "这条来源已经记过了，不重复落库。"
-        self.insert_memory(
-            title=title[:24], content=content, keywords=(keywords + " 见闻").strip(),
-            salience=salience, layer="active", kind="event", source_url=url,
-        )
-        return "已作为见闻记住（带来源链接，与普通记忆同管线，会随时间自然过期）。"
+        """Legacy URL-only entry point cannot establish that a page was read."""
+        return "仅有URL不能证明已读。请先读取真实材料，并通过本轮来源记录保存见闻。"
 
     def memories_in_layer(self, layer: str, kind: str | None = None, *,
                           consumer: str = "maintenance") -> list[sqlite3.Row]:
@@ -255,12 +248,14 @@ class Store(SourceStoreMixin):
             args.append(kind)
         if consumer == "conversation" or kind == "stance":
             clauses.append("origin='conversation'")
+            clauses.append("provenance_status='valid'")
         elif consumer != "maintenance":
             raise ValueError("记忆消费者无效")
-        return self.conn.execute(
+        rows = self.conn.execute(
             "SELECT * FROM memories WHERE " + " AND ".join(clauses)
             + " ORDER BY created_at DESC,id DESC", args,
         ).fetchall()
+        return [r for r in rows if self._parents_available(r["id"], "gui")] if consumer == "conversation" or kind == "stance" else rows
 
     def count_in_layer(self, layer: str) -> int:
         return self.conn.execute(
@@ -276,18 +271,19 @@ class Store(SourceStoreMixin):
     def alive_memories(self, *, include_external: bool = False) -> list[sqlite3.Row]:
         # Thought/persona/skills and extraction all use this default. External
         # material cannot silently become personality input after a restart.
-        where = "" if include_external else " WHERE origin='conversation'"
-        return self.conn.execute("SELECT * FROM memories" + where + " ORDER BY created_at DESC").fetchall()
+        where = " WHERE provenance_status='valid'" + ("" if include_external else " AND origin='conversation'")
+        rows = self.conn.execute("SELECT * FROM memories" + where + " ORDER BY created_at DESC").fetchall()
+        return [r for r in rows if self._parents_available(r["id"], "gui")]
 
     def count_memories_since(self, ts: float, kind: str | None = None) -> int:
         """数据触发器的刻度：某时间点之后新产生的记忆条数。可只数事件类。"""
         if kind:
             return self.conn.execute(
-                "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND kind=? AND origin='conversation'",
+                "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND kind=? AND origin='conversation' AND provenance_status='valid'",
                 (ts, kind),
             ).fetchone()["c"]
         return self.conn.execute(
-            "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND origin='conversation'", (ts,)
+            "SELECT COUNT(*) AS c FROM memories WHERE created_at > ? AND origin='conversation' AND provenance_status='valid'", (ts,)
         ).fetchone()["c"]
 
     def get_memory(self, memory_id: int) -> sqlite3.Row | None:
@@ -295,10 +291,14 @@ class Store(SourceStoreMixin):
 
     def update_memory_content(self, memory_id: int, content: str) -> None:
         """原位更新记忆正文（v0.4 先验状态迁移用：先验→验证不改身份，只改状态行）。"""
-        self.conn.execute(
-            "UPDATE memories SET content=? WHERE id=? AND origin='conversation'", (content.strip(), memory_id)
-        )
-        self.conn.commit()
+        with self.source_transaction():
+            row = self.get_memory(memory_id)
+            if row is None or row["origin"] != "conversation" or row["content"] == content.strip():
+                return
+            children = self.dependent_memories([memory_id]) - {memory_id}
+            for child in children:
+                self.forget_memory_tree(child, "必要依据已修订，旧观点待重新形成")
+            self.conn.execute("UPDATE memories SET content=? WHERE id=?", (content.strip(), memory_id))
 
     def bump_mention(self, memory_id: int) -> None:
         self.conn.execute(
@@ -323,29 +323,19 @@ class Store(SourceStoreMixin):
 
     def expire_memory(self, memory_id: int, reason: str) -> None:
         """真实遗忘：内容删除，仅留墓碑供人工审计（墓碑永不进入上下文）。"""
-        m = self.get_memory(memory_id)
-        if not m:
-            return
-        self.conn.execute(
-            "INSERT INTO memory_tombstones (memory_id, title, expired_at, reason) VALUES (?, ?, ?, ?)",
-            (memory_id, m["title"] if m["origin"] == "conversation" else "外部见闻已遗忘",
-             time.time(), reason if m["origin"] == "conversation" else "外部记忆按既有分层规则遗忘"),
-        )
-        self.conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
-        self.conn.execute("DELETE FROM source_memory_dependencies WHERE memory_id=?", (memory_id,))
-        self.conn.commit()
+        self.forget_memory_tree(memory_id, reason)
 
     def find_by_title(self, title: str) -> sqlite3.Row | None:
         title = title.strip()
         if not title:
             return None
         row = self.conn.execute(
-            "SELECT * FROM memories WHERE title=? AND origin='conversation' ORDER BY id DESC LIMIT 1", (title,)
+            "SELECT * FROM memories WHERE title=? AND origin='conversation' AND provenance_status='valid' ORDER BY id DESC LIMIT 1", (title,)
         ).fetchone()
         if row:
             return row
         return self.conn.execute(
-            "SELECT * FROM memories WHERE title LIKE ? AND origin='conversation' ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM memories WHERE title LIKE ? AND origin='conversation' AND provenance_status='valid' ORDER BY id DESC LIMIT 1",
             (f"%{title}%",),
         ).fetchone()
 
@@ -364,7 +354,7 @@ class Store(SourceStoreMixin):
             ):
                 continue
             if m["origin"] != "conversation":
-                if m["expires_at"] is None or m["expires_at"] <= time.time():
+                if m["lifecycle"] != "memory" and (m["expires_at"] is None or m["expires_at"] <= time.time()):
                     continue
                 packets = self.external_memory_sources(m["id"], scope=source_scope)
                 if not packets or (allowed_source_packet_ids is not None

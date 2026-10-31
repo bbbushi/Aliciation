@@ -327,6 +327,7 @@ function invalidateSourceDisplays() {
 }
 
 window.addEventListener("alice:sources-changed", invalidateSourceDisplays);
+window.addEventListener("alice:discussion-saved", () => { syncHistory(); window.AliceObserver?.refreshAfterTurn(); });
 
 function markTurn(node, turn) {
   if (Number.isSafeInteger(turn.id) && turn.id > 0) {
@@ -352,6 +353,7 @@ function markTurn(node, turn) {
   node.classList.toggle("from-qq", fromQQ);
   markSourceProjection(node, turn);
   renderTurnMetadata(node);
+  window.AliceChatSearch?.decorateTurn(node, turn);
   scheduleSourceExpiry();
 }
 
@@ -383,6 +385,7 @@ function setChatNotice(message) {
 function renderActivity() {
   const el = $("#chat-activity");
   if (!activity) return;
+  window.AliceChatSearch?.observeActivity(activity);
   connectionStatus(activity.status === "draining" ? "正在关闭"
     : activity.status === "busy" ? "正在处理" : "本机已连接",
   activity.status === "draining" ? "waiting" : activity.status === "busy" ? "busy" : "ready");
@@ -402,6 +405,7 @@ async function refreshActivity() {
 }
 
 function resetHistory(epoch) {
+  window.AliceChatSearch?.reset();
   historyVersion += 1;
   sourceProjectionVersion++;
   sourceRefreshIndex = 0;
@@ -1218,7 +1222,9 @@ function handleEvent(ev, node, userNode, requestId) {
     setBubbleText(txt, raw() + ev.text);
     scrollBottom();
   } else if (ev.type === "tool") {
-    sysline(ev.name === "remember" ? "（悄悄记下了一件事…）" : "（翻了一下记忆…）");
+    sysline(ev.name === "remember" ? "（正在整理可保存的记忆…）" : ev.name === "discovery_search" ? "（正在查找资料…）" : "（翻了一下记忆…）");
+  } else if (ev.type === "search") {
+    window.AliceChatSearch?.progress(ev, node);
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {
@@ -1254,9 +1260,9 @@ async function send() {
     toast("核查许可正在登记，请等待登记完成再发送。", 4000);
     return;
   }
+  const retry = uncertainSend?.text === text && uncertainSend.epoch === sessionEpoch ? uncertainSend : null;
   busy = true;
   connectionStatus("正在提交", "busy");
-  const retry = uncertainSend?.text === text && uncertainSend.epoch === sessionEpoch ? uncertainSend : null;
   const requestId = retry?.requestId || crypto.randomUUID().replaceAll("-", "");
   // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
   const evaluationId = retry ? retry.evaluationId : window.AliceEvaluations?.peekForSend();
@@ -1265,6 +1271,7 @@ async function send() {
     ...(evaluationId ? { evaluation_id: evaluationId } : {}) };
   const epochAtSend = sessionEpoch;
   uncertainSend = { requestId, text, evaluationId, epoch: epochAtSend };
+  window.AliceChatSearch?.begin(requestId, epochAtSend);
   $("#chat-new-attempt").classList.add("hidden");
   input.disabled = true;
   $("#send").disabled = true;
@@ -1348,6 +1355,7 @@ async function send() {
     // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
     if (!accepted && !rejected) window.AliceEvaluations?.consumeForSend(evaluationId);
     busy = false;
+    window.AliceChatSearch?.setBusy(false);
     window.AliceEvaluations?.afterTurn();
     if (!shuttingDown) {
       input.disabled = false;

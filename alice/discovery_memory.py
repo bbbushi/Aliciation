@@ -190,6 +190,17 @@ class SourceStoreMixin:
         ):
             payload[key] = _text(packet.get(key, ""), limit, required=required)
         payload["evidence_hash"] = hashlib.sha256(payload["evidence"].encode("utf-8")).hexdigest()
+        payload["observation_eligible"] = packet.get("observation_eligible") is True and kind != "search_snippet"
+        payload["coverage"] = _text(packet.get("coverage", ""), 1500)
+        deadline = packet.get("observation_expires_at")
+        if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= now):
+            raise ValueError("独立证据保留期限无效")
+        payload["observation_expires_at"] = deadline
+        policy = packet.get("reading_policy", {})
+        payload["reading_policy"] = {
+            "tieba_reply_count": policy.get("tieba_reply_count", 0) if type(policy.get("tieba_reply_count", 0)) is int else 0,
+            "tieba_replies_requested": policy.get("tieba_replies_requested") is True,
+        } if isinstance(policy, dict) else {}
         encoded = _dump(payload)
         existing = self.conn.execute("SELECT payload_json,revoked FROM source_packets WHERE id=?", (packet_id,)).fetchone()
         if existing:
@@ -232,6 +243,7 @@ class SourceStoreMixin:
                 "SELECT COALESCE(SUM(length(CAST(title||url||summary||author_view||interpretation||uncertainty||question AS BLOB))),0) "
                 "FROM discovery_cards"
             ).fetchone()[0]
+        total += self.conn.execute("SELECT COALESCE(SUM(length(CAST(payload_json AS BLOB))),0) FROM retained_evidence").fetchone()[0]
         return total
 
     def _check_source_space(self, additional: int) -> None:
@@ -245,6 +257,8 @@ class SourceStoreMixin:
 
     def get_source_packet(self, packet_id: str, *, scope: str = "gui", now: float | None = None) -> dict | None:
         now = time.time() if now is None else now
+        if isinstance(packet_id, str) and packet_id.startswith("evidence:"):
+            return self.get_retained_source(packet_id, scope=scope, now=now)
         row = self.conn.execute("SELECT * FROM source_packets WHERE id=?", (packet_id,)).fetchone()
         if row is None or row["revoked"] or row["expires_at"] <= now or scope not in json.loads(row["scope_json"]):
             return None
@@ -262,12 +276,14 @@ class SourceStoreMixin:
         packets = [self.get_source_packet(pid, scope=scope, now=now) for pid in ids]
         return packets if all(packets) else []
 
-    def revoke_source_packets(self, packet_ids=(), *, source_id: str | None = None) -> int:
+    def revoke_source_packets(self, packet_ids=(), *, source_id: str | None = None, reason="revoked") -> int:
         """Erase payload and every necessary derivative; retain only ID tombstones."""
         ids = list(packet_ids)
         if source_id is not None:
             ids += [r[0] for r in self.conn.execute("SELECT id FROM source_packets WHERE source_id=?", (source_id,))]
         ids = set(ids)
+        if reason != "expired":
+            self.revoke_retained_evidence(ids, source_id=source_id)
         if not ids:
             return 0
         with self.source_transaction():
@@ -276,7 +292,7 @@ class SourceStoreMixin:
                 mids = [r[0] for r in self.conn.execute(
                     "SELECT memory_id FROM source_memory_dependencies WHERE packet_id=?", (pid,))]
                 for mid in mids:
-                    self.conn.execute("DELETE FROM memories WHERE id=? AND origin!='conversation'", (mid,))
+                    self.forget_memory_tree(mid, "来源已失效")
                     self.conn.execute("DELETE FROM source_memory_dependencies WHERE memory_id=?", (mid,))
             for row in self.conn.execute("SELECT turn_id,source_ids_json FROM source_turns WHERE content!=''").fetchall():
                 if ids.intersection(json.loads(row["source_ids_json"])):
@@ -287,9 +303,15 @@ class SourceStoreMixin:
         now = time.time() if now is None else now
         ids = [r[0] for r in self.conn.execute(
             "SELECT id FROM source_packets WHERE expires_at<=? AND revoked=0", (now,))]
-        removed = self.revoke_source_packets(ids)
+        removed = self.revoke_source_packets(ids, reason="expired")
         with self.source_transaction():
             self.conn.execute("UPDATE source_turns SET content='' WHERE expires_at<=?", (now,))
+            for row in self.conn.execute("SELECT id FROM memories WHERE origin!='conversation' AND lifecycle='memory' "
+                                         "AND expires_at IS NOT NULL AND expires_at<=?", (now,)).fetchall():
+                self.forget_memory_tree(row[0], "正式见闻保留期已到")
+            for row in self.conn.execute("SELECT id FROM retained_evidence WHERE revoked=0 AND expires_at IS NOT NULL AND expires_at<=?", (now,)).fetchall():
+                self.revoke_retained_evidence([row[0]])
+            self.gc_retained_evidence()
         return removed
 
     def restrict_source_scope(self, scope: str) -> int:
@@ -301,6 +323,12 @@ class SourceStoreMixin:
         if scope not in SOURCE_SCOPES:
             raise ValueError("来源可用渠道无效")
         changed = 0
+        with self.source_transaction():
+            for row in self.conn.execute("SELECT id,scope_json FROM retained_evidence WHERE revoked=0").fetchall():
+                scopes = json.loads(row["scope_json"])
+                if scope in scopes:
+                    scopes.remove(scope)
+                    self.conn.execute("UPDATE retained_evidence SET scope_json=? WHERE id=?", (_dump(scopes), row["id"]))
         with self.source_transaction():
             for row in self.conn.execute("SELECT id,scope_json,payload_json,revoked FROM source_packets").fetchall():
                 scopes = json.loads(row["scope_json"])
@@ -320,8 +348,7 @@ class SourceStoreMixin:
                     if scopes:
                         self.conn.execute("UPDATE memories SET scope=? WHERE id=?", (_dump(scopes), row["id"]))
                     else:
-                        self.conn.execute("DELETE FROM memories WHERE id=?", (row["id"],))
-                        self.conn.execute("DELETE FROM source_memory_dependencies WHERE memory_id=?", (row["id"],))
+                        self.forget_memory_tree(row["id"], "来源可见范围已撤回")
             self.conn.execute("UPDATE source_turns SET content='' WHERE scope=?", (scope,))
         return changed
 
@@ -423,6 +450,9 @@ class SourceStoreMixin:
             "SELECT 1 FROM source_turns WHERE turn_id=?", (r["id"],)).fetchone()]
 
     def external_memory_sources(self, memory_id: int, *, scope="gui") -> list[dict]:
+        retained = self.observation_sources(memory_id, scope=scope)
+        if retained:
+            return retained
         memory = self.conn.execute("SELECT origin,scope,expires_at FROM memories WHERE id=?", (memory_id,)).fetchone()
         if (memory is None or memory["origin"] == "conversation"
                 or memory["expires_at"] is None or memory["expires_at"] <= time.time()
@@ -484,8 +514,8 @@ class SourceStoreMixin:
                     return None
             self._check_source_space(sum(len(value.encode("utf-8")) for value in (title, content, keywords)))
             cur = self.conn.execute(
-                "INSERT INTO memories(created_at,layer,title,content,keywords,salience,kind,pressure,origin,scope,expires_at) "
-                "VALUES(?,'active',?,?,?,0,'event',0,?,?,?)",
+                "INSERT INTO memories(created_at,layer,title,content,keywords,salience,kind,pressure,origin,scope,expires_at,lifecycle) "
+                "VALUES(?,'active',?,?,?,0,'event',0,?,?,?,'source')",
                 (now, title, content, keywords, origin, scope_json,
                  min(p["expires_at"] for p in packets)),
             )

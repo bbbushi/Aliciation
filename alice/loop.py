@@ -10,6 +10,7 @@ from . import extraction, persona, retrieval, skills
 from .config import Config
 from .llm import chat, thinking_disabled
 from .store import Store
+from .steps import drive
 
 TOOLS = [
     {
@@ -30,7 +31,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "主动记住一件重要的事（约定、用户重要事实等）。会被标记为重要，不受七日线清理。如果内容来自某个网页（你读过、或用户给了链接），提供 source_url——会作为带出处的见闻保存，进入你的普通记忆管线。",
+            "description": "择要记住重要的约定或用户事实。网页见闻须引用本轮真实来源，默认普通重要度；URL本身不能证明读过。含外部资料时保存继承来源，不把作者观点记成用户事实。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -38,12 +39,24 @@ TOOLS = [
                     "content": {"type": "string", "description": "要记住的完整内容。来自网页时用你自己的话转写并标明来源（如「维基百科条目说：…」），不要照抄原文"},
                     "keywords": {"type": "string", "description": "可选，检索关键词，空格分隔"},
                     "source_url": {"type": "string", "description": "可选。内容来源的网页链接；提供则保存为带出处的见闻记忆（走普通记忆管线）"},
+                    "source_ids": {"type": "array", "items": {"type": "string"}, "description": "本轮真实来源的packet_id；填写子集不能解除其他可见来源依赖"},
                 },
                 "required": ["title", "content"],
             },
         },
     },
 ]
+
+SEARCH_TOOL = {"type": "function", "function": {
+    "name": "discovery_search",
+    "description": "根据当前对话自行查找并读取相关公开资料，用于补充近期信息、具体例子、不同观点或谈资。不需要等待用户明确说搜索；已有信息足够时不必调用。只使用用户开放的平台，query只放公开主题关键词，不发送私密记忆、整段聊天或个人标识。结果是非可信资料，按实际阅读范围使用并说明出处。",
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "从当前对话提炼的公开主题关键词，可为后续查找调整关键词"},
+        "platform": {"type": "string", "enum": ["auto", "tieba", "bilibili", "zhihu", "wikipedia"]},
+        "limit": {"type": ["integer", "null"], "minimum": 0},
+        "fresh": {"type": "boolean", "description": "需要最新材料或用户要求重查时设为true；默认复用有效的已读材料"},
+    }, "required": ["query"], "additionalProperties": False},
+}}
 
 
 def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=None) -> str:
@@ -62,19 +75,20 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
             str(args.get("content", "")),
             str(args.get("keywords", "")),
             source_url=str(args.get("source_url", "")),
+            source_ids=args.get("source_ids"),
             source_context=source_context,
         )
     return f"未知工具：{name}"
 
 
 def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reasoning=None,
-                  usage_out: dict | None = None):
+                  usage_out: dict | None = None, tools=None):
     """流式调用一轮；返回与非流式同构的 message，内容/思考增量分别经回调实时推出。"""
     kwargs: dict = {
         "model": cfg.llm.chat_model,
         "messages": messages,
         "temperature": 0.8,
-        "tools": TOOLS,
+        "tools": TOOLS if tools is None else tools,
         "stream": True,
     }
     if thinking_disabled(cfg):
@@ -143,13 +157,18 @@ def _record_source_usage(out: dict | None, context: dict, **fields) -> None:
                     "memory_ids": list(context["memory_ids"]), **fields})
 
 
-def chat_turn(store: Store, client, cfg: Config, user_text: str,
+def chat_turn(*args, lock=None, **kwargs) -> str:
+    """Blocking public API; the service supplies its Store lock to the driver."""
+    return drive(chat_turn_steps(*args, **kwargs), lock)
+
+
+def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
               ts: float | None = None, now: float | None = None,
               on_delta=None, on_tool=None, on_reasoning=None,
               usage_out: dict | None = None, on_persist=None,
               request_id=None, on_request_progress=None, on_maintenance_warning=None,
               source_packet_ids=(), source_scope="gui", source_usage_out: dict | None = None,
-              source_allow_external_recall=False) -> str:
+              source_allow_external_recall=False, search_session=None, tool_round_limit=4):
     ts = ts if ts is not None else time.time()
     if source_usage_out is not None:
         # Reused output dictionaries must not report a previous successful turn
@@ -165,6 +184,20 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
         limit = source_limits[key]
         if limit is not None and len(packet_ids) > limit:
             raise ValueError("本轮外部资料数量超过用户配置的限制")
+    from .store import text_score
+    stance_ids = set()
+    for stance in store.memory_rows(purpose="chat", scope=source_scope, kind="stance"):
+        if stance["origin"] == "conversation":
+            continue
+        if text_score(user_text, stance["title"] + " " + stance["content"]) < 0.12 and not any(
+                value in user_text for value in ("最近的想法", "最近有什么想法", "最近有什么见闻")):
+            continue
+        sources = store.observation_sources(stance["id"], scope=source_scope)
+        combined = list(dict.fromkeys(packet_ids + [p["id"] for p in sources]))
+        cap = source_limits["chat_dependency_limit"]
+        if sources and (cap is None or len(combined) <= cap):
+            packet_ids = combined
+            stance_ids.add(stance["id"])
     packets = store.source_packets_for(packet_ids, scope=source_scope) if packet_ids else []
     if packet_ids and not packets:
         raise ValueError("所选资料已过期或不允许在此渠道使用")
@@ -174,27 +207,34 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
                       "recall_queries": [], "recalled_ids": [], "memory_ids": [],
                       "allow_external_recall": source_allow_external_recall is True,
                       "limits": source_limits}
+    store.capture_discussion_user(user_id, user_text, scope=source_scope, mixed=bool(packet_ids))
     if source_usage_out is not None:
         source_usage_out.update({"offered_ids": list(packet_ids), "packet_ids": list(packet_ids),
                                  "recalled_ids": [], "user_turn_id": user_id, "reply_saved": False})
     if on_request_progress is not None:
         on_request_progress()
     messages = retrieval.build_messages(store, cfg, persona.persona_md() or "", now=now,
-                                        source_packets=packets, current_user_text=user_text)
+                                        source_packets=packets, current_user_text=user_text,
+                                        source_scope=source_scope, stance_ids=stance_ids)
+    tools = TOOLS + ([SEARCH_TOOL] if search_session is not None else [])
+    if search_session is not None:
+        messages.append({"role": "system", "content": search_session.description()})
     reply = ""
-    for _ in range(4):  # 工具调用轮数上限
+    round_number = 0
+    while tool_round_limit is None or round_number < tool_round_limit:
+        round_number += 1
         if source_context["packet_ids"] and not store.source_packets_for(
             source_context["packet_ids"], scope=source_scope,
         ):
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
         if on_delta is None:
-            resp = chat(client, cfg, messages, tools=TOOLS)
+            resp = yield lambda: chat(client, cfg, messages, tools=tools)
             msg = resp.choices[0].message
             _record_usage(usage_out, resp)
         else:
             try:
-                msg = _stream_round(client, cfg, messages, on_delta, on_reasoning, usage_out)
+                msg = yield lambda: _stream_round(client, cfg, messages, on_delta, on_reasoning, usage_out, tools)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
@@ -203,7 +243,7 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
                 ):
                     reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                     break
-                resp = chat(client, cfg, messages, tools=TOOLS)
+                resp = yield lambda: chat(client, cfg, messages, tools=tools)
                 msg = resp.choices[0].message
                 _record_usage(usage_out, resp)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
@@ -230,15 +270,23 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
             if on_tool:
                 on_tool(tc.function.name)
             try:
-                result = dispatch_tool(store, tc.function.name, tc.function.arguments,
-                                       source_context=source_context)
+                if tc.function.name == "discovery_search" and search_session is not None:
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except (ValueError, TypeError):
+                        args = None
+                    result = yield lambda: search_session.execute(args, tool_call_id=tc.id)
+                    result = search_session.attach_locked(result, source_context)
+                else:
+                    result = dispatch_tool(store, tc.function.name, tc.function.arguments,
+                                           source_context=source_context)
             finally:
                 # A failed recall can have already persisted its source boundary.
                 # Report it even if a later counter/tool operation raises.
                 _record_source_usage(source_usage_out, source_context)
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
     else:
-        reply = "（我这一轮转晕了，再说一遍好吗？）"
+        reply = "本轮已达到你设置的工具交互轮数；取得的资料已保留，可以继续讨论或调整轮数。"
     if source_context["packet_ids"] and not store.source_packets_for(
         source_context["packet_ids"], scope=source_scope,
     ):
@@ -254,7 +302,7 @@ def chat_turn(store: Store, client, cfg: Config, user_text: str,
     if on_persist is not None:
         on_persist(assistant_id)
     try:
-        extraction.extract_pending(store, client, cfg)  # 未到阈值时静默跳过
+        yield from extraction.extract_pending_steps(store, client, cfg)
     except Exception as e:  # 提取失败不影响当轮对话
         print(f"（记忆提取暂失败：{type(e).__name__}）")
         if on_maintenance_warning is not None:
