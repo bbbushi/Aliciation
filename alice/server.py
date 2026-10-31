@@ -400,6 +400,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("qq.js", "application/javascript; charset=utf-8")
             elif path == "/discovery.js":
                 self._file("discovery.js", "application/javascript; charset=utf-8")
+            elif path == "/chat-search.js":
+                self._file("chat-search.js", "application/javascript; charset=utf-8")
+            elif path == "/chat-search.css":
+                self._file("chat-search.css", "text/css; charset=utf-8")
             elif path == "/discovery.css":
                 self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
@@ -553,6 +557,16 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
+            if path in ("/api/chat/search/status", "/api/chat/search/cancel", "/api/discovery/memory"):
+                intent = "discovery" if path == "/api/discovery/memory" else "gui"
+                if not self._trusted_json(intent):
+                    self._json({"error": "请从本机 GUI 操作", "code": "gui_only"}, 403)
+                    return
+                body = self._body()
+                result = (svc.observation_memory(body) if path == "/api/discovery/memory"
+                          else svc.chat_search_control(body, cancel=path.endswith("/cancel")))
+                self._json(result)
+                return
             if path == "/api/discovery":
                 self._discovery_route()
                 return
@@ -605,7 +619,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "请从本机 GUI 聊天；适配器使用渠道接口", "code": "gui_only"}, 403)
                     return
                 body = self._body()
-                if set(body) - {"text", "evaluation_id", "request_id", "session_epoch"} or not isinstance(body.get("text"), str):
+                if set(body) - {"text", "evaluation_id", "request_id", "session_epoch", "search_intent"} or not isinstance(body.get("text"), str):
                     raise ValueError("聊天请求无效")
                 text = body["text"].strip()
                 evaluation_id = body.get("evaluation_id")
@@ -619,7 +633,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "空消息"}, 400)
                 else:
                     self._sse_chat(text, evaluation_id=evaluation_id,
-                                   request_id=body.get("request_id"), session_epoch=body.get("session_epoch"))
+                                   request_id=body.get("request_id"), session_epoch=body.get("session_epoch"),
+                                   search_intent=body.get("search_intent"))
             elif path == "/api/metrics/toggle":
                 body = self._body()
                 module, on = str(body.get("module") or ""), bool(body.get("on"))
@@ -672,7 +687,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         # ---------- SSE 流式对话 ----------
 
-        def _sse_chat(self, text: str, *, evaluation_id=None, request_id=None, session_epoch=None) -> None:
+        def _sse_chat(self, text: str, *, evaluation_id=None, request_id=None, session_epoch=None, search_intent=None) -> None:
             connected = True
             started = False
 
@@ -714,6 +729,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     evaluation_id=evaluation_id,
                     request_id=request_id, session_epoch=session_epoch,
                     nonblocking=True, on_accepted=start,
+                    search_intent=search_intent, on_search_progress=lambda info: emit({"type": "search", **info}),
                 )
                 for line in result["events"]:
                     emit({"type": "meta", "text": line})

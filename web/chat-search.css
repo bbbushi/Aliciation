@@ -1,0 +1,16 @@
+.chat-search { margin: .35rem 0 .65rem; font-size: .85rem; }
+.chat-search-entry { display: flex; align-items: center; justify-content: space-between; gap: .7rem; flex-wrap: wrap; }
+.chat-search-entry span { opacity: .8; }
+.chat-search-progress { border-left: 2px solid var(--accent, #73baba); padding: .5rem .8rem; margin-top: .6rem; }
+.chat-search-progress p { margin: .3rem 0; }
+.chat-search-progress ul { margin: .4rem 0 0; padding-left: 1.2rem; max-height: 9rem; overflow: auto; }
+.chat-search-progress li { margin: .3rem 0; }
+.chat-search-progress a, .source-memory-dialog a { color: var(--accent, #87d4d0); }
+.source-memory-dialog { width: min(44rem, calc(100vw - 2rem)); max-height: 80vh; overflow: auto; padding: 1.3rem; border-radius: 1rem; border: 1px solid #476475; color: #e2e9ee; background: #142737; }
+.source-memory-dialog::backdrop { background: #05111bad; }
+.source-memory-dialog h2 { font-size: 1.1rem; }
+.source-memory-content, .source-memory-dialog blockquote { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.source-memory-dialog section { border-top: 1px solid #476475; padding: .8rem 0; }
+.source-memory-dialog blockquote { margin: .6rem 0; padding-left: .8rem; border-left: 2px solid #73baba; }
+.discussion-memory-action { display: block; margin-top: .45rem; font-size: .78rem; }
+@media (max-width: 640px) { .chat-search-entry { align-items: flex-start; } }

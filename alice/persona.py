@@ -15,6 +15,7 @@ from . import config as paths
 from .config import Config
 from .llm import chat, parse_json
 from .store import Store
+from .steps import drive
 
 TAGS = ["害羞", "外向", "幽默", "严肃", "高冷", "热情", "温柔", "毒舌", "沉稳", "活泼"]
 
@@ -413,7 +414,13 @@ def _protect_sections(new_md: str, current_md: str) -> str:
 
 
 def evolve(store: Store, client, cfg: Config) -> str:
+    return drive(evolve_steps(store, client, cfg))
+
+
+def evolve_steps(store: Store, client, cfg: Config):
     current = persona_md() or ""
+    from .thought import _render_stances, _write_section
+    current = _write_section(current, _render_stances(store) or "（暂无当前可用观点）")
     since = store.meta_get_time("last_evolve_at")
     rows = [m for m in store.alive_memories() if m["created_at"] > since][:100]
     # 卫生：压力窗口记忆不作为演化输入——人格不因高压下的让步而改
@@ -434,7 +441,7 @@ def evolve(store: Store, client, cfg: Config) -> str:
         current=current,
         memories="\n".join(mem_lines),
     )
-    resp = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    resp = yield lambda: chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
     try:
         data = parse_json(resp.choices[0].message.content or "")
     except ValueError:
@@ -458,8 +465,12 @@ def evolve(store: Store, client, cfg: Config) -> str:
 
 
 def evolve_if_due(store: Store, client, cfg: Config) -> str | None:
+    return drive(evolve_if_due_steps(store, client, cfg))
+
+
+def evolve_if_due_steps(store: Store, client, cfg: Config):
     """数据触发：自上次演化起新记忆累计到阈值即演化。没有足够新材料就不动。"""
     anchor = store.meta_get_time("last_evolve_at")
     if store.count_memories_since(anchor) >= cfg.persona.evolve_every_memories:
-        return evolve(store, client, cfg)
+        return (yield from evolve_steps(store, client, cfg))
     return None

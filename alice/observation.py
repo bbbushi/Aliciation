@@ -28,7 +28,7 @@ FILE_DETAIL_LIMIT = 4 * 1024 * 1024
 HISTORY_NAME = re.compile(r"v[0-9]{3,12}_[0-9]{8}\.md\Z")
 MEMORY_META = (
     "id, created_at, layer, kind, salience, pressure, mention_count, "
-    "use_count, last_used_at, promoted_at, origin, scope, expires_at"
+    "use_count, last_used_at, promoted_at, origin, scope, expires_at, lifecycle, provenance_status"
 )
 SKILL_META = "id, created_at, use_count, last_used_at"
 
@@ -44,6 +44,17 @@ GUI_MEMORY = """(
    SELECT 1 FROM source_memory_dependencies d LEFT JOIN source_packets p ON p.id=d.packet_id
    WHERE d.memory_id=memories.id AND
     (p.id IS NULL OR p.revoked!=0 OR p.expires_at<=? OR instr(p.scope_json,'"gui"')=0)
+  )
+ )
+ OR (
+  memories.origin IN ('external','external_derived') AND memories.lifecycle='memory'
+  AND memories.provenance_status='valid' AND instr(memories.scope,'"gui"')>0
+  AND (memories.expires_at IS NULL OR memories.expires_at>strftime('%s','now'))
+  AND EXISTS(SELECT 1 FROM memory_evidence_links l WHERE l.memory_id=memories.id)
+  AND NOT EXISTS(
+   SELECT 1 FROM memory_evidence_links l LEFT JOIN retained_evidence e ON e.id=l.evidence_id
+   WHERE l.memory_id=memories.id AND (e.id IS NULL OR e.revoked!=0
+    OR (e.expires_at IS NOT NULL AND e.expires_at<=strftime('%s','now')) OR instr(e.scope_json,'"gui"')=0)
   )
  )
 )"""

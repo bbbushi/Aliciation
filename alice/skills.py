@@ -6,6 +6,7 @@ import time
 from .config import Config
 from .llm import chat, parse_json
 from .store import Store
+from .steps import drive
 
 SKILL_CAPACITY = 500
 
@@ -28,6 +29,10 @@ DISTILL_PROMPT = """你是技能提炼器。从下面的记忆中提炼可复用
 
 
 def distill(store: Store, client, cfg: Config) -> str:
+    return drive(distill_steps(store, client, cfg))
+
+
+def distill_steps(store: Store, client, cfg: Config):
     horizon = time.time() - 30 * 86400
     rows = [m for m in store.alive_memories() if m["created_at"] >= horizon][:80]
     if not rows:
@@ -38,7 +43,7 @@ def distill(store: Store, client, cfg: Config) -> str:
         existing="、".join(existing) if existing else "（暂无）",
         memories="\n".join(f'- {m["title"]}：{m["content"]}' for m in rows),
     )
-    resp = chat(
+    resp = yield lambda: chat(
         client, cfg,
         [{"role": "user", "content": prompt}],
         model=cfg.llm.cheap_model,
@@ -78,8 +83,12 @@ def distill(store: Store, client, cfg: Config) -> str:
 
 
 def distill_if_due(store: Store, client, cfg: Config) -> str | None:
+    return drive(distill_if_due_steps(store, client, cfg))
+
+
+def distill_if_due_steps(store: Store, client, cfg: Config):
     """数据触发：自上次提炼起新记忆累计到阈值即提炼。"""
     anchor = store.meta_get_time("last_distill_at")
     if store.count_memories_since(anchor) >= cfg.memory.distill_every_memories:
-        return distill(store, client, cfg)
+        return (yield from distill_steps(store, client, cfg))
     return None

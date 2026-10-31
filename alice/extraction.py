@@ -7,6 +7,7 @@ from datetime import datetime
 from .config import Config
 from .llm import chat, parse_json
 from .store import Store
+from .steps import drive
 
 EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型AI）与用户的对话，以及当前已有的近期记忆标题列表。
 
@@ -41,6 +42,10 @@ def _fmt_turns(rows) -> str:
 
 
 def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -> int:
+    return drive(extract_pending_steps(store, client, cfg, force=force))
+
+
+def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = False):
     """把自上次提取后的对话提炼为记忆。返回新增条数；失败不动游标，下次重试。"""
     cursor = int(store.meta_get("extract_cursor", "0") or 0)
     pending = store.turns_since(cursor)
@@ -62,7 +67,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
         recent_titles="、".join(recent_titles) if recent_titles else "（暂无）",
         conversation=_fmt_turns(ordinary),
     )
-    resp = chat(
+    resp = yield lambda: chat(
         client, cfg,
         [{"role": "user", "content": prompt}],
         model=cfg.llm.cheap_model,

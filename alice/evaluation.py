@@ -308,12 +308,12 @@ class EvaluationStore:
         if row is None or row["status"] != "armed":
             raise EvaluationError("该单次核查已消费、取消或不存在")
         run_id = row["id"]
-        total = self.conn.execute("SELECT COUNT(*) FROM memories WHERE origin='conversation'").fetchone()[0]
+        total = self.conn.execute("SELECT COUNT(*) FROM memories WHERE origin='conversation' AND provenance_status='valid'").fetchone()[0]
         inventory, complete, source_chars = [], total <= MAX_INVENTORY, 0
         deadline = time.monotonic() + 1.0
         if complete:
             fields = ",".join("substr(" + field + ",1,16001) AS " + field if field in ("title", "content", "keywords") else field for field in HASH_FIELDS)
-            for memory in self.conn.execute(f"SELECT id,{fields} FROM memories WHERE origin='conversation' ORDER BY id LIMIT ?", (MAX_INVENTORY + 1,)):
+            for memory in self.conn.execute(f"SELECT id,{fields} FROM memories WHERE origin='conversation' AND provenance_status='valid' ORDER BY id LIMIT ?", (MAX_INVENTORY + 1,)):
                 source_chars += sum(len(memory[field]) for field in ("title", "content", "keywords"))
                 if source_chars > MAX_SOURCE_CHARS or time.monotonic() > deadline or any(len(memory[field]) > MAX_FIELD for field in ("title", "content", "keywords")):
                     complete = False
@@ -423,7 +423,7 @@ class EvaluationStore:
         memories = []
         deadline = time.monotonic() + 1.0
         fields = ",".join("substr(m." + field + ",1,16001) AS " + field if field in ("title", "content", "keywords") else "m." + field for field in HASH_FIELDS)
-        rows = self.conn.execute(f"SELECT m.id,{fields},i.content_hash FROM evaluation_inventory i JOIN memories m ON m.id=i.memory_id WHERE i.run_id=? AND m.origin='conversation' ORDER BY m.id", (run["id"],))
+        rows = self.conn.execute(f"SELECT m.id,{fields},i.content_hash FROM evaluation_inventory i JOIN memories m ON m.id=i.memory_id WHERE i.run_id=? AND m.origin='conversation' AND m.provenance_status='valid' ORDER BY m.id", (run["id"],))
         checked, source_chars = 0, 0
         for row in rows:
             checked += 1

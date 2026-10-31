@@ -640,8 +640,14 @@
     });
     if (selected.view === "memories") meta.append(node("dt", "来源链"), node("dd",
       d.metadata?.origin && d.metadata.origin !== "conversation"
-        ? "外部来源包及有效期由宿主记录；引用存在不等于陈述可信，首版不作为人格、思辨或技能依据。"
+        ? d.metadata.lifecycle === "memory" ? "带出处的正式见闻，按普通记忆遗忘；可参与当前范围内的思辨，来源声称仍需核实。" : "旧来源记忆，仍按原来源有效期使用。"
         : "普通对话记忆尚无结构化来源轮次；观点出处以原文为准。"));
+    if (selected.view === "memories") {
+      const link = node("button", "查看出处与相关讨论", "link"); link.type = "button";
+      link.onclick = () => window.AliceChatSearch?.showMemory(d.metadata.id);
+      meta.append(node("dt", "追溯"), link);
+      if (d.metadata.provenance_status === "legacy_unverified") meta.append(node("dt", "迁移状态"), node("dd", "旧记录缺少可核对来源，暂不进入自动召回和思辨。"));
+    }
   }
   function resetList() {
     before = null; ceiling = null; nextBefore = null; listSignature = ""; listRevision++;
