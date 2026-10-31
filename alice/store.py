@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS memories (
   last_used_at REAL,
   promoted_at REAL,
   kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event', 'stance')),
-  pressure INTEGER NOT NULL DEFAULT 0 CHECK (pressure IN (0, 1))
+  pressure INTEGER NOT NULL DEFAULT 0 CHECK (pressure IN (0, 1)),
+  source_url TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories (layer);
 CREATE TABLE IF NOT EXISTS memory_tombstones (
@@ -120,6 +121,7 @@ class Store(SourceStoreMixin):
             ("origin", "TEXT NOT NULL DEFAULT 'conversation'"),
             ("scope", "TEXT NOT NULL DEFAULT '[]'"),
             ("expires_at", "REAL"),
+            ("source_url", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {declaration}")
@@ -209,15 +211,39 @@ class Store(SourceStoreMixin):
         layer: str = "active",
         kind: str = "event",
         pressure: int = 0,
+        source_url: str = "",
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind, pressure) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories (created_at, layer, title, content, keywords, salience, kind, pressure, source_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (created_at if created_at is not None else time.time(), layer, title.strip(),
-             content.strip(), keywords, int(salience), kind, 1 if pressure else 0),
+             content.strip(), keywords, int(salience), kind, 1 if pressure else 0, source_url.strip()),
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def save_web_seen_memory(self, title: str, content: str, source_url: str,
+                             keywords: str = "", salience: int = 0) -> str:
+        """见闻单元（v0.4 P2）：网上读到的信息，经她复述后转正为对话起源的记忆。
+
+        与普通记忆同表同管线（七日线/容量竞争/思辨视野），出处由 source_url 列
+        与 content 内的来源明示承担（「{来源}说：…」措辞即认识论防线）。
+        去重：同 source_url 且同题的见闻不重复落库。返回给模型的确认语。
+        """
+        url = source_url.strip()
+        if not url:
+            return "见闻需要来源链接（source_url），没有出处的不落库。"
+        dup = self.conn.execute(
+            "SELECT id FROM memories WHERE source_url=? AND title=? LIMIT 1",
+            (url, title.strip()[:24]),
+        ).fetchone()
+        if dup:
+            return "这条来源已经记过了，不重复落库。"
+        self.insert_memory(
+            title=title[:24], content=content, keywords=(keywords + " 见闻").strip(),
+            salience=salience, layer="active", kind="event", source_url=url,
+        )
+        return "已作为见闻记住（带来源链接，与普通记忆同管线，会随时间自然过期）。"
 
     def memories_in_layer(self, layer: str, kind: str | None = None, *,
                           consumer: str = "maintenance") -> list[sqlite3.Row]:
