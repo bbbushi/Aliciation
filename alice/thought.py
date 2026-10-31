@@ -26,7 +26,8 @@ DELIBERATE_PROMPT = """你是 {name} 的思辨任务：把积累的记忆消化�
 
 硬性规则：
 - 每条观点的 sources 必须逐字使用下方记忆里实际存在的标题（代码逐条校验，出处不实的观点会被整个丢弃）；禁止无出处或空出处的观点。
-- 观点带完整认识论结构：encounter（什么处境）、facts（处境中的事实）、interp（你的解释 + 来源：经历/推断/用户/捐赠）、missing（没看见的与不确定）、next_response（这会怎样改变你下次的回应——观点要落在回应方式上，不是悬空的命题）。
+- 观点带完整认识论结构：encounter（什么处境）、facts（处境中的事实）、interp（你的解释 + 来源：经历/推断/用户/捐赠/见闻）、missing（没看见的与不确定）、next_response（这会怎样改变你下次的回应——观点要落在回应方式上，不是悬空的命题）。
+- 来源为「见闻」的观点：依据是网上读到的材料（记忆里带来源链接的条目）——它们是别人写的声称，不是你的亲历；引用时保留出处指向，观点措辞标明「读到」，不把网页声称升格为亲历事实。
 - 遇到与已有先验观点相关的经历时，先做验证裁决（verifications）：证实/证伪/无关，并检查上次的 next_response 兑现没有。先验被证伪是成长的正常一步，不是失败。
 - 修订成熟观点必须带新论据：写 replaces 时，新观点的 sources 里至少要有一个出处不在旧观点的依据里；没有新证据就维持原观点，不要因为被质疑就改。
 - 叙事里修订过的观点写成「以前我以为X，后来觉得Y（依据…）」——思想的变动要可见；先验观点标注（先验·未验证）。
@@ -40,7 +41,7 @@ DELIBERATE_PROMPT = """你是 {name} 的思辨任务：把积累的记忆消化�
 {memories}
 
 输出 JSON：
-{{"views": [{{"claim": "一句话主张（≤24字）", "encounter": "什么处境下形成", "facts": "处境中的事实", "interp": {{"kind": "经历|推断|用户|捐赠", "note": "一句话解释"}}, "missing": "没看见的与不确定", "next_response": "会怎样改变下次回应", "sources": ["出处记忆标题"], "replaces": "被修订的旧观点主张原文，没有则空字符串"}}],
+{{"views": [{{"claim": "一句话主张（≤24字）", "encounter": "什么处境下形成", "facts": "处境中的事实", "interp": {{"kind": "经历|推断|用户|捐赠|见闻", "note": "一句话解释"}}, "missing": "没看见的与不确定", "next_response": "会怎样改变下次回应", "sources": ["出处记忆标题"], "replaces": "被修订的旧观点主张原文，没有则空字符串"}}],
  "verifications": [{{"claim": "已有先验观点的主张原文", "verdict": "证实|证伪|无关", "honored": "兑现|未兑现|无从判断", "note": "一句话说明", "sources": ["依据记忆标题"]}}]}}"""
 
 PRESSURE_BLOCK_HEADER = (
@@ -167,6 +168,10 @@ def deliberate(store: Store, client, cfg: Config) -> str:
                     if s in title_pressure]
         if not vsources:
             continue  # 裁决也要过 A01：没有真实出处的事件依据，裁决不生效
+        for s in vsources:  # 裁决引用同样计使用——依据链与观点同寿
+            src = store.find_by_title(s)
+            if src is not None:
+                store.bump_use(src["id"])
         note = str(w.get("note", "")).strip()
         if verdict == "证实":
             body = _set_state(prior["content"], "验证")
@@ -206,7 +211,7 @@ def deliberate(store: Store, client, cfg: Config) -> str:
             continue
         interp = v.get("interp") if isinstance(v.get("interp"), dict) else {}
         kind = str(interp.get("kind", "经历")).strip() or "经历"
-        if kind not in {"经历", "推断", "用户", "捐赠"}:
+        if kind not in {"经历", "推断", "用户", "捐赠", "见闻"}:
             kind = "经历"
         content = (
             f'遭遇：{str(v.get("encounter", "")).strip() or "（未记）"}\n'
@@ -234,6 +239,10 @@ def deliberate(store: Store, client, cfg: Config) -> str:
         # A01：压力沿派生链保留——出处含压力记忆的观点自身带压力标记，
         # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
         src_pressure = any(title_pressure[s] for s in valid)
+        for s in valid:  # 思辨引用计使用（bump_use）——被消化成观点的见闻/事件与观点同寿
+            src = store.find_by_title(s)
+            if src is not None:
+                store.bump_use(src["id"])
         store.insert_memory(
             title=claim, content=content,
             keywords="观点 " + " ".join(valid),

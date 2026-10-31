@@ -30,13 +30,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "主动记住一件重要的事（约定、用户重要事实等）。会被标记为重要，不受七日线清理。",
+            "description": "主动记住一件重要的事（约定、用户重要事实等）。会被标记为重要，不受七日线清理。如果内容来自某个网页（你读过、或用户给了链接），提供 source_url——会作为带出处的见闻保存，进入你的普通记忆管线。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "短标题，≤12字"},
-                    "content": {"type": "string", "description": "要记住的完整内容"},
+                    "content": {"type": "string", "description": "要记住的完整内容。来自网页时用你自己的话转写并标明来源（如「维基百科条目说：…」），不要照抄原文"},
                     "keywords": {"type": "string", "description": "可选，检索关键词，空格分隔"},
+                    "source_url": {"type": "string", "description": "可选。内容来源的网页链接；提供则保存为带出处的见闻记忆（走普通记忆管线）"},
                 },
                 "required": ["title", "content"],
             },
@@ -60,6 +61,7 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
             str(args.get("title", "")),
             str(args.get("content", "")),
             str(args.get("keywords", "")),
+            source_url=str(args.get("source_url", "")),
             source_context=source_context,
         )
     return f"未知工具：{name}"

@@ -178,9 +178,14 @@ def tool_recall(store: Store, query: str, *, source_context: dict | None = None)
 
 
 def tool_remember(store: Store, title: str, content: str, keywords: str = "", *,
-                  source_context: dict | None = None) -> str:
+                  source_url: str = "", source_context: dict | None = None) -> str:
     if not title.strip() or not content.strip():
         return "title 和 content 都不能为空。"
+    if source_url.strip():
+        # 见闻通道（v0.4 P2）：网上读到的信息，她复述后带来源转正为对话起源的记忆——
+        # 与七日线/思辨同管线，不隔离不设特权；转正条件=她自己的措辞+来源明示。
+        return store.save_web_seen_memory(
+            title, content, source_url, keywords, salience=1)
     if source_context and source_context["packet_ids"]:
         try:
             mid = store.save_external_event(
