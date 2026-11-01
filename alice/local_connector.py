@@ -149,10 +149,12 @@ class LocalConnectorManager:
             with self._lock:
                 if not self._closed and op == self._state["operation_id"]:
                     self._setup["message"] = message
+        stage = "stop"
         try:
             self._close_idle_helper(child)
             if self._setup_cancel.is_set():
                 raise SetupFailure("cancelled")
+            stage = "inspect"
             if action == "recheck":
                 # The same gate excludes terminal bridges during explicit detection.
                 if not self.spec.setup_root.is_dir():
@@ -162,6 +164,7 @@ class LocalConnectorManager:
                         environment = inspect_environment(self.spec.setup_root)
             else:
                 environment = inspect_environment(self.spec.setup_root)
+                stage = "prepare"
                 environment = install_dependencies(self.spec.setup_root, environment,
                                                    self._setup_cancel, report)
             with self._lock:
@@ -171,11 +174,13 @@ class LocalConnectorManager:
                 self._state = {"state": "idle" if environment.state == "ready" else "unavailable",
                                "operation_id": uuid.uuid4().hex}
         except Exception as exc:
-            message = str(exc) if isinstance(exc, SetupFailure) else str(SetupFailure())
+            failure = exc if isinstance(exc, SetupFailure) else SetupFailure(stage=stage)
+            message = str(failure)
             with self._lock:
                 if self._closed or op != self._state["operation_id"]:
                     return
                 self._setup = {"state": "failed", "message": message,
+                               "diagnostic": failure.diagnostic(stage),
                                "can_install": bool(self._environment and self._environment.npm
                                                    and self._environment.state == "dependencies_missing"),
                                "can_recheck": True}
