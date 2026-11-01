@@ -234,16 +234,27 @@ const DELIVERY_LABELS = {
 const DELIVERY_FINAL = new Set(["platform_confirmed", "confirmed", "expired"]);
 
 const SOURCE_HISTORY_PLACEHOLDER = "（这一轮参考了外部资料；资料正文仅在仍获准的来源附件中提供。）";
+const WORKER_HISTORY_PLACEHOLDER = "（这一轮使用了协作任务资料；正文仅在 GUI 内、任务资料仍获准时可见。）";
+const WORKER_REPORT_STATES = { succeeded: "执行已结束", failed: "执行失败", cancelled: "已停止", unknown: "执行状态待确认" };
 
 function renderTurnMetadata(node) {
   const meta = node.querySelector(".message-meta");
   if (!meta) return;
   const channel = node.dataset.channel || "gui", fromQQ = channel.startsWith("qq");
   const assistant = node.classList.contains("assistant");
+  const unavailable = node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "true";
+  if (node.classList.contains("worker-report")) {
+    meta.textContent = `宿主通知 · ${WORKER_REPORT_STATES[node.dataset.workerReportState] || "任务状态已更新"} · DSH 公开回复未经 Alice 核实 · 任务 ${node.dataset.workerTaskId}`;
+    if (unavailable) meta.textContent += node.dataset.sourceAvailable === "unknown" ? " · 正在核对任务资料资格" : " · 任务正文已不可用";
+    meta.title = "由宿主转达协作结果；没有为这条通知调用 Alice 模型。";
+    return;
+  }
   meta.textContent = fromQQ ? (assistant ? "回复 QQ" : "QQ · 所有者")
     : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
-  if (!fromQQ) return;
-  const unavailable = node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "true";
+  if (!fromQQ) {
+    if (node.dataset.workerBound === "true") meta.textContent += unavailable ? " · 协作任务正文当前不可用" : " · 含协作任务资料";
+    return;
+  }
   if (assistant) {
     meta.textContent += ` · ${DELIVERY_LABELS[node.dataset.delivery] || "QQ 发送状态待确认"}`;
     meta.title = "平台接收不代表对方已读；发送失败不会重新生成答案。";
@@ -259,7 +270,7 @@ function renderTurnMetadata(node) {
 
 function redactSourceNode(node, pending = false) {
   const txt = node.querySelector(".txt");
-  if (txt) setBubbleText(txt, SOURCE_HISTORY_PLACEHOLDER);
+  if (txt) setBubbleText(txt, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
   // Streamed reasoning can contain the same source material as the final text.
   node.querySelector("details.think")?.remove();
   node.dataset.sourceAvailable = pending ? "unknown" : "false";
@@ -288,6 +299,15 @@ function scheduleSourceExpiry() {
 }
 
 function markSourceProjection(node, turn) {
+  if (typeof turn.worker_bound === "boolean") node.dataset.workerBound = String(turn.worker_bound);
+  const report = turn.worker_report;
+  if (report && typeof report.task_id === "string" && typeof report.attempt_id === "string"
+      && node.classList.contains("assistant") && !node.dataset.channel?.startsWith("qq")) {
+    node.classList.add("worker-report");
+    node.dataset.workerTaskId = report.task_id;
+    node.dataset.workerReportState = typeof report.state === "string" ? report.state : "unknown";
+    node.querySelector("details.think")?.remove();
+  }
   if (typeof turn.source_bound !== "boolean") return;
   node.dataset.sourceBound = String(turn.source_bound);
   if (!turn.source_bound) {
@@ -980,6 +1000,7 @@ function openSettings(section = "general") {
 
 function closeSettings() {
   $("#settings-modal").classList.add("hidden");
+  window.AliceWorkers?.setSettingsVisible(false);
   window.AliceQQ?.close();
 }
 
@@ -1150,6 +1171,7 @@ $("#shutdown-btn").onclick = async () => {
   window.AliceQQ?.close();
   window.AliceObserver?.shutdown();
   window.AliceEvaluations?.shutdown();
+  window.AliceWorkers?.shutdown();
   $("#shutdown-screen").classList.remove("hidden");
   $("#shutdown-title").textContent = "正在关闭 Alice";
   $("#shutdown-state").textContent = "正在等待当前回复完成，并整理本机记忆…";
@@ -1407,10 +1429,11 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "appearance", "qq", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "qq", "workers", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
+    window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
   }
   window.AliceUI = { selectSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
@@ -1436,7 +1459,7 @@ boot().catch(showStartupError);
     byId("nav-backdrop").classList.toggle("hidden", !open);
     byId("nav-toggle").setAttribute("aria-expanded", String(open));
     // On a small screen the navigation overlays the page, so its background is inert.
-    for (const id of ["chat", "observer", "evaluations"]) byId(id).inert = open;
+    for (const id of ["chat", "observer", "evaluations", "worker-tasks"]) byId(id).inert = open;
     if (open) focus(byId("nav-close"));
     else if (returnFocus) focus(byId("nav-toggle"));
   }
@@ -1458,6 +1481,7 @@ boot().catch(showStartupError);
   byId("chat-nav").addEventListener("click", () => {
     window.AliceObserver?.close();
     window.AliceEvaluations?.close();
+    window.AliceWorkers?.close(false);
     setNav(false, false);
     focus(byId("input"));
   });

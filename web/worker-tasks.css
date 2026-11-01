@@ -1,0 +1,79 @@
+/* Independent GUI work records; the primary conversation keeps its own scroll. */
+.chat-header-actions { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+#workers-btn { white-space: nowrap; }
+#workers-btn[aria-expanded=true] { border-color: var(--accent); }
+.worker-count { font-size: 11px; color: var(--accent); }
+.worker-panel { flex: 0 0 clamp(360px, 29vw, 420px); min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 20px; border: 2px solid var(--line); background: var(--card); overflow: auto; }
+.worker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.worker-eyebrow { font: 11px/1.6 var(--mono); color: var(--muted); letter-spacing: 1px; }
+.worker-head h2 { margin: 2px 0; font-size: 19px; }
+.worker-status { margin: 12px 0 4px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.worker-status[data-error=true] { color: var(--warning); }
+.worker-toolbar { display: flex; gap: 18px; border-bottom: 1px solid var(--line); padding-bottom: 10px; font-size: 13px; }
+.worker-config { font-size: 13px; }
+.worker-config p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.worker-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.worker-settings-head h2 { margin: 0; }
+.worker-config input[type=checkbox] { width: 16px; flex: 0 0 16px; }
+#workers-policy, .worker-pairing, #workers-pairing, .worker-task-settings { display: grid; gap: 10px; }
+.worker-task-settings { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+.worker-pairing { border-bottom: 1px solid var(--line); margin-bottom: 14px; padding-bottom: 14px; }
+.worker-advanced { border-top: 1px solid var(--line); padding-top: 10px; }
+.worker-advanced > summary { cursor: pointer; color: var(--muted); line-height: 1.8; }
+.worker-advanced[open] > summary { margin-bottom: 12px; }
+.worker-token-rotation { display: grid; gap: 8px; border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+#workers-credential-state[data-error=true] { color: var(--warning); }
+.worker-config h3 { margin: 5px 0; font-size: 14px; }
+.worker-policy-limits { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.worker-policy-limits label { min-width: 0; }
+.worker-policy-limits input { display: block; width: 100%; margin-top: 5px; }
+.worker-permission-boundary { border-left: 2px solid var(--warning); padding: 8px 10px; color: var(--warning); background: var(--warning-bg); }
+.worker-ack { display: flex; gap: 8px; align-items: flex-start; line-height: 1.8; }
+.worker-ack input { flex-shrink: 0; margin-top: 5px; }
+#workers-policy-result[data-error=true], #workers-pairing-result[data-error=true], #workers-task-settings-result[data-error=true], #workers-management-result[data-error=true] { color: var(--warning); }
+.worker-hint { color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.worker-empty { color: var(--muted); padding: 24px 4px; line-height: 1.9; font-size: 14px; }
+.worker-list-view { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding-top: 10px; }
+.worker-list-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.worker-list-filter button { border: 1px solid var(--line); background: var(--bg); border-radius: 5px; padding: 7px 9px; font-size: 12px; }
+.worker-list-filter button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+.worker-list { display: grid; gap: 9px; }
+.worker-task { display: grid; gap: 5px; text-align: left; width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 12px; }
+.worker-task:hover { border-color: var(--accent); }
+.worker-task[data-unread=true] { border-left: 3px solid var(--accent); }
+.worker-task-title { font-size: 14px; overflow-wrap: anywhere; }
+.worker-task-info { font-size: 12px; color: var(--muted); }
+.worker-task-state { font-size: 12px; color: var(--accent); }
+#workers-more { margin: 12px 0; width: 100%; }
+.worker-detail { flex: 1; min-height: 240px; display: flex; flex-direction: column; }
+#workers-back { align-self: flex-start; margin-top: 10px; }
+#workers-task-title { margin: 9px 0 0; font-size: 15px; overflow-wrap: anywhere; }
+#workers-task-meta, #workers-tool-note { margin: 3px 0; }
+.worker-events { flex: 1; min-height: 140px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 8px 6px 6px 0; }
+.worker-event { padding: 10px 11px; border-left: 2px solid var(--line); background: var(--bg); margin: 8px 0; overflow-wrap: anywhere; }
+.worker-event[data-actor=alice] { border-color: #789bd8; }
+.worker-event[data-actor=dsh] { border-color: #75b7b0; }
+.worker-event-head { font-size: 12px; color: var(--accent); }
+.worker-event-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.worker-event-text { font: 13px/1.9 var(--font); white-space: pre-wrap; overflow-wrap: anywhere; margin: 7px 0 0; }
+.worker-event details summary { font-size: 12px; color: var(--muted); }
+.worker-event details > .worker-event-text { max-height: 320px; overflow-y: auto; }
+.worker-artifacts { max-height: 130px; overflow-y: auto; font-size: 13px; border-top: 1px solid var(--line); }
+.worker-artifact { display: flex; align-items: center; gap: 8px; justify-content: space-between; overflow-wrap: anywhere; margin: 6px 0; }
+.worker-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.worker-actions > .link { font-size: 12px; }
+#workers-review-state { margin: 7px 0 0; }
+.worker-management-actions { margin-top: 10px; }
+.worker-management-confirm { border: 1px solid var(--line); background: var(--bg); border-radius: 5px; padding: 12px; margin-top: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.worker-management-confirm h3 { font-size: 14px; margin: 0 0 10px; }
+.worker-management-confirm p { margin: 0 0 10px; line-height: 1.8; }
+#workers-management-warning { color: var(--warning); }
+/* JS chooses the separate panel when the actual remaining chat width is too small. */
+#app.workers-open.worker-narrow .chat { display: none; }
+#app.workers-open.worker-narrow .worker-panel { flex: 1; width: 100%; }
+@media (max-width: 540px) {
+  .chat header { flex-wrap: wrap; gap: 8px; }
+  .chat-header-actions { width: 100%; justify-content: space-between; gap: 8px; }
+  #workers-btn { font-size: 12px; padding: 5px 8px; }
+  .worker-panel { padding: 14px; }
+}

@@ -292,6 +292,49 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             except Exception:
                 self._json({"error": "连接状态暂时无法确认，请刷新后查看", "code": "connector_unavailable"}, 503)
 
+        def _worker_route(self, path: str) -> None:
+            posting = self.command == "POST"
+            if (not self._trusted_intent("workers", json_body=posting)
+                    or len(self.headers.get_all("X-Alice-Intent", [])) != 1
+                    or len(self.headers.get_all("Origin", [])) > 1):
+                self._json({"error": "协作记录仅供本机 GUI 使用", "code": "gui_only"}, 403)
+                return
+            try:
+                query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                if posting and query:
+                    raise ValueError("写操作不接受查询参数")
+                if posting:
+                    payload = self._bounded_body(32768)
+                    if path == "/api/collaborators":
+                        result = svc.collaborators(payload)
+                    elif path == "/api/worker-task-settings":
+                        result = svc.worker_task_settings(payload)
+                    elif path == "/api/worker-inputs":
+                        result = svc.worker_inputs(payload)
+                    elif path == "/api/worker-artifacts/download":
+                        result = svc.worker_artifacts(payload)
+                    elif path in {"/api/worker-tasks/" + action for action in
+                                  ("detail", "events", "cancel", "review", "revoke", "archive", "restore", "delete")}:
+                        result = svc.worker_tasks(path.rsplit("/", 1)[1], payload)
+                    else:
+                        self._json({"error": "not found"}, 404)
+                        return
+                elif path == "/api/collaborators" and not query:
+                    result = svc.collaborators()
+                elif path == "/api/worker-tasks":
+                    if set(query) - {"limit", "before", "archived"} or any(len(v) != 1 for v in query.values()):
+                        raise ValueError("分页参数无效")
+                    result = svc.worker_tasks("list", {key: int(value[0]) for key, value in query.items()})
+                else:
+                    raise ValueError("查询无效")
+                self._json(result)
+            except ChannelError as exc:
+                self._channel_error(exc)
+            except (ValueError, TypeError):
+                self._json({"error": "协作请求参数无效", "code": "invalid_request"}, 400)
+            except Exception:
+                self._json({"error": "协作记录暂不可用，请重新同步", "code": "workers_unavailable"}, 503)
+
         def _channel_route(self, path: str) -> None:
             """Machine credentials never grant GUI, memory, model or P1 authority."""
             port = self.server.server_port
@@ -403,6 +446,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("chat-search.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.css":
                 self._file("chat-search.css", "text/css; charset=utf-8")
+            elif path == "/worker-tasks.js":
+                self._file("worker-tasks.js", "application/javascript; charset=utf-8")
+            elif path == "/worker-tasks.css":
+                self._file("worker-tasks.css", "text/css; charset=utf-8")
             elif path == "/discovery.css":
                 self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
@@ -415,6 +462,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.chat_activity())
             elif path == "/api/connectors/qq":
                 self._connector_route()
+            elif path in ("/api/collaborators", "/api/worker-tasks"):
+                self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
             elif path == "/api/persona":
@@ -556,6 +605,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
+            if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download", "/api/worker-task-settings")
+                    or path.startswith("/api/worker-tasks/")):
+                self._worker_route(path)
+                return
             if path in ("/api/chat/search/status", "/api/chat/search/cancel", "/api/discovery/memory"):
                 intent = "discovery" if path == "/api/discovery/memory" else "gui"
                 if not self._trusted_json(intent):
