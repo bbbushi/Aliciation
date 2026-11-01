@@ -22,9 +22,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         self.ledger = WorkerLedger(self.service.store)
         self.ledger.interrupt()
         self.cancel_attempted.clear()
-        with self.ledger.conn:
-            # Process restart/reset requires a fresh human pairing and grant.
-            self.ledger.conn.execute('UPDATE worker_policy SET enabled=0 WHERE id=1')
+        # The grant and its budget are durable. Connection credentials/handles
+        # stay in memory: startup never pairs, sends, or replays historical work.
         self.paused = False
 
     def _epoch(self, payload):
@@ -35,17 +34,20 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
 
     def registration(self):
         connected = self.bridge is not None and self.connection_state == 'connected' and not self.paused and not self.closing
+        enabled = bool(self.ledger.policy()['enabled'])
         result = {
             'name': 'dsh-agent', 'display_name': 'DSH', 'state': 'ready' if connected else self.connection_state,
-            'enabled': bool(self.ledger.policy()['enabled']), 'available': connected,
-            'reason': '插件已配对；按 GUI 授权创建专属会话。' if connected else
-                      '请启用 DSH 插件的业务桥并配对；不会自动启动 DSH 或发送任务。',
+            'enabled': enabled, 'available': connected,
+            'reason': ('插件已连接；已保存授权继续有效，补充前会核对原会话状态。' if enabled else
+                       '插件已连接；派工授权尚未开启，请在设置 → DSH 确认授权。') if connected else
+                      ('尚未连接；已保存授权和任务记录，请到设置 → DSH 连接。' if enabled else
+                       '尚未连接；授权设置和任务记录已保留，请到设置 → DSH 连接并确认授权。'),
             'permission_summary': '仅操作插件自建会话；原生权限不是操作系统沙箱。次数与时限不构成费用硬帽。',
             'manual_setup': {'title': '插件连接步骤', 'steps': [
                 '在 DSH NEXT 安装并启用 0.3.0 或更新的 Alice 桥接插件；从旧版本更新时重新加载一次。',
                 '点击“生成令牌并连接”；独立令牌在本机加密保存，插件自动读取，无需复制或设置环境变量。',
-                '明确授权工作目录、原生访问模式、执行次数和单轮时限，再在主聊天提出任务。'],
-                'note': '自动令牌目前支持 Windows。断开保留令牌并撤销派工授权；高级设置保留手动配对。'},
+                '已保存授权会继续保留；首次使用或授权关闭时，确认目录、原生模式、执行次数和时限。'],
+                'note': '自动令牌目前支持 Windows。断开保留令牌、授权、任务记录和已用次数；关闭授权才撤销任务资料。高级设置保留手动配对。'},
             'capabilities': self.bridge.hello.get('capabilities', {}) if self.bridge else {},
             'verification': 'authenticated_plugin' if connected else 'installation_metadata',
             'runtime_checked': connected,
@@ -160,6 +162,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                     events.append(event)
                 return {'session_epoch': epoch, 'task_id': task['task_id'], 'events': events,
                         'cursor': events[-1]['sequence'] if events else cursor, 'has_more': len(rows) > limit,
+                        'content_available': visible,
+                        'content_unavailable_reason': self.ledger.content_unavailable_reason(task),
                         'content_revoked': not visible}
             old = self.ledger.replay(epoch, payload.get('request_id'), {'action': action, **payload})
             if old is not None:
@@ -192,6 +196,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             return result
 
     def prepare_chat_locked(self, request):
+        if request.get('worker_target') is not None:
+            self.validate_chat_target_locked(request)
         if request.get('channel_id') != 'gui' or not self.ledger.policy()['enabled'] or self.closing or self.paused:
             return None
         from .worker_tools import WorkerChatSession

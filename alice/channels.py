@@ -49,6 +49,16 @@ def _text(value):
     return value
 
 
+def normalize_worker_target(value):
+    """A GUI routing identity, never a task body, permission or DSH session ID."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {'collaborator', 'task_id'}
+            or value.get('collaborator') != 'dsh-agent'):
+        raise _bad('协作引用目标无效')
+    return {'collaborator': 'dsh-agent', 'task_id': _id(value.get('task_id'))}
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channel_requests (
  request_id TEXT PRIMARY KEY, session_epoch TEXT NOT NULL, channel_id TEXT NOT NULL,
@@ -60,6 +70,7 @@ CREATE TABLE IF NOT EXISTS channel_requests (
 CREATE TABLE IF NOT EXISTS channel_turns (
  turn_id INTEGER PRIMARY KEY, request_id TEXT NOT NULL, channel_id TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS channel_requests_user_turn ON channel_requests(user_turn_id);
 CREATE INDEX IF NOT EXISTS channel_turns_request ON channel_turns(request_id);
 CREATE TABLE IF NOT EXISTS channel_deliveries (
  request_id TEXT NOT NULL, segment_index INTEGER NOT NULL,
@@ -220,18 +231,24 @@ class ChannelCoordinator:
                 "text": text, "source": dict(source), "source_key": _digest([epoch, *identity]),
                 "payload_hash": _digest([identity, text]), "timestamp": timestamp}
 
-    def gui_request(self, text, request_id, epoch, *, search_intent=None):
+    def gui_request(self, text, request_id, epoch, *, search_intent=None, worker_target=None):
         text = _text(text)
+        target = normalize_worker_target(worker_target)
         from .dialogue_search import normalize_intent
         intent = normalize_intent(text, search_intent)
         with self.condition:
             epoch = self.epoch if epoch is None else epoch
             self.check_epoch(epoch)
         request_id = _id(request_id) if request_id is not None else uuid.uuid4().hex
+        source = {"provider": "local", "chat_type": "owner", **({"search_intent": intent} if intent else {})}
+        payload_hash = _digest([text, intent]) if intent else _digest(text)
+        if target is not None:
+            source['worker_target'] = target
+            payload_hash = _digest({'format': 'alice-gui-worker-target-v1', 'text': text,
+                                    'search_intent': intent, 'worker_target': target})
         return {"request_id": request_id, "session_epoch": epoch, "channel_id": "gui",
-                "text": text, "search_intent": intent,
-                "source": {"provider": "local", "chat_type": "owner", **({"search_intent": intent} if intent else {})},
-                "source_key": _digest([epoch, "gui", request_id]), "payload_hash": _digest([text, intent]) if intent else _digest(text)}
+                "text": text, "search_intent": intent, "worker_target": target,
+                "source": source, "source_key": _digest([epoch, "gui", request_id]), "payload_hash": payload_hash}
 
     def _reply_hash_locked(self, row):
         """Freeze legacy metadata without ever hashing an expired source shadow.
@@ -286,6 +303,9 @@ class ChannelCoordinator:
         result = {key: row[key] for key in ("request_id", "session_epoch", "channel_id", "status", "created_at", "updated_at",
                                           "user_turn_id", "assistant_turn_id", "error_code", "maintenance_status")}
         result["reply"] = None
+        if row['channel_id'] == 'gui':
+            result['worker_target'] = self.service._workers.worker_target_view_locked(
+                normalize_worker_target(json.loads(row['source_json']).get('worker_target')), row['session_epoch'])
         result["reply_hash"] = self._reply_hash_locked(row)
         result["delivery_allowed"] = self._reply_sendable_locked(row)
         if row["assistant_turn_id"] is not None:
@@ -308,9 +328,12 @@ class ChannelCoordinator:
             return None
         view = self._view_locked(row)
         source_bound = bool(row["assistant_turn_id"] and self.service.store.turn_source_ids(row["assistant_turn_id"]))
+        source_bound = source_bound or bool(view.get('worker_target'))
         cached_view = copy.deepcopy(view)
         if source_bound:
-            cached_view["reply"] = None  # Always hydrate through scope/expiry, never cache source prose.
+            # Targets also need fresh availability; cached metadata cannot grant
+            # interaction after archive, deletion, disconnect or revocation.
+            cached_view["reply"] = None
         with self.condition:
             self.cache[request_id] = {"view": cached_view, "payload_hash": row["payload_hash"],
                                       "source_key": row["source_key"], "source": json.loads(row["source_json"]),

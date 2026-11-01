@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS worker_requests (
 CREATE TABLE IF NOT EXISTS worker_reports (
  attempt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, epoch TEXT NOT NULL,
  outcome TEXT NOT NULL, report_state TEXT NOT NULL DEFAULT 'pending',
+ kind TEXT NOT NULL DEFAULT 'legacy_transcript',
  turn_id INTEGER UNIQUE, created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS worker_reports_pending ON worker_reports(report_state,created_at);
@@ -131,6 +132,7 @@ class WorkerLedger:
                                'tool_call_id': 'TEXT', 'deadline': 'REAL'},
             'worker_messages': {'truncated': 'INTEGER NOT NULL DEFAULT 0'},
             'worker_events': {'truncated': 'INTEGER NOT NULL DEFAULT 0'},
+            'worker_reports': {'kind': "TEXT NOT NULL DEFAULT 'legacy_transcript'"},
         }
         with self.conn:
             for table, columns in migrations.items():
@@ -138,6 +140,10 @@ class WorkerLedger:
                 for name, declaration in columns.items():
                     if name not in existing:
                         self.conn.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + name + ' ' + declaration)
+            # Reconnecting after a restart is not permission to generate an old
+            # summary. Preserve delivery as a status notice, with no model call.
+            self.conn.execute("UPDATE worker_reports SET report_state='pending_notice',kind='status' "
+                              "WHERE report_state IN ('pending','summarizing')")
 
     def policy(self):
         return dict(self.conn.execute('SELECT * FROM worker_policy WHERE id=1').fetchone())
@@ -153,12 +159,29 @@ class WorkerLedger:
             raise ChannelError(404, 'not_found', '当前会话没有此协作任务')
         return dict(row)
 
-    def visible(self, task):
+    def content_unavailable_reason(self, task):
+        """Keep connectivity, disabled access and actual revocation distinct."""
+        if task['deleted']:
+            return 'deleted'
+        if task['revoked']:
+            return 'revoked'
+        if task['expires_at'] <= time.time():
+            return 'expired'
         policy = self.policy()
-        return (not task['revoked'] and not task['deleted'] and task['expires_at'] > time.time()
-                and task['policy_revision'] == policy['revision'] and bool(policy['enabled']))
+        if task['policy_revision'] != policy['revision']:
+            return 'policy_changed'
+        if not policy['enabled']:
+            return 'authorization_disabled'
+        return None
+
+    def visible(self, task):
+        return self.content_unavailable_reason(task) is None
 
     def summary(self, task):
+        reason = self.content_unavailable_reason(task)
+        unavailable_titles = {'deleted': '任务已删除', 'revoked': '任务正文已撤销',
+                              'expired': '任务资料已过期', 'policy_changed': '任务授权已变更',
+                              'authorization_disabled': '任务资料待恢复授权'}
         return {**{k: task[k] for k in ('task_id', 'state', 'updated_at', 'created_at', 'last_sequence',
                                        'review', 'version', 'cancel_requested', 'termination_confirmed')},
                 'name': 'dsh-agent', 'agent_idle': bool(task['agent_idle']),
@@ -166,8 +189,11 @@ class WorkerLedger:
                 'archived': bool(task['archived']), 'deleted': bool(task['deleted']),
                 'management_pending': task['management_pending'],
                 'management_sync_dsh': bool(task['management_sync_dsh']),
-                'title': task['title'] if self.visible(task) else '任务资料已不可用',
-                'content_revoked': not self.visible(task), 'usage': self.usage(task['task_id'])}
+                'title': task['title'] if reason is None else unavailable_titles[reason],
+                'content_available': reason is None, 'content_unavailable_reason': reason,
+                # Existing clients use this legacy field as an availability
+                # flag. New clients display the explicit reason above.
+                'content_revoked': reason is not None, 'usage': self.usage(task['task_id'])}
 
     def record_usage(self, attempt_id, report):
         value = {'known': False, 'cost_known': False, 'source': 'dsh_reported', 'coverage': 'owned_agent_only'}

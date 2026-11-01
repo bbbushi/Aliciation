@@ -124,7 +124,7 @@ class WorkerManagementMixin:
                 self.ledger.revoke(task_id)
                 self.service.store.revoke_worker_context(task_id)
             self.ledger.conn.execute("UPDATE worker_reports SET report_state='suppressed' "
-                                     "WHERE task_id=? AND report_state='pending'", (task_id,))
+                                     "WHERE task_id=? AND report_state IN ('pending','pending_notice','summarizing')", (task_id,))
             self.ledger.conn.execute('UPDATE worker_tasks SET deleted=1 WHERE task_id=?', (task_id,))
         else:
             # Archive is only list organization. It does not renew or revoke
