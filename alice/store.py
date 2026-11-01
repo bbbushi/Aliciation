@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
+from .worker_tasks import WORKER_SCHEMA, WorkerStoreMixin
 from .observation_memory import ObservationStoreMixin
 
 SCHEMA = """
@@ -93,7 +94,7 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
     return m["mention_count"] * 2 + m["use_count"] + recency
 
 
-class Store(ObservationStoreMixin, SourceStoreMixin):
+class Store(ObservationStoreMixin, SourceStoreMixin, WorkerStoreMixin):
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
@@ -108,6 +109,7 @@ class Store(ObservationStoreMixin, SourceStoreMixin):
         self.conn.executescript(SCHEMA)
         self._migrate()
         self.conn.executescript(SOURCE_SCHEMA)
+        self.conn.executescript(WORKER_SCHEMA)
         self.init_observation_memory()
         self.purge_source_packets()
 
