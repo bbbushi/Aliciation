@@ -5,15 +5,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { QQBot } from '@tencent-connect/qqbot-nodejs';
+import { acquireRuntimeLease } from './runtime-lease.mjs';
 import { loadConfig, readSecret } from './config.mjs';
 import { Ledger, SafeLog, acquireLock, unlockStale, atomicJSON, hash, privateDirectory } from './storage.mjs';
 import { AliceClient } from './alice-client.mjs';
 import { Bridge } from './bridge.mjs';
 
 const require = createRequire(import.meta.url);
-const QRCode = require('qrcode-terminal/vendor/QRCode');
-const QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel');
+let QQBot, QRCode, QRErrorCorrectLevel;
+let runtimeReady = false;
+let runtimeLease = null;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const args = process.argv.slice(2);
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
@@ -39,6 +40,17 @@ let running = null;
 let closing = false;
 let inputBuffer = '';
 let commandChain = Promise.resolve();
+
+async function prepareRuntime() {
+  if (runtimeReady) return;
+  // Imported modules stay in Node's cache, so this lease is released only when
+  // the helper exits, including after a partial import failure.
+  if (!runtimeLease) runtimeLease = acquireRuntimeLease();
+  ({ QQBot } = await import('@tencent-connect/qqbot-nodejs'));
+  QRCode = require('qrcode-terminal/vendor/QRCode');
+  QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel');
+  runtimeReady = true;
+}
 
 function emit(value) {
   if (!closing && !process.stdout.destroyed) process.stdout.write(JSON.stringify(value) + '\n');
@@ -353,6 +365,7 @@ async function command(value) {
   }
   if (running || awaitingBinding) throw new Error('busy');
   if (action === 'confirm') { confirm(id); return; }
+  if (['scan', 'pair', 'run'].includes(action)) await prepareRuntime();
   if (action === 'scan') { await scan(id); return; }
   if (action === 'pair') { await pair(id); return; }
   if (action === 'run') {
@@ -390,7 +403,7 @@ process.stdin.on('data', chunk => {
       let value;
       try { value = JSON.parse(line); await command(value); }
       catch (err) {
-        const safe = new Set(['busy', 'already_configured', 'binding_conflict', 'not_configured', 'owner_pair_required', 'unsupported_node', 'command_invalid', 'confirmation_stale', 'operation_stale', 'external_bridge_or_stale_lock', 'token_invalid']);
+        const safe = new Set(['busy', 'already_configured', 'binding_conflict', 'not_configured', 'owner_pair_required', 'unsupported_node', 'command_invalid', 'confirmation_stale', 'operation_stale', 'external_bridge_or_stale_lock', 'token_invalid', 'installation_busy']);
         error(safe.has(err.message) ? err.message : 'operation_failed', validID(value?.operation_id) ? value.operation_id : current.operation_id);
       }
     });

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import readline from 'node:readline/promises';
-import { QQBot } from '@tencent-connect/qqbot-nodejs';
+import { acquireRuntimeLease } from './runtime-lease.mjs';
 import { loadConfig, readSecret } from './config.mjs';
 import { Ledger, SafeLog, acquireLock, unlockStale, atomicJSON, hash, privateDirectory } from './storage.mjs';
 import { AliceClient } from './alice-client.mjs';
@@ -16,6 +16,7 @@ const ix = args.indexOf('--config');
 const file = path.resolve(ix >= 0 ? args[ix + 1] ?? '' : path.join(root, 'user/qq/config.json'));
 if (args.some((a, i) => i > 0 && a !== '--config' && i !== ix + 1)) throw new Error('参数无效');
 const controller = new AbortController();
+let QQBot;
 process.on('SIGINT', () => controller.abort());
 process.on('SIGTERM', () => controller.abort());
 
@@ -168,6 +169,8 @@ async function main() {
   if (command === 'unlock') { unlockStale(c.storage.state_dir); console.log('已移除确认失效的实例锁。'); return; }
   if (command === 'config') { coreSnippet(c); return; }
   if (!['scan', 'pair', 'run'].includes(command)) throw new Error('未知命令');
+  acquireRuntimeLease(); // Held until exit, including any SDK shutdown work.
+  if (command !== 'scan') ({ QQBot } = await import('@tencent-connect/qqbot-nodejs'));
   const release = acquireLock(c.storage.state_dir);
   try {
     if (command === 'scan') { createToken(c); await scan(c); }
@@ -177,6 +180,11 @@ async function main() {
 }
 main().catch(error => {
   // Keep platform/provider exception messages and credentials out of console/logs.
+  if (error.message === 'installation_busy') {
+    console.error('QQ 组件正在安装或上次安装尚未收尾；请回到网页重新检测，准备好后再连接。');
+    process.exitCode = 1;
+    return;
+  }
   const safe = /^(此命令|目标已有|只支持一个|返回凭据|扫码|pair |配对|QQ连接|未确认|机器凭据|Alice 未|配置已|未找到|未知命令|桥已有|该 PID|锁损坏|桥账本)/.test(error.message);
   console.error(safe ? error.message : '操作未完成；请按 README 核对配置、文件权限、依赖和网络。未输出原始异常。');
   process.exitCode = 1;

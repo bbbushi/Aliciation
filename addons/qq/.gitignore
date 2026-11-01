@@ -4,3 +4,7 @@ state.json
 bridge.lock
 stop.request
 credentials/
+.npm-cache/
+.install-guard
+.install-lock/
+.runtime-leases/

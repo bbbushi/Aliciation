@@ -10,6 +10,7 @@
     error: "需要处理", unavailable: "暂不可用",
   };
   const actionButtons = {
+    install: $("qq-install"), recheck: $("qq-recheck"),
     scan: $("qq-scan"), pair: $("qq-pair"), confirm: $("qq-confirm"),
     run: $("qq-start"), stop: $("qq-stop"), cancel: $("qq-cancel"),
   };
@@ -75,11 +76,18 @@
       button.disabled = busy;
     });
     $("qq-refresh").disabled = busy;
+    $("qq-setup").classList.add("hidden");
+    $("qq-setup").setAttribute("aria-busy", "false");
+    $("qq-setup-progress").classList.add("hidden");
+    $("qq-node-download").classList.add("hidden");
     if (!d) {
       clearPrivateDisplay();
       return;
     }
     const state = d.state;
+    const setup = d.setup && typeof d.setup === "object" ? d.setup : null;
+    const needsSetup = ["unavailable", "idle", "stopped"].includes(state) && setup && setup.state !== "ready";
+    const installing = needsSetup && setup.state === "installing";
     $("qq-badge").textContent = labels[state] || "状态待确认";
     $("qq-badge").className = "qq-badge" + (state === "connected" ? " connected" : ["error", "unavailable"].includes(state) ? " error" : "");
     setStatus(d.message || ({
@@ -93,6 +101,26 @@
       pairing: "请用本人的 QQ 发送下面的配对文字。",
       awaiting_confirmation: "请核对下面的身份，再确认保存。",
     }[state] || "暂时无法确认连接状态，请刷新。"), ["error", "unavailable"].includes(state));
+    if (needsSetup) {
+      $("qq-setup").classList.remove("hidden");
+      $("qq-setup").setAttribute("aria-busy", String(!!installing));
+      $("qq-setup-progress").classList.toggle("hidden", !installing);
+      $("qq-badge").textContent = installing ? "正在准备" : setup.state === "failed" ? "准备未完成" : "需要准备";
+      $("qq-badge").className = "qq-badge" + (setup.state === "failed" ? " error" : "");
+      $("qq-setup-title").textContent = installing ? "正在准备 QQ 组件" : setup.state === "failed" ? "准备未完成，请按提示处理" : "首次使用，先准备 QQ 组件";
+      if (typeof setup.message === "string" && setup.message) setStatus(setup.message, setup.state === "failed");
+      $("qq-setup-hint").textContent = ({
+        dependencies_missing: "首次使用需要联网下载组件，安装在运行 Alice 的这台电脑。完成后就可以继续扫码。",
+        installing: "正在准备组件，请保持 Alice 运行。关闭这个面板后仍会继续，可稍后回来查看。",
+        failed: setup.can_install === true ? "处理上方提示后，可重试安装。若已在电脑上补齐组件，点击“重新检测”。" : "处理上方提示后，点击“重新检测”。",
+        node_missing: "请先在运行 Alice 的电脑安装 Node.js 22.19 或更新版本，再点击“重新检测”。若仍找不到，请重启 Alice 后再试。",
+        node_old: "请在运行 Alice 的电脑将 Node.js 更新到 22.19 或更新版本，再点击“重新检测”。若仍提示版本较旧，请重启 Alice 后再试。",
+        npm_missing: "现有 Node.js 缺少安装工具，请从官网下载完整版本并安装，再点击“重新检测”。若仍未识别，请重启 Alice 后再试。",
+        component_missing: "请先更新或重新下载完整的 Alice 项目，再点击“重新检测”。",
+      })[setup.state] || "请按上方提示完成准备，再重新检测。";
+      $("qq-node-download").classList.toggle("hidden", !["node_missing", "node_old", "npm_missing"].includes(setup.state));
+      actionButtons.install.textContent = setup.state === "failed" ? "重试安装" : "安装 QQ 组件";
+    }
     $("qq-app-id").textContent = d.app_id || "—";
     const owner = typeof d.owner_openid === "string" ? d.owner_openid : "";
     const candidate = state === "awaiting_confirmation" && !!owner;
@@ -119,6 +147,16 @@
     if (state === "error" && ["external_bridge_or_stale_lock", "busy", "stop_unconfirmed", "binding_conflict"].includes(d.error_code)) actions = ["stop"];
     if (state === "error" && d.error_code === "external_bridge_or_stale_lock") {
       setStatus(`${d.message} 本页只能停止自己启动的连接；终端启动的连接请在原终端停止。`, true);
+    }
+    if (state === "error" && d.error_code === "installation_busy") {
+      actions = ["stop"];
+      setStatus(`${d.message} 请先点击“停止本页连接”，再重新检测。`, true);
+    }
+    if (["idle", "stopped"].includes(state) && setup?.state === "ready" && setup.can_recheck === true) actions.push("recheck");
+    if (needsSetup) {
+      actions = [];
+      if (!installing && setup.can_install === true) actions.push("install");
+      if (!installing && setup.can_recheck === true) actions.push("recheck");
     }
     const validId = typeof d.operation_id === "string" && /^[0-9a-f]{32}$/.test(d.operation_id);
     actions.forEach(action => {
@@ -185,24 +223,24 @@
     const operationId = snapshot.operation_id;
     if (action === "confirm" && !$("qq-owner-confirmed").checked) return;
     busy = true;
-    generation++;
+    const ticket = ++generation;
     reader?.abort();
     reader = null;
     clearTimeout(timer);
     render();
-    setStatus("正在提交操作，请稍候…");
+    setStatus(action === "install" ? "正在开始安装，请稍候…" : action === "recheck" ? "正在检查这台电脑的准备情况…" : "正在提交操作，请稍候…");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       const data = await request("POST", { action, operation_id: operationId }, controller.signal);
-      if (visible) { snapshot = data; render(); }
+      if (visible && ticket === generation) { snapshot = data; render(); }
     } catch (error) {
-      if (visible) {
+      if (visible && ticket === generation) {
         // The action may already be accepted: only poll, never repeat it automatically.
         snapshot = null;
         clearPrivateDisplay();
         render();
-        setStatus(error.name === "AbortError" ? "本次操作结果尚未确认，正在重新读取状态；请先不要重复扫码或连接。" : error.message, true);
+        setStatus(error.name === "AbortError" ? "本次操作结果尚未确认，正在重新读取状态；请先不要重复操作。" : error.message, true);
       }
     } finally {
       clearTimeout(timeout);

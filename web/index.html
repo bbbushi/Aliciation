@@ -302,9 +302,15 @@
       </section>
       <section id="qq-settings" class="settings-section qq-settings hidden" data-settings-section="qq" tabindex="-1" aria-labelledby="qq-title">
         <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
-        <ol class="qq-flow" aria-label="连接步骤"><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
+        <ol class="qq-flow" aria-label="连接步骤"><li>首次准备</li><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
         <p class="settings-hint">用手机 QQ 扫码，把 Alice 接到你的私聊。与这里共用对话和记忆，仅接收已确认的本人文字消息。</p>
         <p id="qq-status" class="qq-status" role="status" aria-live="polite">打开后读取当前连接状态。</p>
+        <div id="qq-setup" class="qq-step qq-setup hidden" aria-labelledby="qq-setup-title">
+          <h3 id="qq-setup-title">首次使用，先准备 QQ 组件</h3>
+          <p id="qq-setup-hint" class="settings-hint"></p>
+          <progress id="qq-setup-progress" class="hidden" aria-label="QQ 组件正在准备"></progress>
+          <a id="qq-node-download" class="qq-download hidden" href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">前往 Node.js 官网下载（新窗口）</a>
+        </div>
         <div id="qq-qr-box" class="qq-qr-box hidden">
           <canvas id="qq-qr" role="img" aria-label="用手机 QQ 扫描此二维码，授权连接官方机器人"></canvas>
           <p>打开手机 QQ，扫一扫</p>
@@ -323,6 +329,8 @@
           <p class="settings-hint">保存后还需要点击“开始 QQ 聊天”，才会接收聊天消息。</p>
         </div>
         <div class="settings-actions qq-actions">
+          <button id="qq-install" class="btn primary hidden" type="button">安装 QQ 组件</button>
+          <button id="qq-recheck" class="btn ghost hidden" type="button">重新检测</button>
           <button id="qq-scan" class="btn primary hidden" type="button">扫码连接 QQ</button>
           <button id="qq-pair" class="btn primary hidden" type="button">确认我的 QQ 身份</button>
           <button id="qq-confirm" class="btn primary hidden" type="button" disabled>确认并保存</button>

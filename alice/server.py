@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import sys
 import threading
 import webbrowser
@@ -282,7 +281,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     return
                 body = self._bounded_body()
                 if (set(body) - {"action", "operation_id"}
-                        or body.get("action") not in {"scan", "cancel", "pair", "confirm", "run", "stop"}
+                        or body.get("action") not in {"scan", "cancel", "pair", "confirm", "run", "stop", "install", "recheck"}
                         or ("operation_id" in body and not isinstance(body["operation_id"], str))):
                     raise ChannelError(400, "invalid_request", "连接操作无效，请刷新页面")
                 self._json(connectors.action(body), 202)
@@ -775,23 +774,14 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         # Fixed public addon command; no import of addon code and no request-
         # supplied program, arguments, filesystem path or callback address.
         connector_root = PROJECT_ROOT / "addons" / "qq"
-        node_path = shutil.which("node")
-        unavailable_reason = ""
-        if node_path is None:
-            unavailable_reason = "这台电脑还没有找到 Node.js，请先安装 Node.js 22.19 或更新版本"
-        elif not (connector_root / "src" / "web-control.mjs").is_file():
-            unavailable_reason = "QQ 连接组件缺失，请确认已取得完整项目文件"
-        elif not all((connector_root / "node_modules" / package / "package.json").is_file()
-                     for package in ("@tencent-connect/qqbot-nodejs", "@tencent-connect/qqbot-connector", "qrcode-terminal")):
-            unavailable_reason = "QQ 连接依赖尚未安装，请按接入说明完成首次安装"
         connector_command = (
-            node_path or "node",
+            "node",
             str(connector_root / "src" / "web-control.mjs"),
             "--config", str(USER_DIR / "qq" / "config.json"),
             "--alice-url", f"http://127.0.0.1:{httpd.server_port}",
         )
         connectors = LocalConnectorManager(ConnectorSpec(command=connector_command, cwd=PROJECT_ROOT,
-                                                        unavailable_reason=unavailable_reason), svc)
+                                                        setup_root=connector_root), svc)
         httpd.RequestHandlerClass = make_handler(svc, gate, runtime_info, connectors)
         url = f"http://{host}:{httpd.server_port}"
         print(f"=== {svc.cfg.persona.name} 图形界面 ===")
