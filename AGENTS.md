@@ -24,6 +24,6 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-01 ZCode：**协作者调度设计稿 v1.1**（docs/设计文档/协作者调度-设计.md，待评审；当日用户裁定**本期只动设计文档**）——方向定案：**纯协作者模型，全部联网（检索+阅读）走 `dispatch_worker` 委托，`discovery_search` 直连把手目标拆除（先建后拆，节奏待排期）**。机制：manifest 标准（宿主内置+addons 双来源注册表，名单/校验/计账单一事实源）+ 统一 dispatch 工具（单前台槽/共享额度/失败分型）+ findings 绑来源逐字 quote（禁预消化）+ 存在事实清单 manifest 渲染；检索协作者=discovery_worker 加 manifest（plan/search/read/interpret 四 op 已建成，接线非新建）；宪法措辞 retrieval.py:26 随拆除退休。
+- 2026-11-01 ZCode：**协作者调度设计稿 v2.0（管家架构总纲）**（docs/设计文档/协作者调度-设计.md，待评审；当日用户裁定**本期只动设计文档**）——定位升格：Alice=管家，"不需要会干但需要会指挥"；**名册主角=本机已装的完整 agent**（ZCode/DSH 等，注册即授权：调用档案+权限档+预算帽+注册试跑），**并行异步派工为核心**（单前台槽废除），artifact/information 双回传契约、宿主跑 verify 验收、干将报告也过注入膜；定制工具（research/browser_reader）降格随身小工具；`discovery_search` 直连拆除仍待排期。最关键待决=权限档档位标准（八.3）。
 - 待人工验收与待做不变（QQ 扫码、P1、观察器、深海 UI、对话内检索、见闻通道、v0.4+分寸首思辨、身体层复测；A05/A02、tests 旧路径适配 user/），详见 git log。
 - 雷：本机无 `timeout`、无 Chrome；`dist/` 与 `user/` 不入库；PR 走 compare 页手动建；推送等用户明确指示；**活库元先验待下次人格重装种入**。
