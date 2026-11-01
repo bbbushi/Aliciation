@@ -679,6 +679,7 @@
   el("observer-btn").onclick = () => {
     if (opened) { close(); return; }
     window.AliceEvaluations?.close();
+    window.AliceWorkers?.close(false);
     opened = true; stopped = false; generation++;
     el("observer").classList.remove("hidden"); el("observer-btn").setAttribute("aria-expanded", "true");
     el("app").classList.add("observing");

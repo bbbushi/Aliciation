@@ -6,6 +6,7 @@
 <title>Alice</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/discovery.css">
+<link rel="stylesheet" href="/worker-tasks.css">
 </head>
 <body>
 <a class="skip-link" href="#input">跳到输入框</a>
@@ -119,7 +120,7 @@
     </div>
     <header>
       <div class="chat-heading"><button id="nav-toggle" class="card-x mobile-only" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="app-nav">☰</button><span class="chat-avatar" aria-hidden="true">a</span><div><div class="who" id="name">Alice</div><span class="chat-subtitle">conversation / 我们的对话</span></div></div>
-      <details class="memory-summary"><summary>记忆概览</summary><div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能">尚未读取</div></details>
+      <div class="chat-header-actions"><button id="workers-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="worker-tasks">协作会话 <span id="workers-count" class="worker-count"></span></button><details class="memory-summary"><summary>记忆概览</summary><div class="mem" id="memory" title="三层记忆 / 已遗忘 / 技能">尚未读取</div></details></div>
     </header>
     <div class="chat-sync-bar">
       <span id="chat-activity" class="hidden" role="status" aria-live="polite"></span>
@@ -136,6 +137,29 @@
       <div class="composer-foot"><span>alice / 对话继续</span><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span></div>
     </footer>
   </div>
+  <aside id="worker-tasks" class="worker-panel hidden" aria-labelledby="workers-title">
+    <div class="worker-head"><div><span class="worker-eyebrow">ALICE / DSH</span><h2 id="workers-title">协作会话</h2></div><button id="workers-close" class="card-x" type="button" aria-label="关闭协作会话">×</button></div>
+    <p id="workers-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p>
+    <div class="worker-toolbar"><button id="workers-refresh" class="link" type="button">同步记录</button></div>
+    <section id="workers-list-view" class="worker-list-view" aria-label="任务列表">
+      <div class="worker-list-filter" role="group" aria-label="任务范围"><button id="workers-unarchived" type="button" aria-pressed="true">进行中与历史（未归档）</button><button id="workers-archived" type="button" aria-pressed="false">已归档</button></div>
+      <p id="workers-empty" class="worker-empty">还没有协作任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天告诉 Alice 要做什么。</p>
+      <div id="workers-list" class="worker-list"></div><button id="workers-more" class="btn ghost hidden" type="button">加载更早任务</button>
+    </section>
+    <section id="workers-detail" class="worker-detail hidden" aria-label="任务详情">
+      <button id="workers-back" class="link" type="button">← 返回会话列表</button><h3 id="workers-task-title"></h3><p id="workers-task-meta" class="worker-hint"></p><p id="workers-tool-note" class="worker-hint"></p>
+      <div id="workers-events" class="worker-events" role="log" aria-live="off" aria-label="公开消息与工作记录" tabindex="0"></div><button id="workers-events-restart" class="link hidden" type="button">本页仅保留最近 300 条 · 从头读取</button>
+      <button id="workers-events-more" class="link hidden" type="button">继续加载工作记录</button><button id="workers-latest" class="link hidden" type="button">↓ 回到最新记录</button>
+      <div id="workers-artifacts" class="worker-artifacts"></div>
+      <p id="workers-review-state" class="worker-hint"></p><div class="worker-actions"><button id="workers-supplement" class="btn ghost" type="button">让 Alice 补充</button><button id="workers-cancel" class="btn danger" type="button">请求停止</button><button id="workers-review" class="btn ghost" type="button">记录人工核对通过</button><button id="workers-revoke" class="link" type="button">撤销任务正文</button></div>
+      <div class="worker-actions worker-management-actions"><button id="workers-archive" class="btn ghost" type="button" disabled>归档任务</button><button id="workers-delete" class="btn danger" type="button" disabled>删除任务</button><button id="workers-management-retry" class="btn ghost hidden" type="button" disabled>重试待确认操作</button></div>
+      <p id="workers-management-hint" class="worker-hint">仅已结束且 DSH 会话已空闲的任务可以归档或删除。</p><p id="workers-management-result" class="worker-hint" role="status"></p>
+      <form id="workers-management-confirm" class="worker-management-confirm hidden" aria-labelledby="workers-management-title">
+        <h3 id="workers-management-title" tabindex="-1"></h3><p id="workers-management-description"></p><p id="workers-management-scope" class="worker-hint"></p><p id="workers-management-warning" class="worker-hint" role="status"></p>
+        <div class="worker-actions"><button id="workers-management-submit" class="btn primary" type="submit" disabled>确认操作</button><button id="workers-management-back" class="btn ghost" type="button">返回详情</button></div>
+      </form>
+    </section>
+  </aside>
   <aside id="observer" class="observer hidden" aria-label="开发者观察器">
     <div class="obs-head"><strong>开发者观察器</strong><button id="obs-close" class="card-x" type="button" title="关闭并清空观察记录">×</button></div>
     <div class="obs-tools">
@@ -281,7 +305,7 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
     <div class="modal-body settings-body">
       <section class="settings-section hidden" data-settings-section="appearance">
         <label class="panel-title" for="ui-texture">屏幕纹理</label>
@@ -299,6 +323,47 @@
         </select>
         <div id="ui-motion-hint" class="settings-hint">细噪点随机浮动、淡入淡出，分层背景随鼠标轻微位移与倾斜；细光在节点间传递，收到回复时稍微活跃。选择立即生效，仅保存在此浏览器；系统的“减少动态效果”设置优先。</div>
         <div id="ui-motion-state" class="settings-result" role="status"></div>
+      </section>
+      <section id="workers-config" class="settings-section worker-config hidden" data-settings-section="workers" aria-labelledby="workers-settings-title">
+        <div class="worker-settings-head"><h2 id="workers-settings-title" class="panel-title">DSH 连接与授权</h2><button id="workers-settings-refresh" class="link" type="button">同步状态</button></div>
+        <p id="workers-settings-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p>
+        <p class="settings-hint">在这里管理连接和任务范围，再到主聊天描述任务。关闭设置不会断开连接、撤销授权或中断任务。</p>
+        <p id="workers-connection"></p><p id="workers-capabilities" class="worker-hint"></p>
+        <section class="worker-pairing" aria-labelledby="workers-pairing-title">
+          <h3 id="workers-pairing-title">1 · 连接本机 DSH</h3>
+          <p id="workers-pairing-hint" class="worker-hint">首次使用请重载 Alice 与 DSH NEXT 的 0.4 版协作插件，并在 DSH 中启用插件及执行许可。之后可在这里连接，无需命令行、环境变量或复制令牌。打开设置或同步状态只查看已有状态。</p>
+          <p id="workers-credential-state" class="worker-hint">尚未读取本机令牌状态</p>
+          <p class="worker-hint">同一 Windows 用户下的 Alice 与 DSH NEXT 共用这份本机加密令牌。令牌不在网页显示，不写入聊天或交给模型。断开会撤销派工授权，并保留令牌供下次连接。</p>
+          <div class="worker-actions"><button id="workers-managed-connect" class="btn primary" type="button" disabled>生成令牌并连接</button><button id="workers-disconnect" class="btn danger" type="button" disabled>断开并撤销授权</button></div>
+          <p id="workers-pairing-result" class="worker-hint" role="status"></p>
+          <details id="workers-advanced" class="worker-advanced">
+            <summary>高级设置 · 手动令牌与更换</summary>
+            <form id="workers-pairing" autocomplete="off">
+              <label for="workers-token">手动配对令牌</label><input id="workers-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="4096" aria-describedby="workers-token-hint" disabled>
+              <p id="workers-token-hint" class="worker-hint">仅用于已单独设置令牌的 DSH 插件；不是模型密钥。托管文件存在时，新版插件优先使用托管令牌，此输入不会覆盖该文件或切换托管令牌。输入提交后立即清空，服务重启后需重新输入。</p>
+              <button id="workers-connect" class="btn ghost" type="submit" disabled>使用手动令牌连接</button>
+            </form>
+            <div class="worker-token-rotation"><button id="workers-rotate-token" class="btn ghost" type="button" disabled>更换已保存令牌</button><p class="worker-hint">仅在断开且派工授权关闭时可更换。旧令牌会失效，同一 Windows 用户下使用旧令牌的其他 Alice 实例也需要重新连接。</p></div>
+          </details>
+        </section>
+        <section id="workers-manual-setup" class="hidden" aria-labelledby="workers-manual-title"><strong id="workers-manual-title"></strong><ol id="workers-manual-steps" class="worker-hint"></ol><p id="workers-manual-note" class="worker-hint"></p></section>
+        <form id="workers-policy">
+          <h3>2 · 授权 Alice 派工</h3><label><input id="workers-enabled" type="checkbox" disabled> 允许 Alice 在以下范围调用 DSH</label>
+          <label for="workers-workspace">本次任务工作目录（绝对路径）</label><input id="workers-workspace" type="text" maxlength="1024" placeholder="例如 D:\AliceTasks" autocomplete="off" spellcheck="false" disabled><p class="worker-hint">填写你明确允许 DSH 处理的目录。Alice 会新建专属协作会话，不接管你的日常会话。</p>
+          <label for="workers-mode">任务权限</label><select id="workers-mode" disabled><option value="read-only">仅可查看 · 阅读与分析</option><option value="workspace-write">工作区内修改 · 生成或修改文件</option></select>
+          <div class="worker-policy-limits"><label for="workers-max-runs">本次授权总执行次数<input id="workers-max-runs" type="number" min="0" max="100" step="1" value="0" disabled></label><label for="workers-max-seconds">每次执行最长秒数<input id="workers-max-seconds" type="number" min="30" max="1800" step="1" value="600" disabled></label></div><p id="workers-budget-state" class="worker-hint"></p>
+          <p class="worker-permission-boundary">DSH 原生权限不能保证任务目录外的读取和网络隔离。任务与相关文件内容可能由 DSH 发给其模型服务；这里不开放完全权限。执行次数和超时都不是费用硬限额，未知消费不记为零。</p>
+          <label class="worker-ack"><input id="workers-native-ack" type="checkbox" disabled> 我理解上述边界，并授权 DSH 按所选模式处理该目录及调用其模型服务。</label>
+          <button id="workers-policy-save" class="btn primary" type="submit" disabled>保存授权</button><p id="workers-policy-result" class="worker-hint" role="status"></p>
+        </form>
+        <form id="workers-task-settings" class="worker-task-settings">
+          <h3>3 · 任务管理同步</h3><p class="worker-hint">默认只整理 Alice 的任务记录。以下选择独立于派工授权，不改变执行次数或时限。</p>
+          <label class="worker-ack"><input id="workers-sync-archive" type="checkbox" disabled> 归档或恢复 Alice 任务时，同步处理 DSH 专属会话</label>
+          <p id="workers-sync-archive-hint" class="worker-hint"></p>
+          <label class="worker-ack"><input id="workers-sync-delete" type="checkbox" disabled> 删除 Alice 任务时，也永久删除 DSH 专属会话</label>
+          <p id="workers-sync-delete-hint" class="worker-hint">当前 DSH 版本不支持同步删除；Alice 记录仍可删除。</p>
+          <button id="workers-task-settings-save" class="btn ghost" type="submit" disabled>保存同步设置</button><p id="workers-task-settings-result" class="worker-hint" role="status"></p>
+        </form>
       </section>
       <section id="qq-settings" class="settings-section qq-settings hidden" data-settings-section="qq" tabindex="-1" aria-labelledby="qq-title">
         <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
@@ -405,6 +470,7 @@
 
 <script src="/observer.js"></script>
 <script src="/evaluations.js"></script>
+<script src="/worker-tasks.js"></script>
 <script src="/qq.js"></script>
 <link rel="stylesheet" href="/chat-search.css">
 <script src="/chat-search.js"></script>

@@ -335,7 +335,9 @@ class EvaluationStore:
         turn = self.conn.execute("SELECT substr(content,1,16001),length(content) FROM turns WHERE id=? AND role='assistant'", (turn_id,)).fetchone()
         if turn is None:
             raise EvaluationError("核查必须绑定实际已保存的助手回复")
-        source_turn = self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone() is not None
+        source_turn = self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=? UNION ALL "
+                                        "SELECT 1 FROM worker_turns WHERE turn_id=? LIMIT 1",
+                                        (turn_id, turn_id)).fetchone() is not None
         complete = run["complete"] and turn[1] <= MAX_REPLY and bool(turn[0]) and not source_turn
         with self._transaction():
             self.conn.execute("UPDATE evaluation_runs SET turn_id=?,reply_hash=?,status=?,reason_code=?,complete=? WHERE id=?",
@@ -412,7 +414,9 @@ class EvaluationStore:
     def _live(self, run: dict, *, include_memories=False):
         if not run["complete"] or run["turn_id"] is None:
             raise EvidenceUnavailable("核查范围不完整或回复尚未绑定")
-        if self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=?", (run["turn_id"],)).fetchone():
+        if self.conn.execute("SELECT 1 FROM source_turns WHERE turn_id=? UNION ALL "
+                             "SELECT 1 FROM worker_turns WHERE turn_id=? LIMIT 1",
+                             (run["turn_id"], run["turn_id"])).fetchone():
             raise EvidenceUnavailable("这轮包含外部资料，不能作为普通记忆主张核查材料")
         turn = self.conn.execute("SELECT substr(content,1,16001),length(content) FROM turns WHERE id=? AND role='assistant'", (run["turn_id"],)).fetchone()
         if turn is None or turn[1] > MAX_REPLY or _text_hash(turn[0]) != run["reply_hash"]:

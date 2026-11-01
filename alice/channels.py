@@ -138,7 +138,7 @@ class ChannelCoordinator:
                     "channel": self.active_channel, "request_id": self.active_request,
                     "channels_enabled": self.enabled(), "max_text_bytes": 12000}
 
-    def reserve(self, channel, request_id=None, *, wait=False):
+    def reserve(self, channel, request_id=None, *, wait=False, notify_foreground=True):
         with self.condition:
             while self.slot is not None and not self.closing:
                 if not wait:
@@ -149,7 +149,7 @@ class ChannelCoordinator:
             token = object()
             self.slot, self.active_channel, self.active_request = token, channel, request_id
             discovery = getattr(self.service, "_discovery", None)
-            if discovery is not None:
+            if discovery is not None and notify_foreground:
                 discovery.foreground_started()
             return token
 
@@ -271,6 +271,9 @@ class ChannelCoordinator:
         if turn_id is None or not self.service.store.conn.execute(
                 "SELECT 1 FROM turns WHERE id=? AND role='assistant'", (turn_id,)).fetchone():
             return False
+        worker = self.service.store.worker_turn_status(turn_id, scope=row['channel_id'])
+        if worker is not None:
+            return worker['worker_available']
         attachment = self.service.store.conn.execute("SELECT * FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
         if attachment is None:
             return True  # An ordinary reply may itself equal the shadow text.

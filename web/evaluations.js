@@ -359,7 +359,7 @@
   }
   $("evaluations-btn").onclick = () => {
     if (open) { close(); return; }
-    window.AliceObserver?.close(); open = true; generation++;
+    window.AliceObserver?.close(); window.AliceWorkers?.close(false); open = true; generation++;
     $("evaluations").classList.remove("hidden"); $("evaluations-btn").setAttribute("aria-expanded", "true"); $("app").classList.add("observing");
     refresh(); schedule();
   };
