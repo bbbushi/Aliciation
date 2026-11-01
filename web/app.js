@@ -1382,7 +1382,10 @@ function ensureThinking(node) {
 }
 
 function handleEvent(ev, node, userNode, requestId) {
-  if (ev.type === "done" || ev.type === "error") replyMotion(node, false);
+  if (ev.type === "done" || ev.type === "error") {
+    replyMotion(node, false);
+    window.AliceWorkers?.refreshAfterTurn();
+  }
   const txt = node.querySelector(".txt");
   const raw = () => txt.dataset.raw || "";
   if (ev.type === "start" || ev.type === "accepted") {
@@ -1400,6 +1403,7 @@ function handleEvent(ev, node, userNode, requestId) {
     setBubbleText(txt, raw() + ev.text);
     scrollBottom();
   } else if (ev.type === "tool") {
+    window.AliceWorkers?.noteTool(ev.name);
     sysline(ev.name === "remember" ? "（正在整理可保存的记忆…）" : ev.name === "discovery_search" ? "（正在查找资料…）" : "（翻了一下记忆…）");
   } else if (ev.type === "search") {
     window.AliceChatSearch?.progress(ev, node);

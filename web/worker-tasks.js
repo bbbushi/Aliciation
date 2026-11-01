@@ -20,7 +20,7 @@
   let eventCursor = 0, eventMore = false, listBusy = false, actionBusy = false, policyDirty = false;
   let archivedView = false, listGeneration = 0, listDepth = 40, management = null, taskSettingsDirty = false;
   let taskSignature = "", artifactSignature = "", following = true, savedListScroll = 0;
-  let controlGeneration = 0;
+  let controlGeneration = 0, dispatchWatchUntil = 0;
   const tasks = new Map(), seen = new Map(), eventNodes = new Map(), messageNodes = new Map();
   const controllers = new Set();
   const readPrefix = "alice.collaborator-read.v1.dsh-agent.";
@@ -113,11 +113,33 @@
     }
   }
   function invalidateChatSources() { window.dispatchEvent(new Event("alice:sources-changed")); }
+  function avatarSizeHint(button) {
+    return `双击${button.dataset.size === "small" ? "放大" : "缩小"}头像`;
+  }
   function setupAvatarDrag(button) {
     const area = button.closest(".chat-conversation");
+    const portrait = button.querySelector(".collaborator-avatar-image");
     const storageKey = `alice.collaborator-position.v1.${button.dataset.worker}`;
     const clamp = (n) => Math.max(0, Math.min(1, n));
+    const doubleClickMs = 500;
     let position = { x: 1, y: 1 }, drag = null, suppressClick = false, frame = null;
+    let clickTimer = null, pendingClick = null, workBaseline = null;
+    const interactive = () => !stopped && !document.hidden && !button.closest("[inert]")
+      && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
+      && button.getClientRects().length > 0 && getComputedStyle(button).visibility !== "hidden";
+    function clearClick() {
+      clearTimeout(clickTimer); clickTimer = null; pendingClick = null;
+    }
+    function activate() { if (interactive()) opened ? close() : open(); }
+    function setSize(size) {
+      if (button.dataset.size === size) return;
+      clearClick(); finish(true);
+      button.dataset.size = size;
+      portrait.src = size === "small" ? portrait.dataset.smallSrc : portrait.dataset.largeSrc;
+      portrait.width = portrait.height = size === "small" ? 64 : 192;
+      text("workers-avatar-help", `拖动调整位置；单击或 Enter 打开会话；${avatarSizeHint(button)}。`);
+      renderList(); place();
+    }
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey));
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
@@ -153,10 +175,13 @@
       try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* Drag still works. */ }
     }
     function finish(cancelled = false) {
+      if (cancelled) clearClick();
       if (!drag) return;
       const ended = drag; drag = null;
       button.dataset.dragging = "false";
+      if (cancelled) suppressClick = true;
       if (ended.moved) {
+        clearClick();
         suppressClick = true;
         if (cancelled) position = ended.position;
         else save();
@@ -168,6 +193,8 @@
       if (event.button !== 0 || !event.isPrimary || drag || button.closest("[inert]")) return;
       const box = bounds();
       if (!box) return;
+      // Hold a pending single click while a possible second press is down.
+      clearTimeout(clickTimer);
       suppressClick = false;
       drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
         left: box.left + position.x * box.width, top: box.top + position.y * box.height,
@@ -179,6 +206,7 @@
       if (button.closest("[inert]") || !bounds()) { finish(true); return; }
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      clearClick();
       drag.moved = true; button.dataset.dragging = "true";
       event.preventDefault();
       move(drag.left + dx, drag.top + dy, drag.box);
@@ -191,11 +219,26 @@
     }
     button.addEventListener("click", (event) => {
       if (suppressClick && (event.detail !== 0 || event.pointerType)) {
-        suppressClick = false; event.preventDefault(); event.stopImmediatePropagation();
+        suppressClick = false; clearClick(); event.preventDefault(); event.stopImmediatePropagation(); return;
       }
+      if (!interactive()) { clearClick(); return; }
+      if (event.detail === 0 && !event.pointerType) { clearClick(); activate(); return; }
+      const now = performance.now(), pointerType = event.pointerType || "mouse";
+      if (pendingClick && now - pendingClick.at <= doubleClickMs && pendingClick.pointerType === pointerType
+          && Math.hypot(event.clientX - pendingClick.x, event.clientY - pendingClick.y) <= 12) {
+        event.preventDefault();
+        setSize(button.dataset.size === "small" ? "large" : "small"); return;
+      }
+      clearClick();
+      pendingClick = { at: now, x: event.clientX, y: event.clientY, pointerType };
+      // Delay only pointer activation: a double click changes size without
+      // opening the conversation. The same gesture also supports touch taps.
+      clickTimer = setTimeout(() => { clearClick(); if (!drag) activate(); }, doubleClickMs);
     }, true);
+    button.addEventListener("dblclick", (event) => event.preventDefault());
     button.addEventListener("dragstart", (event) => event.preventDefault());
     button.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") clearClick();
       if (event.key === "Escape" && drag) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
     });
     const resize = new ResizeObserver(() => {
@@ -208,6 +251,21 @@
     window.addEventListener("pagehide", () => { finish(true); cancelAnimationFrame(frame); resize.disconnect(); });
     window.addEventListener("pageshow", () => { resize.observe(area); resize.observe(button); place(); });
     place();
+    return {
+      cancel: () => finish(true),
+      syncWork(data) {
+        const used = data.policy?.runs_used;
+        if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(data.revision)) return;
+        if (!workBaseline || workBaseline.epoch !== data.session_epoch || workBaseline.revision !== data.revision) {
+          workBaseline = { epoch: data.session_epoch, revision: data.revision, used }; return;
+        }
+        if (used > workBaseline.used) {
+          workBaseline.used = used;
+          setSize("large");
+          return true;
+        }
+      },
+    };
   }
   function renderAvatar(running = 0, unread = 0) {
     const worker = registry?.collaborators?.find((row) => row.name === "dsh-agent");
@@ -223,7 +281,7 @@
     text("workers-count", unread ? String(Math.min(unread, 99)) + (unread > 99 ? "+" : "") : "");
     const details = [statusLabel, running ? `${running} 个任务运行中` : "", unread ? `${unread} 个任务未读` : ""].filter(Boolean).join("，");
     button.setAttribute("aria-label", `${opened ? "收起" : "打开"} DSH 会话，${details}`);
-    button.title = `DSH · ${details}。点击查看会话，拖动调整位置。`;
+    button.title = `DSH · ${details}。单击查看会话，${avatarSizeHint(button)}，拖动调整位置。`;
   }
   function setupWorkerWindow() {
     const handle = $("workers-window-handle"), dockButton = $("workers-window-dock");
@@ -416,6 +474,7 @@
     }
     if (registry?.task_management?.revision !== data.task_management?.revision) taskSettingsDirty = false;
     registry = data;
+    if (avatarControl.syncWork(data)) dispatchWatchUntil = 0;
     const worker = data.collaborators?.find((row) => row.name === "dsh-agent");
     text("workers-connection", worker ? `DSH · ${state(worker.state)}${worker.reason ? `：${worker.reason}` : ""}` : "宿主未返回 DSH 注册信息，暂不可启用。");
     const paired = data.connection?.connected === true;
@@ -1135,7 +1194,8 @@
     clearTimeout(timer);
     if (!visible()) return;
     const active = [...tasks.values()].some((task) => activeStates.has(task.state));
-    timer = setTimeout(poll, delay ?? (opened && selection || active ? 1800 : opened || settingsOpened ? 5000 : 10000));
+    timer = setTimeout(poll, delay ?? (Date.now() < dispatchWatchUntil ? 1000
+      : opened && selection || active ? 1800 : opened || settingsOpened ? 5000 : 10000));
   }
   async function poll() {
     clearTimeout(timer);
@@ -1160,11 +1220,13 @@
     windowFrame.layout();
   }
   function open() {
+    avatarControl.cancel();
     window.AliceObserver?.close(); window.AliceEvaluations?.close(); opened = true;
     panel.classList.remove("hidden"); app.classList.add("workers-open"); $("workers-btn").setAttribute("aria-expanded", "true"); windowFrame.open();
     $("workers-list-view").scrollTop = savedListScroll; renderList(); $("workers-close").focus({ preventScroll: true }); poll();
   }
   function close(returnFocus = true) {
+    avatarControl.cancel();
     if (!opened) return;
     closeManagement(); $("workers-task-menu").open = false;
     opened = false; viewGeneration++; savedListScroll = $("workers-list-view").scrollTop;
@@ -1178,6 +1240,7 @@
     schedule();
   }
   function setSettingsVisible(value) {
+    if (value) avatarControl.cancel();
     settingsOpened = value === true && !$("settings-modal").classList.contains("hidden")
       && !$("workers-config").classList.contains("hidden");
     if (!settingsOpened) {
@@ -1198,6 +1261,7 @@
   async function openTask(taskId) {
     if (stopped || app.inert || app.classList.contains("hidden") || app.classList.contains("nav-open")
         || actionBusy || typeof taskId !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(taskId)) return;
+    avatarControl.cancel();
     if (!opened) open();
     const generation = viewGeneration;
     try {
@@ -1276,8 +1340,7 @@
     } catch (e) { status(e.message, true); }
   }
   const windowFrame = setupWorkerWindow();
-  setupAvatarDrag($("workers-btn"));
-  $("workers-btn").onclick = () => opened ? close() : open();
+  const avatarControl = setupAvatarDrag($("workers-btn"));
   $("workers-close").onclick = () => close();
   $("workers-refresh").onclick = poll;
   $("workers-settings-refresh").onclick = poll;
@@ -1387,8 +1450,16 @@
   new ResizeObserver(layout).observe(app);
   new MutationObserver(() => { if (visible()) schedule(0); else clearTimeout(timer); }).observe(app, { attributes: true, attributeFilter: ["class"] });
   window.addEventListener("pagehide", () => { $("workers-token").value = ""; clearTimeout(timer); controllers.forEach((controller) => controller.abort()); });
-  window.AliceWorkers = { close, openTask, setSettingsVisible, shutdown() {
-    stopped = true; setSettingsVisible(false); close(false); clearTimeout(timer); controllers.forEach((controller) => controller.abort());
+  window.AliceWorkers = { close, openTask, setSettingsVisible,
+    noteTool(name) {
+      if (!["dispatch_worker", "send_worker_message"].includes(name)) return;
+      // A tool announcement is only intent: refresh promptly, but expand only
+      // when the host confirms that its execution counter actually increased.
+      dispatchWatchUntil = Date.now() + 30000; schedule(0);
+    },
+    refreshAfterTurn() { schedule(0); },
+    shutdown() {
+    stopped = true; avatarControl.cancel(); setSettingsVisible(false); close(false); clearTimeout(timer); controllers.forEach((controller) => controller.abort());
   } };
   schedule(0);
 })();

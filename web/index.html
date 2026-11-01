@@ -132,13 +132,12 @@
       <div id="chat-empty" class="chat-empty hidden"><span class="brand-mark" aria-hidden="true">a_</span><span class="eyebrow">HELLO, WORLD_</span><h1>你的消息，就是此刻的世界。</h1><p>一句近况，一个念头，都可以。</p></div>
       <main id="msgs" aria-label="对话记录" tabindex="0"></main>
       <div id="collaborator-dock" class="collaborator-dock hidden" aria-label="协作者入口">
-        <button id="workers-btn" class="collaborator-avatar" type="button" data-worker="dsh-agent" data-state="unknown" data-unread="false" aria-expanded="false" aria-controls="worker-tasks" aria-label="打开 DSH 会话" aria-describedby="workers-avatar-status workers-avatar-help">
-          <span class="collaborator-avatar-placeholder" aria-hidden="true">DSH</span>
-          <span class="collaborator-name">DSH</span>
+        <button id="workers-btn" class="collaborator-avatar" type="button" data-worker="dsh-agent" data-size="large" data-state="unknown" data-unread="false" aria-expanded="false" aria-controls="worker-tasks" aria-label="打开 DSH 会话" aria-describedby="workers-avatar-status workers-avatar-help">
+          <img class="collaborator-avatar-image" src="/assets/dsh-avatar-a-v1.png" data-large-src="/assets/dsh-avatar-a-v1.png" data-small-src="/assets/dsh-avatar-small-v1.png" width="192" height="192" alt="" draggable="false">
           <span id="workers-avatar-status" class="collaborator-status">状态待确认</span>
           <span id="workers-count" class="worker-count"></span>
         </button>
-        <span id="workers-avatar-help" class="sr-only">拖动调整位置；点击或 Enter 打开会话。</span>
+        <span id="workers-avatar-help" class="sr-only">拖动调整位置；单击或 Enter 打开会话；双击缩小头像。</span>
       </div>
     </div>
     <div class="latest-wrap"><button id="chat-latest" class="btn ghost hidden" type="button">↓ 回到最新消息</button></div>
