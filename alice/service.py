@@ -21,6 +21,7 @@ from .config_edit import ConfigConflict, revision, replace_llm_values, replace_c
 from .llm import make_client, safe_provider_error
 from .evaluation_service import EvaluationCoordinator
 from .discovery import DiscoveryCoordinator
+from .collaborators import WorkerCoordinator
 from .store import Store
 
 ARCHIVE_ROOT = appconfig.DATA_DIR / "archive"  # 初始化时把旧会话整体搬到这里
@@ -93,6 +94,7 @@ class ChatService:
             self._evaluations = EvaluationCoordinator(self)
             self._channels = ChannelCoordinator(self)
             self._channels.set_ready(persona.persona_md() is not None)
+            self._workers = WorkerCoordinator(self)
             self._discovery = DiscoveryCoordinator(self)
             self._discovery.start()
         except BaseException:
@@ -164,22 +166,57 @@ class ChatService:
     def history(self, limit: int = 60) -> list[dict]:
         with self._lock:
             return [
-                {"role": r["role"], "content": self.store.turn_display(r["id"], scope="gui"), "ts": r["ts"],
+                {"role": r["role"], "content": self._history_turn_display_locked(r["id"]), "ts": r["ts"],
                  **self._history_source_fields_locked(r["id"])}
                 for r in self.store.recent_turns(limit)
             ]
 
+    def _history_source_available_locked(self, turn_id, attachment) -> bool:
+        if (not attachment["content"] or attachment["expires_at"] <= time.time()
+                or attachment["scope"] not in {"gui", "qq-owner"}):
+            return False
+        ids = self.store.turn_source_ids(turn_id)
+        if not self.store.source_packets_for(ids, scope="gui"):
+            return False
+        if attachment["scope"] == "qq-owner":
+            channel = self.store.conn.execute("SELECT channel_id FROM channel_turns WHERE turn_id=?", (turn_id,)).fetchone()
+            return bool(channel and channel[0] == "qq-owner" and self.store.source_packets_for(ids, scope="qq-owner"))
+        return True
+
+    def _history_turn_display_locked(self, turn_id):
+        # The local owner's history may show their QQ answer only while every
+        # dependency permits both audiences. This does not widen model/recall
+        # scopes, nor allow GUI-only material to flow in the other direction.
+        attachment = self.store.conn.execute(
+            "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
+        if (attachment is not None and attachment["scope"] == "qq-owner"
+                and self._history_source_available_locked(turn_id, attachment)):
+            return self.store.turn_display(turn_id, scope="qq-owner")
+        return self.store.turn_display(turn_id, scope="gui")
+
     def _history_source_fields_locked(self, turn_id) -> dict:
         discussion = self.store.discussion_status(turn_id, scope="gui")
+        report = self.store.conn.execute(
+            "SELECT task_id,attempt_id,outcome FROM worker_reports "
+            "WHERE turn_id=? AND epoch=? AND report_state='delivered'",
+            (turn_id, self._channels.epoch)).fetchone()
+        report_fields = {"worker_report": {"task_id": report["task_id"], "attempt_id": report["attempt_id"],
+                                            "state": report["outcome"]}} if report else {}
+        worker = self.store.worker_turn_status(turn_id, scope="gui")
+        if worker is not None:
+            # The existing GUI history refresh tracks source_bound rows. Task
+            # attachments share that invalidation mechanism, not web provenance.
+            return {"source_bound": True, "source_available": worker["worker_available"],
+                    "source_expires_at": worker.get("worker_expires_at"), "discussion": discussion,
+                    **worker, **report_fields}
         attachment = self.store.conn.execute(
             "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
         if attachment is None:
-            return {"source_bound": False, "source_available": True, "source_expires_at": None, "discussion": discussion}
-        available = (attachment["scope"] == "gui" and bool(attachment["content"])
-                     and attachment["expires_at"] > time.time()
-                     and bool(self.store.source_packets_for(self.store.turn_source_ids(turn_id), scope="gui")))
+            return {"source_bound": False, "source_available": True, "source_expires_at": None,
+                    "discussion": discussion, **report_fields}
+        available = self._history_source_available_locked(turn_id, attachment)
         return {"source_bound": True, "source_available": bool(available),
-                "source_expires_at": attachment["expires_at"], "discussion": discussion}
+                "source_expires_at": attachment["expires_at"], "discussion": discussion, **report_fields}
 
     def history_page(self, after_id=None, limit=60, session_epoch=None, source_turn_ids=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 100 or
@@ -212,10 +249,13 @@ class ChatService:
                                                                   (row["request_id"],))]
                     delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
                                     "platform_confirmed" if states else "pending")
-                turns.append({"id": row["id"], "role": row["role"], "content": self.store.turn_display(row["id"], scope="gui"), "ts": row["ts"],
-                              "request_id": row["request_id"], "channel": row["channel_id"] or "local",
-                               "sender_label": "所有者", "delivery": delivery,
-                               **self._history_source_fields_locked(row["id"])})
+                source_fields = self._history_source_fields_locked(row["id"])
+                report = source_fields.get("worker_report")
+                turns.append({"id": row["id"], "role": row["role"], "content": self._history_turn_display_locked(row["id"]), "ts": row["ts"],
+                              "request_id": None if report else row["request_id"],
+                              "channel": "gui" if report else row["channel_id"] or "local",
+                              "sender_label": "宿主协作通知" if report else "所有者", "delivery": None if report else delivery,
+                              **source_fields})
             source_updates = []
             if source_turn_ids:
                 from .store import SOURCE_SHADOW
@@ -229,7 +269,7 @@ class ChatService:
                                                "source_bound": True, "source_available": False,
                                                "source_expires_at": None})
                         continue
-                    source_updates.append({"id": identity, "content": self.store.turn_display(identity, scope="gui"),
+                    source_updates.append({"id": identity, "content": self._history_turn_display_locked(identity),
                                            **self._history_source_fields_locked(identity)})
             return {"turns": turns, "session_epoch": self._channels.epoch,
                     "next_after_id": turns[-1]["id"] if turns else (after_id or 0), "has_more": more,
@@ -296,6 +336,26 @@ class ChatService:
         """Local GUI discovery controls; channel credentials do not grant this API."""
         return self._discovery.access(action, payload)
 
+    def collaborators(self, payload=None) -> dict:
+        """Local GUI registration/policy; never grants channel credentials access."""
+        return self._workers.collaborators(payload)
+
+    def worker_tasks(self, action: str = "list", payload=None) -> dict:
+        """Persistent, GUI-scoped worker records; reads never execute an agent."""
+        return self._workers.tasks(action, payload)
+
+    def worker_task_settings(self, payload) -> dict:
+        """GUI-only archive/delete preferences, separate from execution grants."""
+        return self._workers.management_settings(payload)
+
+    def worker_inputs(self, payload=None) -> dict:
+        """No user file may be imported until the DSH permission profile exists."""
+        return self._workers.unavailable()
+
+    def worker_artifacts(self, payload=None):
+        """No arbitrary file paths or uncollected agent outputs are downloadable."""
+        return self._workers.unavailable()
+
     def chat_search_control(self, payload, *, cancel=False) -> dict:
         """Cancellation is an event, never a wait for the conversation Store lock."""
         return self._discovery.chat_control(payload, cancel=cancel)
@@ -316,6 +376,7 @@ class ChatService:
         self._channels.begin_shutdown()
         self._evaluations.begin_shutdown()
         self._discovery.begin_shutdown()
+        self._workers.begin_shutdown()
 
     # ---------- 写操作（全部持锁） ----------
 
@@ -338,32 +399,40 @@ class ChatService:
 
     def seed(self, tags: list[str], reset: bool = False) -> dict:
         """reset=True 表示「初始化」：先归档旧会话（对话/记忆/人格），再装新人格。"""
-        with self._channels.control(), self._lock:
+        with self._channels.control(), self._workers.control_lock:
             if reset:
-                # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
-                md = persona.generate_seed_md(self.client, self.cfg, tags)
-                self._archive_locked()
-                persona.install_persona(
-                    self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
-            else:
-                persona.seed_from_tags(self.store, self.client, self.cfg, tags)
-            self._channels.set_ready(persona.persona_md() is not None)
+                self._workers.drain()
+            with self._lock:
+                if reset:
+                    # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
+                    md = persona.generate_seed_md(self.client, self.cfg, tags)
+                    self._archive_locked()
+                    persona.install_persona(
+                        self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
+                else:
+                    persona.seed_from_tags(self.store, self.client, self.cfg, tags)
+                self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
     def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False) -> dict:
-        with self._channels.control(), self._lock:
+        with self._channels.control(), self._workers.control_lock:
             if reset:
-                self._archive_locked()
-            persona.install_persona(self.store, self.cfg, md_text, source=source,
-                                    client=self.client)  # v0.3：传 client 走消化流程
-            self._channels.set_ready(persona.persona_md() is not None)
+                self._workers.drain()
+            with self._lock:
+                if reset:
+                    self._archive_locked()
+                persona.install_persona(self.store, self.cfg, md_text, source=source,
+                                        client=self.client)  # v0.3：传 client 走消化流程
+                self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
     def reset_session(self) -> dict:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
-        with self._channels.control(), self._lock:
-            self._archive_locked()
-            return self.state()
+        with self._channels.control(), self._workers.control_lock:
+            self._workers.drain()
+            with self._lock:
+                self._archive_locked()
+                return self.state()
 
     def _archive_locked(self) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
@@ -371,6 +440,7 @@ class ChatService:
         self._channels.set_ready(False)
         self._evaluations.before_reset()
         self._discovery.before_reset()
+        self._workers.before_reset()
         turns = self._turn_count()
         mem = self._memory_stats()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -396,6 +466,7 @@ class ChatService:
             self._evaluations.bind_store()
             self._channels.bind_store()
             self._discovery.bind_store()
+            self._workers.bind_store()
             return None
         (dest / "note.txt").write_text(
             f"初始化归档：{datetime.now():%Y-%m-%d %H:%M}\n"
@@ -407,6 +478,7 @@ class ChatService:
         self._evaluations.bind_store()
         self._channels.bind_store()
         self._discovery.bind_store()
+        self._workers.bind_store()
         return dest
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
@@ -442,7 +514,6 @@ class ChatService:
                         self._channels.begin_shutdown()
                 raise
         finally:
-            self._discovery.finish_chat(request["request_id"])
             self._channels.release(token)
 
     def _replayed_result(self, prior):
@@ -455,9 +526,14 @@ class ChatService:
         # Historical private name retained for the channel adapter. The driver
         # now owns each short Store step; callers must not hold the outer lock.
         from .steps import drive
-        return drive(self._send_steps(request, on_delta, on_tool, on_reasoning,
-                     evaluation_id=evaluation_id, owner_token=owner_token,
-                     on_search_progress=on_search_progress), self._lock)
+        try:
+            return drive(self._send_steps(request, on_delta, on_tool, on_reasoning,
+                         evaluation_id=evaluation_id, owner_token=owner_token,
+                         on_search_progress=on_search_progress), self._lock)
+        finally:
+            # Both GUI and QQ workers own searches; release their in-memory
+            # results even when generation or maintenance fails.
+            self._discovery.finish_chat(request["request_id"])
 
     def _send_steps(self, request, on_delta, on_tool, on_reasoning, *, evaluation_id,
                     owner_token, on_search_progress):
@@ -490,6 +566,7 @@ class ChatService:
                 source_packet_ids=source_ids, source_scope=request["channel_id"],
                 source_allow_external_recall=source_explicit, source_usage_out=source_usage,
                 search_session=search_session, tool_round_limit=settings.get("tool_round_limit", 4),
+                worker_session=self._workers.prepare_chat_locked(request),
             )
             try:
                 self._discovery.record_chat_locked(request, source_usage,
@@ -772,6 +849,7 @@ class ChatService:
         self._channels.drain()  # HTTP 202 workers outlive their submitting connections.
         self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
         self._discovery.shutdown()
+        self._workers.shutdown()
         with self._lock:
             warning = None
             try:

@@ -11,6 +11,7 @@ from .config import Config
 from .llm import chat, thinking_disabled
 from .store import Store
 from .steps import drive
+from .worker_context import merge_worker_refs
 
 TOOLS = [
     {
@@ -154,7 +155,8 @@ def _record_source_usage(out: dict | None, context: dict, **fields) -> None:
         out.update({"packet_ids": list(context["packet_ids"]),
                     "recalled_ids": list(context["recalled_ids"]),
                     "recall_queries": list(context["recall_queries"]),
-                    "memory_ids": list(context["memory_ids"]), **fields})
+                    "memory_ids": list(context["memory_ids"]),
+                    "worker_refs": list(context.get("worker_refs", [])), **fields})
 
 
 def chat_turn(*args, lock=None, **kwargs) -> str:
@@ -168,18 +170,21 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
               usage_out: dict | None = None, on_persist=None,
               request_id=None, on_request_progress=None, on_maintenance_warning=None,
               source_packet_ids=(), source_scope="gui", source_usage_out: dict | None = None,
-              source_allow_external_recall=False, search_session=None, tool_round_limit=4):
+              source_allow_external_recall=False, search_session=None, worker_session=None, tool_round_limit=4):
     ts = ts if ts is not None else time.time()
     if source_usage_out is not None:
         # Reused output dictionaries must not report a previous successful turn
         # when source validation or persistence fails before this one starts.
         source_usage_out.update({"offered_ids": [], "packet_ids": [], "recalled_ids": [],
                                  "recall_queries": [], "memory_ids": [], "user_turn_id": None,
-                                 "assistant_turn_id": None, "reply_saved": False})
+                                 "assistant_turn_id": None, "reply_saved": False, "worker_refs": []})
     # Caller selects explicit/relevant material. Never pick background cards
     # simply because a permanent conversation happens to be active.
     source_limits = store.source_limits()
-    packet_ids = list(dict.fromkeys(source_packet_ids))
+    history_limit = max(0, cfg.context.recent_turns - 1)
+    worker_refs = store.worker_history_refs(history_limit, scope=source_scope)
+    packet_ids = list(dict.fromkeys(list(source_packet_ids)
+        + store.worker_history_sources(history_limit, scope=source_scope)))
     for key in ("chat_material_limit", "chat_dependency_limit"):
         limit = source_limits[key]
         if limit is not None and len(packet_ids) > limit:
@@ -201,13 +206,15 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     packets = store.source_packets_for(packet_ids, scope=source_scope) if packet_ids else []
     if packet_ids and not packets:
         raise ValueError("所选资料已过期或不允许在此渠道使用")
+    # The same history window used below may include qualified task-derived
+    # replies. Bind the new input before exposing those replies to the model.
     user_id = store.add_turn("user", user_text, ts=ts, request_id=request_id,
-                             source_packet_ids=packet_ids, source_scope=source_scope)
+                             source_packet_ids=packet_ids, source_scope=source_scope, worker_refs=worker_refs)
     source_context = {"scope": source_scope, "packet_ids": packet_ids, "user_turn_id": user_id,
                       "recall_queries": [], "recalled_ids": [], "memory_ids": [],
                       "allow_external_recall": source_allow_external_recall is True,
-                      "limits": source_limits}
-    store.capture_discussion_user(user_id, user_text, scope=source_scope, mixed=bool(packet_ids))
+                      "limits": source_limits, "worker_refs": worker_refs}
+    store.capture_discussion_user(user_id, user_text, scope=source_scope, mixed=bool(packet_ids or worker_refs))
     if source_usage_out is not None:
         source_usage_out.update({"offered_ids": list(packet_ids), "packet_ids": list(packet_ids),
                                  "recalled_ids": [], "user_turn_id": user_id, "reply_saved": False})
@@ -219,10 +226,20 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     tools = TOOLS + ([SEARCH_TOOL] if search_session is not None else [])
     if search_session is not None:
         messages.append({"role": "system", "content": search_session.description()})
+    if source_scope != "gui":
+        worker_session = None
+    worker_names = set()
+    if worker_session is not None:
+        tools += worker_session.tools
+        worker_names = {tool["function"]["name"] for tool in worker_session.tools}
+        messages.append({"role": "system", "content": worker_session.description()})
     reply = ""
     round_number = 0
     while tool_round_limit is None or round_number < tool_round_limit:
         round_number += 1
+        if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+            reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
+            break
         if source_context["packet_ids"] and not store.source_packets_for(
             source_context["packet_ids"], scope=source_scope,
         ):
@@ -233,11 +250,21 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             msg = resp.choices[0].message
             _record_usage(usage_out, resp)
         else:
+            # Task-bound text waits for the post-I/O licence check; a policy
+            # revocation during model generation must not publish late deltas.
+            buffered = [] if source_context["worker_refs"] else None
+            delta_callback = buffered.append if buffered is not None else on_delta
+            reasoning_callback = None if buffered is not None else on_reasoning
             try:
-                msg = yield lambda: _stream_round(client, cfg, messages, on_delta, on_reasoning, usage_out, tools)
+                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback, usage_out, tools)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
+                if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+                    reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
+                    break
+                if buffered is not None:
+                    buffered.clear()
                 if source_context["packet_ids"] and not store.source_packets_for(
                     source_context["packet_ids"], scope=source_scope,
                 ):
@@ -247,8 +274,17 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 msg = resp.choices[0].message
                 _record_usage(usage_out, resp)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
-                if r and on_reasoning:
+                if r and on_reasoning and not source_context["worker_refs"]:
                     on_reasoning(r)
+        if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+            reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
+            break
+        if source_context["packet_ids"] and not store.source_packets_for(source_context["packet_ids"], scope=source_scope):
+            reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
+            break
+        if on_delta is not None and buffered is not None:
+            for piece in buffered:
+                on_delta(piece)
         if not msg.tool_calls:
             reply = (msg.content or "").strip()
             break
@@ -267,6 +303,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             }
         ]
         for tc in msg.tool_calls:
+            if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+                reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
+                break
+            if source_context["packet_ids"] and not store.source_packets_for(source_context["packet_ids"], scope=source_scope):
+                reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
+                break
             if on_tool:
                 on_tool(tc.function.name)
             try:
@@ -277,6 +319,18 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                         args = None
                     result = yield lambda: search_session.execute(args, tool_call_id=tc.id)
                     result = search_session.attach_locked(result, source_context)
+                elif tc.function.name in worker_names:
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except (ValueError, TypeError):
+                        args = None
+                    worker_session.bind_context_locked(source_context)
+                    result = yield lambda: worker_session.execute(tc.function.name, args, tool_call_id=tc.id)
+                    result = worker_session.attach_locked(result, source_context)
+                    # The host supplies refs, never the model's arguments.
+                    source_context["worker_refs"] = merge_worker_refs(source_context["worker_refs"])
+                    if source_context["worker_refs"]:
+                        store.protect_worker_turn(user_id, source_context["worker_refs"], scope=source_scope)
                 else:
                     result = dispatch_tool(store, tc.function.name, tc.function.arguments,
                                            source_context=source_context)
@@ -293,9 +347,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         # A model response may arrive after the source licence expired. Do not
         # publish that derived body as a newly saved reply.
         reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
+    if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+        reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
     reply = reply or "（沉默）"
     assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id,
-                                  source_packet_ids=source_context["packet_ids"], source_scope=source_scope)
+                                  source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
+                                  worker_refs=source_context["worker_refs"])
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     if on_request_progress is not None:
         on_request_progress()

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
 from .observation_memory import ObservationStoreMixin
+from .worker_context import SCHEMA as WORKER_CONTEXT_SCHEMA, WORKER_SHADOW, WorkerStoreMixin
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -93,7 +94,7 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
     return m["mention_count"] * 2 + m["use_count"] + recency
 
 
-class Store(ObservationStoreMixin, SourceStoreMixin):
+class Store(WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
@@ -109,6 +110,7 @@ class Store(ObservationStoreMixin, SourceStoreMixin):
         self._migrate()
         self.conn.executescript(SOURCE_SCHEMA)
         self.init_observation_memory()
+        self.conn.executescript(WORKER_CONTEXT_SCHEMA)
         self.purge_source_packets()
 
     def _migrate(self) -> None:
@@ -161,18 +163,20 @@ class Store(ObservationStoreMixin, SourceStoreMixin):
 
     # ---------- 对话轮次 ----------
     def add_turn(self, role: str, content: str, ts: float | None = None, *, request_id=None,
-                 source_packet_ids=(), source_scope="gui") -> int:
+                 source_packet_ids=(), source_scope="gui", worker_refs=()) -> int:
         # A short transaction binds the actual row ID to its request before any
         # network call or callback. No model call is inside this transaction.
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO turns (ts, role, content) VALUES (?, ?, ?)",
                 (ts if ts is not None else time.time(), role,
-                 SOURCE_SHADOW if source_packet_ids else content),
+                 WORKER_SHADOW if worker_refs else SOURCE_SHADOW if source_packet_ids else content),
             )
             turn_id = cur.lastrowid
             if source_packet_ids:
                 self._source_turn_write(turn_id, content, source_packet_ids, source_scope)
+            if worker_refs:
+                self._worker_turn_write(turn_id, content, worker_refs, source_scope)
             if request_id is not None:
                 column = "user_turn_id" if role == "user" else "assistant_turn_id"
                 status = "user_committed" if role == "user" else "generated"

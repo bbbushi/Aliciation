@@ -24,8 +24,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-02 ZCode：**撞车裁决落定（用户裁定按 ZCode 建议执行）**——采纳 trial 3732ffe 为正典（桥路径为 P1 唯一路径，跑对方 A01~A12 人工验收）；本地撞车实现已 revert（代码存 git 历史 f3acba0，为 P3 本地 CLI 干将轨现成起点），保留 worker_artifacts.py 与 testbed worker（对方无对应件、无冲突互补）；契约 v1 转 P1 验收标尺（§六 + astra §5 门槛：权限可强制/软硬预算分标/首期只交句柄），架构侧下一步=对照审计对方实现（初探：其 loop 按 scope 取 worker_refs，9.1 方向正确，深审待做），P2 来源契约为下一块设计。
-- 2026-11-01 Codex/DSH（trial：PR#15/#16 已合 main，3732ffe 未合）：QQ 组件首次安装与已装误判修复（qrcode-terminal 检查改查实际 lib/main.js）；**放开 QQ 私聊受许可网页搜索**（渠道政策变化）；DSH 全链路协作会话（任务派发/会话管理/凭据边界）。合并时按惯例并档本文件并跑共存检查。
-- 2026-11-01 ZCode：协作者调度设计稿 v2.1+架构图+契约冻结 v1，astra 架构评审与开发方案 v1 已入库（docs/设计文档/协作者调度-*.md）；本地机制实现细节转契约 §六 验收清单用。
-- 待人工验收/待修：QQ 真实安装与扫码收发、DSH 协作会话（对方 A01~A12）、对话内检索（**GUI 知乎 candidate/url 静态不匹配 bug 待修**，评审 E11）、P1、观察器、深海 UI、见闻通道、身体层复测；A05/A02、tests 旧路径适配 user/。
+- 2026-11-02 ZCode：**撞车裁决落定（用户裁定按 ZCode 建议执行）**——采纳 trial 3732ffe 为正典（桥路径为 P1 唯一路径，跑对方 A01~A12 人工验收）；本地撞车实现已 revert（代码存 git 历史 f3acba0，为 P3 本地 CLI 干将轨现成起点），保留 worker_artifacts.py 与 testbed worker（对方无对应件、无冲突互补）；契约 v1 转 P1 验收标尺（§六 + astra §5 门槛），架构侧下一步=对照审计对方实现（初探：其 loop 按 scope 取 worker_refs，9.1 方向正确，深审待做），P2 来源契约为下一块设计；设计稿 v2.3、astra 评审与开发方案已入库。
+- 2026-11-01 Codex（PR#17 已合 main）：**QQ 本人私聊搜索修复**——原 GUI 限定改为受许可 qq-owner（内容访问+聊天查找+QQ 资料许可），平台/额度共用、缓存/来源按渠道，GUI 历史双范围有效才展示 QQ 正文；仅 10 个搜索路径，群聊/DSH 不入 PR（群聊 6cb3113 前身 e8aa55d 另行保留）。真实搜索/撤权/超时待人工。
+- 2026-11-01 Codex（同批 3732ffe）：**DSH 插件 0.4.0 协作会话**——专属历史会话 archive/restore/status（无永久删除），Alice「设置→DSH」归档/恢复/删除同步选项默认关闭；Windows DPAPI 独立令牌、**原生权限非 OS 沙箱**（如实标注，契约 5.2 对应）、1 执行+4 待办/五工具；7 处核心接线同一提交，不将截图自报产物当宿主验收，真实操作待人工。
+- 待人工验收/待修：QQ 真实安装/扫码/私聊搜索与撤权超时、DSH 协作会话（A01~A12）、对话内检索（**GUI 知乎 candidate/url 静态不匹配 bug 待修**，评审 E11）、P1、观察器、深海 UI、见闻通道、身体层复测；A05/A02、tests 旧路径适配 user/。
 - 雷：本机无 `timeout`、无 Chrome；**起服一律 `.venv/bin/python -m alice serve`（系统 python3 无 openai，serve 启动即需要；macOS 下 ps 显示框架路径，不代表没用 venv）**；`dist/` 与 `user/` 不入库；PR 走 compare 页手动建；推送等用户明确指示；**活库元先验待下次人格重装种入**。

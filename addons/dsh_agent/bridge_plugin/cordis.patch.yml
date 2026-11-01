@@ -1,0 +1,9 @@
+# Credential-gated by default: no managed/manual token means no listener or model work.
+# Task admission additionally requires explicit Alice pairing and directory consent.
+- insert:
+    - id: alice-dsh-bridge-probe
+      name: ./index.mjs
+      config:
+        enabled: true
+        allow_execution: true
+        port: 18765

@@ -81,7 +81,8 @@
               </details>
               <details class="discovery-policy-section"><summary>聊天取材与记忆</summary>
               <label class="discovery-check"><input id="discovery-chat-interests" type="checkbox"><span>允许从聊天中明确表达的普通兴趣整理候选，供我确认</span></label>
-              <label class="discovery-check"><input id="discovery-share-qq" type="checkbox"><span>允许在既有本人 QQ 聊天中使用符合范围的资料，不主动发送</span></label>
+              <label class="discovery-check"><input id="discovery-share-qq" type="checkbox"><span>允许本人 QQ 私聊搜索和使用资料；搜索还需开启上方的聊天查找许可，不主动发送</span></label>
+              <p class="discovery-hint">QQ 与网页共用已开放的平台和搜索额度。开关与额度仍在本机设置，QQ 消息不能自行修改。</p>
               <label class="discovery-check"><input id="discovery-remember-observations" type="checkbox"><span>允许择要保存带出处的见闻，随普通记忆遗忘</span></label>
               </details>
               <details class="discovery-policy-section"><summary>活动节奏与库存目标</summary><div id="discovery-rhythm-settings" class="discovery-policy-grid"></div></details>
