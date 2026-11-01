@@ -9,6 +9,25 @@
     connected: "已连接", stopping: "正在暂停", stopped: "已暂停",
     error: "需要处理", unavailable: "暂不可用",
   };
+  const setupStages = {
+    prepare: "准备安装环境", supervision: "准备安装程序", launch: "启动安装程序",
+    install: "下载与安装", verify: "检查安装结果", inspect: "检测本机组件", stop: "结束原有 QQ 连接",
+  };
+  // Mirror the public diagnostic codes; never render arbitrary process output.
+  const setupFailureCodes = new Set([
+    "failed", "busy", "lock_unknown", "timeout", "cancelled", "permission", "disk_full",
+    "project_config_present", "manifest_invalid", "supervision_failed", "launch_failed",
+    "network", "certificate", "package_unavailable", "integrity", "runtime_incompatible",
+    "npm_failed", "verify_failed",
+  ]);
+  const setupNpmCodes = new Set([
+    "EACCES", "EPERM", "EBUSY", "EROFS", "ENOSPC", "EDQUOT", "ECONNRESET", "ECONNREFUSED",
+    "ETIMEDOUT", "ESOCKETTIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH",
+    "ECONNABORTED", "CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID", "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "E401", "E403", "E404", "ETARGET", "EINTEGRITY", "EBADENGINE", "EUSAGE", "ENOENT", "EINVAL",
+    "ERR_REQUIRE_ESM", "MODULE_NOT_FOUND",
+  ]);
   const actionButtons = {
     install: $("qq-install"), recheck: $("qq-recheck"),
     scan: $("qq-scan"), pair: $("qq-pair"), confirm: $("qq-confirm"),
@@ -68,6 +87,32 @@
     $("qq-status").classList.toggle("error", error);
   }
 
+  function renderSetupDiagnostic(setup) {
+    const stageLine = $("qq-setup-stage");
+    const codeLine = $("qq-setup-diagnostic");
+    const codeText = $("qq-setup-code");
+    stageLine.textContent = "";
+    codeText.textContent = "";
+    stageLine.classList.add("hidden");
+    codeLine.classList.add("hidden");
+    if (setup?.state !== "failed") return;
+    const d = setup.diagnostic;
+    if (!d || typeof d !== "object" || Array.isArray(d)) return;
+    if (typeof d.stage === "string" && Object.hasOwn(setupStages, d.stage)) {
+      stageLine.textContent = `失败环节：${setupStages[d.stage]}`;
+      stageLine.classList.remove("hidden");
+    }
+    const parts = [];
+    if (setupFailureCodes.has(d.code)) parts.push(d.code);
+    if (setupNpmCodes.has(d.npm_code)) parts.push(d.npm_code);
+    if (Number.isSafeInteger(d.system_code) && d.system_code > 0 && d.system_code <= 0xffffffff) parts.push(`系统 ${d.system_code}`);
+    if (Number.isSafeInteger(d.exit_code) && d.exit_code >= -0x80000000 && d.exit_code <= 0xffffffff) parts.push(`退出 ${d.exit_code}`);
+    if (parts.length) {
+      codeText.textContent = `排查编号：${parts.join(" / ")}`;
+      codeLine.classList.remove("hidden");
+    }
+  }
+
   function render() {
     if (!visible) return;
     const d = snapshot;
@@ -80,6 +125,7 @@
     $("qq-setup").setAttribute("aria-busy", "false");
     $("qq-setup-progress").classList.add("hidden");
     $("qq-node-download").classList.add("hidden");
+    renderSetupDiagnostic(null);
     if (!d) {
       clearPrivateDisplay();
       return;
@@ -120,6 +166,7 @@
       })[setup.state] || "请按上方提示完成准备，再重新检测。";
       $("qq-node-download").classList.toggle("hidden", !["node_missing", "node_old", "npm_missing"].includes(setup.state));
       actionButtons.install.textContent = setup.state === "failed" ? "重试安装" : "安装 QQ 组件";
+      renderSetupDiagnostic(setup);
     }
     $("qq-app-id").textContent = d.app_id || "—";
     const owner = typeof d.owner_openid === "string" ? d.owner_openid : "";
