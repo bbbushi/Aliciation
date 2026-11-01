@@ -6,6 +6,7 @@ status requests. Runtime leases coordinate with both public Node entry points.
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import re
@@ -28,23 +29,106 @@ MESSAGES = {
     "component_missing": "QQ 组件文件或安装清单不完整，请重新取得完整项目文件。",
     "dependencies_missing": "首次使用需要安装 QQ 组件，点击安装后会联网下载。",
     "installing": "正在下载并安装 QQ 组件，请稍候。",
-    "failed": "安装未完成，请检查网络和目录权限后重试。",
+    "failed": "安装未完成，请提供下方排查编号，以便确认具体原因。",
 }
 FAILURES = {
     "busy": "另一个 QQ 连接或安装仍在运行，请先停止后重新检测。",
     "lock_unknown": "QQ 组件的占用状态无法确认，请按接入说明核对残留锁后重试。",
     "timeout": "安装等待超过 5 分钟，已停止；请检查网络后重试。",
     "cancelled": "安装已随 Alice 关闭而停止，下次可重新安装。",
+    "permission": "安装目录或文件不允许写入，请检查 Alice 所在文件夹的权限，并关闭占用组件的程序后重试。",
+    "disk_full": "安装所在磁盘空间不足，请释放空间后重试。",
+    "project_config_present": "项目有自定义安装设置，请按接入说明使用终端安装，成功后点击重新检测。",
+    "manifest_invalid": "安装清单不完整或与组件版本不一致，请更新完整项目后重新检测。",
+    "supervision_failed": "系统未能准备安装进程，下载尚未开始。请提供下方排查编号。",
+    "launch_failed": "安装程序未能启动，请重新检测 Node.js；仍失败时请提供下方排查编号。",
+    "network": "安装工具未能连接组件下载服务，请检查网络或代理设置后重试。",
+    "certificate": "下载连接的证书校验未通过，请检查电脑时间、网络代理及证书设置后重试。",
+    "package_unavailable": "下载服务未能提供所需组件，请稍后重试；仍失败时请提供下方排查编号。",
+    "integrity": "下载的组件未通过完整性检查，请检查下载连接后重试。",
+    "runtime_incompatible": "Node.js 与安装工具版本不兼容，请安装配套的官方 Node.js 和 npm 后重新检测。",
+    "npm_failed": "安装工具已退出，但未完成安装。请提供下方排查编号，或按接入说明使用终端安装。",
+    "verify_failed": "安装程序已结束，但组件文件仍不齐全，请重试；也可使用终端安装后重新检测。",
     "failed": MESSAGES["failed"],
+}
+STAGES = {"prepare", "supervision", "launch", "install", "verify", "inspect", "stop"}
+NPM_ERRORS = {
+    "EACCES": "permission", "EPERM": "permission", "EBUSY": "permission", "EROFS": "permission",
+    "ENOSPC": "disk_full", "EDQUOT": "disk_full",
+    "ECONNRESET": "network", "ECONNREFUSED": "network", "ETIMEDOUT": "network",
+    "ESOCKETTIMEDOUT": "network", "ENOTFOUND": "network", "EAI_AGAIN": "network",
+    "ENETUNREACH": "network", "EHOSTUNREACH": "network", "ECONNABORTED": "network",
+    "CERT_HAS_EXPIRED": "certificate", "CERT_NOT_YET_VALID": "certificate",
+    "DEPTH_ZERO_SELF_SIGNED_CERT": "certificate", "SELF_SIGNED_CERT_IN_CHAIN": "certificate",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE": "certificate", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY": "certificate",
+    "E401": "package_unavailable", "E403": "package_unavailable", "E404": "package_unavailable",
+    "ETARGET": "package_unavailable", "EINTEGRITY": "integrity", "EBADENGINE": "runtime_incompatible",
+    "EUSAGE": "manifest_invalid", "ENOENT": "npm_failed", "EINVAL": "npm_failed",
+    "ERR_REQUIRE_ESM": "runtime_incompatible", "MODULE_NOT_FOUND": "launch_failed",
 }
 EXPECTED = {"@tencent-connect/qqbot-nodejs": "1.0.4",
             "@tencent-connect/qqbot-connector": "1.2.0", "qrcode-terminal": "0.12.0"}
 
 
 class SetupFailure(Exception):
-    def __init__(self, code="failed"):
-        self.code = code
-        super().__init__(FAILURES.get(code, FAILURES["failed"]))
+    def __init__(self, code="failed", *, stage=None, npm_code=None, system_code=None, exit_code=None):
+        self.code = code if code in FAILURES else "failed"
+        self.stage = stage if stage in STAGES else None
+        self.npm_code = npm_code if npm_code in NPM_ERRORS else None
+        self.system_code = system_code if type(system_code) is int and 0 < system_code <= 0xFFFFFFFF else None
+        self.exit_code = exit_code if type(exit_code) is int and -(2 ** 31) <= exit_code <= 0xFFFFFFFF else None
+        super().__init__(FAILURES[self.code])
+
+    def diagnostic(self, default_stage):
+        result = {"code": self.code, "stage": self.stage or default_stage}
+        for name in ("npm_code", "system_code", "exit_code"):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value
+        return result
+
+
+def _os_failure(exc: OSError, stage: str) -> SetupFailure:
+    number = getattr(exc, "winerror", None) or exc.errno
+    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.EBUSY) or getattr(exc, "winerror", None) in (5, 32, 33):
+        code = "permission"
+    elif exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)) or getattr(exc, "winerror", None) == 112:
+        code = "disk_full"
+    else:
+        code = "launch_failed" if stage == "launch" else "failed"
+    return SetupFailure(code, stage=stage, system_code=number)
+
+
+class _NpmDiagnostic:
+    """Drain stderr with bounded memory; retain only an allowlisted error code."""
+    def __init__(self, stream):
+        self.code = None
+        self._stream = stream
+        self._thread = threading.Thread(target=self._read, name="alice-npm-diagnostic", daemon=True)
+        self._thread.start()
+
+    def _read(self):
+        tail = b""
+        try:
+            while chunk := self._stream.read1(4096):
+                block = tail + chunk
+                for match in re.finditer(rb"(?:npm (?:ERR!|error) code |code: ['\"])([A-Z][A-Z0-9_]{1,63})(?=[\s'\"\r\n]|$)", block):
+                    code = match.group(1).decode("ascii")
+                    if self.code is None and code in NPM_ERRORS:
+                        self.code = code
+                tail = block[-128:]
+        except (OSError, ValueError):
+            pass
+        finally:
+            self._stream.close()
+
+    def finish(self):
+        self._thread.join(timeout=1)
+
+    def failure(self, exit_code):
+        self.finish()
+        return SetupFailure(NPM_ERRORS.get(self.code, "npm_failed"), stage="install",
+                            npm_code=self.code, exit_code=exit_code)
 
 
 @dataclass(frozen=True)
@@ -162,7 +246,10 @@ def inspect_environment(root: Path) -> Environment:
             if not name:
                 continue
             package = _json_file(root / name / "package.json")
-            main = package.get("main", "index.js")
+            # This pinned package declares "./lib/main". Node resolves that to
+            # main.js; checking the literal extensionless path rejects a valid
+            # installation on every platform. Check its actual entry instead.
+            main = "lib/main.js" if name == "node_modules/qrcode-terminal" else package.get("main", "index.js")
             entry = (root / name / main).resolve()
             entry.relative_to((root / name).resolve())
             if package.get("version") != item["version"] or not entry.is_file():
@@ -287,9 +374,9 @@ class InstallGuard:
             if legacy.exists():
                 raise SetupFailure("busy")
             return self
-        except OSError:
+        except OSError as exc:
             self.__exit__(None, None, None)
-            raise SetupFailure() from None
+            raise _os_failure(exc, "prepare") from None
         except BaseException:
             self.__exit__(None, None, None)
             raise
@@ -366,15 +453,16 @@ class WindowsJob:
         limits = Limits()
         limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         if not handle:
-            raise SetupFailure()
+            raise SetupFailure("supervision_failed", stage="supervision", system_code=ctypes.get_last_error())
         if not self.kernel.SetInformationJobObject(handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            error = ctypes.get_last_error()
             self.kernel.CloseHandle(handle)
-            raise SetupFailure()
+            raise SetupFailure("supervision_failed", stage="supervision", system_code=error)
         self.handle = handle
 
     def assign(self, child):
         if self.handle and not self.kernel.AssignProcessToJobObject(self.handle, int(child._handle)):
-            raise SetupFailure()
+            raise SetupFailure("supervision_failed", stage="supervision", system_code=ctypes.get_last_error())
 
     def close(self):
         if self.handle:
@@ -405,36 +493,48 @@ process.stdin.on('data', chunk => {
 
 
 def install_dependencies(root: Path, environment: Environment, cancel, report) -> Environment:
-    """Only called by the user-triggered worker. Output is discarded, never logged."""
+    """User-triggered only; raw output is never stored, logged or sent to the GUI."""
     if environment.state != "dependencies_missing" or not environment.node or not environment.npm:
         return environment
     child = None
+    diagnostic = None
     with InstallGuard(root) as guard:
         if cancel.is_set():
             raise SetupFailure("cancelled")
-        _manifest(root)  # Fail closed if a local update replaced the locked manifest.
+        try:
+            _manifest(root)  # Fail closed if a local update replaced the locked manifest.
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise SetupFailure("manifest_invalid", stage="prepare") from None
         if (root / ".npmrc").exists():
-            raise SetupFailure()
-        for name in ("npm-user.conf", "npm-global.conf"):
-            (guard.directory / name).write_text("", encoding="utf-8")
-        command = (environment.node, "-e", _NPM_LAUNCHER, environment.npm,
+            raise SetupFailure("project_config_present", stage="prepare")
+        try:
+            for name in ("npm-user.conf", "npm-global.conf"):
+                (guard.directory / name).write_text("", encoding="utf-8")
+        except OSError as exc:
+            raise _os_failure(exc, "prepare") from None
+        command = (environment.node, "--input-type=commonjs", "-e", _NPM_LAUNCHER, "--", environment.npm,
                    "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--global=false",
                    f"--prefix={root}", f"--userconfig={guard.directory / 'npm-user.conf'}",
                    f"--globalconfig={guard.directory / 'npm-global.conf'}", f"--cache={root / '.npm-cache'}",
                    "--registry=https://registry.npmjs.org", "--logs-max=0", "--fetch-retries=1",
                    "--fetch-timeout=30000")
         job = WindowsJob()
+        stage = "launch"
         try:
+            report("正在启动安装程序，请稍候。")
             child = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, start_new_session=os.name != "nt",
+                                     stderr=subprocess.PIPE, start_new_session=os.name != "nt",
                                      env=_environment(),
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            diagnostic = _NpmDiagnostic(child.stderr)
             job.assign(child)
             guard.set_child(child.pid)
             if cancel.is_set():
                 raise SetupFailure("cancelled")
             child.stdin.write(b"install\n")
             child.stdin.flush()
+            stage = "install"
+            report("正在下载并安装 QQ 组件，请稍候。")
             deadline = time.monotonic() + 300
             while child.poll() is None:
                 if cancel.wait(0.2):
@@ -442,12 +542,21 @@ def install_dependencies(root: Path, environment: Environment, cancel, report) -
                 if time.monotonic() >= deadline:
                     raise SetupFailure("timeout")
             if child.returncode:
-                raise SetupFailure()
+                raise diagnostic.failure(child.returncode)
+            stage = "verify"
             report("正在检查安装结果，请稍候。")
             checked = inspect_environment(root)
             if checked.state != "ready":
-                raise SetupFailure()
+                raise SetupFailure("verify_failed", stage="verify")
             return checked
+        except SetupFailure as exc:
+            if exc.stage is None:
+                exc.stage = stage
+            raise
+        except OSError as exc:
+            raise _os_failure(exc, stage) from None
+        except Exception:
+            raise SetupFailure("failed", stage=stage) from None
         finally:
             job.close()
             if child is not None:
@@ -463,3 +572,5 @@ def install_dependencies(root: Path, environment: Environment, cancel, report) -
                             child.stdin.close()
                         except OSError:
                             pass
+                    if diagnostic is not None:
+                        diagnostic.finish()
