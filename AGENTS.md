@@ -24,8 +24,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-01 Codex：**QQ 组件首次安装**（PR#15）——网页 QQ 首次安装/重新检测入口，缺组件显式安装、失败重试、成功后直接扫码，缺 Node.js 给官网指引；固定锁定依赖、安装超时/进程回收、网页与终端运行租约互斥；安装只由点击发起，不自动扫码；**加载新版需受控重启，升级前先停旧 QQ 连接**。
-- 2026-11-01 Codex（PR#16）：**修复已装组件被判缺失**——qrcode-terminal@0.12.0 声明的 main 无扩展名，检查改为实际 lib/main.js；固定失败环节/排查编号与受限 npm 错误分类，原始安装输出不写日志/不进网页；已安装者更新重启后先重新检测，无需重装组件；修复后重新检测、扫码及收发待人工确认。
-- 2026-11-01 ZCode：**协作者调度设计稿 v2.1 + 架构图 + D1/D2 机制层施工完成**（设计稿 docs/设计文档/协作者调度-设计.md、架构图 docs/架构图-协作者调度.png；用户裁定**只动架构侧**）——契约冻结 v1（协作者调度-协议契约-v1.md：帧协议/状态机/三态名册/输入产物/预算）；新模块 `alice/{worker_tasks,collaborators,worker_transport,worker_artifacts}.py`（账本幂等键与状态机、GO 准入、realpath 包含性收取）+ 零成本 testbed worker（默认禁用）；开发自检 19/19（临时库，非验收）；**未动**：D0 真实 adapter 核验（需用户授权付费试跑）、D3 GUI/loop 接线、D4 DSH 剧本。
-- 待人工验收/待修：QQ 真实安装与扫码收发、对话内检索（**GUI 知乎 candidate/url 静态不匹配 bug 待修**，astra 评审 E11）、P1、观察器、深海 UI、见闻通道、v0.4+分寸首思辨、身体层复测；A05/A02、tests 旧路径适配 user/。
+- 2026-11-02 ZCode：⚠**平行施工撞车，待用户裁决**——trial 未合提交 3732ffe（"DSH接入与协作会话"，36 文件 5661 行）与本地 ytq 的 D1/D2 施工**同名实现** collaborators/worker_tasks/worker_transport；对方更完整（addons/dsh_agent 首个真实 adapter=Koishi 桥、worker_credentials/runtime/management/reports、GUI 任务卡、loop 接线，且自带 D0 接口核验与人工验收文档）。**建议采纳对方为正典**；本地 worker 实现两提交（f3acba0/b4edbfa）暂不推送，契约 v1（协作者调度-协议契约-v1.md）转评审与验收清单用。
+- 2026-11-01 Codex/DSH（trial：PR#15/#16 已合 main，3732ffe 未合）：QQ 组件首次安装与已装误判修复（qrcode-terminal 检查改查实际 lib/main.js）；**放开 QQ 私聊受许可网页搜索**（渠道政策变化）；DSH 全链路协作会话（任务派发/会话管理/凭据边界）。合并时按惯例并档本文件并跑共存检查。
+- 2026-11-01 ZCode：协作者调度设计稿 v2.1+架构图+契约冻结 v1，astra 架构评审与开发方案 v1 已入库（docs/设计文档/协作者调度-*.md）；本地机制实现细节转契约 §六 验收清单用。
+- 待人工验收/待修：QQ 真实安装与扫码收发、DSH 协作会话（对方 A01~A12）、对话内检索（**GUI 知乎 candidate/url 静态不匹配 bug 待修**，评审 E11）、P1、观察器、深海 UI、见闻通道、身体层复测；A05/A02、tests 旧路径适配 user/。
 - 雷：本机无 `timeout`、无 Chrome；**起服一律 `.venv/bin/python -m alice serve`（系统 python3 无 openai，serve 启动即需要；macOS 下 ps 显示框架路径，不代表没用 venv）**；`dist/` 与 `user/` 不入库；PR 走 compare 页手动建；推送等用户明确指示；**活库元先验待下次人格重装种入**。
