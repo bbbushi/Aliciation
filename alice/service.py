@@ -164,10 +164,33 @@ class ChatService:
     def history(self, limit: int = 60) -> list[dict]:
         with self._lock:
             return [
-                {"role": r["role"], "content": self.store.turn_display(r["id"], scope="gui"), "ts": r["ts"],
+                {"role": r["role"], "content": self._history_turn_display_locked(r["id"]), "ts": r["ts"],
                  **self._history_source_fields_locked(r["id"])}
                 for r in self.store.recent_turns(limit)
             ]
+
+    def _history_source_available_locked(self, turn_id, attachment) -> bool:
+        if (not attachment["content"] or attachment["expires_at"] <= time.time()
+                or attachment["scope"] not in {"gui", "qq-owner"}):
+            return False
+        ids = self.store.turn_source_ids(turn_id)
+        if not self.store.source_packets_for(ids, scope="gui"):
+            return False
+        if attachment["scope"] == "qq-owner":
+            channel = self.store.conn.execute("SELECT channel_id FROM channel_turns WHERE turn_id=?", (turn_id,)).fetchone()
+            return bool(channel and channel[0] == "qq-owner" and self.store.source_packets_for(ids, scope="qq-owner"))
+        return True
+
+    def _history_turn_display_locked(self, turn_id):
+        # The local owner's history may show their QQ answer only while every
+        # dependency permits both audiences. This does not widen model/recall
+        # scopes, nor allow GUI-only material to flow in the other direction.
+        attachment = self.store.conn.execute(
+            "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
+        if (attachment is not None and attachment["scope"] == "qq-owner"
+                and self._history_source_available_locked(turn_id, attachment)):
+            return self.store.turn_display(turn_id, scope="qq-owner")
+        return self.store.turn_display(turn_id, scope="gui")
 
     def _history_source_fields_locked(self, turn_id) -> dict:
         discussion = self.store.discussion_status(turn_id, scope="gui")
@@ -175,9 +198,7 @@ class ChatService:
             "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
         if attachment is None:
             return {"source_bound": False, "source_available": True, "source_expires_at": None, "discussion": discussion}
-        available = (attachment["scope"] == "gui" and bool(attachment["content"])
-                     and attachment["expires_at"] > time.time()
-                     and bool(self.store.source_packets_for(self.store.turn_source_ids(turn_id), scope="gui")))
+        available = self._history_source_available_locked(turn_id, attachment)
         return {"source_bound": True, "source_available": bool(available),
                 "source_expires_at": attachment["expires_at"], "discussion": discussion}
 
@@ -212,7 +233,7 @@ class ChatService:
                                                                   (row["request_id"],))]
                     delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
                                     "platform_confirmed" if states else "pending")
-                turns.append({"id": row["id"], "role": row["role"], "content": self.store.turn_display(row["id"], scope="gui"), "ts": row["ts"],
+                turns.append({"id": row["id"], "role": row["role"], "content": self._history_turn_display_locked(row["id"]), "ts": row["ts"],
                               "request_id": row["request_id"], "channel": row["channel_id"] or "local",
                                "sender_label": "所有者", "delivery": delivery,
                                **self._history_source_fields_locked(row["id"])})
@@ -229,7 +250,7 @@ class ChatService:
                                                "source_bound": True, "source_available": False,
                                                "source_expires_at": None})
                         continue
-                    source_updates.append({"id": identity, "content": self.store.turn_display(identity, scope="gui"),
+                    source_updates.append({"id": identity, "content": self._history_turn_display_locked(identity),
                                            **self._history_source_fields_locked(identity)})
             return {"turns": turns, "session_epoch": self._channels.epoch,
                     "next_after_id": turns[-1]["id"] if turns else (after_id or 0), "has_more": more,
@@ -442,7 +463,6 @@ class ChatService:
                         self._channels.begin_shutdown()
                 raise
         finally:
-            self._discovery.finish_chat(request["request_id"])
             self._channels.release(token)
 
     def _replayed_result(self, prior):
@@ -455,9 +475,14 @@ class ChatService:
         # Historical private name retained for the channel adapter. The driver
         # now owns each short Store step; callers must not hold the outer lock.
         from .steps import drive
-        return drive(self._send_steps(request, on_delta, on_tool, on_reasoning,
-                     evaluation_id=evaluation_id, owner_token=owner_token,
-                     on_search_progress=on_search_progress), self._lock)
+        try:
+            return drive(self._send_steps(request, on_delta, on_tool, on_reasoning,
+                         evaluation_id=evaluation_id, owner_token=owner_token,
+                         on_search_progress=on_search_progress), self._lock)
+        finally:
+            # Both GUI and QQ workers own searches; release their in-memory
+            # results even when generation or maintenance fails.
+            self._discovery.finish_chat(request["request_id"])
 
     def _send_steps(self, request, on_delta, on_tool, on_reasoning, *, evaluation_id,
                     owner_token, on_search_progress):

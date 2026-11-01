@@ -406,10 +406,15 @@ class DiscoveryCoordinator:
         # Called under the channel condition. Never take another lock or wait here.
         self._cancel.set()
 
+    def _chat_search_allowed(self, scope, settings):
+        return (settings["enabled"] and settings["chat_search_enabled"]
+                and scope in {"gui", "qq-owner"}
+                and (scope != "qq-owner" or (settings["share_in_qq"] and self.service._channels.enabled())))
+
     def prepare_chat_locked(self, request, token, on_progress=None):
         from .dialogue_search import SearchSession, search_declined
         _, settings = self._config_locked()
-        if (request["channel_id"] != "gui" or not settings["enabled"] or not settings["chat_search_enabled"]
+        if (not self._chat_search_allowed(request["channel_id"], settings)
                 or search_declined(request["text"])):
             return None
         session = SearchSession(self, request, token, on_progress)
@@ -428,7 +433,7 @@ class DiscoveryCoordinator:
 
     def chat_control(self, payload, *, cancel=False):
         if (not isinstance(payload, dict) or set(payload) != {"request_id", "session_epoch"}
-                or not isinstance(payload["request_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", payload["request_id"])
+                or not isinstance(payload["request_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", payload["request_id"])
                 or payload["session_epoch"] != self.dataset_id):
             raise ChannelError(409, "session_changed", "请刷新后查看本轮检索")
         with self._guard:
@@ -461,8 +466,9 @@ class DiscoveryCoordinator:
     def _foreground_allowed(self, job):
         channels = self.service._channels
         if job.get("kind") == "chat_search":
-            return (channels.slot is job.get("owner_token") and channels.slot is not None
-                    and channels.active_channel == "gui" and channels.active_request == job.get("parent_request_id"))
+            scope = job.get("scope")
+            return (scope in {"gui", "qq-owner"} and channels.slot is job.get("owner_token") and channels.slot is not None
+                    and channels.active_channel == scope and channels.active_request == job.get("parent_request_id"))
         return channels.slot is None
 
     def begin_shutdown(self):
@@ -1324,7 +1330,7 @@ class DiscoveryCoordinator:
         enabled = settings["enabled"] or bool(check_job)
         if job.get("kind") == "chat_search":
             with self.service._channels.condition:
-                enabled = enabled and settings["chat_search_enabled"] and self._foreground_allowed(job)
+                enabled = self._chat_search_allowed(job.get("scope"), settings) and self._foreground_allowed(job)
         return revision == job["revision"] and enabled
 
     def _phase(self, job, phase, *, state="running", reason=""):
