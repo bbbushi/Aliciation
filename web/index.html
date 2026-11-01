@@ -133,7 +133,10 @@
       <main id="msgs" aria-label="对话记录" tabindex="0"></main>
       <div id="collaborator-dock" class="collaborator-dock hidden" aria-label="协作者入口">
         <button id="workers-btn" class="collaborator-avatar" type="button" data-worker="dsh-agent" data-size="large" data-state="unknown" data-unread="false" aria-expanded="false" aria-controls="worker-tasks" aria-label="打开 DSH 会话" aria-describedby="workers-avatar-status workers-avatar-help">
-          <img class="collaborator-avatar-image" src="/assets/dsh-avatar-a-v1.png" data-large-src="/assets/dsh-avatar-a-v1.png" data-small-src="/assets/dsh-avatar-small-v1.png" width="192" height="192" alt="" draggable="false">
+          <span class="collaborator-avatar-art" aria-hidden="true">
+            <img class="collaborator-avatar-image collaborator-avatar-large" src="/assets/dsh-avatar-a-v1.png" width="192" height="192" alt="" draggable="false">
+            <img class="collaborator-avatar-image collaborator-avatar-small" src="/assets/dsh-avatar-small-v1.png" width="64" height="64" alt="" draggable="false">
+          </span>
           <span id="workers-avatar-status" class="collaborator-status">状态待确认</span>
           <span id="workers-count" class="worker-count"></span>
         </button>

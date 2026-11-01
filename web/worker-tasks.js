@@ -118,12 +118,16 @@
   }
   function setupAvatarDrag(button) {
     const area = button.closest(".chat-conversation");
-    const portrait = button.querySelector(".collaborator-avatar-image");
+    const art = button.querySelector(".collaborator-avatar-art");
+    const visualParts = [art, $("workers-avatar-status"), $("workers-count")];
+    const portraits = [...button.querySelectorAll(".collaborator-avatar-image")];
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const storageKey = `alice.collaborator-position.v1.${button.dataset.worker}`;
     const clamp = (n) => Math.max(0, Math.min(1, n));
     const doubleClickMs = 500;
     let position = { x: 1, y: 1 }, drag = null, suppressClick = false, frame = null;
     let clickTimer = null, pendingClick = null, workBaseline = null;
+    let sizeAnimations = [], areaWidth = area.clientWidth, areaHeight = area.clientHeight;
     const interactive = () => !stopped && !document.hidden && !button.closest("[inert]")
       && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
       && button.getClientRects().length > 0 && getComputedStyle(button).visibility !== "hidden";
@@ -131,14 +135,51 @@
       clearTimeout(clickTimer); clickTimer = null; pendingClick = null;
     }
     function activate() { if (interactive()) opened ? close() : open(); }
+    function stopSizeMotion() {
+      for (const animation of sizeAnimations) animation.cancel();
+      sizeAnimations = [];
+    }
+    function cancelInteraction() { finish(true); stopSizeMotion(); }
     function setSize(size) {
       if (button.dataset.size === size) return;
+      // Capture an in-flight transition before cancelling it, so reversing the
+      // size change starts at the current visual position and opacity.
+      const before = button.getBoundingClientRect();
+      const beforeParts = visualParts.map((part) => part.getBoundingClientRect());
+      const opacity = portraits.map((image) => getComputedStyle(image).opacity);
+      stopSizeMotion();
       clearClick(); finish(true);
       button.dataset.size = size;
-      portrait.src = size === "small" ? portrait.dataset.smallSrc : portrait.dataset.largeSrc;
-      portrait.width = portrait.height = size === "small" ? 64 : 192;
       text("workers-avatar-help", `拖动调整位置；单击或 Enter 打开会话；${avatarSizeHint(button)}。`);
       renderList(); place();
+      const after = button.getBoundingClientRect();
+      const afterParts = visualParts.map((part) => part.getBoundingClientRect());
+      if (reducedMotion.matches || typeof button.animate !== "function" || !interactive()
+          || !before.width || !before.height || !after.width || !after.height) return;
+      // Commit layout once, then animate only transform/opacity. Drag bounds
+      // and ResizeObserver never have to follow an interpolated layout size.
+      const timing = { duration: 240, easing: "cubic-bezier(.22, 1, .36, 1)" };
+      const dx = before.left - after.left, dy = before.top - after.top;
+      const animations = [button.animate([
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: "none" },
+      ], timing)];
+      // Scale only the square portrait, uniformly. Labels and badges move
+      // between their old/new positions without stretching their text.
+      visualParts.forEach((part, index) => {
+        const from = beforeParts[index], to = afterParts[index];
+        if (!from.width || !from.height || !to.width || !to.height) return;
+        const scale = part === art ? from.width / to.width : 1;
+        animations.push(part.animate([
+          { transform: `translate(${from.left - to.left - dx}px, ${from.top - to.top - dy}px) scale(${scale})` },
+          { transform: "none" },
+        ], timing));
+      });
+      portraits.forEach((image, index) => {
+        animations.push(image.animate([{ opacity: opacity[index] }, { opacity: getComputedStyle(image).opacity }], timing));
+      });
+      sizeAnimations = animations;
+      animations[0].onfinish = () => { if (sizeAnimations === animations) stopSizeMotion(); };
     }
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey));
@@ -191,6 +232,7 @@
     }
     button.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || !event.isPrimary || drag || button.closest("[inert]")) return;
+      stopSizeMotion();
       const box = bounds();
       if (!box) return;
       // Hold a pending single click while a possible second press is down.
@@ -242,17 +284,21 @@
       if (event.key === "Escape" && drag) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
     });
     const resize = new ResizeObserver(() => {
+      if (area.clientWidth !== areaWidth || area.clientHeight !== areaHeight) {
+        areaWidth = area.clientWidth; areaHeight = area.clientHeight; stopSizeMotion();
+      }
       if (drag) finish(true);
       cancelAnimationFrame(frame); frame = requestAnimationFrame(place);
     });
     resize.observe(area); resize.observe(button);
-    window.addEventListener("blur", () => finish(true));
-    document.addEventListener("visibilitychange", () => { if (document.hidden) finish(true); });
-    window.addEventListener("pagehide", () => { finish(true); cancelAnimationFrame(frame); resize.disconnect(); });
+    window.addEventListener("blur", cancelInteraction);
+    document.addEventListener("visibilitychange", () => { if (document.hidden) cancelInteraction(); });
+    window.addEventListener("pagehide", () => { cancelInteraction(); cancelAnimationFrame(frame); resize.disconnect(); });
     window.addEventListener("pageshow", () => { resize.observe(area); resize.observe(button); place(); });
+    reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopSizeMotion(); });
     place();
     return {
-      cancel: () => finish(true),
+      cancel: cancelInteraction,
       syncWork(data) {
         const used = data.policy?.runs_used;
         if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(data.revision)) return;
