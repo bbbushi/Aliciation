@@ -24,7 +24,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-02 ZCode：⚠**平行施工撞车，待用户裁决**——trial 未合提交 3732ffe（"DSH接入与协作会话"，36 文件 5661 行）与本地 ytq 的 D1/D2 施工**同名实现** collaborators/worker_tasks/worker_transport；对方更完整（addons/dsh_agent 首个真实 adapter=Koishi 桥、worker_credentials/runtime/management/reports、GUI 任务卡、loop 接线，且自带 D0 接口核验与人工验收文档）。**建议采纳对方为正典**；本地 worker 实现两提交（f3acba0/b4edbfa）暂不推送，契约 v1（协作者调度-协议契约-v1.md）转评审与验收清单用。
+- 2026-11-02 ZCode：**撞车裁决落定（用户裁定按 ZCode 建议执行）**——采纳 trial 3732ffe 为正典（桥路径为 P1 唯一路径，跑对方 A01~A12 人工验收）；本地撞车实现已 revert（代码存 git 历史 f3acba0，为 P3 本地 CLI 干将轨现成起点），保留 worker_artifacts.py 与 testbed worker（对方无对应件、无冲突互补）；契约 v1 转 P1 验收标尺（§六 + astra §5 门槛：权限可强制/软硬预算分标/首期只交句柄），架构侧下一步=对照审计对方实现（初探：其 loop 按 scope 取 worker_refs，9.1 方向正确，深审待做），P2 来源契约为下一块设计。
 - 2026-11-01 Codex/DSH（trial：PR#15/#16 已合 main，3732ffe 未合）：QQ 组件首次安装与已装误判修复（qrcode-terminal 检查改查实际 lib/main.js）；**放开 QQ 私聊受许可网页搜索**（渠道政策变化）；DSH 全链路协作会话（任务派发/会话管理/凭据边界）。合并时按惯例并档本文件并跑共存检查。
 - 2026-11-01 ZCode：协作者调度设计稿 v2.1+架构图+契约冻结 v1，astra 架构评审与开发方案 v1 已入库（docs/设计文档/协作者调度-*.md）；本地机制实现细节转契约 §六 验收清单用。
 - 待人工验收/待修：QQ 真实安装与扫码收发、DSH 协作会话（对方 A01~A12）、对话内检索（**GUI 知乎 candidate/url 静态不匹配 bug 待修**，评审 E11）、P1、观察器、深海 UI、见闻通道、身体层复测；A05/A02、tests 旧路径适配 user/。
