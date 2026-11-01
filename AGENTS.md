@@ -24,10 +24,6 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-10-31 Codex（经 trial PR#13 入 main）：**对话内检索 + browser_reader 交付**——GUI 主模型按需 `discovery_search(query/platform/limit/fresh)`（无独立表单/口令门槛/强制预取），后台/聊天独立开关、共享额度、单前台槽、锁外模型/网络与短存储步骤、进度/停止/原请求恢复及平台阻塞保留；QQ 不开放新搜索协议。
-- 同批 Codex：**正式见闻**需真实来源与保存许可（salience=0、短证据/依赖 ID 和版本、普通遗忘；URL-only 拒写，旧 source_url 标 legacy_unverified；按渠道提供见闻观点，不写跨渠道人格正文）；首次迁移自动备份。**browser_reader** 独立 Playwright 环境读 JS 渲染页（B 站简介/知乎回答实测过），核心/GUI 零新增依赖，逐资源核准计账；用户独立 Edge 登录。
-- 本轮 Python 编译、14 项 JS 语法、37 路径凭据模式检查及截图核对通过，8800 首页 200；自主检索→阅读→对话→记忆→撤销、多平台/GUI 与 QQ 共存/视觉待人工。
-- 2026-10-31 ZCode（经 ytq PR#11/#12 入 main）：**见闻通道**（memories.source_url 列+remember source_url 参数+interp 枚举「见闻」+思辨引用计 use——网上检索的信息作为见闻进成长管线，与 Codex 的正式见闻衔接）、**存在事实清单**（宪法身份边界：烟味事件收口，复测待做）、**元观点**（对话终结权元先验+思辨叙事恒重建）、**分寸机制**（契约松绑+元先验+提取配对事件）、**v0.4 思想层认识论结构化 P0**（七字段 schema+先验→验证→修订生命周期）、架构图 v0.4、催睡观察、对话内检索设计稿（discovery_search 方案 A——与 PR#13 实现一致）。
-- 待人工验收：QQ 真实扫码收发、P1、观察器、深海 UI、内容发现矩阵（贴吧增强含内）、对话内检索、见闻通道、v0.4+分寸首次真机思辨、身体层复测（烟味重发）。
-- 待做：ZCode 侧 A05（remember 压力绕行）、A02（共享锚点阻止首次自动思辨）；`tests/pressure/launch.py:69`、`deploy.py:146/221/237/250` 旧 data/ 布局待适配 user/。
+- 2026-11-01 ZCode：**协作者调度设计稿 v1**（docs/设计文档/协作者调度-设计.md，待评审排期）——分层能力观定案：薄能力亲历（discovery_search 检索循环）、重/危/常驻能力委托。机制：manifest 标准（addons 即注册表，名单/校验/计账单一事实源）+ 统一 `dispatch_worker(name, brief)` 同步工具（单前台槽/共享额度/失败分型）+ 回传 findings 绑来源逐字 quote（禁预消化结论）+ 存在事实清单改 manifest 渲染（自模型漂移机制化对治）。P0=manifest 扫描渲染/dispatch 工具/browser_reader 迁移首个 worker。
+- 待人工验收与待做不变（QQ 扫码、P1、观察器、深海 UI、对话内检索、见闻通道、v0.4+分寸首思辨、身体层复测；A05/A02、tests 旧路径适配 user/），详见 git log。
 - 雷：本机无 `timeout`、无 Chrome；`dist/` 与 `user/` 不入库；PR 走 compare 页手动建；推送等用户明确指示；**活库元先验待下次人格重装种入**。
