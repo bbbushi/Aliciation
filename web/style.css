@@ -556,3 +556,20 @@ html[data-motion-paused=true] *, html[data-motion-paused=true] *::before, html[d
 .chat[inert] .chat-atmosphere *, .chat[inert] .chat-atmosphere *::before { animation-play-state: paused !important; }
 html:not([data-motion=on]) *, html:not([data-motion=on]) *::before, html:not([data-motion=on]) *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce), (forced-colors: active) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* claude-agent 权限质询面板（分支限定 ytq） */
+.claude-gate-panel { position: fixed; right: 16px; bottom: 16px; width: 340px; max-width: calc(100vw - 32px);
+  background: var(--panel, #101820); border: 1px solid #A8579B; border-radius: 10px; padding: 12px;
+  z-index: 300; box-shadow: 0 6px 24px rgba(0,0,0,.4); font-size: 13px; color: var(--text, #dde); }
+.claude-gate-title { font-weight: 600; margin-bottom: 8px; color: #A8579B; }
+.claude-gate-card { border: 1px solid rgba(168,87,155,.4); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.claude-gate-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.claude-gate-tool { color: #889; font-size: 12px; }
+.claude-gate-input { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; margin-bottom: 4px; }
+.claude-gate-hint { color: #99a; font-size: 12px; margin-bottom: 4px; }
+.claude-gate-actions { display: flex; gap: 6px; }
+.claude-gate-btn { flex: 1; padding: 4px 6px; border-radius: 6px; border: 1px solid #556; background: transparent;
+  color: inherit; cursor: pointer; }
+.claude-gate-btn:hover { border-color: #A8579B; }
+.claude-gate-deny:hover { border-color: #C44E52; color: #C44E52; }
+.claude-gate-note { color: #889; font-size: 12px; margin-top: 6px; min-height: 1em; }
