@@ -615,7 +615,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
-            if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download", "/api/worker-task-settings")
+            if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download",
+                         "/api/worker-task-settings", "/api/worker-permissions/answer")
                     or path.startswith("/api/worker-tasks/")):
                 self._worker_route(path)
                 return
