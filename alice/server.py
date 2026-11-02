@@ -325,6 +325,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                         return
                 elif path == "/api/collaborators" and not query:
                     result = svc.collaborators()
+                elif path == "/api/worker-permissions/list" and not query:
+                    result = svc.worker_permissions("list")
                 elif path == "/api/worker-tasks":
                     if set(query) - {"limit", "before", "archived"} or any(len(v) != 1 for v in query.values()):
                         raise ValueError("分页参数无效")
@@ -470,7 +472,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.chat_activity())
             elif path == "/api/connectors/qq":
                 self._connector_route()
-            elif path in ("/api/collaborators", "/api/worker-tasks"):
+            elif path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list"):
                 self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
