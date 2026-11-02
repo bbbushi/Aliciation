@@ -296,8 +296,18 @@ class WorkerChatSession:
                 return False
         policy = store.conn.execute("SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
         revision = self.request.get("worker_policy_revision")
-        return (policy is not None and bool(policy["enabled"]) and type(revision) is int
-                and policy["revision"] == revision)
+        dsh_ok = (policy is not None and bool(policy["enabled"]) and type(revision) is int
+                  and policy["revision"] == revision)
+        if dsh_ok:
+            return True
+        # claude-agent 轨（分支限定）：claude_policy 启用且请求绑定其 revision 时等效授权。
+        try:
+            cp = store.conn.execute(
+                "SELECT revision,enabled FROM claude_policy WHERE id=1").fetchone()
+        except Exception:
+            return False
+        return (cp is not None and bool(cp["enabled"]) and type(revision) is int
+                and cp["revision"] == revision)
 
     def _read_locked(self, envelope, payload, context, store):
         task_id = _identity(envelope.get("task_id"))

@@ -214,6 +214,15 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         from .worker_tools import WorkerChatSession
         session = WorkerChatSession(self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']})
         session.available_workers = {'dsh-agent': dsh_enabled, 'claude-agent': claude_enabled}
+        if claude_enabled and not dsh_enabled:
+            # 仅 claude 轨启用时，绑定的政策 revision 用 claude_policy 的（授权检查按工人对表）。
+            try:
+                cp_rev = self.ledger.store.conn.execute(
+                    'SELECT revision FROM claude_policy WHERE id=1').fetchone()
+                if cp_rev is not None:
+                    session.request['worker_policy_revision'] = cp_rev['revision']
+            except Exception:
+                pass
         return session
 
     def begin_shutdown(self):
