@@ -316,6 +316,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     elif path in {"/api/worker-tasks/" + action for action in
                                   ("detail", "events", "cancel", "review", "revoke", "archive", "restore", "delete")}:
                         result = svc.worker_tasks(path.rsplit("/", 1)[1], payload)
+                    elif path == "/api/worker-permissions/list":
+                        result = svc.worker_permissions("list")
+                    elif path == "/api/worker-permissions/answer":
+                        result = svc.worker_permissions("answer", payload)
                     else:
                         self._json({"error": "not found"}, 404)
                         return

@@ -372,6 +372,21 @@ class ChatService:
         """GUI-only archive/delete preferences, separate from execution grants."""
         return self._workers.management_settings(payload)
 
+    def worker_permissions(self, action: str = "list", payload=None) -> dict:
+        """claude-agent 质询文件袋（分支限定 ytq）：list 挂起质询 / answer 三层答案。"""
+        from addons.claude_agent.permission_gate import claude_policy_row, claude_gate_dir, list_pending, answer
+        row = claude_policy_row(self._workers.ledger.store)
+        gate_dir = claude_gate_dir(row)
+        if gate_dir is None:
+            return {"pending": [], "note": "claude-agent 未配置工作目录或未迁移，质询通道未启用"}
+        if action == "list":
+            return {"pending": list_pending(gate_dir)}
+        if action == "answer":
+            if not isinstance(payload, dict):
+                raise ValueError("答案请求必须是对象")
+            return answer(gate_dir, payload)
+        raise ValueError("action 无效")
+
     def worker_inputs(self, payload=None) -> dict:
         """No user file may be imported until the DSH permission profile exists."""
         return self._workers.unavailable()
