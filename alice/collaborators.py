@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from .channels import ChannelError
 from .worker_tasks import ACTIVE, WorkerLedger, bounded_int
@@ -91,6 +92,19 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         task = self.ledger.task(task_id, epoch)
         if task['state'] in ACTIVE | {'unknown'}:
             self.cancel_attempted.discard(task_id)
+            # 本地轨（claude-agent）：不进 DSH 的 stopping/unknown 语义——执行线程
+            # 在本进程内，取消即收敛终态（transport 已死则直接判 failed 收尾）。
+            if task['bridge_instance'] == 'local:claude-agent':
+                now = time.time()
+                self.ledger.conn.execute(
+                    'UPDATE worker_tasks SET cancel_requested=1,state=?,updated_at=?,version=version+1 '
+                    'WHERE task_id=?', ('cancelled', now, task_id))
+                self.ledger.conn.execute(
+                    "UPDATE worker_attempts SET state='cancelled',updated_at=? WHERE task_id=? "
+                    "AND state IN ('queued','starting','running')", (now, task_id))
+                self.ledger.event(task_id, 'run_stopped', payload={
+                    'text': '已取消（claude 本地任务）：本地执行已停止，已消耗费用不作保证。'})
+                return {'task_id': task_id, 'cancel_requested': True, 'termination_confirmed': True}
             queued = task['state'] == 'queued'
             self.ledger.conn.execute('UPDATE worker_tasks SET cancel_requested=1,state=?,agent_idle=? WHERE task_id=?',
                                      ('cancelled' if queued else 'stopping' if task['state'] != 'unknown' else 'unknown',
