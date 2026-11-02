@@ -198,10 +198,23 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
     def prepare_chat_locked(self, request):
         if request.get('worker_target') is not None:
             self.validate_chat_target_locked(request)
-        if request.get('channel_id') != 'gui' or not self.ledger.policy()['enabled'] or self.closing or self.paused:
+        if request.get('channel_id') != 'gui' or self.closing or self.paused:
+            return None
+        # 任一工人政策启用即挂载协作工具（各工人在 runtime 分派时各自核验）。
+        dsh_enabled = bool(self.ledger.policy()['enabled'])
+        claude_enabled = False
+        try:
+            row = self.ledger.store.conn.execute(
+                'SELECT enabled FROM claude_policy WHERE id=1').fetchone()
+            claude_enabled = bool(row and row['enabled'])
+        except Exception:
+            pass  # 未迁移（无 claude_policy 表）时视为未启用
+        if not dsh_enabled and not claude_enabled:
             return None
         from .worker_tools import WorkerChatSession
-        return WorkerChatSession(self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']})
+        session = WorkerChatSession(self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']})
+        session.available_workers = {'dsh-agent': dsh_enabled, 'claude-agent': claude_enabled}
+        return session
 
     def begin_shutdown(self):
         self.closing = True

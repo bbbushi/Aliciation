@@ -180,6 +180,18 @@ class WorkerChatSession:
         self.request = copy.deepcopy(request)
         self.target = normalize_worker_target(self.request.get('worker_target'))
         self.tools = copy.deepcopy(TOOLS) if self.request.get("channel_id") == "gui" else []
+        # 名单化：按协调器提供的可用工人过滤 dispatch 枚举（禁用的工人不进模型视野）。
+        available = getattr(self, "available_workers", None)
+        if available:
+            names = [n for n in ("dsh-agent", "claude-agent") if available.get(n)]
+            for tool in self.tools:
+                if tool["function"]["name"] == "dispatch_worker":
+                    props = tool["function"]["parameters"]["properties"]
+                    props["name"]["enum"] = names
+                    props["name"]["description"] = (
+                        "协作者名；当前可用：" + "、".join(names)
+                        + "（claude-agent=本机终端直调，权限经宿主闸门质询，非 OS 沙箱）"
+                          if "claude-agent" in names else "协作者名；当前可用：" + "、".join(names))
         if self.target is not None:
             task_id = self.target['task_id']
             self.tools = [tool for tool in self.tools if tool['function']['name'] != 'dispatch_worker']
@@ -197,7 +209,8 @@ class WorkerChatSession:
     def description(self):
         description = (
             "协作工具只在本机 GUI 配对及授权有效时提供。用户允许的任务目录、原生工作模式和执行次数由宿主控制，"
-            "工具不能扩大授权；DSH 原生模式不是操作系统读取或网络沙箱。"
+            "工具不能扩大授权；DSH 原生模式不是操作系统读取或网络沙箱；"
+            "claude-agent 的权限质询闸门也不是操作系统沙箱，产物以任务目录收取为准。"
             "任务使用 GUI 已授权目录中的文件，以相对路径指明；input_ids 文件导入和自动附件下载尚未开放。"
             "dispatch/send 回执只表示准入，先查状态，再用 worker_task_read 有界读取公开消息；"
             "GUI 自动协作通知仅供用户展示，不自动进入你的对话上下文；用户要求解读通知时先查状态并读取对应任务。"
