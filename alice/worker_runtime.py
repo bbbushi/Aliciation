@@ -587,9 +587,15 @@ class WorkerRuntime(WorkerReportsMixin):
         不触碰 bridge/session 语义（bridge_instance 记 'local:claude-agent'）。
         预算帽硬断：本次派工前核验当日已花是否超 claude_policy.budget_usd_per_day。
         """
-        spent = self.ledger.conn.execute(
-            "SELECT COALESCE(SUM(CAST(json_extract(payload,'$.cost_usd') AS REAL)),0) "
-            "FROM worker_events WHERE type='claude_completed' AND ts>=?", (day_start(),)).fetchone()[0]
+        spent = 0.0
+        for row in self.ledger.conn.execute(
+                "SELECT payload FROM worker_events WHERE type='claude_completed' AND observed_at>=?",
+                (day_start(),)):
+            try:
+                spent += float(json.loads(json.loads(row['payload']).get('summary') or '{}')
+                               .get('cost_usd') or 0)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
         if spent >= cp['budget_usd_per_day']:
             raise ChannelError(409, 'quota_exhausted',
                                f'claude-agent 当日预算已用完（已花 ${spent:.2f} / 帽 ${cp["budget_usd_per_day"]:.2f}）')
@@ -613,12 +619,13 @@ class WorkerRuntime(WorkerReportsMixin):
         from addons.claude_agent.permission_gate import claude_gate_dir
         now = time.time()
         attempt_id = uuid.uuid4().hex
+        message_id = uuid.uuid4().hex  # 正典 attempts.message_id NOT NULL：claude 轨用独立 ID 占位
         sandbox = Path(cp['workspace_root']).resolve() / f"claude_task_{task_id[:8]}"
         gate_dir = claude_gate_dir(cp)
         with self.service._lock, self.ledger.conn:
             self.ledger.conn.execute(
-                'INSERT INTO worker_attempts(attempt_id,task_id,state,created_at,updated_at,request_id) '
-                'VALUES(?,?,?,?,?,?)', (attempt_id, task_id, 'starting', now, now, task_id))
+                'INSERT INTO worker_attempts(attempt_id,task_id,message_id,state,created_at,updated_at,request_id) '
+                'VALUES(?,?,?,?,?,?,?)', (attempt_id, task_id, message_id, 'starting', now, now, task_id))
             self.ledger.conn.execute("UPDATE worker_tasks SET state='starting' WHERE task_id=?", (task_id,))
             self.ledger.event(task_id, 'run_started', attempt_id=attempt_id,
                               payload={'text': 'claude-agent 本地执行开始。'})
@@ -648,11 +655,15 @@ class WorkerRuntime(WorkerReportsMixin):
             usage = payload.get('usage', {}) or {}
             cost = round(float(payload.get('total_cost_usd') or 0), 4)
             with self.service._lock, self.ledger.conn:
+                # 正典 event() 的 payload 白名单只有 text/summary/tool_name——
+                # 计费字段编码进 summary（结构化 JSON 串），供日预算查询与 GUI 展示。
                 self.ledger.event(task_id, 'claude_completed', attempt_id=attempt_id,
                                   payload={'text': safe_text(str(payload.get('result')), 4000),
-                                           'cost_usd': cost,
-                                           'output_tokens': usage.get('output_tokens'),
-                                           'num_turns': payload.get('num_turns')})
+                                           'summary': json.dumps(
+                                               {'cost_usd': cost,
+                                                'output_tokens': usage.get('output_tokens'),
+                                                'num_turns': payload.get('num_turns')},
+                                               ensure_ascii=False)})
                 state = 'succeeded' if payload.get('status') == 'succeeded' else 'failed'
                 self._finish_locked(task_id, attempt_id, state, idle=True,
                                     text=f'claude-agent 完成（${cost}）。' if state == 'succeeded'
