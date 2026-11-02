@@ -450,6 +450,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("worker-tasks.js", "application/javascript; charset=utf-8")
             elif path == "/worker-tasks.css":
                 self._file("worker-tasks.css", "text/css; charset=utf-8")
+            elif path == "/assets/dsh-avatar-a-v1.png":
+                self._file("assets/dsh-avatar-a-v1.png", "image/png")
+            elif path == "/assets/dsh-avatar-small-v1.png":
+                self._file("assets/dsh-avatar-small-v1.png", "image/png")
             elif path == "/discovery.css":
                 self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
@@ -671,7 +675,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "请从本机 GUI 聊天；适配器使用渠道接口", "code": "gui_only"}, 403)
                     return
                 body = self._body()
-                if set(body) - {"text", "evaluation_id", "request_id", "session_epoch", "search_intent"} or not isinstance(body.get("text"), str):
+                if set(body) - {"text", "evaluation_id", "request_id", "session_epoch", "search_intent", "worker_target"} or not isinstance(body.get("text"), str):
                     raise ValueError("聊天请求无效")
                 text = body["text"].strip()
                 evaluation_id = body.get("evaluation_id")
@@ -686,7 +690,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 else:
                     self._sse_chat(text, evaluation_id=evaluation_id,
                                    request_id=body.get("request_id"), session_epoch=body.get("session_epoch"),
-                                   search_intent=body.get("search_intent"))
+                                   search_intent=body.get("search_intent"), worker_target=body.get("worker_target"))
             elif path == "/api/metrics/toggle":
                 body = self._body()
                 module, on = str(body.get("module") or ""), bool(body.get("on"))
@@ -739,7 +743,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         # ---------- SSE 流式对话 ----------
 
-        def _sse_chat(self, text: str, *, evaluation_id=None, request_id=None, session_epoch=None, search_intent=None) -> None:
+        def _sse_chat(self, text: str, *, evaluation_id=None, request_id=None, session_epoch=None,
+                      search_intent=None, worker_target=None) -> None:
             connected = True
             started = False
 
@@ -782,12 +787,13 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     request_id=request_id, session_epoch=session_epoch,
                     nonblocking=True, on_accepted=start,
                     search_intent=search_intent, on_search_progress=lambda info: emit({"type": "search", **info}),
+                    worker_target=worker_target,
                 )
                 for line in result["events"]:
                     emit({"type": "meta", "text": line})
                 emit({"type": "done", "reply": result["reply"], "memory": result["memory"],
                       "evaluation_id": result.get("evaluation_id"),
-                      **{key: result.get(key) for key in ("request_id", "session_epoch", "user_turn_id", "assistant_turn_id")}})
+                      **{key: result.get(key) for key in ("request_id", "session_epoch", "user_turn_id", "assistant_turn_id", "worker_target")}})
             except ChannelError as exc:
                 if not started:
                     self._channel_error(exc)

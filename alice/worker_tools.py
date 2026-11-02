@@ -12,7 +12,7 @@ import re
 import sqlite3
 import time
 
-from .channels import ChannelError
+from .channels import ChannelError, normalize_worker_target
 from .worker_context import merge_worker_refs
 
 
@@ -177,11 +177,24 @@ class WorkerChatSession:
     def __init__(self, coordinator, request):
         self.coordinator = coordinator
         self.request = copy.deepcopy(request)
+        self.target = normalize_worker_target(self.request.get('worker_target'))
         self.tools = copy.deepcopy(TOOLS) if self.request.get("channel_id") == "gui" else []
+        if self.target is not None:
+            task_id = self.target['task_id']
+            self.tools = [tool for tool in self.tools if tool['function']['name'] != 'dispatch_worker']
+            for tool in self.tools:
+                function = tool['function']
+                properties = function['parameters']['properties']
+                if function['name'] == 'worker_task_status':
+                    properties['task_ids']['items'] = {**properties['task_ids']['items'], 'enum': [task_id]}
+                    properties['task_ids']['maxItems'] = 1
+                    properties['task_ids']['description'] = '省略或空数组时仅查询本轮引用任务。'
+                elif 'task_id' in properties:
+                    properties['task_id'] = {**properties['task_id'], 'enum': [task_id]}
         self._bound_context = None
 
     def description(self):
-        return (
+        description = (
             "协作工具只在本机 GUI 配对及授权有效时提供。用户允许的任务目录、原生工作模式和执行次数由宿主控制，"
             "工具不能扩大授权；DSH 原生模式不是操作系统读取或网络沙箱。"
             "任务使用 GUI 已授权目录中的文件，以相对路径指明；input_ids 文件导入和自动附件下载尚未开放。"
@@ -195,6 +208,12 @@ class WorkerChatSession:
             "同任务补充使用 send_worker_message；状态 unknown 或发送响应丢失时不要重发。"
             "停止请求不是停止证明，费用未知不作零。requested_outputs 只是期望，未经收取核验不得声称产物已交付。"
         )
+        if self.target is not None:
+            description += ("\n本轮用户显式引用的协作目标为：" + json.dumps(self.target, ensure_ascii=False)
+                            + "。本轮仅可对这个任务查询状态、有界读取、补充或请求停止，不能另建任务或操作其他任务。"
+                            "引用只绑定目标，不表示已读取其正文；需要内容时仍须显式 worker_task_read。"
+                            "引用不会清除既有任务或网页来源依赖，也不保证当前状态允许继续发送。")
+        return description
 
     def bind_context_locked(self, source_context):
         """Bind one call to host-owned dependency IDs, never report bodies."""
@@ -222,6 +241,16 @@ class WorkerChatSession:
             return {**envelope, "payload": {"result": {"error": "worker_context_unbound"}}}
         try:
             args = _arguments(name, arguments)
+            if self.target is not None:
+                task_id = self.target['task_id']
+                if name == 'dispatch_worker':
+                    raise ValueError('worker_target_bound')
+                if name == 'worker_task_status':
+                    if any(value != task_id for value in args.get('task_ids', [])):
+                        raise ValueError('worker_target_mismatch')
+                    args['task_ids'] = [task_id]
+                elif args.get('task_id') != task_id:
+                    raise ValueError('worker_target_mismatch')
             if not isinstance(tool_call_id, str) or not 1 <= len(tool_call_id) <= 200:
                 raise ValueError("invalid_tool_call_id")
         except (ValueError, TypeError, UnicodeError) as error:
@@ -246,6 +275,11 @@ class WorkerChatSession:
         if (self.request.get("channel_id") != "gui" or context.get("scope") != "gui"
                 or self.request.get("session_epoch") != store.meta_get("session_epoch")):
             return False
+        if self.target is not None:
+            try:
+                self.coordinator.validate_chat_target_locked(self.request)
+            except ChannelError:
+                return False
         policy = store.conn.execute("SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
         revision = self.request.get("worker_policy_revision")
         return (policy is not None and bool(policy["enabled"]) and type(revision) is int
@@ -253,6 +287,8 @@ class WorkerChatSession:
 
     def _read_locked(self, envelope, payload, context, store):
         task_id = _identity(envelope.get("task_id"))
+        if self.target is not None and task_id != self.target['task_id']:
+            raise ValueError('worker_target_mismatch')
         refs = merge_worker_refs(payload.get("worker_refs", []))
         if len(refs) > envelope["limit"] or any(ref["task_id"] != task_id for ref in refs):
             raise ValueError("invalid_read_refs")
@@ -316,6 +352,11 @@ class WorkerChatSession:
             if not isinstance(payload, dict):
                 raise ValueError("invalid_tool_result")
             metadata = _metadata(payload.get("result", {}))
+            if self.target is not None:
+                task_id = self.target['task_id']
+                if (metadata.get('task_id') not in (None, task_id)
+                        or any(item.get('task_id') != task_id for item in metadata.get('tasks', []))):
+                    raise ValueError('worker_target_mismatch')
             if envelope["tool"] == "worker_task_read" and not metadata.get("error"):
                 result = self._read_locked(envelope, payload, source_context, store)
             elif payload.get("worker_refs"):

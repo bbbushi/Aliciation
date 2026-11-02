@@ -7,7 +7,7 @@
   const endedStates = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
   const managementNames = { archive: "归档", restore: "恢复", delete: "删除" };
   const states = { unverified: "接口未核实", unavailable: "未接入", unauthorized: "未授权", disabled: "未授权",
-    ready: "可用", connected: "已配对", disconnected: "未配对", connecting: "正在配对", paused: "已暂停", draining: "正在断开", uncertain: "连接待确认", enabled: "已授权", blocked_permission_profile: "连接与权限待核实", queued: "排队", starting: "准备", preparing: "准备", running: "工作中", working: "工作中", collecting: "收取产物", waiting: "等待补充", waiting_input: "等待补充",
+    ready: "可用", connected: "已连接", disconnected: "未连接", connecting: "正在连接", paused: "已暂停", draining: "正在断开", uncertain: "连接待确认", enabled: "已授权", blocked_permission_profile: "连接与权限待核实", queued: "排队", starting: "准备", preparing: "准备", running: "工作中", working: "工作中", collecting: "收取产物", waiting: "等待补充", waiting_input: "等待补充",
     stopping: "正在停止", completed: "已结束", succeeded: "已结束", failed: "失败", interrupted: "中断", unknown: "状态未知", cancelled: "已停止", stopped: "已停止", revoked: "正文已撤销" };
   const eventNames = { task_accepted: "宿主已接收任务", run_started: "开始执行", alice_message_queued: "任务消息已登记，等待发送",
     alice_message_sent: "Alice → DSH", agent_message_delta: "DSH → Alice · 公开回复", agent_message_completed: "DSH → Alice · 公开回复",
@@ -20,9 +20,70 @@
   let eventCursor = 0, eventMore = false, listBusy = false, actionBusy = false, policyDirty = false;
   let archivedView = false, listGeneration = 0, listDepth = 40, management = null, taskSettingsDirty = false;
   let taskSignature = "", artifactSignature = "", following = true, savedListScroll = 0;
-  let controlGeneration = 0;
+  let controlGeneration = 0, dispatchWatchUntil = 0;
   const tasks = new Map(), seen = new Map(), eventNodes = new Map(), messageNodes = new Map();
   const controllers = new Set();
+  const readPrefix = "alice.collaborator-read.v1.dsh-agent.";
+  const readIdentity = /^[A-Za-z0-9_-]{16,128}$/;
+  function readKey(taskId) {
+    return typeof epoch === "string" && readIdentity.test(epoch) && typeof taskId === "string" && readIdentity.test(taskId)
+      ? `${readPrefix}${epoch}.${taskId}` : null;
+  }
+  function readValue(value) {
+    // -1 is a deletion marker: another tab's late response cannot revive it.
+    if (value === "-1") return -1;
+    if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(value)) return 0;
+    const sequence = Number(value);
+    return Number.isSafeInteger(sequence) ? sequence : 0;
+  }
+  function savedRead(taskId) {
+    const key = readKey(taskId);
+    try { return key ? readValue(localStorage.getItem(key)) : 0; }
+    catch { return 0; } // Reading still works when browser storage is unavailable.
+  }
+  function readThrough(taskId) {
+    if (!seen.has(taskId)) seen.set(taskId, savedRead(taskId));
+    return Math.max(0, seen.get(taskId) || 0);
+  }
+  function markSeen(taskId, sequence) {
+    const key = readKey(taskId);
+    if (!key || !Number.isSafeInteger(sequence) || sequence < 0) return;
+    const saved = savedRead(taskId), previous = seen.get(taskId) || 0;
+    if (saved === -1 || previous === -1) { seen.set(taskId, -1); return; }
+    const next = Math.max(saved, previous, sequence);
+    seen.set(taskId, next);
+    if (next > saved) {
+      try { localStorage.setItem(key, String(next)); } catch { /* Keep this page's read position. */ }
+    }
+  }
+  function forgetSeen(taskId) {
+    const key = readKey(taskId);
+    seen.set(taskId, -1);
+    try { if (key) localStorage.setItem(key, "-1"); } catch { /* No task text is stored here. */ }
+  }
+  function canReadSelected(taskId) {
+    return opened && selection === taskId && !stopped && !document.hidden && !settingsOpened
+      && !app.inert && !panel.inert && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
+      && !$("workers-detail").classList.contains("hidden") && panel.getClientRects().length > 0;
+  }
+  function markVisibleRead() {
+    if (!canReadSelected(selection) || !following || eventMore || $("workers-history").open
+        || !selectedTask || eventCursor < Number(selectedTask.last_sequence || 0)) return;
+    markSeen(selection, eventCursor); renderList();
+  }
+  window.addEventListener("storage", (event) => {
+    if (!epoch) return;
+    try { if (event.storageArea !== localStorage) return; } catch { return; }
+    if (event.key === null) { seen.clear(); renderList(); return; }
+    const prefix = `${readPrefix}${epoch}.`;
+    if (!event.key.startsWith(prefix)) return;
+    const taskId = event.key.slice(prefix.length);
+    if (!readIdentity.test(taskId)) return;
+    if (event.newValue === null) seen.delete(taskId);
+    else if (readValue(event.newValue) === -1 || seen.get(taskId) === -1) forgetSeen(taskId);
+    else markSeen(taskId, readValue(event.newValue));
+    renderList();
+  });
   const node = (tag, value, cls) => { const n = document.createElement(tag); if (value !== undefined) n.textContent = String(value); if (cls) n.className = cls; return n; };
   const show = (id, yes) => $(id).classList.toggle("hidden", !yes);
   const text = (id, value) => { if ($(id).textContent !== String(value)) $(id).textContent = String(value); };
@@ -31,12 +92,366 @@
   const visible = () => !stopped && !document.hidden && (settingsOpened || !app.classList.contains("hidden"));
   const current = (id, generation, session) => opened && !$("workers-detail").classList.contains("hidden") && selection === id && generation === viewGeneration && session === epoch;
   const id = () => crypto.randomUUID();
+  function taskContentState(task = {}) {
+    const reasons = {
+      revoked: ["正文已撤销", "任务正文已撤销，仅保留任务状态事实。"],
+      deleted: ["任务已删除", "任务已删除，正文不再可用。"],
+      expired: ["资料已过期", "任务资料已过期，正文不再可用。"],
+      policy_changed: ["授权范围已变更", "任务正文所属的授权范围已变更，旧正文不再可用。"],
+      authorization_disabled: ["待恢复授权", "授权已关闭，正文暂不可用；恢复原授权后可重新读取仍有效的资料。"]
+    };
+    const reason = typeof task.content_unavailable_reason === "string" ? task.content_unavailable_reason
+      : task.state === "revoked" ? "revoked" : null;
+    const unavailable = !!reason || task.content_available === false
+      || task.content_available !== true && task.content_revoked === true;
+    const description = reasons[reason] || ["正文暂不可用", "正文当前不可用，请同步授权状态后再查看。"];
+    return { available: !unavailable, reason, label: unavailable ? description[0] : "", message: description[1] };
+  }
   function status(message, error = false) {
     for (const name of ["workers-status", "workers-settings-status"]) {
-      text(name, message); $(name).dataset.error = String(error);
+      text(name, message); $(name).dataset.error = String(error); $(name).title = message;
     }
   }
   function invalidateChatSources() { window.dispatchEvent(new Event("alice:sources-changed")); }
+  function avatarSizeHint(button) {
+    return `双击${button.dataset.size === "small" ? "放大" : "缩小"}头像`;
+  }
+  function setupAvatarDrag(button) {
+    const area = button.closest(".chat-conversation");
+    const art = button.querySelector(".collaborator-avatar-art");
+    const visualParts = [art, $("workers-avatar-status"), $("workers-count")];
+    const portraits = [...button.querySelectorAll(".collaborator-avatar-image")];
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const storageKey = `alice.collaborator-position.v1.${button.dataset.worker}`;
+    const clamp = (n) => Math.max(0, Math.min(1, n));
+    const doubleClickMs = 500;
+    let position = { x: 1, y: 1 }, drag = null, suppressClick = false, frame = null;
+    let clickTimer = null, pendingClick = null, workBaseline = null;
+    let sizeAnimations = [], areaWidth = area.clientWidth, areaHeight = area.clientHeight;
+    const interactive = () => !stopped && !document.hidden && !button.closest("[inert]")
+      && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
+      && button.getClientRects().length > 0 && getComputedStyle(button).visibility !== "hidden";
+    function clearClick() {
+      clearTimeout(clickTimer); clickTimer = null; pendingClick = null;
+    }
+    function activate() { if (interactive()) opened ? close() : open(); }
+    function stopSizeMotion() {
+      for (const animation of sizeAnimations) animation.cancel();
+      sizeAnimations = [];
+    }
+    function cancelInteraction() { finish(true); stopSizeMotion(); }
+    function setSize(size) {
+      if (button.dataset.size === size) return;
+      // Capture an in-flight transition before cancelling it, so reversing the
+      // size change starts at the current visual position and opacity.
+      const before = button.getBoundingClientRect();
+      const beforeParts = visualParts.map((part) => part.getBoundingClientRect());
+      const opacity = portraits.map((image) => getComputedStyle(image).opacity);
+      stopSizeMotion();
+      clearClick(); finish(true);
+      button.dataset.size = size;
+      text("workers-avatar-help", `拖动调整位置；单击或 Enter 打开会话；${avatarSizeHint(button)}。`);
+      renderList(); place();
+      const after = button.getBoundingClientRect();
+      const afterParts = visualParts.map((part) => part.getBoundingClientRect());
+      if (reducedMotion.matches || typeof button.animate !== "function" || !interactive()
+          || !before.width || !before.height || !after.width || !after.height) return;
+      // Commit layout once, then animate only transform/opacity. Drag bounds
+      // and ResizeObserver never have to follow an interpolated layout size.
+      const timing = { duration: 240, easing: "cubic-bezier(.22, 1, .36, 1)" };
+      const dx = before.left - after.left, dy = before.top - after.top;
+      const animations = [button.animate([
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: "none" },
+      ], timing)];
+      // Scale only the square portrait, uniformly. Labels and badges move
+      // between their old/new positions without stretching their text.
+      visualParts.forEach((part, index) => {
+        const from = beforeParts[index], to = afterParts[index];
+        if (!from.width || !from.height || !to.width || !to.height) return;
+        const scale = part === art ? from.width / to.width : 1;
+        animations.push(part.animate([
+          { transform: `translate(${from.left - to.left - dx}px, ${from.top - to.top - dy}px) scale(${scale})` },
+          { transform: "none" },
+        ], timing));
+      });
+      portraits.forEach((image, index) => {
+        animations.push(image.animate([{ opacity: opacity[index] }, { opacity: getComputedStyle(image).opacity }], timing));
+      });
+      sizeAnimations = animations;
+      animations[0].onfinish = () => { if (sizeAnimations === animations) stopSizeMotion(); };
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        position = { x: clamp(saved.x), y: clamp(saved.y) };
+      }
+    } catch { /* Position storage is optional, including in private browsing. */ }
+    function bounds() {
+      const width = area.clientWidth, height = area.clientHeight;
+      if (!width || !height || !button.offsetWidth || !button.offsetHeight) return null;
+      if (width < button.offsetWidth || height < button.offsetHeight) return null;
+      const insetX = Math.min(12, Math.max(0, (width - button.offsetWidth) / 2));
+      const insetY = Math.min(12, Math.max(0, (height - button.offsetHeight) / 2));
+      return { left: insetX, top: insetY,
+        width: Math.max(0, width - button.offsetWidth - insetX * 2),
+        height: Math.max(0, height - button.offsetHeight - insetY * 2) };
+    }
+    function place() {
+      const box = bounds();
+      // A collapsed conversation must not leave the avatar over the composer.
+      // Visibility preserves its size, so the next resize can restore it.
+      button.style.visibility = box ? "" : "hidden";
+      if (!box) return;
+      button.style.left = `${box.left + position.x * box.width}px`;
+      button.style.top = `${box.top + position.y * box.height}px`;
+      button.style.right = "auto"; button.style.bottom = "auto";
+    }
+    function move(left, top, box) {
+      position = { x: box.width ? clamp((left - box.left) / box.width) : position.x,
+        y: box.height ? clamp((top - box.top) / box.height) : position.y };
+      place();
+    }
+    function save() {
+      try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* Drag still works. */ }
+    }
+    function finish(cancelled = false) {
+      if (cancelled) clearClick();
+      if (!drag) return;
+      const ended = drag; drag = null;
+      button.dataset.dragging = "false";
+      if (cancelled) suppressClick = true;
+      if (ended.moved) {
+        clearClick();
+        suppressClick = true;
+        if (cancelled) position = ended.position;
+        else save();
+      }
+      if (button.hasPointerCapture(ended.pointerId)) button.releasePointerCapture(ended.pointerId);
+      place();
+    }
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !event.isPrimary || drag || button.closest("[inert]")) return;
+      stopSizeMotion();
+      const box = bounds();
+      if (!box) return;
+      // Hold a pending single click while a possible second press is down.
+      clearTimeout(clickTimer);
+      suppressClick = false;
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+        left: box.left + position.x * box.width, top: box.top + position.y * box.height,
+        position: { ...position }, moved: false, box };
+      try { button.setPointerCapture(event.pointerId); } catch { drag = null; }
+    });
+    button.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (button.closest("[inert]") || !bounds()) { finish(true); return; }
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      clearClick();
+      drag.moved = true; button.dataset.dragging = "true";
+      event.preventDefault();
+      move(drag.left + dx, drag.top + dy, drag.box);
+    });
+    button.addEventListener("pointerup", (event) => {
+      if (drag && event.pointerId === drag.pointerId) finish();
+    });
+    for (const name of ["pointercancel", "lostpointercapture"]) {
+      button.addEventListener(name, (event) => { if (drag?.pointerId === event.pointerId) finish(true); });
+    }
+    button.addEventListener("click", (event) => {
+      if (suppressClick && (event.detail !== 0 || event.pointerType)) {
+        suppressClick = false; clearClick(); event.preventDefault(); event.stopImmediatePropagation(); return;
+      }
+      if (!interactive()) { clearClick(); return; }
+      if (event.detail === 0 && !event.pointerType) { clearClick(); activate(); return; }
+      const now = performance.now(), pointerType = event.pointerType || "mouse";
+      if (pendingClick && now - pendingClick.at <= doubleClickMs && pendingClick.pointerType === pointerType
+          && Math.hypot(event.clientX - pendingClick.x, event.clientY - pendingClick.y) <= 12) {
+        event.preventDefault();
+        setSize(button.dataset.size === "small" ? "large" : "small"); return;
+      }
+      clearClick();
+      pendingClick = { at: now, x: event.clientX, y: event.clientY, pointerType };
+      // Delay only pointer activation: a double click changes size without
+      // opening the conversation. The same gesture also supports touch taps.
+      clickTimer = setTimeout(() => { clearClick(); if (!drag) activate(); }, doubleClickMs);
+    }, true);
+    button.addEventListener("dblclick", (event) => event.preventDefault());
+    button.addEventListener("dragstart", (event) => event.preventDefault());
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") clearClick();
+      if (event.key === "Escape" && drag) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
+    });
+    const resize = new ResizeObserver(() => {
+      if (area.clientWidth !== areaWidth || area.clientHeight !== areaHeight) {
+        areaWidth = area.clientWidth; areaHeight = area.clientHeight; stopSizeMotion();
+      }
+      if (drag) finish(true);
+      cancelAnimationFrame(frame); frame = requestAnimationFrame(place);
+    });
+    resize.observe(area); resize.observe(button);
+    window.addEventListener("blur", cancelInteraction);
+    document.addEventListener("visibilitychange", () => { if (document.hidden) cancelInteraction(); });
+    window.addEventListener("pagehide", () => { cancelInteraction(); cancelAnimationFrame(frame); resize.disconnect(); });
+    window.addEventListener("pageshow", () => { resize.observe(area); resize.observe(button); place(); });
+    reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopSizeMotion(); });
+    place();
+    return {
+      cancel: cancelInteraction,
+      syncWork(data) {
+        const used = data.policy?.runs_used;
+        if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(data.revision)) return;
+        if (!workBaseline || workBaseline.epoch !== data.session_epoch || workBaseline.revision !== data.revision) {
+          workBaseline = { epoch: data.session_epoch, revision: data.revision, used }; return;
+        }
+        if (used > workBaseline.used) {
+          workBaseline.used = used;
+          setSize("large");
+          return true;
+        }
+      },
+    };
+  }
+  function renderAvatar(running = 0, unread = 0) {
+    const worker = registry?.collaborators?.find((row) => row.name === "dsh-agent");
+    // Registration controls which tools are represented; a temporary disconnect
+    // must not remove the entry needed to read that tool's existing sessions.
+    show("collaborator-dock", !!worker);
+    const button = $("workers-btn");
+    const paired = registry?.connection?.connected === true && worker?.available === true;
+    const statusLabel = !connected ? "状态待同步" : !paired ? "未连接" : running ? "工作中" : "已连接";
+    button.dataset.state = !connected ? "unknown" : !paired ? "disconnected" : running ? "working" : "connected";
+    button.dataset.unread = String(unread > 0);
+    text("workers-avatar-status", statusLabel);
+    text("workers-count", unread ? String(Math.min(unread, 99)) + (unread > 99 ? "+" : "") : "");
+    const details = [statusLabel, running ? `${running} 个任务运行中` : "", unread ? `${unread} 个任务未读` : ""].filter(Boolean).join("，");
+    button.setAttribute("aria-label", `${opened ? "收起" : "打开"} DSH 会话，${details}`);
+    button.title = `DSH · ${details}。单击查看会话，${avatarSizeHint(button)}，拖动调整位置。`;
+  }
+  function setupWorkerWindow() {
+    const handle = $("workers-window-handle"), dockButton = $("workers-window-dock");
+    const storageKey = "alice.collaborator-window.v1.dsh-agent";
+    const clamp = (n) => Math.max(0, Math.min(1, n));
+    let mode = "floating", position = { x: 1, y: 0.08 }, drag = null, suppressClick = false;
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) position = { x: clamp(saved.x), y: clamp(saved.y) };
+    } catch { /* Window placement is optional, local-only presentation state. */ }
+    function area() {
+      const style = getComputedStyle(app), nav = $("app-nav");
+      const gap = parseFloat(style.gap) || 0;
+      const left = (parseFloat(style.paddingLeft) || 0)
+        + (nav.getClientRects().length && getComputedStyle(nav).position !== "fixed" ? nav.offsetWidth + gap : 0);
+      const top = parseFloat(style.paddingTop) || 0;
+      return { left, top,
+        width: Math.max(0, app.clientWidth - left - (parseFloat(style.paddingRight) || 0)),
+        height: Math.max(0, app.clientHeight - top - (parseFloat(style.paddingBottom) || 0)) };
+    }
+    const dockWidth = () => Math.min(600, Math.max(420, app.clientWidth * 0.36));
+    function canDock() { const box = area(); return box.width - dockWidth() >= 460 && box.height >= 320; }
+    function save() {
+      try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* Still movable. */ }
+    }
+    function render() {
+      if (mode === "docked" && !canDock()) mode = "floating";
+      panel.dataset.presentation = mode;
+      app.classList.toggle("workers-docked", opened && mode === "docked");
+      dockButton.textContent = mode === "docked" ? "恢复浮窗" : "固定右侧";
+      dockButton.disabled = mode !== "docked" && !canDock();
+      dockButton.title = dockButton.disabled ? "窗口较窄，保留浮窗以免挤压主聊天" : mode === "docked" ? "移出侧栏，恢复浮动窗口" : "将此窗口固定在右侧";
+      if (!opened) return;
+      if (mode === "docked") {
+        for (const prop of ["left", "top", "right", "bottom", "width", "height", "maxWidth", "maxHeight"]) panel.style[prop] = "";
+        return;
+      }
+      const box = area();
+      if (!box.width || !box.height) return;
+      const width = Math.min(720, box.width), height = Math.min(660, box.height);
+      Object.assign(panel.style, { width: `${width}px`, height: `${height}px`, maxWidth: `${box.width}px`, maxHeight: `${box.height}px`,
+        right: "auto", bottom: "auto", left: `${box.left + position.x * (box.width - width)}px`,
+        top: `${box.top + position.y * (box.height - height)}px` });
+    }
+    function atRightEdge(event) {
+      const box = area(), rect = app.getBoundingClientRect();
+      const x = event.clientX - rect.left, y = event.clientY - rect.top;
+      return canDock() && x >= box.left + box.width - 32 && x <= app.clientWidth
+        && y >= box.top && y <= box.top + box.height;
+    }
+    function preview(yes) {
+      const box = area(), hint = $("workers-dock-preview");
+      if (yes) Object.assign(hint.style, { top: `${box.top}px`, right: `${app.clientWidth - box.left - box.width}px`,
+        height: `${box.height}px`, width: `${dockWidth()}px` });
+      show("workers-dock-preview", yes);
+    }
+    function finish(cancelled = false, event = null) {
+      if (!drag) return;
+      const ended = drag; drag = null;
+      panel.dataset.dragging = "false"; preview(false);
+      if (ended.moved) {
+        suppressClick = true;
+        if (cancelled) { mode = ended.mode; position = ended.position; }
+        else {
+          mode = event && atRightEdge(event) ? "docked" : "floating";
+          save();
+        }
+      }
+      if (handle.hasPointerCapture(ended.pointerId)) handle.releasePointerCapture(ended.pointerId);
+      render();
+    }
+    handle.addEventListener("pointerdown", (event) => {
+      if (!opened || drag || event.button !== 0 || !event.isPrimary || panel.closest("[inert]")) return;
+      // A cancelled gesture may have no trailing click. A new press starts fresh,
+      // including a press on the close/dock controls inside the drag handle.
+      suppressClick = false;
+      if (event.target.closest("button,a,input,select,textarea")) return;
+      const rect = panel.getBoundingClientRect();
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
+        mode, position: { ...position }, anchorX: clamp((event.clientX - rect.left) / rect.width),
+        anchorY: event.clientY - rect.top };
+      try { handle.setPointerCapture(event.pointerId); event.preventDefault(); } catch { drag = null; }
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!opened || panel.closest("[inert]") || !panel.getClientRects().length) { finish(true); return; }
+      if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
+      drag.moved = true; mode = "floating"; render(); panel.dataset.dragging = "true";
+      const box = area(), rect = app.getBoundingClientRect();
+      const width = Math.min(720, box.width), height = Math.min(660, box.height);
+      const left = event.clientX - rect.left - drag.anchorX * width;
+      const top = event.clientY - rect.top - Math.min(drag.anchorY, Math.max(0, height - 36));
+      position = { x: box.width > width ? clamp((left - box.left) / (box.width - width)) : position.x,
+        y: box.height > height ? clamp((top - box.top) / (box.height - height)) : position.y };
+      event.preventDefault(); render(); preview(atRightEdge(event));
+    });
+    handle.addEventListener("pointerup", (event) => {
+      if (drag?.pointerId === event.pointerId) finish(!!panel.closest("[inert]") || !opened, event);
+    });
+    for (const name of ["pointercancel", "lostpointercapture"]) {
+      handle.addEventListener(name, (event) => { if (drag?.pointerId === event.pointerId) finish(true); });
+    }
+    handle.addEventListener("click", (event) => {
+      if (suppressClick && (event.detail !== 0 || event.pointerType)) {
+        suppressClick = false; event.preventDefault(); event.stopImmediatePropagation();
+      }
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && drag) { event.preventDefault(); event.stopImmediatePropagation(); finish(true); }
+    }, true);
+    dockButton.onclick = () => {
+      if (!opened || dockButton.disabled) return;
+      finish(true); mode = mode === "docked" ? "floating" : "docked"; render();
+    };
+    window.addEventListener("blur", () => finish(true));
+    document.addEventListener("visibilitychange", () => { if (document.hidden) finish(true); });
+    window.addEventListener("pagehide", () => finish(true));
+    window.addEventListener("pageshow", render);
+    return {
+      open() { finish(true); mode = "floating"; render(); },
+      close() { finish(true); preview(false); app.classList.remove("workers-docked"); },
+      layout() { if (!drag) render(); }
+    };
+  }
   function resetList() {
     listGeneration++; listDepth = 40; nextBefore = null; savedListScroll = 0;
     tasks.clear(); $("workers-list").replaceChildren(); renderList();
@@ -45,10 +460,17 @@
     const action = management?.action; management = null; show("workers-management-confirm", false);
     if (returnFocus && selectedTask) $(selectedTask.management_pending ? "workers-management-retry" : action === "delete" ? "workers-delete" : "workers-archive").focus({ preventScroll: true });
   }
+  function clearEventView(message = "") {
+    eventNodes.clear(); messageNodes.clear();
+    $("workers-messages").replaceChildren(...(message ? [node("p", message, "worker-hint")] : []));
+    $("workers-history-events").replaceChildren();
+    $("workers-history").open = false; show("workers-history", false);
+    text("workers-history-summary", "工具与执行记录");
+    text("workers-tool-note", "");
+  }
   function hideTaskBody(message) {
     eventCursor = 0; eventMore = false; artifactSignature = "";
-    eventNodes.clear(); messageNodes.clear();
-    $("workers-events").replaceChildren(node("p", message, "worker-hint")); $("workers-artifacts").replaceChildren();
+    clearEventView(message); $("workers-artifacts").replaceChildren();
     show("workers-events-more", false); show("workers-events-restart", false); show("workers-latest", false);
   }
   async function request(path, payload) {
@@ -68,16 +490,17 @@
   }
   function clearDetail() {
     closeManagement();
+    $("workers-task-menu").open = false;
     viewGeneration++; selectedTask = null; eventCursor = 0; eventMore = false; following = true;
-    taskSignature = ""; artifactSignature = ""; eventNodes.clear(); messageNodes.clear();
-    $("workers-events").replaceChildren(); $("workers-artifacts").replaceChildren();
-    for (const name of ["workers-task-title", "workers-task-meta", "workers-tool-note", "workers-review-state", "workers-management-hint", "workers-management-result"]) text(name, "");
+    taskSignature = ""; artifactSignature = ""; clearEventView();
+    $("workers-artifacts").replaceChildren();
+    for (const name of ["workers-task-title", "workers-task-state", "workers-task-meta", "workers-tool-note", "workers-review-state", "workers-management-hint", "workers-management-result"]) text(name, "");
     for (const name of ["workers-cancel", "workers-supplement", "workers-review", "workers-revoke", "workers-archive", "workers-delete", "workers-management-retry"]) $(name).disabled = true;
     show("workers-management-retry", false);
     show("workers-events-more", false); show("workers-events-restart", false); show("workers-latest", false);
   }
   function acceptEpoch(next) {
-    if (!next) throw new Error("服务未返回有效会话身份");
+    if (typeof next !== "string" || !readIdentity.test(next)) throw new Error("服务未返回有效会话身份");
     if (epoch && epoch !== next) {
       seen.clear(); clearDetail(); selection = null; archivedView = false; resetList();
       show("workers-detail", false); show("workers-list-view", true);
@@ -97,11 +520,13 @@
     }
     if (registry?.task_management?.revision !== data.task_management?.revision) taskSettingsDirty = false;
     registry = data;
+    if (avatarControl.syncWork(data)) dispatchWatchUntil = 0;
     const worker = data.collaborators?.find((row) => row.name === "dsh-agent");
     text("workers-connection", worker ? `DSH · ${state(worker.state)}${worker.reason ? `：${worker.reason}` : ""}` : "宿主未返回 DSH 注册信息，暂不可启用。");
     const paired = data.connection?.connected === true;
-    text("workers-capabilities", paired ? (data.policy?.enabled ? "已配对并授权。请在主聊天描述任务，由 Alice 派工；关闭设置不会中断任务。" : "已配对，尚未授权派工。请设置工作目录、模式和执行上限。")
-      : "尚未配对。请在下方选择连接方式；同步记录仅查看已有状态。");
+    text("workers-capabilities", paired ? (data.policy?.enabled ? "已连接，现有授权和剩余额度继续有效。请在主聊天描述任务，由 Alice 派工。" : "已连接，派工授权尚未开启。可核对原范围后恢复授权，或设置新的任务范围。")
+      : data.policy?.enabled ? "连接已断开，授权和剩余额度仍保留，仍有效的任务正文可以查看。请使用已保存令牌重新连接后继续派工。"
+      : "当前未连接，派工授权尚未开启。请连接后核对任务范围；同步状态只读取已有记录。");
     if (paired) $("workers-token").value = "";
     const credential = data.credential;
     const credentialState = credential?.state;
@@ -129,7 +554,7 @@
       $("workers-max-seconds").value = data.policy?.max_seconds ?? 600;
       $("workers-workspace").value = data.policy?.workspace_root || "";
       $("workers-mode").value = ["read-only", "workspace-write"].includes(data.policy?.permission_mode) ? data.policy.permission_mode : "read-only";
-      $("workers-native-ack").checked = data.policy?.enabled === true && data.policy?.native_permissions_ack === true;
+      $("workers-native-ack").checked = data.policy?.native_permissions_ack === true;
     }
     const used = Number.isSafeInteger(data.policy?.runs_used) ? data.policy.runs_used : "未知";
     const remaining = Number.isSafeInteger(data.policy?.remaining_runs) ? data.policy.remaining_runs : "未知";
@@ -164,11 +589,11 @@
       || credential?.supported !== true || credential?.configured !== true;
     $("workers-token").disabled = actionBusy || !epoch || hasConnection;
     $("workers-connect").disabled = actionBusy || !epoch || hasConnection || !$("workers-token").value.trim();
-    $("workers-disconnect").disabled = actionBusy || !epoch || (!hasConnection && !registry?.policy?.enabled);
+    $("workers-disconnect").disabled = actionBusy || !epoch || !hasConnection;
     for (const name of ["workers-max-runs", "workers-max-seconds", "workers-workspace", "workers-mode", "workers-native-ack"]) $(name).disabled = actionBusy || !canUse;
     $("workers-enabled").disabled = actionBusy || !epoch || !canUse && !registry?.policy?.enabled;
     $("workers-policy-save").disabled = actionBusy || !epoch || !canUse && !registry?.policy?.enabled;
-    $("workers-policy-save").textContent = $("workers-enabled").checked ? "保存并启用授权" : "保存为关闭";
+    $("workers-policy-save").textContent = $("workers-enabled").checked ? registry?.policy?.enabled ? "保存授权设置" : "保存并开启授权" : "保存为关闭授权";
     const taskSettings = registry?.task_management;
     const settingsKnown = Number.isSafeInteger(taskSettings?.revision);
     $("workers-sync-archive").disabled = actionBusy || !epoch || !settingsKnown;
@@ -191,7 +616,7 @@
       : "还没有未归档任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天描述目标。");
     let unread = 0, running = 0;
     for (const [position, task] of rows.entries()) {
-      const hasUnread = !archivedView && Number(task.last_sequence || 0) > (seen.get(task.task_id) || 0);
+      const hasUnread = !archivedView && Number(task.last_sequence || 0) > readThrough(task.task_id);
       if (hasUnread) unread++;
       if (activeStates.has(task.state)) running++;
       let button = [...$("workers-list").children].find((child) => child.dataset.taskId === task.task_id);
@@ -204,7 +629,8 @@
       button.dataset.unread = String(hasUnread); button.setAttribute("aria-current", String(selection === task.task_id));
       button.children[0].textContent = `DSH · ${task.title || "协作任务"}`;
       const pending = managementNames[task.management_pending];
-      button.children[1].textContent = `${state(task.state)}${pending ? ` · ${pending}待确认` : ""}${hasUnread ? " · 未读" : ""}`;
+      const content = taskContentState(task);
+      button.children[1].textContent = `${state(task.state)}${content.label ? ` · ${content.label}` : ""}${pending ? ` · ${pending}待确认` : ""}${hasUnread ? " · 未读" : ""}`;
       button.children[2].textContent = `最近活动 ${time(task.updated_at)}`;
       if ($("workers-list").children[position] !== button) {
         const focused = document.activeElement === button;
@@ -212,7 +638,7 @@
         if (focused) button.focus({ preventScroll: true });
       }
     }
-    text("workers-count", archivedView ? "已归档" : [running ? `${running} 运行` : "", unread ? `${unread} 未读` : ""].filter(Boolean).join(" · "));
+    renderAvatar(running, unread);
     show("workers-empty", rows.length === 0); show("workers-more", nextBefore !== null);
   }
   async function syncList(older = false) {
@@ -235,18 +661,19 @@
         if (next === null) break;
         before = next;
       }
-      let newlyRevoked = false;
+      let newlyUnavailable = false;
       for (const row of incoming.values()) {
         const previous = tasks.get(row.task_id);
-        if (previous && previous.content_revoked !== true && row.content_revoked === true) newlyRevoked = true;
-        if (row.task_id === selection && row.content_revoked === true) {
-          // A closed panel must not retain a revoked body until it is reopened.
-          if (selectedTask?.content_revoked !== true) viewGeneration++;
+        const unavailable = !taskContentState(row).available;
+        if (previous && taskContentState(previous).available && unavailable) newlyUnavailable = true;
+        if (row.task_id === selection && unavailable) {
+          // A closed panel must not retain a body whose permission has changed.
+          if (taskContentState(selectedTask || {}).available) viewGeneration++;
           renderDetail({ task: row, artifacts: [] });
         }
       }
       tasks.clear(); for (const [key, row] of incoming) tasks.set(key, row);
-      if (newlyRevoked) invalidateChatSources();
+      if (newlyUnavailable) invalidateChatSources();
       listDepth = wanted; nextBefore = next; renderList();
     } finally {
       listBusy = false; $("workers-more").disabled = false;
@@ -264,16 +691,17 @@
   }
   function updateTaskControls() {
     const task = selectedTask;
+    show("workers-cancel", !!task && (activeStates.has(task.state) || ["unknown", "waiting"].includes(task.state)));
     if (!task) {
       for (const name of ["workers-cancel", "workers-supplement", "workers-review", "workers-revoke"]) $(name).disabled = true;
       return;
     }
-    const revoked = task.content_revoked === true || task.state === "revoked", pending = !!task.management_pending;
+    const content = taskContentState(task), pending = !!task.management_pending;
     $("workers-cancel").disabled = actionBusy || pending || !(activeStates.has(task.state) || ["unknown", "waiting"].includes(task.state)) || task.state === "stopping" || !!task.cancel_requested && task.state !== "unknown";
     $("workers-cancel").textContent = task.state === "unknown" && task.cancel_requested ? "重试停止" : "请求停止";
-    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || revoked || registry?.policy?.enabled !== true || registry?.connection?.connected !== true;
-    $("workers-review").disabled = actionBusy || pending || revoked || !["completed", "succeeded"].includes(task.state);
-    $("workers-revoke").disabled = actionBusy || pending || revoked;
+    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || !content.available || registry?.policy?.enabled !== true || registry?.connection?.connected !== true;
+    $("workers-review").disabled = actionBusy || pending || !content.available || !["completed", "succeeded"].includes(task.state);
+    $("workers-revoke").disabled = actionBusy || pending || !content.available;
   }
   function updateManagementControls() {
     const task = selectedTask, pending = task?.management_pending;
@@ -328,6 +756,7 @@
     submit.textContent = `${management.pending ? "确认重试" : "确认"}${managementNames[action]}${syncDsh ? "（含 DSH）" : "（仅 Alice）"}`;
     submit.classList.toggle("danger", action === "delete"); submit.classList.toggle("primary", action !== "delete");
     show("workers-management-confirm", true); updateManagementControls();
+    $("workers-task-menu").open = true;
     $("workers-management-title").focus({ preventScroll: true });
     $("workers-management-confirm").scrollIntoView({ block: "nearest" });
   }
@@ -352,8 +781,8 @@
             || choice.action === "archive" && data.archived !== true || choice.action === "restore" && data.archived !== false) {
           throw new Error("宿主返回的管理结果不完整，需要重新核对状态");
         }
-        if (choice.action === "delete") { seen.delete(choice.taskId); invalidateChatSources(); }
-        else if (selectedTask) seen.set(choice.taskId, Number(selectedTask.last_sequence) || 0);
+        if (choice.action === "delete") { forgetSeen(choice.taskId); invalidateChatSources(); }
+        // Archive/restore preserves the position actually read, not the latest sequence.
         if (choice.action === "restore") archivedView = false;
         selection = null; clearDetail(); resetList();
         show("workers-detail", false); show("workers-list-view", true);
@@ -411,9 +840,239 @@
     if (typeof payload.tool_name === "string") return `工具：${payload.tool_name}`;
     return "";
   }
+  function renderWorkerMarkdown(target, source) {
+    // Build only known DOM nodes. Source never becomes HTML, CSS or an image
+    // request. Complex input falls back to bounded literal text, without loss.
+    const raw = typeof source === "string" ? source : "";
+    const textSource = raw.slice(0, 65536) + (raw.length > 65536 ? "\n[排版文本已达上限]" : "");
+    const limit = {}, budget = { nodes: 2400, steps: 16000 };
+    const step = (count = 1) => { if ((budget.steps -= count) < 0) throw limit; };
+    const element = (tag, value) => {
+      if (--budget.nodes < 0) throw limit;
+      const result = document.createElement(tag);
+      if (value !== undefined) {
+        if (--budget.nodes < 0) throw limit;
+        result.textContent = value;
+      }
+      return result;
+    };
+    const plain = (parent, value) => {
+      if (!value) return;
+      if (--budget.nodes < 0) throw limit;
+      parent.appendChild(document.createTextNode(value));
+    };
+    const literal = (parent, value) => {
+      const pre = element("pre", value); pre.className = "worker-markdown-literal"; parent.appendChild(pre);
+    };
+    function safeLink(value) {
+      if (value.length > 2048 || !/^https?:\/\//i.test(value) || /[\u0000-\u0020\u007f\\]/.test(value)) return null;
+      try {
+        const url = new URL(value), host = url.hostname.toLowerCase().replace(/\.+$/, "");
+        if (!["http:", "https:"].includes(url.protocol) || !host || url.username || url.password
+            || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")
+            || !host.includes(".") || host.startsWith("[")) return null;
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+          const [a, b] = host.split(".").map(Number);
+          if (a === 0 || a === 10 || a === 127 || a >= 224 || a === 169 && b === 254
+              || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127) return null;
+        }
+        return url.href;
+      } catch { return null; }
+    }
+    function linkAt(value, start, image) {
+      const labelStart = start + (image ? 2 : 1);
+      let close = labelStart;
+      for (; close < value.length && close - labelStart <= 1024; close++) {
+        step();
+        if (value[close] === "\n") return null;
+        if (value[close] === "\\") { close++; continue; }
+        if (value[close] === "]") break;
+      }
+      if (value[close] !== "]" || value[close + 1] !== "(") return null;
+      let end = close + 2, depth = 1;
+      for (; end < value.length && end - close <= 4096; end++) {
+        step();
+        if (value[end] === "\n") return null;
+        if (value[end] === "\\") { end++; continue; }
+        if (value[end] === "(" && ++depth > 4) return null;
+        if (value[end] === ")" && --depth === 0) break;
+      }
+      if (depth !== 0) return null;
+      const destination = value.slice(close + 2, end).trim();
+      const match = /^(?:<([^<>\n]+)>|(\S+?))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?$/.exec(destination);
+      return { end: end + 1, label: value.slice(labelStart, close),
+        href: match && safeLink(match[1] || match[2]), literal: value.slice(start, end + 1) };
+    }
+    function inline(parent, value, depth = 0, allowLinks = true) {
+      if (depth >= 6 || value.length > 8000) { plain(parent, value); return; }
+      const tokens = /\\\n|\n|\\[\\`*_\[\]{}()#+.!>|~-]|`+|!\[|\[|<https?:\/\/|\*\*\*|___|\*\*|__|~~|\*|_/gi;
+      let cursor = 0, match;
+      while ((match = tokens.exec(value))) {
+        step();
+        const token = match[0], start = match.index;
+        if (token.endsWith("\n")) {
+          if (token === "\n" && value.slice(Math.max(cursor, start - 2), start) !== "  ") continue;
+          plain(parent, value.slice(cursor, token === "\n" ? start - 2 : start));
+          parent.appendChild(element("br")); cursor = tokens.lastIndex; continue;
+        }
+        if (token[0] === "\\") {
+          plain(parent, value.slice(cursor, start)); plain(parent, token.slice(1)); cursor = tokens.lastIndex; continue;
+        }
+        if (token === "[" || token === "![") {
+          const link = linkAt(value, start, token === "![");
+          if (!link) continue;
+          plain(parent, value.slice(cursor, start));
+          if (allowLinks && token === "[" && link.href) {
+            const anchor = element("a"); anchor.href = link.href; anchor.target = "_blank";
+            anchor.rel = "noopener noreferrer"; anchor.referrerPolicy = "no-referrer";
+            inline(anchor, link.label || link.href, depth + 1, false); parent.appendChild(anchor);
+          } else plain(parent, link.literal);
+          cursor = link.end; tokens.lastIndex = cursor; continue;
+        }
+        if (token[0] === "<") {
+          const end = value.indexOf(">", tokens.lastIndex);
+          if (end < 0 || end - start > 2048) continue;
+          const href = allowLinks && safeLink(value.slice(start + 1, end));
+          if (!href) continue;
+          plain(parent, value.slice(cursor, start));
+          const anchor = element("a", value.slice(start + 1, end)); anchor.href = href; anchor.target = "_blank";
+          anchor.rel = "noopener noreferrer"; anchor.referrerPolicy = "no-referrer"; parent.appendChild(anchor);
+          cursor = end + 1; tokens.lastIndex = cursor; continue;
+        }
+        const from = start + token.length, end = value.indexOf(token, from), code = token[0] === "`";
+        if (end <= from) continue;
+        const content = value.slice(from, end);
+        if (!code && (!content.trim() || token[0] === "_" && /[\p{L}\p{N}]/u.test(value[start - 1] || ""))) continue;
+        if (code && (value[end - 1] === "`" || value[end + token.length] === "`")) continue;
+        plain(parent, value.slice(cursor, start));
+        const format = element(code ? "code" : token === "~~" ? "del" : token.length >= 2 ? "strong" : "em");
+        if (code) plain(format, content);
+        else if (token.length === 3) {
+          const emphasis = element("em"); inline(emphasis, content, depth + 1, allowLinks); format.appendChild(emphasis);
+        } else inline(format, content, depth + 1, allowLinks);
+        parent.appendChild(format); cursor = end + token.length; tokens.lastIndex = cursor;
+      }
+      plain(parent, value.slice(cursor));
+    }
+    const fence = (line) => {
+      const match = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(line);
+      return match && !(match[1][0] === "`" && match[2].includes("`")) ? match[1] : null;
+    };
+    const heading = (line) => /^ {0,3}(#{1,6})(?:[ \t]+([^\n]*)|[ \t]*)$/.exec(line);
+    const rule = (line) => /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line);
+    const listItem = (line) => {
+      const match = /^( {0,3})([-+*]|\d{1,9}[.)])[ \t]+([^\n]*)$/.exec(line);
+      return match ? { indent: match[1].length, ordered: /^\d/.test(match[2]), number: parseInt(match[2], 10), body: match[3] } : null;
+    };
+    const cells = (line) => {
+      if (line.length > 8192 || !line.includes("|")) return null;
+      const values = [], input = line.trim();
+      let value = "", codeRun = 0, separators = 0;
+      for (let i = 0; i < input.length; i++) {
+        step();
+        if (input[i] === "\\" && i + 1 < input.length) { value += input[i] + input[++i]; continue; }
+        if (input[i] === "`") {
+          let count = 1;
+          while (input[i + count] === "`") { step(); count++; }
+          if (!codeRun) codeRun = count;
+          else if (codeRun === count) codeRun = 0;
+          value += "`".repeat(count); i += count - 1; continue;
+        }
+        if (input[i] === "|" && !codeRun) {
+          values.push(value.trim()); value = ""; separators++;
+          if (values.length > 17) return null;
+        } else value += input[i];
+      }
+      if (!separators) return null;
+      values.push(value.trim());
+      if (values[0] === "" && input.startsWith("|")) values.shift();
+      if (values[values.length - 1] === "" && input.endsWith("|")) values.pop();
+      return values.length && values.length <= 16 ? values : null;
+    };
+    const tableStart = (lines, i) => {
+      const head = cells(lines[i]), divider = i + 1 < lines.length && cells(lines[i + 1]);
+      return head && divider && head.length === divider.length && divider.every((value) => /^:?-{3,}:?$/.test(value)) ? head : null;
+    };
+    function blocks(lines, parent, depth = 0) {
+      if (depth >= 6) { literal(parent, lines.join("\n")); return; }
+      let i = 0;
+      while (i < lines.length) {
+        step();
+        if (!lines[i].trim()) { i++; continue; }
+        const mark = fence(lines[i]);
+        if (mark) {
+          const content = []; i++;
+          while (i < lines.length) {
+            step();
+            const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(lines[i]);
+            if (closing && closing[1][0] === mark[0] && closing[1].length >= mark.length) { i++; break; }
+            content.push(lines[i++]);
+          }
+          const pre = element("pre"); pre.className = "worker-markdown-code";
+          pre.appendChild(element("code", content.join("\n"))); parent.appendChild(pre); continue;
+        }
+        const title = heading(lines[i]);
+        if (title) {
+          const h = element(`h${title[1].length}`);
+          inline(h, (title[2] || "").replace(/[ \t]+#+[ \t]*$/, "").trim()); parent.appendChild(h); i++; continue;
+        }
+        if (rule(lines[i])) { parent.appendChild(element("hr")); i++; continue; }
+        const header = tableStart(lines, i);
+        if (header) {
+          const wrap = element("div"); wrap.className = "worker-markdown-table"; wrap.tabIndex = 0;
+          const table = element("table"), head = element("thead"), row = element("tr"), body = element("tbody");
+          for (const value of header) { const cell = element("th"); cell.scope = "col"; inline(cell, value); row.appendChild(cell); }
+          head.appendChild(row); table.appendChild(head); i += 2;
+          let rows = 0, values;
+          while (i < lines.length && (values = cells(lines[i]))) {
+            step(); if (++rows > 100) throw limit;
+            const tr = element("tr");
+            if (values.length !== header.length) {
+              const td = element("td", lines[i]); td.colSpan = header.length; tr.appendChild(td);
+            } else for (const value of values) { const td = element("td"); inline(td, value); tr.appendChild(td); }
+            body.appendChild(tr); i++;
+          }
+          table.appendChild(body); wrap.appendChild(table); parent.appendChild(wrap); continue;
+        }
+        if (/^ {0,3}>/.test(lines[i])) {
+          const quoted = [];
+          while (i < lines.length && /^ {0,3}>/.test(lines[i])) { step(); quoted.push(lines[i++].replace(/^ {0,3}> ?/, "")); }
+          const quote = element("blockquote"); blocks(quoted, quote, depth + 1); parent.appendChild(quote); continue;
+        }
+        const first = listItem(lines[i]);
+        if (first) {
+          const list = element(first.ordered ? "ol" : "ul"); if (first.ordered) list.start = first.number;
+          while (i < lines.length) {
+            step(); const item = listItem(lines[i]);
+            if (!item || item.ordered !== first.ordered || item.indent !== first.indent) break;
+            const li = element("li"); inline(li, item.body); i++;
+            const nested = [], prefix = " ".repeat(first.indent + 2);
+            while (i < lines.length && lines[i].trim() && lines[i].startsWith(prefix)) { step(); nested.push(lines[i++].slice(prefix.length)); }
+            if (nested.length) blocks(nested, li, depth + 1);
+            list.appendChild(li);
+          }
+          parent.appendChild(list); continue;
+        }
+        const paragraph = [lines[i++]];
+        while (i < lines.length && lines[i].trim() && !fence(lines[i]) && !heading(lines[i]) && !rule(lines[i])
+            && !listItem(lines[i]) && !/^ {0,3}>/.test(lines[i]) && !tableStart(lines, i)) { step(); paragraph.push(lines[i++]); }
+        const p = element("p"); inline(p, paragraph.join("\n")); parent.appendChild(p);
+      }
+    }
+    target.classList.add("worker-markdown");
+    const content = document.createDocumentFragment(), lines = textSource.replace(/\r\n?/g, "\n").split("\n");
+    try {
+      if (lines.length > 4000) throw limit;
+      blocks(lines, content); target.replaceChildren(content);
+    } catch {
+      const pre = document.createElement("pre"); pre.className = "worker-markdown-literal"; pre.textContent = textSource;
+      target.replaceChildren(pre);
+    }
+  }
   function bodyText(entry, value) {
-    entry.body.textContent = value;
-    const long = value.length > 900;
+    if (entry.markdown) renderWorkerMarkdown(entry.body, value);
+    else entry.body.textContent = value;
+    const long = !entry.markdown && value.length > 900;
     entry.fold.classList.toggle("hidden", !long); entry.body.hidden = false;
     if (long && entry.body.parentNode !== entry.fold) entry.fold.appendChild(entry.body);
     else if (!long && entry.body.parentNode !== entry.root) entry.root.insertBefore(entry.body, entry.fold);
@@ -422,14 +1081,16 @@
     if (!Number.isSafeInteger(event.sequence) || event.sequence <= eventCursor || eventNodes.has(event.event_id)) return;
     const actor = event.actor === "alice" ? "alice" : ["dsh", "agent", "dsh-agent"].includes(event.actor) ? "dsh" : "host";
     const isMessage = ["agent_message_delta", "agent_message_completed"].includes(event.type);
-    const messageKey = isMessage && event.message_id ? `${actor}:${event.message_id}` : null;
+    const isConversation = isMessage || ["alice_message_queued", "agent_question"].includes(event.type);
+    const target = $(isConversation ? "workers-messages" : "workers-history-events");
+    const messageKey = (isMessage || event.type === "alice_message_queued") && event.message_id ? `${actor}:${event.message_id}` : null;
     let entry = messageKey && messageNodes.get(messageKey);
     if (!entry) {
       const root = node("article", undefined, "worker-event"); root.dataset.actor = actor;
-      const head = node("div", "", "worker-event-head"), body = node("p", "", "worker-event-text"), fold = node("details");
+      const head = node("div", "", "worker-event-head"), body = node("div", "", "worker-event-text"), fold = node("details");
       fold.appendChild(node("summary", "展开长消息"));
       const meta = node("div", "", "worker-event-meta"); root.append(head, body, fold, meta);
-      entry = { root, head, body, fold, meta, content: "", offset: 0 }; $("workers-events").appendChild(root);
+      entry = { root, head, body, fold, meta, content: "", offset: 0, markdown: isConversation }; target.appendChild(root);
       if (messageKey) messageNodes.set(messageKey, entry);
     }
     const content = eventText(event);
@@ -440,28 +1101,52 @@
         else if (offset > entry.content.length) entry.content += "\n[缺失片段，等待完整消息]\n" + content;
       } else entry.content += content;
     } else entry.content = content;
-    entry.head.textContent = eventNames[event.type] || "公开工作事件";
-    entry.meta.textContent = `#${event.sequence} · ${time(event.observed_at)} · ${actor === "dsh" ? "DSH 报告，未经宿主事实复核" : "宿主记录"}${event.truncated ? " · 片段已截断" : ""}`;
+    entry.truncated = event.truncated === true;
+    entry.head.textContent = isConversation
+      ? event.type === "alice_message_queued" ? "Alice → DSH" : event.type === "agent_question" ? "DSH → Alice · 等待补充" : "DSH → Alice"
+      : eventNames[event.type] || "公开工作事件";
+    const truncation = entry.truncated ? " · 片段已截断" : "";
+    entry.meta.textContent = isConversation
+      ? `${time(event.observed_at)}${event.type === "alice_message_queued" ? " · 已登记" : ""}${truncation}`
+      : `#${event.sequence} · ${time(event.observed_at)} · ${actor === "dsh" ? "DSH 报告，未经宿主事实复核" : "宿主记录"}${truncation}`;
+    entry.root.dataset.attention = String(["tool_failed", "run_failed", "connection_lost"].includes(event.type));
+    if (event.type === "alice_message_sent") {
+      // This is a host receipt, not a second message or a replacement for the brief.
+      const sent = messageNodes.get(`alice:${event.message_id}`);
+      if (sent) sent.meta.textContent = `${time(event.observed_at)} · 已送达${sent.truncated ? " · 片段已截断" : ""}`;
+    }
     // The host bounds messages too; keep a second client bound for an open tab.
     if (entry.content.length > 64000) entry.content = entry.content.slice(0, 64000) + "\n[本页消息长度已达上限]";
     bodyText(entry, entry.content); eventNodes.set(event.event_id, entry); eventCursor = event.sequence;
     while (eventNodes.size > 600) eventNodes.delete(eventNodes.keys().next().value);
-    while ($("workers-events").children.length > 300) {
-      const oldest = $("workers-events").firstElementChild; oldest.remove();
+    // Bound both streams independently, so a tool-heavy run cannot evict the conversation.
+    while (target.children.length > 300) {
+      const oldest = target.firstElementChild; oldest.remove();
       for (const [key, value] of messageNodes) if (value.root === oldest) messageNodes.delete(key);
       for (const [key, value] of eventNodes) if (value.root === oldest) eventNodes.delete(key);
       show("workers-events-restart", true);
     }
   }
+  function renderHistorySummary() {
+    const records = $("workers-history-events"), count = records.children.length;
+    const attention = records.querySelectorAll('[data-attention="true"]').length;
+    text("workers-history-summary", `工具与执行记录 · ${count} 条${attention ? ` · ${attention} 条异常记录` : ""}`);
+    show("workers-history", count > 0);
+  }
   function renderDetail(data) {
     const task = data.task;
-    if (selectedTask?.task_id === task.task_id && selectedTask.content_revoked !== true && task.content_revoked === true) invalidateChatSources();
+    const content = taskContentState(task);
+    if (selectedTask?.task_id === task.task_id && taskContentState(selectedTask).available && !content.available) invalidateChatSources();
+    if (selectedTask?.task_id === task.task_id && !taskContentState(selectedTask).available && content.available) clearEventView();
     selectedTask = task;
     const signature = JSON.stringify(task);
     if (taskSignature !== signature) {
       taskSignature = signature;
       text("workers-task-title", task.title || "协作任务");
-      text("workers-task-meta", `${state(task.state)}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · DSH 会话已关闭" : ""} · 最后更新 ${time(task.updated_at)} · ${task.task_id}`);
+      $("workers-task-title").title = task.title || "协作任务";
+      text("workers-task-state", `${managementNames[task.management_pending] ? `${managementNames[task.management_pending]}待确认` : state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · 会话已关闭" : ""}`);
+      $("workers-task-state").title = $("workers-task-state").textContent;
+      text("workers-task-meta", `${state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · DSH 会话已关闭" : ""} · 最后更新 ${time(task.updated_at)} · ${task.task_id}`);
       const cap = registry?.collaborators?.find((row) => row.name === "dsh-agent")?.capabilities;
       text("workers-tool-note", data.tool_details_available === true || cap?.tool_details === true || cap?.tool_events === true ? "工具事件来自 DSH 的公开报告。" : "此接口未提供工具详情。");
       const reported = task.usage;
@@ -473,12 +1158,11 @@
         ? (task.agent_idle ? " DSH 会话已空闲；外部进程树终止未确认。" : " 停止尚未确认。") : "";
       text("workers-review-state", `${review} ${cost}${stopNote}`);
     }
-    const revoked = task.content_revoked === true || task.state === "revoked";
     const deleting = task.management_pending === "delete";
-    if (revoked || deleting) hideTaskBody(revoked ? "正文已撤销，仅保留任务状态事实。" : "删除结果待确认，正文暂不在本页展示。请按原选择明确重试。");
+    if (!content.available || deleting) hideTaskBody(!content.available ? content.message : "删除结果待确认，正文暂不在本页展示。请按原选择明确重试。");
     updateTaskControls();
     updateManagementControls();
-    const artifacts = revoked || deleting ? [] : data.artifacts || [];
+    const artifacts = !content.available || deleting ? [] : data.artifacts || [];
     const signatureArtifacts = JSON.stringify(artifacts);
     if (signatureArtifacts !== artifactSignature) {
       artifactSignature = signatureArtifacts; $("workers-artifacts").replaceChildren();
@@ -491,7 +1175,7 @@
         $("workers-artifacts").appendChild(row);
       }
     }
-    return !revoked && !deleting;
+    return content.available && !deleting;
   }
   async function syncDetail(explicit = false) {
     if (actionBusy || !opened || !selection || $("workers-detail").classList.contains("hidden")) return;
@@ -500,7 +1184,7 @@
     try { data = await request("/api/worker-tasks/detail", { session_epoch: session, task_id: selected }); }
     catch (e) {
       if (e.code === "not_found" && current(selected, generation, session)) {
-        controlGeneration++; seen.delete(selected); selection = null; clearDetail(); resetList();
+        controlGeneration++; forgetSeen(selected); selection = null; clearDetail(); resetList();
         show("workers-detail", false); show("workers-list-view", true); invalidateChatSources();
         status("任务已不在当前记录中，列表正在重新同步。"); return;
       }
@@ -508,9 +1192,18 @@
       throw e;
     }
     if (!current(selected, generation, session) || data.task?.task_id !== selected || data.session_epoch && data.session_epoch !== session) return;
-    if (!renderDetail(data)) return;
-    // While reading earlier events, do not evict them through automatic paging.
-    if (!explicit && !following && $("workers-events").children.length >= 300) return;
+    if (!renderDetail(data)) {
+      // An unavailable body still has a readable status; do not leave its
+      // already-seen revocation/expiry notice permanently marked as unread.
+      if (!taskContentState(data.task).available && canReadSelected(selected)) {
+        markSeen(selected, data.task.last_sequence); renderList();
+      }
+      return;
+    }
+    // Reading tool records must not freeze the shared cursor or hide a later reply.
+    if (!explicit && !following && !$("workers-history").open && $("workers-messages").children.length >= 300) {
+      show("workers-events-more", true); return;
+    }
     let response;
     try {
       response = await request("/api/worker-tasks/events", { session_epoch: session, task_id: selected, after_cursor: eventCursor, limit: 100 });
@@ -520,24 +1213,35 @@
     }
     if (!current(selected, generation, session) || response.session_epoch !== session || response.task_id !== selected) return;
     if (response.resync_required) { clearDetail(); status("工作记录游标已过期，正在重新同步。", true); return; }
-    if (response.content_revoked) {
-      clearDetail(); renderDetail({ task: { ...data.task, content_revoked: true }, artifacts: [] });
+    if (!taskContentState(response).available) {
+      renderDetail({ task: { ...data.task, content_available: false, content_revoked: response.content_revoked === true,
+        content_unavailable_reason: response.content_unavailable_reason || null }, artifacts: [] });
       invalidateChatSources(); return;
     }
-    const scroll = $("workers-events"), atEnd = following;
+    const scroll = $("workers-events"), history = $("workers-history"), records = $("workers-history-events");
+    const atEnd = following && !history.open, historyTop = history.getBoundingClientRect().top;
+    const recordAnchor = history.open && [...records.children].find((row) => row.getBoundingClientRect().bottom > records.getBoundingClientRect().top);
+    const anchorTop = recordAnchor ? recordAnchor.getBoundingClientRect().top - records.getBoundingClientRect().top : 0;
     for (const event of response.events || []) appendEvent(event);
+    renderHistorySummary();
     eventCursor = Math.max(eventCursor, Number(response.cursor) || 0); eventMore = !!response.has_more;
     show("workers-events-more", eventMore);
     if (atEnd) scroll.scrollTop = scroll.scrollHeight;
+    else if (history.open) {
+      scroll.scrollTop += history.getBoundingClientRect().top - historyTop;
+      if (recordAnchor?.isConnected) records.scrollTop += recordAnchor.getBoundingClientRect().top - records.getBoundingClientRect().top - anchorTop;
+      else if (recordAnchor) records.scrollTop = 0;
+    }
     show("workers-latest", !atEnd && scroll.scrollHeight > scroll.clientHeight);
-    if (atEnd && !eventMore) seen.set(selected, eventCursor);
+    if (atEnd && !eventMore && canReadSelected(selected)) markSeen(selected, eventCursor);
     renderList();
   }
   function schedule(delay) {
     clearTimeout(timer);
     if (!visible()) return;
     const active = [...tasks.values()].some((task) => activeStates.has(task.state));
-    timer = setTimeout(poll, delay ?? (opened && selection || active ? 1800 : opened || settingsOpened ? 5000 : 10000));
+    timer = setTimeout(poll, delay ?? (Date.now() < dispatchWatchUntil ? 1000
+      : opened && selection || active ? 1800 : opened || settingsOpened ? 5000 : 10000));
   }
   async function poll() {
     clearTimeout(timer);
@@ -547,7 +1251,7 @@
     try {
       const data = await request("/api/collaborators");
       if (!visible() || generation !== controlGeneration) return;
-      acceptEpoch(data.session_epoch); setRegistry(data); connected = true;
+      connected = true; acceptEpoch(data.session_epoch); setRegistry(data);
       await syncList();
       if (generation !== controlGeneration) return;
       if (opened && selection) await syncDetail();
@@ -555,29 +1259,34 @@
       const worker = registry.collaborators?.find((row) => row.name === "dsh-agent");
       status(worker && worker.state !== "ready" ? (worker.reason || `DSH · ${state(worker.state)}`) : `已同步 · ${time(Date.now() / 1000)}`);
     } catch (e) {
-      if (!stopped) { connected = false; status(`连接暂不可用；执行状态未确认。${e.message}`, true); }
+      if (!stopped) { connected = false; renderList(); status(`连接暂不可用；执行状态未确认。${e.message}`, true); }
     } finally { polling = false; schedule(connected ? undefined : 10000); }
   }
   function layout() {
-    const nav = $("app-nav"), style = getComputedStyle(app);
-    const available = app.clientWidth - (nav.getClientRects().length && getComputedStyle(nav).position !== "fixed" ? nav.offsetWidth : 0)
-      - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 2 * (parseFloat(style.gap) || 0);
-    app.classList.toggle("worker-narrow", available < 900);
+    windowFrame.layout();
   }
   function open() {
+    avatarControl.cancel();
     window.AliceObserver?.close(); window.AliceEvaluations?.close(); opened = true;
-    panel.classList.remove("hidden"); app.classList.add("workers-open"); $("workers-btn").setAttribute("aria-expanded", "true"); layout();
-    $("workers-list-view").scrollTop = savedListScroll; $("workers-close").focus({ preventScroll: true }); poll();
+    panel.classList.remove("hidden"); app.classList.add("workers-open"); $("workers-btn").setAttribute("aria-expanded", "true"); windowFrame.open();
+    $("workers-list-view").scrollTop = savedListScroll; renderList(); $("workers-close").focus({ preventScroll: true }); poll();
   }
   function close(returnFocus = true) {
+    avatarControl.cancel();
     if (!opened) return;
-    closeManagement();
+    closeManagement(); $("workers-task-menu").open = false;
     opened = false; viewGeneration++; savedListScroll = $("workers-list-view").scrollTop;
+    windowFrame.close();
     panel.classList.add("hidden"); app.classList.remove("workers-open"); $("workers-btn").setAttribute("aria-expanded", "false");
-    if (returnFocus && !app.inert && !app.classList.contains("nav-open")) $("input").focus({ preventScroll: true });
+    renderList();
+    if (returnFocus && !app.inert && !app.classList.contains("nav-open")) {
+      const avatar = $("workers-btn");
+      (avatar.getClientRects().length && getComputedStyle(avatar).visibility !== "hidden" ? avatar : $("input")).focus({ preventScroll: true });
+    }
     schedule();
   }
   function setSettingsVisible(value) {
+    if (value) avatarControl.cancel();
     settingsOpened = value === true && !$("settings-modal").classList.contains("hidden")
       && !$("workers-config").classList.contains("hidden");
     if (!settingsOpened) {
@@ -594,6 +1303,21 @@
     show("workers-list-view", false); show("workers-detail", true);
     $("workers-back").focus({ preventScroll: true });
     try { await syncDetail(); } catch (e) { status(e.message, true); }
+  }
+  async function openTask(taskId) {
+    if (stopped || app.inert || app.classList.contains("hidden") || app.classList.contains("nav-open")
+        || actionBusy || typeof taskId !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(taskId)) return;
+    avatarControl.cancel();
+    if (!opened) open();
+    const generation = viewGeneration;
+    try {
+      if (!epoch) {
+        const data = await request("/api/collaborators");
+        if (!opened || !visible() || app.inert || actionBusy || generation !== viewGeneration) return;
+        connected = true; acceptEpoch(data.session_epoch); setRegistry(data);
+      }
+      if (opened && !app.inert && !actionBusy) await select(taskId);
+    } catch (e) { if (opened) status(e.message, true); }
   }
   async function mutate(action, extra = {}) {
     if (actionBusy || !epoch) return;
@@ -626,20 +1350,21 @@
       if (session !== epoch || generation !== controlGeneration || data.session_epoch !== session) return;
       policyDirty = false; setRegistry(data);
       const setup = typeof data.setup_message === "string" ? data.setup_message.slice(0, 1000) : "";
-      text(resultId, pairing ? (data.connection?.connected ? "已配对。请继续检查并保存任务授权。"
-        : action === "connect_managed" ? setup || (data.credential?.configured === true
-          ? "令牌已保存，DSH NEXT 需加载新版插件后再次连接。" : "连接尚未完成，请查看上方令牌与连接状态。")
+      text(resultId, pairing ? (data.connection?.connected ? data.policy?.enabled ? "连接已恢复，原授权和剩余额度保持不变，无需重新保存授权。" : "已连接。请核对并开启任务授权。"
+        : action === "connect_managed" ? (data.credential?.configured === true
+          ? "令牌已保存，连接尚未确认。请查看上方连接状态，确认 DSH NEXT 正在运行后再次连接。" : "连接尚未完成，请查看上方令牌与连接状态。")
           : "配对尚未完成，请查看上方连接原因。")
         : action === "rotate_token" ? setup || "新令牌已保存，旧令牌已失效。请重新连接；派工授权仍关闭。"
-        : action === "disconnect" ? "已断开并撤销授权，已保存令牌仍保留；任务停止是否确认请查看任务状态。"
+        : action === "disconnect" ? "连接已断开，原授权、剩余额度和仍有效的任务正文保留。再次连接后可继续使用；运行停止是否确认请查看任务状态。"
         : data.policy_unchanged === true ? "授权设置未变化，已有任务记录与剩余额度保持不变。"
-        : data.policy?.enabled ? "授权已保存。现在可以在主聊天向 Alice 描述任务。" : "授权已关闭；重新启用时需要再次确认任务范围。");
+        : data.policy_resumed === true ? "原授权已恢复，原执行次数与剩余额度保留；仍有效且未被撤销的任务正文可以重新查看。"
+        : data.policy?.enabled ? "授权已保存。现在可以在主聊天向 Alice 描述任务。" : "授权已关闭，旧任务正文及派生内容已清除，无法仅靠重新开启授权恢复。");
     } catch (e) {
       if (session !== epoch || generation !== controlGeneration) return;
       // A pairing error must never echo a token, even if an upstream error does.
-      const message = action === "connect_managed" ? "连接未确认。请同步令牌状态，并确认 DSH NEXT 已加载 0.4 版插件且启用执行许可，再手动连接；没有自动重试。"
+      const message = action === "connect_managed" ? "连接未确认。连接失败本身不会撤销原授权或任务正文；请同步连接与令牌状态后再手动连接，没有自动重试。"
         : action === "rotate_token" ? "更换令牌未确认。请同步本机令牌状态；没有自动重试。"
-        : action === "connect" ? "配对未确认。请核对桥已启用、执行许可已开启及令牌一致，再查看连接状态；没有自动重试。"
+        : action === "connect" ? "配对未确认。请查看上方连接状态并核对所用桥接令牌；原授权不会因本次连接失败自动撤销，没有自动重试。"
         : `操作未确认：${e.message}；没有自动重试。`;
       text(resultId, message); $(resultId).dataset.error = "true";
     } finally {
@@ -660,7 +1385,8 @@
       document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { status(e.message, true); }
   }
-  $("workers-btn").onclick = () => opened ? close() : open();
+  const windowFrame = setupWorkerWindow();
+  const avatarControl = setupAvatarDrag($("workers-btn"));
   $("workers-close").onclick = () => close();
   $("workers-refresh").onclick = poll;
   $("workers-settings-refresh").onclick = poll;
@@ -671,7 +1397,7 @@
   $("workers-events-restart").onclick = () => { clearDetail(); following = false; syncDetail(true).catch((e) => status(e.message, true)); };
   $("workers-back").onclick = () => {
     if (actionBusy) return;
-    closeManagement();
+    closeManagement(); $("workers-task-menu").open = false;
     viewGeneration++; show("workers-detail", false); show("workers-list-view", true);
     $("workers-list-view").scrollTop = savedListScroll;
     [...$("workers-list").children].find((child) => child.dataset.taskId === selection)?.focus({ preventScroll: true });
@@ -679,12 +1405,22 @@
   $("workers-events").onscroll = () => {
     const el = $("workers-events"); following = el.scrollHeight - el.scrollTop - el.clientHeight < 35;
     show("workers-latest", !following);
+    markVisibleRead();
   };
-  $("workers-latest").onclick = () => { following = true; $("workers-events").scrollTop = $("workers-events").scrollHeight; show("workers-latest", false); };
+  $("workers-latest").onclick = () => {
+    $("workers-history").open = false; following = true;
+    $("workers-events").scrollTop = $("workers-events").scrollHeight; show("workers-latest", false); schedule(0);
+    markVisibleRead();
+  };
   $("workers-supplement").onclick = () => {
     if (!selection || $("workers-supplement").disabled) return;
-    const input = $("input"), reference = `关于协作任务 ${selection}，请补充：`;
-    input.value += `${input.value ? "\n" : ""}${reference}`; input.dispatchEvent(new Event("input", { bubbles: true }));
+    const accepted = window.AliceComposer?.setWorkerReference({
+      task_id: selection, title: selectedTask?.title || "DSH 协作会话", session_epoch: epoch,
+    });
+    if (!accepted) {
+      status("暂时无法更换任务引用，请先处理主聊天中的发送状态。", true); return;
+    }
+    const input = $("input");
     close(false); input.focus(); input.setSelectionRange(input.value.length, input.value.length);
   };
   $("workers-cancel").onclick = () => mutate("cancel");
@@ -694,6 +1430,14 @@
   $("workers-delete").onclick = () => beginManagement("delete");
   $("workers-management-retry").onclick = () => beginManagement(selectedTask?.management_pending);
   $("workers-management-back").onclick = () => closeManagement(true);
+  $("workers-task-menu").addEventListener("toggle", () => {
+    if (!$("workers-task-menu").open && management && !actionBusy) closeManagement();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if ($("workers-task-menu").open && !actionBusy && !$("workers-task-menu").contains(event.target)) {
+      closeManagement(); $("workers-task-menu").open = false;
+    }
+  });
   $("workers-management-confirm").onsubmit = (event) => { event.preventDefault(); manageTask(); };
   $("workers-task-settings").oninput = () => { taskSettingsDirty = true; updateControls(); };
   $("workers-task-settings").onsubmit = (event) => { event.preventDefault(); saveTaskSettings(); };
@@ -713,7 +1457,6 @@
   $("workers-policy").oninput = (event) => {
     policyDirty = true;
     if (!["workers-native-ack", "workers-enabled"].includes(event.target.id)) $("workers-native-ack").checked = false;
-    if (event.target.id === "workers-enabled" && !event.target.checked) $("workers-native-ack").checked = false;
     updateControls();
   };
   $("workers-policy").onsubmit = (event) => {
@@ -722,27 +1465,47 @@
     const enabled = $("workers-enabled").checked, max = Number($("workers-max-runs").value);
     const seconds = Number($("workers-max-seconds").value), workspace = $("workers-workspace").value.trim();
     const mode = $("workers-mode").value, acknowledged = $("workers-native-ack").checked;
+    const previous = registry.policy || {};
+    const sameGrant = max === previous.max_runs && seconds === previous.max_seconds
+      && workspace === (previous.workspace_root || "") && mode === previous.permission_mode
+      && acknowledged === (previous.native_permissions_ack === true);
     const invalid = (message) => { text("workers-policy-result", message); $("workers-policy-result").dataset.error = "true"; };
     if (!Number.isSafeInteger(max) || max < 0 || max > 100) { invalid("执行次数须为 0–100 的整数。"); return; }
     if (!Number.isSafeInteger(seconds) || seconds < 30 || seconds > 1800) { invalid("每次执行时限须为 30–1800 秒。"); return; }
     if (enabled && (!/^[a-z]:[\\/]/i.test(workspace) || /[\x00-\x1f]/.test(workspace))) { invalid("请填写明确的本机绝对目录，例如 D:\\AliceTasks。"); return; }
     if (!["read-only", "workspace-write"].includes(mode)) { invalid("请选择仅可查看或工作区内修改。"); return; }
     if (enabled && !acknowledged) { invalid("请先确认所选目录、模型外发及 DSH 原生权限边界。"); return; }
-    if (enabled && (registry?.connection?.connected !== true || max < 1)) { invalid("启用前须配对 DSH，并至少授权 1 次执行。"); return; }
+    if (enabled && (max < 1 || (!sameGrant || previous.enabled !== true) && registry?.connection?.connected !== true)) { invalid("开启或修改授权前须连接 DSH，并至少授权 1 次执行。"); return; }
+    const closesGrant = previous.enabled === true && !enabled;
+    const replacesGrant = !!previous.workspace_root && previous.max_runs > 0 && !sameGrant;
+    if ((closesGrant || replacesGrant) && !confirm(closesGrant
+      ? "关闭授权将清除旧任务正文及派生内容，无法仅靠重新开启授权恢复，并停止新的派工。已发生的外部动作不会撤回。确定关闭授权？"
+      : "更改已有授权参数将清除旧任务正文及派生内容，无法仅靠重新开启或改回原参数恢复。新授权另计执行次数。确定保存新的授权范围？")) return;
     configure("policy", { revision: registry.revision, enabled, max_runs: max, max_seconds: seconds,
       workspace_root: workspace, permission_mode: mode, native_permissions_ack: acknowledged });
   };
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && opened && !app.inert && !app.classList.contains("nav-open") && (panel.contains(document.activeElement) || app.classList.contains("worker-narrow"))) {
-      event.preventDefault(); if (management && !actionBusy) closeManagement(true); else close();
+    if (event.key === "Escape" && opened && !app.inert && !app.classList.contains("nav-open") && panel.contains(document.activeElement)) {
+      event.preventDefault();
+      if (management && !actionBusy) closeManagement(true);
+      else if ($("workers-task-menu").open) { $("workers-task-menu").open = false; $("workers-task-menu-toggle").focus({ preventScroll: true }); }
+      else close();
     }
   });
   document.addEventListener("visibilitychange", () => visible() ? poll() : clearTimeout(timer));
   new ResizeObserver(layout).observe(app);
   new MutationObserver(() => { if (visible()) schedule(0); else clearTimeout(timer); }).observe(app, { attributes: true, attributeFilter: ["class"] });
   window.addEventListener("pagehide", () => { $("workers-token").value = ""; clearTimeout(timer); controllers.forEach((controller) => controller.abort()); });
-  window.AliceWorkers = { close, setSettingsVisible, shutdown() {
-    stopped = true; setSettingsVisible(false); close(false); clearTimeout(timer); controllers.forEach((controller) => controller.abort());
+  window.AliceWorkers = { close, openTask, setSettingsVisible,
+    noteTool(name) {
+      if (!["dispatch_worker", "send_worker_message"].includes(name)) return;
+      // A tool announcement is only intent: refresh promptly, but expand only
+      // when the host confirms that its execution counter actually increased.
+      dispatchWatchUntil = Date.now() + 30000; schedule(0);
+    },
+    refreshAfterTurn() { schedule(0); },
+    shutdown() {
+    stopped = true; avatarControl.cancel(); setSettingsVisible(false); close(false); clearTimeout(timer); controllers.forEach((controller) => controller.abort());
   } };
   schedule(0);
 })();

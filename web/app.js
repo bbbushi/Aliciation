@@ -13,6 +13,7 @@ let shuttingDown = false;
 let activity = null;
 let syncTimer = null;
 let uncertainSend = null;
+let composerWorkerReference = null;
 let deliveryRefreshIndex = 0;
 let sourceRefreshIndex = 0;
 let sourceProjectionVersion = 0;
@@ -22,6 +23,7 @@ let historyLoaded = false;
 let composing = false;
 const turnNodes = new Map();
 const requestNodes = new Map();
+const userWorkerTargets = new WeakMap();
 
 async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
@@ -58,6 +60,91 @@ function toast(msg, ms = 2600) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add("hidden"), ms);
 }
+
+function validWorkerTarget(target) {
+  return !!target && target.collaborator === "dsh-agent" && typeof target.task_id === "string"
+    && /^[A-Za-z0-9_-]{16,128}$/.test(target.task_id);
+}
+
+function renderComposerWorkerReference() {
+  const reference = composerWorkerReference, locked = busy || !!uncertainSend;
+  $("#composer-worker-reference").classList.toggle("hidden", !reference);
+  $("#composer-worker-label").textContent = reference ? `DSH · ${reference.title || `会话 ${reference.taskId.slice(-8)}`}` : "";
+  $("#composer-worker-open").title = reference ? `查看协作任务：${reference.title || reference.taskId}` : "";
+  $("#composer-worker-status").textContent = !reference ? "" : busy ? "正在提交本条补充，引用已锁定"
+    : uncertainSend ? "请求结果待确认，引用已锁定" : "本条消息将补充到此协作任务";
+  $("#composer-worker-clear").disabled = locked || shuttingDown;
+  $("#composer-worker-open").disabled = shuttingDown || !reference || reference.epoch !== sessionEpoch;
+}
+
+function setComposerWorkerReference(value) {
+  if (!state || !sessionEpoch || value?.session_epoch !== sessionEpoch) {
+    toast("会话尚未同步或已经更换，请同步记录后重新选择任务。"); return false;
+  }
+  if (busy || shuttingDown || uncertainSend) {
+    toast("当前请求尚未确认，暂时不能更换任务引用。请先同步记录。"); return false;
+  }
+  if (!validWorkerTarget({ collaborator: "dsh-agent", task_id: value.task_id })) return false;
+  composerWorkerReference = { taskId: value.task_id, epoch: sessionEpoch,
+    title: typeof value.title === "string" && value.title.trim() ? value.title.trim().slice(0, 240) : "" };
+  renderComposerWorkerReference();
+  return true;
+}
+
+function confirmComposerRequest(requestId) {
+  if (!uncertainSend || uncertainSend.requestId !== requestId) return;
+  const pending = uncertainSend, reference = pending.workerReference;
+  uncertainSend = null;
+  if (reference && pending.draftUnchanged && $("#input").value.trim() === pending.text) {
+    $("#input").value = ""; resizeComposer();
+  }
+  if (reference && composerWorkerReference?.taskId === reference.taskId && composerWorkerReference.epoch === reference.epoch) {
+    composerWorkerReference = null;
+  }
+  renderComposerWorkerReference();
+}
+
+async function openReferencedWorkerTask(taskId) {
+  if (typeof window.AliceWorkers?.openTask !== "function") { toast("协作会话入口尚未就绪，请刷新页面。"); return; }
+  try { await window.AliceWorkers.openTask(taskId); }
+  catch { toast("暂时无法打开这项协作任务，请稍后同步记录。"); }
+}
+
+function markUserWorkerTarget(node, turn, localTitle = "") {
+  if (!Object.hasOwn(turn, "worker_target")) return;
+  const target = turn.worker_target;
+  const channel = turn.channel || node.dataset.channel || "gui";
+  if (!node.classList.contains("user") || channel !== "gui" || !validWorkerTarget(target)) {
+    node.querySelector(".message-worker-target")?.remove(); userWorkerTargets.delete(node); return;
+  }
+  const previous = userWorkerTargets.get(node);
+  const available = target.available === true || target.available === undefined && !!localTitle;
+  const record = { taskId: target.task_id, epoch: sessionEpoch, available,
+    title: available ? localTitle || (previous?.taskId === target.task_id ? previous.title : "") : "" };
+  userWorkerTargets.set(node, record);
+  let button = node.querySelector(".message-worker-target");
+  if (!button) {
+    button = document.createElement("button"); button.type = "button"; button.className = "message-worker-target";
+    button.onclick = () => {
+      const current = userWorkerTargets.get(node);
+      if (node.isConnected && current?.available && current.epoch === sessionEpoch) openReferencedWorkerTask(current.taskId);
+    };
+    node.insertBefore(button, node.querySelector(".txt"));
+  }
+  button.textContent = (record.title ? `DSH · ${record.title}` : `DSH · 会话 ${record.taskId.slice(-8)}`)
+    + (record.available ? "" : " · 已不可用");
+  button.disabled = !record.available || record.epoch !== sessionEpoch;
+  button.title = `${button.disabled ? "此任务引用当前不可用" : "查看引用的协作会话"} · ${record.taskId}`;
+}
+
+$("#composer-worker-clear").onclick = () => {
+  if (busy || uncertainSend || shuttingDown) return;
+  composerWorkerReference = null; renderComposerWorkerReference(); $("#input").focus({ preventScroll: true });
+};
+$("#composer-worker-open").onclick = () => {
+  if (composerWorkerReference?.epoch === sessionEpoch && !shuttingDown) openReferencedWorkerTask(composerWorkerReference.taskId);
+};
+window.AliceComposer = { setWorkerReference: setComposerWorkerReference };
 
 /* 极简 markdown：标题、列表、引用、表格、粗体、行内代码——够看人格文件了 */
 function renderMd(md) {
@@ -235,20 +322,63 @@ const DELIVERY_FINAL = new Set(["platform_confirmed", "confirmed", "expired"]);
 
 const SOURCE_HISTORY_PLACEHOLDER = "（这一轮参考了外部资料；资料正文仅在仍获准的来源附件中提供。）";
 const WORKER_HISTORY_PLACEHOLDER = "（这一轮使用了协作任务资料；正文仅在 GUI 内、任务资料仍获准时可见。）";
-const WORKER_REPORT_STATES = { succeeded: "执行已结束", failed: "执行失败", cancelled: "已停止", unknown: "执行状态待确认" };
+const WORKER_REPORT_STATES = { succeeded: "执行已结束", failed: "执行失败", cancelled: "已停止", interrupted: "执行已中断", unknown: "执行状态待确认" };
+
+function workerReportFor(node, turn) {
+  const channel = turn.channel || node.dataset.channel || "gui";
+  const assistant = turn.role ? turn.role === "assistant" : node.classList.contains("assistant");
+  const report = turn.worker_report;
+  if (!assistant || channel !== "gui" || !report || typeof report.task_id !== "string" || !report.task_id
+      || typeof report.attempt_id !== "string" || !report.attempt_id) return null;
+  return { taskId: report.task_id, state: typeof report.state === "string" ? report.state : "unknown",
+    kind: ["alice_summary", "status"].includes(report.kind) ? report.kind : "legacy_transcript" };
+}
+
+function historyDisplayContent(node, turn, fallback = "") {
+  const report = workerReportFor(node, turn);
+  // Older services can still return the full host transcript. Never place it in
+  // the main conversation, including the raw-text cache or source refreshes.
+  if (report?.kind === "legacy_transcript") return `DSH ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
+  if (report && turn.source_bound === true && (turn.source_available !== true
+      || !Number.isFinite(Number(turn.source_expires_at)) || Number(turn.source_expires_at) * 1000 <= Date.now())) {
+    return WORKER_HISTORY_PLACEHOLDER;
+  }
+  if (report?.kind === "status") return turn.content || `DSH ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
+  return turn.content || fallback;
+}
 
 function renderTurnMetadata(node) {
   const meta = node.querySelector(".message-meta");
   if (!meta) return;
+  meta.removeAttribute("title");
   const channel = node.dataset.channel || "gui", fromQQ = channel.startsWith("qq");
   const assistant = node.classList.contains("assistant");
   const unavailable = node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "true";
-  if (node.classList.contains("worker-report")) {
-    meta.textContent = `宿主通知 · ${WORKER_REPORT_STATES[node.dataset.workerReportState] || "任务状态已更新"} · DSH 公开回复未经 Alice 核实 · 任务 ${node.dataset.workerTaskId}`;
-    if (unavailable) meta.textContent += node.dataset.sourceAvailable === "unknown" ? " · 正在核对任务资料资格" : " · 任务正文已不可用";
-    meta.title = "由宿主转达协作结果；没有为这条通知调用 Alice 模型。";
+  if (channel === "gui" && node.classList.contains("worker-report")) {
+    const summary = node.dataset.workerReportKind === "alice_summary";
+    const taskId = node.dataset.workerTaskId;
+    let link = meta.querySelector(".worker-report-link");
+    // Keep a focused entry intact when a source-only poll repeats the same report.
+    if (!link || link.dataset.taskId !== taskId || meta.dataset.workerReportKind !== node.dataset.workerReportKind) {
+      meta.textContent = summary ? "DSH任务总结 · " : "";
+      link = document.createElement("button");
+      link.type = "button"; link.className = "link worker-report-link"; link.textContent = "查看协作会话";
+      link.dataset.taskId = taskId; meta.dataset.workerReportKind = node.dataset.workerReportKind;
+      link.onclick = async () => {
+        if (!node.isConnected || node.dataset.channel !== "gui" || node.dataset.workerTaskId !== taskId) return;
+        if (typeof window.AliceWorkers?.openTask !== "function") { toast("协作会话入口尚未就绪，请刷新页面。"); return; }
+        try { await window.AliceWorkers.openTask(taskId); }
+        catch { toast("暂时无法打开这项协作任务，请稍后同步记录。"); }
+      };
+      meta.appendChild(link);
+    }
+    meta.title = summary ? "Alice 基于 DSH 公开自报生成的总结，未核验产物；DSH 原文保留在协作会话。"
+      : node.dataset.workerReportKind === "legacy_transcript" ? "历史宿主状态通知；DSH 原文仅在协作会话展示，这不是 Alice 总结。"
+      : "宿主任务状态通知；这不是 Alice 总结。";
+    if (unavailable) meta.title += node.dataset.sourceAvailable === "unknown" ? " 正在核对任务资料资格。" : " 任务正文当前不可用，仍可查看任务状态。";
     return;
   }
+  delete meta.dataset.workerReportKind;
   meta.textContent = fromQQ ? (assistant ? "回复 QQ" : "QQ · 所有者")
     : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
   if (!fromQQ) {
@@ -300,13 +430,17 @@ function scheduleSourceExpiry() {
 
 function markSourceProjection(node, turn) {
   if (typeof turn.worker_bound === "boolean") node.dataset.workerBound = String(turn.worker_bound);
-  const report = turn.worker_report;
-  if (report && typeof report.task_id === "string" && typeof report.attempt_id === "string"
-      && node.classList.contains("assistant") && !node.dataset.channel?.startsWith("qq")) {
-    node.classList.add("worker-report");
-    node.dataset.workerTaskId = report.task_id;
-    node.dataset.workerReportState = typeof report.state === "string" ? report.state : "unknown";
+  const report = workerReportFor(node, turn);
+  node.classList.toggle("worker-report", !!report);
+  node.classList.toggle("worker-summary", report?.kind === "alice_summary");
+  node.classList.toggle("worker-report-notice", !!report && report.kind !== "alice_summary");
+  if (report) {
+    node.dataset.workerTaskId = report.taskId;
+    node.dataset.workerReportState = report.state;
+    node.dataset.workerReportKind = report.kind;
     node.querySelector("details.think")?.remove();
+  } else {
+    delete node.dataset.workerTaskId; delete node.dataset.workerReportState; delete node.dataset.workerReportKind;
   }
   if (typeof turn.source_bound !== "boolean") return;
   node.dataset.sourceBound = String(turn.source_bound);
@@ -325,22 +459,35 @@ function applySourceUpdates(updates) {
   for (const update of Array.isArray(updates) ? updates : []) {
     const node = turnNodes.get(update.id);
     if (!node?.isConnected || typeof update.source_bound !== "boolean") continue;
+    markUserWorkerTarget(node, update);
     const txt = node.querySelector(".txt");
-    if (txt && typeof update.content === "string") setBubbleText(txt, update.content);
+    if (txt && typeof update.content === "string") setBubbleText(txt, historyDisplayContent(node, update));
     markSourceProjection(node, update);
   }
   scheduleSourceExpiry();
 }
 
 function sourceProjectionIds() {
-  return [...turnNodes].filter(([, node]) => node.isConnected && node.dataset.sourceBound !== "false"
-    && node.dataset.sourceAvailable !== "false").map(([id]) => id);
+  // A disabled legacy grant may be resumed without revocation. Recheck task
+  // projections even while hidden; only the server can restore their text.
+  return [...turnNodes].filter(([, node]) => node.isConnected && (userWorkerTargets.has(node)
+    || node.dataset.workerBound === "true"
+    || node.dataset.sourceBound !== "false" && node.dataset.sourceAvailable !== "false")).map(([id]) => id);
 }
 
 function invalidateSourceDisplays() {
   sourceProjectionVersion++;
+  if (composerWorkerReference) composerWorkerReference.title = "";
+  if (uncertainSend?.workerReference) uncertainSend.workerReference.title = "";
+  renderComposerWorkerReference();
   for (const node of turnNodes.values()) {
     if (node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "false") redactSourceNode(node, true);
+    const target = userWorkerTargets.get(node), button = node.querySelector(".message-worker-target");
+    if (target && button) {
+      target.available = false; target.title = ""; button.disabled = true;
+      button.textContent = `DSH · 会话 ${target.taskId.slice(-8)} · 状态待同步`;
+      button.title = `任务引用状态待同步 · ${target.taskId}`;
+    }
   }
   expireSourceDisplays();
   syncHistory();
@@ -371,6 +518,7 @@ function markTurn(node, turn) {
     node.dataset.delivery = delivery || "pending";
   }
   node.classList.toggle("from-qq", fromQQ);
+  markUserWorkerTarget(node, turn);
   markSourceProjection(node, turn);
   renderTurnMetadata(node);
   window.AliceChatSearch?.decorateTurn(node, turn);
@@ -383,14 +531,14 @@ function mergeTurn(turn) {
   let node = turnNodes.get(turn.id) || (key && requestNodes.get(key));
   if (!node || !node.isConnected) node = bubble(turn.role, "");
   const txt = node.querySelector(".txt");
-  if (turn.role === "assistant") setBubbleText(txt, turn.content || "（沉默）");
+  if (turn.role === "assistant") setBubbleText(txt, historyDisplayContent(node, turn, "（沉默）"));
   else txt.textContent = turn.content || "";
   markTurn(node, turn);
   const later = [...$("#msgs").querySelectorAll(".msg[data-turn-id]")]
     .find((other) => Number(other.dataset.turnId) > turn.id);
   if (later && later !== node) $("#msgs").insertBefore(node, later);
   if (uncertainSend?.requestId === turn.request_id && turn.role === "assistant") {
-    uncertainSend = null;
+    confirmComposerRequest(turn.request_id);
     setChatNotice("");
   }
   scrollBottom();
@@ -425,6 +573,7 @@ async function refreshActivity() {
 }
 
 function resetHistory(epoch) {
+  const hadReference = !!composerWorkerReference || !!uncertainSend?.workerReference;
   window.AliceChatSearch?.reset();
   historyVersion += 1;
   sourceProjectionVersion++;
@@ -435,6 +584,9 @@ function resetHistory(epoch) {
   turnNodes.clear();
   requestNodes.clear();
   uncertainSend = null;
+  composerWorkerReference = null;
+  renderComposerWorkerReference();
+  if (hadReference) toast("会话已切换，任务引用已清除；输入文字仍保留。", 4000);
   historyLoaded = false;
   followingLatest = true;
   // Preserve the interface's empty-state element if it lives inside the transcript.
@@ -561,7 +713,10 @@ $("#chat-new-attempt").onclick = () => {
   if (busy || !uncertainSend?.canStartNew) return;
   if (!window.confirm("原请求已经失败或中断，但用户消息或部分记忆操作可能已保存。作为新的一轮发送可能重复这些操作，并再次产生模型费用。\n确认允许新建一轮吗？")) return;
   const text = uncertainSend.text;
+  const reference = uncertainSend.workerReference;
   uncertainSend = null;
+  if (reference?.epoch === sessionEpoch) composerWorkerReference = { ...reference };
+  renderComposerWorkerReference();
   if (!$("#input").value.trim()) $("#input").value = text;
   resizeComposer();
   $("#chat-new-attempt").classList.add("hidden");
@@ -1227,7 +1382,10 @@ function ensureThinking(node) {
 }
 
 function handleEvent(ev, node, userNode, requestId) {
-  if (ev.type === "done" || ev.type === "error") replyMotion(node, false);
+  if (ev.type === "done" || ev.type === "error") {
+    replyMotion(node, false);
+    window.AliceWorkers?.refreshAfterTurn();
+  }
   const txt = node.querySelector(".txt");
   const raw = () => txt.dataset.raw || "";
   if (ev.type === "start" || ev.type === "accepted") {
@@ -1237,6 +1395,7 @@ function handleEvent(ev, node, userNode, requestId) {
     }
     noteRequestNode(userNode, ev.request_id || requestId, "user");
     noteRequestNode(node, ev.request_id || requestId, "assistant");
+    markUserWorkerTarget(userNode, { channel: "gui", ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
   } else if (ev.type === "reasoning") {
     ensureThinking(node).textContent += ev.text;
     scrollBottom();
@@ -1244,6 +1403,7 @@ function handleEvent(ev, node, userNode, requestId) {
     setBubbleText(txt, raw() + ev.text);
     scrollBottom();
   } else if (ev.type === "tool") {
+    window.AliceWorkers?.noteTool(ev.name);
     sysline(ev.name === "remember" ? "（正在整理可保存的记忆…）" : ev.name === "discovery_search" ? "（正在查找资料…）" : "（翻了一下记忆…）");
   } else if (ev.type === "search") {
     window.AliceChatSearch?.progress(ev, node);
@@ -1255,9 +1415,10 @@ function handleEvent(ev, node, userNode, requestId) {
     renderMemory(ev.memory);
     if (ev.session_epoch) sessionEpoch = ev.session_epoch;
     const id = ev.request_id || requestId;
-    markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui" });
+    markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui",
+      ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
     markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
-    if (uncertainSend?.requestId === id) uncertainSend = null;
+    confirmComposerRequest(id);
     setChatNotice("");
     scrollBottom();
     window.AliceObserver?.refreshAfterTurn();
@@ -1278,6 +1439,15 @@ async function send() {
     await syncHistory();
     return;
   }
+  if (composerWorkerReference && composerWorkerReference.epoch !== sessionEpoch) {
+    composerWorkerReference = null; renderComposerWorkerReference();
+    setChatNotice("任务引用属于旧会话，已清除。请重新选择任务后再发送；输入文字保留。");
+    return;
+  }
+  if (uncertainSend?.workerReference && (uncertainSend.text !== text || uncertainSend.epoch !== sessionEpoch)) {
+    setChatNotice("上一条任务补充的结果尚未确认，不能更换文字或目标后作为重试发送。请先同步记录，或核对原请求结果。");
+    return;
+  }
   if (window.AliceEvaluations?.canSend() === false) {
     toast("核查许可正在登记，请等待登记完成再发送。", 4000);
     return;
@@ -1286,13 +1456,18 @@ async function send() {
   busy = true;
   connectionStatus("正在提交", "busy");
   const requestId = retry?.requestId || crypto.randomUUID().replaceAll("-", "");
+  const reference = retry ? retry.workerReference : composerWorkerReference;
+  const workerReference = reference ? { ...reference } : null;
+  const workerTarget = workerReference ? { collaborator: "dsh-agent", task_id: workerReference.taskId } : null;
   // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
   const evaluationId = retry ? retry.evaluationId : window.AliceEvaluations?.peekForSend();
   const payload = { text, request_id: requestId,
     ...(sessionEpoch ? { session_epoch: sessionEpoch } : {}),
-    ...(evaluationId ? { evaluation_id: evaluationId } : {}) };
+    ...(evaluationId ? { evaluation_id: evaluationId } : {}),
+    ...(workerTarget ? { worker_target: workerTarget } : {}) };
   const epochAtSend = sessionEpoch;
-  uncertainSend = { requestId, text, evaluationId, epoch: epochAtSend };
+  uncertainSend = { requestId, text, evaluationId, epoch: epochAtSend, workerReference, draftUnchanged: true };
+  renderComposerWorkerReference();
   window.AliceChatSearch?.begin(requestId, epochAtSend);
   $("#chat-new-attempt").classList.add("hidden");
   input.disabled = true;
@@ -1344,6 +1519,7 @@ async function send() {
     if (!node?.isConnected) node = bubble("assistant", "", { animate: !retry });
     noteRequestNode(userNode, requestId, "user");
     noteRequestNode(node, requestId, "assistant");
+    markUserWorkerTarget(userNode, { channel: "gui", worker_target: workerTarget }, workerReference?.title || "");
     if (!r.body) throw new Error("没有收到回复数据流");
     replyMotion(node, true);
     const reader = r.body.getReader();
@@ -1361,6 +1537,14 @@ async function send() {
           .map((line) => line.slice(5).trimStart()).join("\n");
         if (!data) continue;
         const event = JSON.parse(data);
+        if (workerReference && (sessionEpoch !== epochAtSend || event.session_epoch && event.session_epoch !== epochAtSend)) {
+          const nextEpoch = sessionEpoch !== epochAtSend ? sessionEpoch : event.session_epoch;
+          if (!input.value.trim()) { input.value = text; resizeComposer(); }
+          resetHistory(nextEpoch || null);
+          setChatNotice("会话已更换，旧请求回复未并入当前会话。任务引用已清除，输入文字保留；请重新选择任务。");
+          await reader.cancel();
+          return;
+        }
         if (event.type === "done" || event.type === "error") terminal = true;
         handleEvent(event, node, userNode, requestId);
       }
@@ -1377,6 +1561,10 @@ async function send() {
     // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
     if (!accepted && !rejected) window.AliceEvaluations?.consumeForSend(evaluationId);
     busy = false;
+    if (uncertainSend?.requestId === requestId && uncertainSend.workerReference && !input.value.trim()) {
+      input.value = uncertainSend.text; resizeComposer();
+    }
+    renderComposerWorkerReference();
     window.AliceChatSearch?.setBusy(false);
     window.AliceEvaluations?.afterTurn();
     if (!shuttingDown) {
@@ -1390,7 +1578,10 @@ async function send() {
 }
 
 $("#send").onclick = send;
-$("#input").addEventListener("input", resizeComposer);
+$("#input").addEventListener("input", () => {
+  if (uncertainSend) uncertainSend.draftUnchanged = false;
+  resizeComposer();
+});
 $("#input").addEventListener("compositionstart", () => { composing = true; });
 $("#input").addEventListener("compositionend", () => { composing = false; resizeComposer(); });
 window.addEventListener("resize", resizeComposer);

@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 
-from .channels import ChannelError
+from .channels import ChannelError, normalize_worker_target
 from .worker_tasks import ACTIVE, bounded_int, identity, safe_text
 from .worker_transport import BridgeError, DshBridge
 from .worker_credentials import CredentialError, ManagedCredential
@@ -26,6 +26,7 @@ class WorkerRuntime(WorkerReportsMixin):
         self.wake = threading.Event()
         self.stop = threading.Event()
         self.thread = None
+        self.report_thread = None
         self.cancel_attempted = set()
         self.credentials = ManagedCredential()
         self.credential_status = self.credentials.metadata()
@@ -77,8 +78,6 @@ class WorkerRuntime(WorkerReportsMixin):
             self.drain()
             with self.service._lock:
                 self.service._channels.check_epoch(epoch)
-                with self.ledger.conn:
-                    self._disable_locked()
                 self.bridge = None
                 self.connection_state = 'disconnected'
                 self.generation += 1
@@ -137,7 +136,7 @@ class WorkerRuntime(WorkerReportsMixin):
                                     or time.monotonic() >= ready_deadline):
                                 break
                             time.sleep(min(0.5, max(0, ready_deadline - time.monotonic())))
-                    setup_message = ('独立令牌已保存并连接 DSH NEXT。请继续设置任务目录与派工授权。' if bridge else
+                    setup_message = ('独立令牌已保存并连接 DSH NEXT。已保存的授权、任务记录与已用次数保留。' if bridge else
                                      '独立令牌已加密保存，DSH NEXT 尚未就绪。若已启用新版插件，请稍后再次连接；旧版需加载 0.4.0 或更新版本。无需复制令牌或设置环境变量。')
             finally:
                 token = None
@@ -151,6 +150,8 @@ class WorkerRuntime(WorkerReportsMixin):
                     self.bridge = bridge
                     self.connection_state = 'connected'
                     self._start_thread_locked()
+                    setup_message += ('原授权继续有效；补充前会核对原会话状态。' if self.ledger.policy()['enabled'] else
+                                      '派工授权尚未开启；使用原参数恢复不会清除未撤销记录或重置次数。')
                 result = {**self.status_locked(), 'setup_message': setup_message}
                 with self.ledger.conn:
                     # Input and receipt contain no secret, ciphertext or secret ID.
@@ -194,12 +195,12 @@ class WorkerRuntime(WorkerReportsMixin):
                 raise ChannelError(409, 'policy_changed', '授权已变化，请刷新')
             if self.closing or self.paused:
                 raise ChannelError(503, 'draining', '正在停止协作任务')
-            unchanged = (bool(policy['enabled']) == payload['enabled']
-                         and policy['max_runs'] == maximum
-                         and policy['workspace_root'] == root
-                         and policy['permission_mode'] == mode
-                         and bool(policy['native_permissions_ack']) == payload['native_permissions_ack']
-                         and policy['max_seconds'] == seconds)
+            same_parameters = (policy['max_runs'] == maximum
+                               and policy['workspace_root'] == root
+                               and policy['permission_mode'] == mode
+                               and bool(policy['native_permissions_ack']) == payload['native_permissions_ack']
+                               and policy['max_seconds'] == seconds)
+            unchanged = bool(policy['enabled']) == payload['enabled'] and same_parameters
             if unchanged:
                 # Saving the same grant is not revocation or a fresh budget.
                 # Keep the revision so existing task bodies and run counts survive.
@@ -216,12 +217,16 @@ class WorkerRuntime(WorkerReportsMixin):
                         (epoch, self.bridge.instance_id)).fetchone():
                     raise ChannelError(409, 'task_busy', '请先停止并确认现有任务，再修改授权')
             with self.ledger.conn:
-                self._disable_locked()
+                resumed = payload['enabled'] and not policy['enabled'] and same_parameters
+                if not resumed:
+                    self._disable_locked()
                 self.ledger.conn.execute('UPDATE worker_policy SET enabled=?,max_runs=?,workspace_root=?,'
                                          'permission_mode=?,native_permissions_ack=?,max_seconds=? WHERE id=1',
                                          (int(payload['enabled']), maximum, root, mode,
                                           int(payload['native_permissions_ack']), seconds))
                 result = self.status_locked()
+                if resumed:
+                    result['policy_resumed'] = True
                 self.ledger.receipt(epoch, payload['request_id'], payload, result)
             self.wake.set()
             return result
@@ -237,21 +242,165 @@ class WorkerRuntime(WorkerReportsMixin):
             raise ChannelError(409, 'not_connected', 'DSH 连接不可用，未提交任务')
         return policy
 
+    def validate_chat_target_locked(self, request):
+        """Validate routing metadata without importing any task/message body."""
+        target = normalize_worker_target(request.get('worker_target'))
+        if target is None:
+            return None
+        policy = self.ledger.policy()
+        self._admit_locked({**request, 'worker_policy_revision': policy['revision']})
+        if self.closing or self.paused or self.stop.is_set() or self.bridge is None:
+            raise ChannelError(409, 'worker_target_unavailable', '协作引用目标当前不可用，请重新选择')
+        task = self.ledger.task(target['task_id'], request['session_epoch'])
+        if (not self.ledger.visible(task) or task['archived'] or task['management_pending']
+                or task['session_closed'] or task['bridge_instance'] != self.bridge.instance_id):
+            raise ChannelError(409, 'worker_target_unavailable', '协作引用已失效或会话已关闭，请重新选择')
+        # Running/unknown targets may still be inspected/stopped. Only the send
+        # branch decides whether this same task is currently resumable.
+        return target
+
+    def worker_target_view_locked(self, target, epoch):
+        target = normalize_worker_target(target)
+        if target is None:
+            return None
+        try:
+            # This projection grants only a link to retained GUI history.
+            # Action admission still uses validate_chat_target_locked above.
+            self.service._channels.check_epoch(epoch)
+            task = self.ledger.task(target['task_id'], epoch)
+            available = bool(epoch == self.service.store.meta_get('session_epoch')
+                             and not task['deleted'] and self.ledger.visible(task))
+        except ChannelError:
+            available = False
+        return {**target, 'available': available}
+
+    def _target_tool_args_locked(self, request, name, args):
+        target = normalize_worker_target(request.get('worker_target'))
+        if target is None:
+            return args
+        if name == 'dispatch_worker':
+            raise ChannelError(403, 'worker_target_bound', '本轮已引用既有任务，不能另建任务')
+        task_id = target['task_id']
+        if name == 'worker_task_status':
+            task_ids = args.get('task_ids', [])
+            if not isinstance(task_ids, list) or any(value != task_id for value in task_ids):
+                raise ChannelError(403, 'worker_target_mismatch', '本轮只允许操作引用的协作任务')
+            args = {**args, 'task_ids': [task_id]}
+        elif name not in {'worker_task_read', 'send_worker_message', 'cancel_worker_task'} or args.get('task_id') != task_id:
+            raise ChannelError(403, 'worker_target_mismatch', '本轮只允许操作引用的协作任务')
+        self.validate_chat_target_locked(request)
+        return args
+
+    def _check_forwarding_locked(self, request, name, args):
+        if name not in {'dispatch_worker', 'send_worker_message'}:
+            return
+        if request.get('worker_context_source_ids'):
+            raise ChannelError(409, 'worker_source_forwarding_unavailable', '尚未开放来源资料转发，未发送')
+        refs = request.get('worker_context_refs', [])
+        if refs:
+            if not self.service.store.worker_refs_valid(refs, scope='gui'):
+                raise ChannelError(409, 'worker_context_unavailable', '任务上下文已失效，未发送')
+            if name == 'dispatch_worker' or any(ref['task_id'] != args.get('task_id') for ref in refs):
+                raise ChannelError(409, 'worker_cross_task_context', '尚未开放跨任务资料转发，请先撤回旧任务资料')
+
+    def _followup_task_locked(self, task_id, epoch):
+        task = self.ledger.task(task_id, epoch)
+        if (not self.ledger.visible(task) or task['archived'] or task['management_pending']
+                or task['session_closed'] or task['cancel_requested']
+                or task['state'] not in {'succeeded', 'waiting'} or not task['agent_idle']
+                or not task['session_id'] or self.bridge is None
+                or task['bridge_instance'] != self.bridge.instance_id):
+            raise ChannelError(409, 'task_not_resumable', '此任务暂不能继续；请检查状态或原 DSH 专属会话是否仍可用')
+        return task
+
+    @staticmethod
+    def _tool_receipt(request, name, args, policy):
+        request_id = hashlib.sha256((request['request_id'] + '\0' + request['tool_call_id']).encode()).hexdigest()
+        payload = {'tool': name, 'args': args, 'policy_revision': policy['revision']}
+        if request.get('worker_target') is not None:
+            payload['worker_target'] = normalize_worker_target(request['worker_target'])
+        return request_id, payload
+
+    def _preflight_followup(self, request, args, tool_call_id):
+        """Read one existing session before charging/queuing; never resume or send."""
+        with self.service._lock:
+            policy = self._admit_locked(request, execution=True)
+            args = self._target_tool_args_locked(request, 'send_worker_message', args)
+            self._check_forwarding_locked(request, 'send_worker_message', args)
+            request_id, payload = self._tool_receipt({**request, 'tool_call_id': tool_call_id},
+                                                     'send_worker_message', args, policy)
+            old = self.ledger.replay(request['session_epoch'], request_id, payload)
+            if old is not None:
+                return {'replayed': old}
+            task = self._followup_task_locked(args.get('task_id'), request['session_epoch'])
+            if args.get('input_ids'):
+                raise ChannelError(409, 'input_import_unavailable', '本轮派工使用获准工作目录，文件 ID 导入尚未开放')
+            if self.ledger.runs_used() >= policy['max_runs']:
+                raise ChannelError(409, 'run_budget_exhausted', '本次授权执行次数已用完')
+            check = {'bridge': self.bridge, 'generation': self.generation, 'epoch': request['session_epoch'],
+                     'revision': policy['revision'], 'task_id': task['task_id'],
+                     'instance_id': self.bridge.instance_id, 'session_id': task['session_id']}
+        remote, error = None, None
+        try:
+            remote = check['bridge'].call('status', {'task_id': check['task_id']})
+        except BridgeError as exc:
+            error = exc
+        with self.service._lock:
+            policy = self._admit_locked(request, execution=True)
+            self._validate_followup_check_locked(check, policy)
+            args = self._target_tool_args_locked(request, 'send_worker_message', args)
+            self._check_forwarding_locked(request, 'send_worker_message', args)
+            old = self.ledger.replay(check['epoch'], request_id, payload)
+            if old is not None:
+                return {'replayed': old}
+            task = self._followup_task_locked(check['task_id'], check['epoch'])
+            if task['session_id'] != check['session_id']:
+                raise ChannelError(409, 'worker_session_changed', '原协作会话身份已变化，未发送补充')
+            closed = (error is not None and not error.uncertain
+                      and error.code in {'task_closed', 'task_expired', 'task_unknown', 'task_not_found'})
+            if remote is not None:
+                if remote.get('session_id') != check['session_id']:
+                    raise ChannelError(409, 'worker_session_changed', 'DSH 返回的会话身份不符，未发送补充')
+                closed = (remote.get('state') == 'closed' or remote.get('dispose_confirmed') is True
+                          or remote.get('close_requested') is True)
+            if closed:
+                with self.ledger.conn:
+                    self.ledger.conn.execute('UPDATE worker_tasks SET session_closed=1,version=version+1 WHERE task_id=?',
+                                             (check['task_id'],))
+                    self.ledger.event(check['task_id'], 'session_closed', payload={
+                        'text': '原 DSH 专属会话已关闭或不再可用；历史资料与已用次数保留，未发送补充。'})
+                raise ChannelError(409, 'task_not_resumable', '原 DSH 会话已关闭或过期，未发送补充；历史资料仍保留')
+            if error is not None:
+                raise error
+            if (remote.get('agent_idle') is not True or remote.get('active_attempt_id') is not None
+                    or remote.get('close_requested') is not False or remote.get('dispose_confirmed') is not False
+                    or remote.get('state') not in {'succeeded', 'idle', 'waiting'}):
+                raise ChannelError(409, 'task_not_resumable', '尚不能确认原 DSH 会话空闲，未发送补充')
+            if (remote.get('permission_profile') != 'dsh_native_v1'
+                    or remote.get('permission_mode') != policy['permission_mode']
+                    or remote.get('approval_policy') != 'never'):
+                raise ChannelError(409, 'permission_unavailable', '原 DSH 会话权限与当前授权不符，未发送补充')
+            return check
+
+    def _validate_followup_check_locked(self, check, policy):
+        if (check['epoch'] != self.service._channels.epoch or check['generation'] != self.generation
+                or check['bridge'] is not self.bridge or self.bridge is None
+                or check['instance_id'] != self.bridge.instance_id or check['revision'] != policy['revision']):
+            raise ChannelError(409, 'worker_session_changed', '连接或授权已变化，未发送补充')
+
     def tool_execute(self, request, name, args, tool_call_id):
         if not isinstance(args, dict) or not isinstance(tool_call_id, str) or not 1 <= len(tool_call_id) <= 200:
             raise ChannelError(400, 'invalid_request', '工具参数或身份无效')
+        checked = self._preflight_followup(request, args, tool_call_id) if name == 'send_worker_message' else None
+        if checked is not None and 'replayed' in checked:
+            return {'result': checked['replayed']}
         with self.service._lock:
             policy = self._admit_locked(request, execution=name in {'dispatch_worker', 'send_worker_message'})
+            if checked is not None:
+                self._validate_followup_check_locked(checked, policy)
+            args = self._target_tool_args_locked(request, name, args)
             epoch = request['session_epoch']
-            if (name in {'dispatch_worker', 'send_worker_message'}
-                    and request.get('worker_context_source_ids')):
-                raise ChannelError(409, 'worker_source_forwarding_unavailable', '尚未开放来源资料转发，未发送')
-            refs = request.get('worker_context_refs', [])
-            if name in {'dispatch_worker', 'send_worker_message'} and refs:
-                if not self.service.store.worker_refs_valid(refs, scope='gui'):
-                    raise ChannelError(409, 'worker_context_unavailable', '任务上下文已失效，未发送')
-                if name == 'dispatch_worker' or any(ref['task_id'] != args.get('task_id') for ref in refs):
-                    raise ChannelError(409, 'worker_cross_task_context', '尚未开放跨任务资料转发，请先撤回旧任务资料')
+            self._check_forwarding_locked(request, name, args)
             if name == 'worker_task_status':
                 ids = args.get('task_ids')
                 if ids:
@@ -283,8 +432,7 @@ class WorkerRuntime(WorkerReportsMixin):
                                         'version': r['version'], 'epoch': epoch,
                                         'policy_revision': policy['revision']} for r in rows],
                         'result': {'task_id': task['task_id'], 'state': task['state']}}
-            request_id = hashlib.sha256((request['request_id'] + '\0' + tool_call_id).encode()).hexdigest()
-            receipt_payload = {'tool': name, 'args': args, 'policy_revision': policy['revision']}
+            request_id, receipt_payload = self._tool_receipt({**request, 'tool_call_id': tool_call_id}, name, args, policy)
             old = self.ledger.replay(epoch, request_id, receipt_payload)
             if old is not None:
                 return {'result': old}
@@ -323,12 +471,9 @@ class WorkerRuntime(WorkerReportsMixin):
                                                   now, now, now + 7 * 86400, self.bridge.instance_id, policy['workspace_root']))
                         self.ledger.event(task_id, 'task_accepted', payload={'text': '已登记任务及本轮执行次数；尚未发送 DSH。'})
                     else:
-                        task = self.ledger.task(args.get('task_id'), epoch)
-                        if (not self.ledger.visible(task) or task['archived'] or task['management_pending']
-                                or task['session_closed'] or task['cancel_requested']
-                                or task['state'] not in {'succeeded', 'waiting'} or not task['agent_idle']
-                                or not task['session_id'] or task['bridge_instance'] != self.bridge.instance_id):
-                            raise ChannelError(409, 'task_not_resumable', '请等待此任务完成；只可继续当前连接中仍有效的专属会话')
+                        task = self._followup_task_locked(args.get('task_id'), epoch)
+                        if task['session_id'] != checked['session_id']:
+                            raise ChannelError(409, 'worker_session_changed', '原协作会话身份已变化，未发送补充')
                         task_id, brief = task['task_id'], args.get('message')
                         if not isinstance(brief, str) or not brief.strip() or len(brief) > 10000:
                             raise ChannelError(400, 'invalid_request', '补充说明须为 1–10000 字符')
@@ -576,12 +721,22 @@ class WorkerRuntime(WorkerReportsMixin):
             self.stop.set()
             self.wake.set()
             thread, bridge, epoch = self.thread, self.bridge, self.service._channels.epoch
+        # The report owns the GUI slot, not DSH execution. Marking stop discards
+        # its eventual result; never delay DSH cancellation by joining model I/O.
+        # Service close/reset drain the GUI slot before closing Store/client.
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=25)
             if thread.is_alive():
                 raise ChannelError(409, 'worker_draining', '协作请求仍在退出，请稍后重试')
         with self.service._lock:
+            with self.ledger.conn:
+                # The execution thread can enqueue its final report while it
+                # stops. Downgrade only after join; reconnect must not start a
+                # historical summary request. Do not wait on report I/O here.
+                self.ledger.conn.execute("UPDATE worker_reports SET report_state='pending_notice',kind='status' "
+                                         "WHERE epoch=? AND report_state IN ('pending','summarizing')", (epoch,))
             tasks = self.ledger.conn.execute('SELECT task_id FROM worker_tasks WHERE epoch=? AND bridge_instance=? '
+                                             "AND agent_idle=0 AND state IN ('starting','running','collecting','stopping','waiting','unknown') "
                                              'ORDER BY agent_idle,updated_at DESC',
                                              (epoch, bridge.instance_id if bridge else '')).fetchall()
         close_deadline = time.monotonic() + 10

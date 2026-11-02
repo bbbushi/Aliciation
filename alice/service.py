@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import shutil
@@ -184,6 +185,16 @@ class ChatService:
         return True
 
     def _history_turn_display_locked(self, turn_id):
+        report = self.store.conn.execute(
+            "SELECT outcome,kind FROM worker_reports WHERE turn_id=? AND epoch=? AND report_state='delivered'",
+            (turn_id, self._channels.epoch)).fetchone()
+        if report and report['kind'] == 'legacy_transcript':
+            # Old reports remain auditable in their task, but their raw DSH body
+            # is no longer replayed into chat or shipped to browser text caches.
+            status = {'succeeded': 'DSH 本轮执行已结束。', 'failed': 'DSH 本轮执行未成功完成。',
+                      'cancelled': 'DSH 本轮执行已停止或取消。', 'interrupted': 'DSH 本轮执行已中断。',
+                      'unknown': 'DSH 本轮执行状态待确认。'}.get(report['outcome'], 'DSH 任务状态已更新。')
+            return status + '完整回复请在协作会话查看。'
         # The local owner's history may show their QQ answer only while every
         # dependency permits both audiences. This does not widen model/recall
         # scopes, nor allow GUI-only material to flow in the other direction.
@@ -197,11 +208,12 @@ class ChatService:
     def _history_source_fields_locked(self, turn_id) -> dict:
         discussion = self.store.discussion_status(turn_id, scope="gui")
         report = self.store.conn.execute(
-            "SELECT task_id,attempt_id,outcome FROM worker_reports "
+            "SELECT task_id,attempt_id,outcome,kind FROM worker_reports "
             "WHERE turn_id=? AND epoch=? AND report_state='delivered'",
             (turn_id, self._channels.epoch)).fetchone()
         report_fields = {"worker_report": {"task_id": report["task_id"], "attempt_id": report["attempt_id"],
-                                            "state": report["outcome"]}} if report else {}
+                                            "state": report["outcome"], "kind": report["kind"]}} if report else {}
+        report_fields['worker_target'] = self._history_worker_target_locked(turn_id)
         worker = self.store.worker_turn_status(turn_id, scope="gui")
         if worker is not None:
             # The existing GUI history refresh tracks source_bound rows. Task
@@ -217,6 +229,18 @@ class ChatService:
         available = self._history_source_available_locked(turn_id, attachment)
         return {"source_bound": True, "source_available": bool(available),
                 "source_expires_at": attachment["expires_at"], "discussion": discussion, **report_fields}
+
+    def _history_worker_target_locked(self, turn_id):
+        row = self.store.conn.execute(
+            "SELECT source_json FROM channel_requests WHERE user_turn_id=? AND channel_id='gui' "
+            'AND session_epoch=?', (turn_id, self._channels.epoch)).fetchone()
+        if row is None:
+            return None
+        try:
+            target = json.loads(row['source_json']).get('worker_target')
+            return self._workers.worker_target_view_locked(target, self._channels.epoch)
+        except (ValueError, TypeError, AttributeError):
+            return None
 
     def history_page(self, after_id=None, limit=60, session_epoch=None, source_turn_ids=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 100 or
@@ -254,7 +278,7 @@ class ChatService:
                 turns.append({"id": row["id"], "role": row["role"], "content": self._history_turn_display_locked(row["id"]), "ts": row["ts"],
                               "request_id": None if report else row["request_id"],
                               "channel": "gui" if report else row["channel_id"] or "local",
-                              "sender_label": "宿主协作通知" if report else "所有者", "delivery": None if report else delivery,
+                              "sender_label": (self.cfg.persona.name if report.get("kind") == "alice_summary" else "协作状态") if report else "所有者", "delivery": None if report else delivery,
                               **source_fields})
             source_updates = []
             if source_turn_ids:
@@ -267,7 +291,7 @@ class ChatService:
                     if identity not in present:
                         source_updates.append({"id": identity, "content": SOURCE_SHADOW,
                                                "source_bound": True, "source_available": False,
-                                               "source_expires_at": None})
+                                               "source_expires_at": None, "worker_target": None})
                         continue
                     source_updates.append({"id": identity, "content": self._history_turn_display_locked(identity),
                                            **self._history_source_fields_locked(identity)})
@@ -402,6 +426,7 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             if reset:
                 self._workers.drain()
+                self._workers.join_worker_reports()
             with self._lock:
                 if reset:
                     # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
@@ -418,6 +443,7 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             if reset:
                 self._workers.drain()
+                self._workers.join_worker_reports()
             with self._lock:
                 if reset:
                     self._archive_locked()
@@ -430,6 +456,7 @@ class ChatService:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
         with self._channels.control(), self._workers.control_lock:
             self._workers.drain()
+            self._workers.join_worker_reports()
             with self._lock:
                 self._archive_locked()
                 return self.state()
@@ -483,9 +510,10 @@ class ChatService:
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
              request_id=None, session_epoch=None, nonblocking=False, on_accepted=None,
-             search_intent=None, on_search_progress=None) -> dict:
+             search_intent=None, on_search_progress=None, worker_target=None) -> dict:
         """One admitted GUI turn. Existing callers retain blocking admission semantics."""
-        request = self._channels.gui_request(text, request_id, session_epoch, search_intent=search_intent)
+        request = self._channels.gui_request(text, request_id, session_epoch,
+                                            search_intent=search_intent, worker_target=worker_target)
         if nonblocking:
             prior = self._channels.lookup(request)
             if prior is not None:
@@ -497,6 +525,7 @@ class ChatService:
                 prior = self._channels.lookup(request)
                 if prior is not None:
                     return self._replayed_result(prior)
+                self._workers.validate_chat_target_locked(request)
                 accepted = self._channels.accept_locked(request)
                 if on_accepted is not None:
                     try:
@@ -847,6 +876,7 @@ class ChatService:
         """通常先强制提取再关资源；启动失败可用 extract=False 直接释放。"""
         self.begin_shutdown()
         self._channels.drain()  # HTTP 202 workers outlive their submitting connections.
+        self._workers.join_worker_reports()  # Report finalizers finish before Store/client disposal.
         self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
         self._discovery.shutdown()
         self._workers.shutdown()
