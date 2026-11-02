@@ -375,17 +375,30 @@ class ChatService:
     def worker_permissions(self, action: str = "list", payload=None) -> dict:
         """claude-agent 质询文件袋（分支限定 ytq）：list 挂起质询 / answer 三层答案。"""
         from addons.claude_agent.permission_gate import claude_policy_row, claude_gate_dir, list_pending, answer
-        row = claude_policy_row(self._workers.ledger.store)
-        gate_dir = claude_gate_dir(row)
-        if gate_dir is None:
-            return {"pending": [], "note": "claude-agent 未配置工作目录或未迁移，质询通道未启用"}
-        if action == "list":
-            return {"pending": list_pending(gate_dir)}
-        if action == "answer":
-            if not isinstance(payload, dict):
-                raise ValueError("答案请求必须是对象")
-            return answer(gate_dir, payload)
-        raise ValueError("action 无效")
+        with self._lock:
+            row = claude_policy_row(self._workers.ledger.store)
+            gate_dir = claude_gate_dir(row)
+            if gate_dir is None or not row['enabled'] or not row['native_sandbox_ack']:
+                return {'pending': []}
+            def current(req):
+                task_id = req.get('task_id')
+                if task_id not in self._workers.claude_transports:
+                    return False
+                task = self._workers.ledger.conn.execute('SELECT * FROM worker_tasks WHERE task_id=?', (task_id,)).fetchone()
+                attempt = self._workers.ledger.conn.execute('SELECT task_id,state FROM worker_attempts WHERE attempt_id=?', (req.get('attempt_id'),)).fetchone()
+                return (task is not None and attempt is not None and attempt['task_id'] == task_id
+                    and attempt['state'] in {'starting', 'running', 'waiting_permission'}
+                    and task['bridge_instance'] == 'local:claude-agent' and not task['cancel_requested']
+                    and req.get('epoch') == self._channels.epoch == task['epoch']
+                    and req.get('policy_revision') == row['revision'] == task['policy_revision']
+                    and self._workers.ledger.visible(task))
+            if action == 'list':
+                return {'pending': [req for req in list_pending(gate_dir) if current(req) and not req.get('stale')]}
+            if action == 'answer':
+                if not isinstance(payload, dict) or not current(payload):
+                    raise ValueError('质询已失效或任务正在停止')
+                return answer(gate_dir, payload)
+            raise ValueError('action 无效')
 
     def worker_inputs(self, payload=None) -> dict:
         """No user file may be imported until the DSH permission profile exists."""
