@@ -1,8 +1,11 @@
-"""生成协作者调度（管家架构）架构图 → docs/架构图-协作者调度.png
+"""生成协作者调度实装架构图（P1 正典：DSH 桥路径）→ docs/架构图-协作者调度.png
 运行：.venv/bin/python tools/make_collab_diagram.py
-依据：docs/设计文档/协作者调度-设计.md（v2.1 总纲）+ astra《协作者调度-开发方案 v1》（2026-11-01）。
-版本史：v1（2026-11-01）：用户授权层 / Alice 本体 / 宿主机制（名册·账本·权限预算·过膜·执行槽）/
-        adapter JSON 行协议 / 三类公民（干将·小工具·通道）/ 伴随纪律条。
+版本史：
+  v1（2026-11-01）：设计稿 v2.1 × 开发方案 v1 的设计图（manifest/GO 门控/本地帧协议）。
+  v2（2026-11-02）：**当前实装**架构图——撞车裁决后正典：dsh_agent 桥路径全链路
+    （五工具/WorkerRuntime 准入与账本/DshBridge HTTP/Koishi 插件/DSH NEXT 专属会话）
+    + 凭据 DPAPI + GUI 协作面板 + 留档 P3 本地轨（虚线）+ 边界与未开放如实标注。
+    依据：main@PR#19 实装代码（3732ffe + PR#17/19）。
 """
 from __future__ import annotations
 
@@ -30,22 +33,22 @@ def _setup_font() -> None:
 _setup_font()
 
 C = {
-    "user": "#4C72B0", "alice": "#C44E52", "registry": "#4C72B0", "ledger": "#55A868",
-    "guard": "#DD8452", "membrane": "#A8579B", "slot": "#3B7A6E", "adapter": "#8172B3",
-    "agent": "#8C564B", "tool": "#DD8452", "channel": "#4C72B0", "law": "#B0432F",
+    "user": "#4C72B0", "alice": "#C44E52", "runtime": "#55A868", "ledger": "#3B7A6E",
+    "gui": "#8172B3", "bridge": "#8C564B", "plugin": "#DD8452", "dsh": "#C44E52",
+    "cred": "#4C72B0", "p3": "#7f7f7f", "ruler": "#A8579B", "law": "#B0432F",
 }
 
 fig, ax = plt.subplots(figsize=(23, 16.5))
 ax.set_xlim(0, 100)
 ax.set_ylim(0, 100)
 ax.axis("off")
-ax.set_title("协作者调度架构图（管家架构 · 设计稿 v2.1 × 开发方案 v1）", fontsize=23, pad=18, fontweight="bold")
-ax.text(50, 99.0, "能力外置 · 判断力留下 ｜ 她的上限取决于用人水平：拆解 · 选人 · 派工 · 验收 · 整合",
+ax.set_title("协作者调度实装架构图（P1 · DSH 桥路径 · main@PR#19）", fontsize=23, pad=18, fontweight="bold")
+ax.text(50, 99.3, "对话槽与任务槽分离 ｜ 判断力不出租：权限/账本/准入在宿主，派工与追问在 Alice，执行在 DSH",
         ha="center", fontsize=11, color="#666", style="italic")
 
 
 def box(x, y, w, h, title, lines=(), color="#666", title_size=12, line_size=9.3,
-        dashed=False, line_gap=2.5):
+        dashed=False, line_gap=2.2):
     ax.add_patch(FancyBboxPatch(
         (x, y), w, h, boxstyle="round,pad=0.35",
         linewidth=0, edgecolor="none", facecolor="white", alpha=0.85, zorder=1,
@@ -78,109 +81,89 @@ def arrow(x1, y1, x2, y2, label="", color="#555", lw=1.6,
                 bbox=dict(fc="white", ec="none", alpha=0.88, pad=0.9))
 
 
-# ================= 顶部：用户与持续授权 =================
-box(3, 90.4, 94, 7.5, "用户 —— 目标 · 持续授权（招募权在人类）", [
-    "注册=授权：调用档案 + 权限档 + 预算帽由用户选定，Alice 无权修改 ｜ 试跑通过才进名册 ｜ 有效能力 = 认可安装 ∩ 政策 ∩ 渠道 ∩ 运行条件",
-], color=C["user"], title_size=12.5)
+# ================= 主列（自上而下） =================
+box(3, 89.8, 94, 8.7, "用户 —— GUI 授权与持续政策", [
+    "「设置→DSH」生成独立随机令牌：Windows DPAPI 加密存专用凭据文件，明文不进网页/配置/数据库/聊天 ｜ 断开保留令牌与授权",
+    "授权：工作目录 + 原生只读/工作区写模式 + 执行次数 + 单轮时限 ｜ 同范围后续派工不再逐次确认（权限收窄随时可做）",
+], color=C["user"], title_size=12.5, line_size=9.2)
 
-# ================= Alice 本体 =================
-box(16, 80.8, 68, 7.5, "Alice 本体 —— 单一永久会话（人格 · 记忆 · 判断力不出租）", [
-    "工具三件：dispatch_worker(name, brief, input_ids, requested_outputs) → 排队事实 ｜ status ｜ cancel ｜ 派工即返回，完成事件在安全对话边界回投",
-], color=C["alice"], title_size=13)
-arrow(50, 90.4, 50, 88.4, label="目标 · 派工 · 查询 · 取消", color=C["user"])
+box(3, 78.4, 60, 8.7, "Alice 本体 —— 单一永久会话（对话槽 ChannelCoordinator 保留）", [
+    "五工具（GUI 挂载）：dispatch_worker(name=\"dsh-agent\") ｜ worker_task_status ｜ worker_task_read ｜ send_worker_message 追问",
+    "worker_refs 按渠道 scope 进上下文：只交付状态与不透明句柄，报告原文不直入永久会话（契约 9.1）",
+], color=C["alice"], title_size=12.5, line_size=9.2)
 
-# ================= 宿主机制层 =================
-ax.add_patch(FancyBboxPatch((3, 45.6), 94, 32.6, boxstyle="round,pad=0.4",
-                            fc="#F7F8FA", ec="#BBBBBB", lw=1.3, zorder=0))
-ax.text(5.0, 76.6, "宿主机制层（alice/ 核心新增 · 纯标准库）", fontsize=13, color="#888", style="italic", zorder=2)
-arrow(50, 80.8, 50, 78.4, label="派工经宿主——她不直接触达任何 agent", color=C["alice"])
+box(3, 60.2, 60, 16.5, "WorkerCoordinator / WorkerRuntime —— 宿主机制层（service._workers）", [
+    "_admit_locked 准入：政策 revision + epoch + worker_target 绑定请求与工具调用",
+    "独立任务槽：1 执行 + 4 待办（_next_job_locked）｜ _supervise 监督线程 ｜ 取消意图 ≠ 已取消",
+    "持久账本 worker_tasks.py：policy/tasks/messages/attempts/events/requests/reports/management_*",
+    "四态完成：执行 / 验收(结构) / 人工 / 交付 ｜ 连接丢失保留 unknown，不重发不猜测",
+    "追问/新建每次预留一次执行次数（取消不退）；次数/token 非金额硬帽，如实分标",
+], color=C["runtime"], title_size=12.5, line_size=9.2, line_gap=2.5)
 
-box(4.5, 56.0, 21.5, 18.7, "协作者名册（collaborators.py）", [
-    "名单渲染进存在事实",
-    "  「我能请协作者做的」",
-    "注册试跑通过才进名单；装卸即显隐",
-    "不合法不注册（fail-visible）",
-    "失败分话术：没装 / 未启用 / 认证失效",
-    "  / 额度不足 —— 都 ≠ 没找到",
-], color=C["registry"], line_size=8.9, line_gap=2.8)
+box(3, 49.4, 60, 8.7, "worker_transport.DshBridge —— HTTP 桥客户端", [
+    "固定 127.0.0.1:18765 ｜ 协议 alice-dsh-plugin-bridge-v1 ｜ 独立令牌鉴权（32~256 位）",
+    "不 import addon、不启动 DSH、不读取其个人认证 ｜ 超时 5s，桥不可达 → bridge_unavailable（uncertain）",
+], color=C["bridge"], title_size=12, line_size=9.2)
 
-box(27.5, 56.0, 21.5, 18.7, "任务账本（worker_tasks.py）", [
-    "表：tasks / attempts / events",
-    "  / budget_entries",
-    "(epoch·请求·工具调用) 幂等键",
-    "绑定会话代际 · 政策版本",
-    "崩溃 → interrupted/unknown",
-    "  不自动重跑；重试=新尝试",
-], color=C["ledger"], line_size=8.9, line_gap=2.8)
+box(3, 38.2, 60, 8.7, "bridge_plugin（Koishi/cordis 0.4.0）—— DSH 本机 bundle", [
+    "无有效凭据不监听 ｜ hello + 专属任务 create/send/status/events/cancel/close ｜ 核对原生模式与 approval=never",
+    "令牌经 DPAPI 凭据文件自动配对 ｜ 只操作插件自建会话，不改日常会话与全局默认",
+], color=C["plugin"], title_size=12, line_size=9.2)
 
-box(50.5, 56.0, 21.5, 18.7, "权限与预算（guard 档位）", [
-    "task_files_v1：只读输入副本，",
-    "  可写 work/output/temp",
-    "模型网与任意外网分开声明",
-    "cwd≠沙箱——档位必须可强制",
-    "事前预留 · 幂等结算 · 未知不记零",
-    "  · 资源组（防别名绕过共享账号）",
-], color=C["guard"], line_size=8.9, line_gap=2.8)
+box(3, 25.6, 60, 10.9, "DSH NEXT —— 专属会话（被调度工人）", [
+    "Desktop 2.0.21-next / Harness 0.2.1-rc.4 / Cordis 4.0.5（固定 D:/dshNEXT/DSH NEXT）",
+    "权限档 dsh_native_v1：原生权限非 OS 沙箱——任务外读取/网络无法强隔离，用户 GUI 明确接受后才可派工",
+    "本轮用授权目录相对文件名；DSH 自报文件 ≠ Alice 已收取或核验（文件 ID 导入/产物下载未开放）",
+], color=C["dsh"], title_size=12.5, line_size=9.2)
 
-box(73.5, 56.0, 21.5, 18.7, "产物过膜（worker_artifacts.py）", [
-    "相对路径清单：拒绝绝对路径 /",
-    "  父目录逃逸 / 链接 / 越界类型",
-    "收取 → 隔离 → SHA-256",
-    "  （不信 worker 自报哈希）",
-    "注入扫描 → 带标签数据块",
-    "四态完成：执行/验收/人工/交付",
-], color=C["membrane"], line_size=8.9, line_gap=2.8)
+# ================= 右列 =================
+box(66, 79.9, 31, 8.7, "凭据（worker_credentials）", [
+    "Windows CurrentUser DPAPI 加密，令牌仅由 DshBridge 出示鉴权",
+    "重启免重授权；更换走高级设置",
+], color=C["cred"], line_size=9.0)
 
-box(4.5, 46.8, 91, 7.5, "任务执行槽 —— 与对话槽（ChannelCoordinator）分离", [
-    "全局运行数 1 · 队列 4 · 期限必为正（0=禁止新增）｜ Store 锁只护短步骤，等待在锁外 ｜ 长文件任务不让路（兴趣发现照旧）｜ 共享账号走资源组限额",
-], color=C["slot"], title_size=11.5, line_size=9.2)
+box(66, 59.2, 31, 19.7, "GUI 协作面板（worker-tasks.js）", [
+    "任务卡：状态/停止/结果与工作记录",
+    "已读游标按站点/epoch/协作者保存，",
+    "  跨标签单调同步、删除标记防迟到",
+    "归档/恢复/删除同步设置",
+    "  （默认关闭，删除禁用）",
+    "正文/标题/凭据不入浏览器存储",
+    "右侧固定面板 + 主区头像入口",
+], color=C["gui"], line_size=9.0)
 
-# ================= Adapter =================
-box(4.5, 34.4, 60, 9.6, "Adapter —— addons/agent_runner（固定 argv · JSON 行协议）", [
-    "start{policy_digest·input_handles·output_root·brief·deadline} → ready{版本·实际能力} → GO → progress/usage → result",
-    "ready 前零付费零副作用 ｜ 独立任务会话（adapter 声明加载范围）｜ 一次尝试一个终态：断连/超量/异常 → 失败或 unknown",
-], color=C["adapter"], title_size=12, line_size=9.2, line_gap=2.5)
-arrow(50, 45.6, 50, 44.1, label="启动（GO 前零付费）", color=C["slot"])
+box(66, 44.8, 31, 13.1, "留档轨（P3 · 未接线）", [
+    "本地 CLI 帧协议（git 历史 f3acba0）：",
+    "  GO 门控 / 256KiB 帧上限 / 整树回收",
+    "worker_artifacts.py + testbed 已进 main",
+    "  ——待本地 CLI 干将（zcode 等）启用",
+], color=C["p3"], line_size=9.0, dashed=True)
 
-# ================= 协作者集群 =================
-ax.add_patch(FancyBboxPatch((3, 14.6), 94, 16.4, boxstyle="round,pad=0.4",
-                            fc="#FBFAF7", ec="#BBBBBB", lw=1.3, zorder=0))
-ax.text(5.0, 29.6, "协作者集群（名册公民 · 各带调用档案与权限档）", fontsize=13, color="#888", style="italic", zorder=2)
+box(66, 34.8, 31, 8.7, "验收标尺（0 项通过·待人工）", [
+    "契约 §六 + astra §5 三硬门槛",
+    "对方 A01~A12 真实场景清单",
+    "已有真实派工证据；产物未验收",
+], color=C["ruler"], line_size=9.0)
 
-box(4.5, 15.9, 33.5, 13.2, "干将（主角 · kind=agent）", [
-    "完整 agent：自己的模型循环 + 工具面",
-    "独立会话——不附着用户现有会话",
-    "artifact 交付 → 宿主 verify（自报不算）",
-    "例：zcode-agent（D0 核验中 · 候选）",
-], color=C["agent"], line_size=9.0, line_gap=2.2)
+# ================= 主链路箭头 =================
+arrow(25, 89.8, 25, 88.4, color=C["user"])
+arrow(25, 78.4, 25, 76.9, label="派工（只返回排队事实）", color=C["alice"])
+arrow(25, 60.2, 25, 58.7, label="HTTP", color=C["runtime"])
+arrow(25, 49.4, 25, 48.1, color=C["bridge"])
+arrow(25, 38.2, 25, 36.9, color=C["plugin"])
+arrow(63, 54, 66.3, 63, label="事件 / 回报", color=C["ledger"], dashed=True, lx=64.6, ly=58.5)
+arrow(55, 75.5, 55, 78.3, label="worker_refs · 状态句柄", color=C["ledger"], dashed=True,
+      lx=55, ly=76.9)
 
-box(40.5, 15.9, 26.5, 13.2, "随身小工具（kind=tool）", [
-    "research：plan/search/read/interpret",
-    "browser_reader：逐资源核准 · Edge 登录态",
-    "findings 交付 · quote 逐字核对",
-    "right-sizing：取快递不动承包商",
-], color=C["tool"], line_size=9.0, line_gap=2.2)
-
-box(69.5, 15.9, 27.5, 13.2, "通道（kind=channel）", [
-    "QQ daemon：只递话，不说话",
-    "凭据只住 daemon——她的上下文永不接触",
-    "渠道策略挂 manifest（QQ 不开放派工）",
-    "对话是人格行为——不外包",
-], color=C["channel"], line_size=9.0, line_gap=2.2)
-
-arrow(25, 34.4, 25, 29.3, label="GO", color=C["adapter"], ly=33.2)
-arrow(53, 34.4, 53, 29.3, label="GO", color=C["adapter"], ly=33.2)
-arrow(64.5, 39.0, 72.0, 45.4, label="结果 · usage · 事件", color=C["membrane"], dashed=True,
-      lx=70.8, ly=41.6)
-arrow(84.2, 78.2, 84.2, 80.8, label="完成事件 · 安全边界回投", color=C["membrane"], dashed=True,
-      lx=84.2, ly=79.5)
-
-# ================= 伴随纪律 =================
-box(3, 2.2, 94, 10.9, "伴随纪律（每一层都生效）", [
-    "招募权在人类——注册/权限档/预算帽/卸载全是用户的决定 ｜ 判断力不出租——委托=执行，亲自=评估 · right-sizing · 承重验证",
-    "素材≠指令——干将报告也是不可信输入，过膜才进她的上下文 ｜ 先建后拆——替代路径过同等验收才启动退役评审 ｜ 成本透明——未知消费不记零",
-    "分期（开发方案 v1，实施待授权）：P0 契约完善 + adapter 核实 + 名册 → P1 单 agent 最小闭环 → P2 内容整合（过来源门槛）→ P3 并行与依赖",
+# ================= 底部：边界与未开放 =================
+box(3, 10.6, 94, 13.1, "边界与未开放（如实标注）", [
+    "未开放：文件 ID 导入 / 产物下载 / 跨任务来源转发 / 多任务并行 ｜ 单任务引用保留草稿、worker_target 绑定请求与 epoch",
+    "边界：取消只针对自有会话（agent 空闲 ≠ 进程树全退）；明确关授权/改参清正文且 GUI 确认；同参恢复不撤销",
+    "已保留：对话槽与单写者锁、GUI 自主检索、正式见闻、QQ 账本 v2、browser_reader ｜ 对话内检索 E11 bug（candidate/url）待修",
 ], color=C["law"], title_size=12.5, line_size=9.2, line_gap=2.5)
+
+ax.text(50, 9.2, "待设计 P2：来源契约（worker 报告以「待核实建议」进见闻管线）｜ P3：本地 CLI 干将轨 ｜ 服务运行中（main@PR#19，数据层撞车已清）",
+        ha="center", fontsize=9.5, color="#888", style="italic")
 
 fig.savefig(OUT, dpi=110, bbox_inches="tight", facecolor="white")
 print(f"已生成 {OUT}")
