@@ -521,6 +521,11 @@ class WorkerRuntime(WorkerReportsMixin):
                             if outputs:
                                 brief += '\n用户预期产物（保存到工作目录）：\n' + '\n'.join(outputs)
                             result = self._dispatch_claude_locked(brief, args, cp)
+                            # claude 轨在此收口：登记/事件/线程已自洽，不得流入下方
+                            # DSH 公共落账段（那里的路径改写与 INSERT 以 DSH 政策为准）。
+                            self.ledger.receipt(epoch, request_id, receipt_payload, result)
+                            self._start_thread_locked()
+                            return {'result': result}
                         elif args.get('name') != 'dsh-agent':
                             raise ChannelError(400, 'unknown_worker', '仅支持 dsh-agent 或 claude-agent')
                         else:
