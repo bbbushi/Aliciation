@@ -24,7 +24,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-02 ZCode：**claude 直调转正式完成（用户裁定 ytq 分支限定，不合 main）**——设计 v1（530bf2c）+ S1~S5 实施：claude_policy 独立表（DSH 零接触）、ClaudeLocalTransport、权限闸门三层（结构禁区硬挡/任务内缓存/质询文件协议 10 分钟超时）、/api/worker-permissions + GUI 质询卡。**C02/C03/C04/C06/C07 自检全通**（allow 落盘/deny 零产物不绕路/`~/.zcode` 诱导被硬挡/取消回收/精确计费 $0.13 级）；C01/C05/C08~C10 待 GUI 人工。下一步=工具枚举名单化接线（dispatch 分派 claude-agent）+ GUI 全链路验收；实施与验收记录 docs/设计文档/claude直调-实施与验收-ytq分支.md。
+- 2026-11-02 ZCode：**claude 直调转正式+接线完成（用户裁定 ytq 分支限定，不合 main）**——设计 v1（530bf2c）+ S1~S5 + **W 接线（28da912）**：`dispatch_worker` 枚举加 claude-agent，runtime 分派分支（claude_policy 三核准入/日预算帽/独立登记/后台执行线程），事件落 worker_events、result 计费落 claude_completed。**自检全通**：C02~C04/C06/C07 + W 全链路（GUI 模拟答案→allow_task 缓存→产物落盘→result 终态；deny 零产物不绕路；`~/.zcode` 诱导结构硬挡）。**GUI 真机使用前提**：claude_policy 填 workspace_root 且 enabled=1（迁移脚本默认禁用），质询卡自动轮询；C01/C05/C08~C10 待 GUI 人工。记录：docs/设计文档/claude直调-*.md。
 - 2026-11-02 Codex：DSH协作、头像交互与本轮切换动画统一通过PR19交付（可拖头像/720px浮窗/左右气泡/安全Markdown/折叠菜单 + 240ms头像切换缓动；JS语法与独立静态审查过，实际动画及PR19其余待人工；未加载前批PNG路由者先重启Alice）。历史任务书/真实截图/重复v2评审/QQ群聊方案留本地未提交；上轮rebase备份与stash保留。
 - 架构沿用用户裁决f983fa7：trial 3732ffe为正典、DSH插件桥为P1唯一路径；另一套D1已撤回（f3acba0留作P3本地CLI参考）。**数据层撞车已清**：昨夜本地D1起服把自建worker表形写入user/data/alice.db，今日对方schema报no such column:sequence；已备份（before-worker-drop-*.bak）后删7张空表、对方10表重建，服务200（ZCode动过user/在此记录）。教训：**平行施工裁决要赶在起服前——起服即写库**。worker_artifacts.py/testbed保留未接线；契约§六+astra§5为P1人工验收标尺，P2来源契约待设计；文件ID导入/产物下载/跨任务来源转发未开放。
 - PR19细节：Alice单次无工具总结/持久领取/依赖隔离（原文仅GUI）、单任务引用保留草稿、worker_target绑定请求与epoch；重启/断开保留授权版本与有效正文，同参恢复不撤销，明确关授权/改参清正文且GUI确认；已读游标按站点/epoch/协作者保存、跨标签单调同步防迟到，正文/标题/凭据不入浏览器存储。

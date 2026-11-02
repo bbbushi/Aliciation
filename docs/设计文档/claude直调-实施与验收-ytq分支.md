@@ -36,10 +36,10 @@
 
 ## 下一步（待排期）
 
-1. **接线**：`worker_tools.py` 枚举名单化 + `dispatch_worker` 分派 claude-agent → ClaudeLocalTransport（含预算帽硬断）；
+1. ~~**接线**~~（2026-11-02 W 轮完成，`28da912`）：`dispatch_worker` 枚举加 `claude-agent`；runtime 分派分支（独立 claude_policy 准入：enabled/ack/workspace_root 三核 + 当日预算帽 + 单行登记 + 后台执行线程 `_run_claude`）；事件流（claude_system/assistant）落 worker_events，result 计费落 `claude_completed` 事件（cost_usd 供 GUI 卡与日帽结算）。全链路复验：GUI 模拟答案 → allow_task 缓存命中 → 产物落盘 → result 终态 ✅。**启动前提**：claude_policy 行填 workspace_root 并 enabled=1（迁移脚本默认禁用），GUI 质询卡自动轮询。
 2. GUI 全链路人工验收（C01/C05/C08/C09/C10）；
 3. 稳定运行一轮后，评审是否提案合入 main（需对照审计 + DSH 共存回归）。
 
 ---
 
-*记录 v1（2026-11-02，ZCode 架构侧，ytq 分支）。*
+*记录 v1（2026-11-02，ZCode 架构侧，ytq 分支）。v2（同日）：补 W 轮接线完成与全链路复验结果。*
