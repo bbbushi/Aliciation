@@ -91,9 +91,12 @@ def main() -> int:
         with audit_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def respond(rid, payload: dict) -> None:
-        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {
-            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}}) + "\n")
+    def respond(rid, payload: dict, *, as_tool_text: bool = False) -> None:
+        # JSON-RPC 方法（initialize/tools/list）返回裸 result；tools/call 的
+        # --permission-prompt-tool 约定要求单个 text block（内容为 JSON 串）。
+        result = ({"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+                  if as_tool_text else payload)
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}) + "\n")
         sys.stdout.flush()
 
     for line in sys.stdin:
@@ -170,7 +173,7 @@ def main() -> int:
             print(f"[闸门] {tool_name} → {decision}（{origin}）", file=sys.stderr, flush=True)
             payload = ({"behavior": "allow", "updatedInput": tool_input} if decision == "allow"
                        else {"behavior": "deny", "message": message})
-            respond(rid, payload)
+            respond(rid, payload, as_tool_text=True)
         elif rid is not None:
             sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid,
                                          "error": {"code": -32601, "message": method or "?"}}) + "\n")
