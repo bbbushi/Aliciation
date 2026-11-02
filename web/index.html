@@ -133,8 +133,9 @@
       <main id="msgs" aria-label="对话记录" tabindex="0"></main>
       <div id="collaborator-dock" class="collaborator-dock hidden" aria-label="协作者入口">
         <button id="workers-btn" class="collaborator-avatar" type="button" data-worker="dsh-agent" data-size="large" data-state="unknown" data-unread="false" aria-expanded="false" aria-controls="worker-tasks" aria-label="打开 DSH 会话" aria-describedby="workers-avatar-status workers-avatar-help">
+          <span class="collaborator-avatar-frame" aria-hidden="true"></span>
           <span class="collaborator-avatar-art" aria-hidden="true">
-            <img class="collaborator-avatar-image collaborator-avatar-large" src="/assets/dsh-avatar-a-v1.png" width="192" height="192" alt="" draggable="false">
+            <img class="collaborator-avatar-image collaborator-avatar-large" src="/assets/dsh-avatar-a-v1.png" width="152" height="152" alt="" draggable="false">
             <img class="collaborator-avatar-image collaborator-avatar-small" src="/assets/dsh-avatar-small-v1.png" width="64" height="64" alt="" draggable="false">
           </span>
           <span id="workers-avatar-status" class="collaborator-status">状态待确认</span>
@@ -154,46 +155,55 @@
       <div class="composer-foot"><span>alice / 对话继续</span><span id="composer-hint">Enter 发送 · Shift + Enter 换行</span></div>
     </footer>
   </div>
-  <aside id="worker-tasks" class="worker-panel hidden" data-presentation="floating" aria-labelledby="workers-title">
-    <div id="workers-window-handle" class="worker-head" title="拖动标题栏移动窗口，靠近右侧可固定">
-      <div class="worker-head-title"><h2 id="workers-title">DSH 会话</h2></div>
-      <div class="worker-head-actions"><button id="workers-window-dock" class="btn ghost" type="button">固定右侧</button><button id="workers-close" class="card-x" type="button" aria-label="关闭 DSH 会话">×</button></div>
+  <aside id="worker-tasks" class="worker-panel hidden" data-presentation="floating" data-state="unknown" aria-label="DSH 协作会话">
+    <div class="worker-workspace">
+      <div class="worker-sidebar">
+        <div class="worker-head-identity">
+          <button id="workers-window-avatar" class="worker-window-avatar" type="button" aria-label="收起协作会话" title="收起协作会话"><img id="workers-window-portrait" src="/assets/dsh-avatar-small-v1.png" width="152" height="152" alt="" draggable="false"></button>
+        </div>
+        <section id="workers-list-view" class="worker-list-view" aria-label="会话列表">
+          <div class="worker-list-filter" role="group" aria-label="任务范围"><button id="workers-unarchived" type="button" aria-pressed="true">会话</button><button id="workers-archived" type="button" aria-pressed="false">已归档</button></div>
+          <p id="workers-empty" class="worker-empty">还没有协作任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天告诉 Alice 要做什么。</p>
+          <div id="workers-list" class="worker-list"></div><button id="workers-more" class="btn ghost hidden" type="button">加载更早任务</button>
+        </section>
+      </div>
+      <div class="worker-chat-pane">
+        <div id="workers-window-handle" class="worker-head" title="拖动标题栏移动窗口，靠近右侧可固定">
+          <div class="worker-head-actions"><button id="workers-window-dock" class="btn ghost" type="button">固定右侧</button><button id="workers-close" class="card-x" type="button" aria-label="收起协作会话">×</button></div>
+        </div>
+        <div id="workers-chat-empty" class="worker-chat-empty"><strong>在左侧选择会话</strong><p>这里会显示 Alice 与 DSH 的公开消息和执行记录。</p></div>
+        <section id="workers-detail" class="worker-detail hidden" aria-label="任务详情">
+          <div class="worker-task-heading"><h3 id="workers-task-title"></h3><span id="workers-task-state" class="worker-task-state"></span></div>
+          <div id="workers-events" class="worker-events" role="region" aria-label="DSH 会话内容" tabindex="0">
+            <div id="workers-messages" role="log" aria-live="off" aria-label="Alice 与 DSH 公开消息"></div>
+            <details id="workers-history" class="worker-history hidden">
+              <summary id="workers-history-summary">工具与执行记录</summary>
+              <p id="workers-tool-note" class="worker-hint"></p>
+              <div id="workers-history-events" class="worker-history-events"></div>
+            </details>
+            <div id="workers-artifacts" class="worker-artifacts"></div>
+          </div>
+          <div class="worker-message-nav"><button id="workers-events-restart" class="link hidden" type="button">本页记录已达上限 · 从头读取</button><button id="workers-events-more" class="link hidden" type="button">继续加载会话记录</button><button id="workers-latest" class="link hidden" type="button">↓ 回到最新消息</button></div>
+          <div class="worker-footer">
+            <button id="workers-supplement" class="btn ghost" type="button">让 Alice 补充</button><button id="workers-cancel" class="btn danger" type="button">请求停止</button>
+            <details id="workers-task-menu" class="worker-task-menu">
+              <summary id="workers-task-menu-toggle">更多</summary>
+              <div class="worker-task-menu-popover">
+                <p id="workers-task-meta" class="worker-hint"></p><p id="workers-review-state" class="worker-hint"></p>
+                <div class="worker-actions"><button id="workers-review" class="btn ghost" type="button">记录人工核对通过</button><button id="workers-revoke" class="link" type="button">撤销任务正文</button></div>
+                <div class="worker-actions worker-management-actions"><button id="workers-archive" class="btn ghost" type="button" disabled>归档任务</button><button id="workers-delete" class="btn danger" type="button" disabled>删除任务</button><button id="workers-management-retry" class="btn ghost hidden" type="button" disabled>重试待确认操作</button></div>
+                <p id="workers-management-hint" class="worker-hint">仅已结束且 DSH 会话已空闲的任务可以归档或删除。</p><p id="workers-management-result" class="worker-hint" role="status"></p>
+                <form id="workers-management-confirm" class="worker-management-confirm hidden" aria-labelledby="workers-management-title">
+                  <h3 id="workers-management-title" tabindex="-1"></h3><p id="workers-management-description"></p><p id="workers-management-scope" class="worker-hint"></p><p id="workers-management-warning" class="worker-hint" role="status"></p>
+                  <div class="worker-actions"><button id="workers-management-submit" class="btn primary" type="submit" disabled>确认操作</button><button id="workers-management-back" class="btn ghost" type="button">返回详情</button></div>
+                </form>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
     </div>
     <div class="worker-toolbar"><p id="workers-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p><button id="workers-refresh" class="link" type="button">同步记录</button></div>
-    <section id="workers-list-view" class="worker-list-view" aria-label="任务列表">
-      <div class="worker-list-filter" role="group" aria-label="任务范围"><button id="workers-unarchived" type="button" aria-pressed="true">进行中与历史（未归档）</button><button id="workers-archived" type="button" aria-pressed="false">已归档</button></div>
-      <p id="workers-empty" class="worker-empty">还没有协作任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天告诉 Alice 要做什么。</p>
-      <div id="workers-list" class="worker-list"></div><button id="workers-more" class="btn ghost hidden" type="button">加载更早任务</button>
-    </section>
-    <section id="workers-detail" class="worker-detail hidden" aria-label="任务详情">
-      <div class="worker-task-heading"><button id="workers-back" class="link" type="button" aria-label="返回会话列表">←</button><h3 id="workers-task-title"></h3><span id="workers-task-state" class="worker-task-state"></span></div>
-      <div id="workers-events" class="worker-events" role="region" aria-label="DSH 会话内容" tabindex="0">
-        <div id="workers-messages" role="log" aria-live="off" aria-label="Alice 与 DSH 公开消息"></div>
-        <details id="workers-history" class="worker-history hidden">
-          <summary id="workers-history-summary">工具与执行记录</summary>
-          <p id="workers-tool-note" class="worker-hint"></p>
-          <div id="workers-history-events" class="worker-history-events"></div>
-        </details>
-        <div id="workers-artifacts" class="worker-artifacts"></div>
-      </div>
-      <div class="worker-message-nav"><button id="workers-events-restart" class="link hidden" type="button">本页记录已达上限 · 从头读取</button><button id="workers-events-more" class="link hidden" type="button">继续加载会话记录</button><button id="workers-latest" class="link hidden" type="button">↓ 回到最新消息</button></div>
-      <div class="worker-footer">
-        <button id="workers-supplement" class="btn ghost" type="button">让 Alice 补充</button><button id="workers-cancel" class="btn danger" type="button">请求停止</button>
-        <details id="workers-task-menu" class="worker-task-menu">
-          <summary id="workers-task-menu-toggle">更多</summary>
-          <div class="worker-task-menu-popover">
-            <p id="workers-task-meta" class="worker-hint"></p><p id="workers-review-state" class="worker-hint"></p>
-            <div class="worker-actions"><button id="workers-review" class="btn ghost" type="button">记录人工核对通过</button><button id="workers-revoke" class="link" type="button">撤销任务正文</button></div>
-            <div class="worker-actions worker-management-actions"><button id="workers-archive" class="btn ghost" type="button" disabled>归档任务</button><button id="workers-delete" class="btn danger" type="button" disabled>删除任务</button><button id="workers-management-retry" class="btn ghost hidden" type="button" disabled>重试待确认操作</button></div>
-            <p id="workers-management-hint" class="worker-hint">仅已结束且 DSH 会话已空闲的任务可以归档或删除。</p><p id="workers-management-result" class="worker-hint" role="status"></p>
-            <form id="workers-management-confirm" class="worker-management-confirm hidden" aria-labelledby="workers-management-title">
-              <h3 id="workers-management-title" tabindex="-1"></h3><p id="workers-management-description"></p><p id="workers-management-scope" class="worker-hint"></p><p id="workers-management-warning" class="worker-hint" role="status"></p>
-              <div class="worker-actions"><button id="workers-management-submit" class="btn primary" type="submit" disabled>确认操作</button><button id="workers-management-back" class="btn ghost" type="button">返回详情</button></div>
-            </form>
-          </div>
-        </details>
-      </div>
-    </section>
   </aside>
   <div id="workers-dock-preview" class="worker-dock-preview hidden" aria-hidden="true"><span>松开固定到右侧</span></div>
   <aside id="observer" class="observer hidden" aria-label="开发者观察器">

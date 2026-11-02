@@ -24,8 +24,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-02 Codex：用户明确当前在ytq工作；已完成项目静态熟悉并出 claude 直调问题定位清单（worker_context/validate_chat_target/tools 时序/账本链/取消/Row.get 六处），仅更新 AGENTS.md，未起服/测试/动 user/。docs→docs/nockname 搬迁等未提交资料保留。
-- 2026-11-02 ZCode：**claude 直调外评五项全修+活体验收通过（f748e55，ytq 限定）**——F1 授权按任务工人身份（worker_context refs 逐ref对表+validate_chat_target 本地轨不要求桥）；F2 available_workers 构造参数化；F3 账本完整链（事务内登记 task+messages+attempts 含 originating/tool_call，完成回复写 completed 消息）；F4 取消接真句柄（claude_transports 注册表/stopping→回收）；F5 Row 下标。活体链：挂载→派工→质询→allow_task→completed→read 返回 worker_refs 全通；僵尸任务已收敛（cancelled+confirmed）。**待用户 GUI 真机**：刷新页面（加载 claude-gate.js）后派工即见质询卡；C01/C05/C08~C10 待人工。Codex 线索与本轮修复重合处已一并覆盖。
+- 2026-11-02 ZCode：**claude 直调外评五项全修+活体验收通过（f748e55，ytq 限定）**——F1 授权按任务工人身份（worker_context refs 逐ref对表+validate_chat_target 本地轨不要求桥）；F2 available_workers 构造参数化；F3 账本完整链（事务内登记 task+messages+attempts 含 originating/tool_call，完成回复写 completed 消息）；F4 取消接真句柄；F5 Row 下标。活体链全通；僵尸任务已收敛。**已知断点（Codex 接手诊断）：首页引用 claude-gate.js 但 GET 404（静态路由缺）→ 质询卡不显示；待修+GUI 人工（C01/C05/C08~C10）**。
+- 2026-11-02 Codex：PR20 已交付（分屏工作区：左头像+会话列表/右消息/40px 拖动栏，浮窗 960×680 可停靠，420ms 展开/收起，头像动画细节保留）；trial 已 rebase 到 PR19 并推增量；历史任务书/截图/QQ群聊方案留本地。另出 claude 直调诊断文档（质询卡缺失：claude-gate.js GET 404、refs 版本、回执哈希等）待修清单 A~D。
 - 正典沿用f983fa7裁决：trial 3732ffe、P1只走DSH插件桥；旧D1撤回（f3acba0作P3参考），worker_artifacts.py/testbed未接线，文件ID导入/产物下载/跨任务来源转发未开放，P2来源契约待设计，契约§六+astra§5为P1人工标尺。前轮ZCode动过user/：备份before-worker-drop-*.bak后删7张空worker表、重建对方10表，服务200；起服即写库，施工裁决须先于起服。
 - PR19已交付DSH协作、可拖头像/720px浮窗/左右气泡/安全Markdown/折叠菜单及240ms切换缓动，实际动画与其余业务待人工；缺PNG路由须重启。单次无工具总结/持久领取/依赖隔离仅GUI；单任务引用保留草稿、worker_target绑定请求与epoch；重启/断开/同参恢复保留授权及有效正文，关授权/改参确认后清正文；已读游标按站点/epoch/协作者单调同步，正文/标题/凭据不入浏览器存储。历史任务书/截图/v2评审/QQ群聊方案留本地未提交。
 - QQ私聊检索PR17及安装PR15/16已合main，qq-owner需内容访问+聊天查找+QQ资料许可，共享平台/额度、分渠道来源；群聊未合。GUI知乎candidate/url、P1/观察器/见闻/深海UI/GUI与QQ共存、A02/A05及旧SDK适配待办；DSH插件0.4.0本地link，原生权限非OS沙箱，1执行+4待办，NEXT无永久删除接口。活库元先验待下次人格重装种入；本机无timeout/Chrome，起服用`.venv/bin/python -m alice serve`；user/dist不入库，PR走compare页手动建，推送须用户明示且目标ytq，Claude直调不合main。
