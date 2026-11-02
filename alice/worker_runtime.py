@@ -255,14 +255,37 @@ class WorkerRuntime(WorkerReportsMixin):
             self.wake.set()
             return result
 
+    def _claude_policy_admitted(self):
+        """claude-agent 政策三核（enabled/ack/目录）。未迁移或未启用 → False。"""
+        try:
+            row = self.ledger.store.conn.execute(
+                'SELECT enabled, native_sandbox_ack, workspace_root FROM claude_policy WHERE id=1').fetchone()
+        except Exception:
+            return False
+        return bool(row and row['enabled'] and row['native_sandbox_ack'] and row['workspace_root'])
+
     def _admit_locked(self, request, *, execution=False):
         self.service._channels.check_epoch(request.get('session_epoch'))
         policy = self.ledger.policy()
-        if (request.get('channel_id') != 'gui' or not policy['enabled'] or not policy['native_permissions_ack']
-                or policy['permission_mode'] not in {'read-only', 'workspace-write'} or not policy['workspace_root']
-                or request.get('worker_policy_revision') != policy['revision']):
+        dsh_ready = (policy['enabled'] and policy['native_permissions_ack']
+                     and policy['permission_mode'] in {'read-only', 'workspace-write'}
+                     and bool(policy['workspace_root'])
+                     and request.get('worker_policy_revision') == policy['revision'])
+        if not dsh_ready:
+            # DSH 未就绪时不立即拒绝：claude-agent 政策开启且请求未点名 DSH 时按本地轨放行。
+            claude_ok = self._claude_policy_admitted()
+            requested = (request.get('worker_target') is not None
+                         or (request.get('name') == 'dsh-agent'))
+            if claude_ok and not requested:
+                return {**policy, 'claude_only': True}
             raise ChannelError(403, 'worker_not_authorized', '协作授权已失效')
         if execution and (self.closing or self.paused or self.bridge is None or self.connection_state != 'connected'):
+            # DSH 已授权但桥未连：仅当请求可由 claude 承接（未点名 dsh）时降级放行。
+            claude_ok = self._claude_policy_admitted()
+            requested_dsh = (request.get('worker_target') is not None
+                             or request.get('name') == 'dsh-agent')
+            if execution and claude_ok and not requested_dsh:
+                return {**policy, 'claude_only': True}
             raise ChannelError(409, 'not_connected', 'DSH 连接不可用，未提交任务')
         return policy
 
@@ -469,7 +492,8 @@ class WorkerRuntime(WorkerReportsMixin):
                 elif name in {'dispatch_worker', 'send_worker_message'}:
                     if args.get('input_ids'):
                         raise ChannelError(409, 'input_import_unavailable', '本轮派工使用获准工作目录，文件 ID 导入尚未开放')
-                    if self.ledger.runs_used() >= policy['max_runs']:
+                    claude_only = bool(policy.get('claude_only')) and args.get('name') == 'claude-agent'
+                    if not claude_only and self.ledger.runs_used() >= policy['max_runs']:
                         raise ChannelError(409, 'run_budget_exhausted', '本次授权执行次数已用完')
                     if self.ledger.conn.execute("SELECT COUNT(*) FROM worker_attempts WHERE state='queued'").fetchone()[0] >= 4:
                         raise ChannelError(409, 'queue_full', '待办已满，请等待现有任务')
