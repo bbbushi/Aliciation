@@ -40,16 +40,17 @@ def _tool(name, description, properties, required=()):
 
 TOOLS = [
     _tool("dispatch_worker",
-          "将用户要求的有界任务交给 DSH，在 GUI 已配对并授权的目录和原生工作模式内创建专属会话。"
+          "将用户要求的有界任务交给协作者（dsh-agent 经桥接插件；claude-agent 为本机终端直调的实验干将，"
+          "权限经宿主闸门逐条质询，非操作系统沙箱）。"
           "只发送完成任务所需的 brief，不发送无关历史、记忆、凭据或人格。回执不表示任务完成。",
-          {"name": {"type": "string", "enum": ["dsh-agent"]},
+          {"name": {"type": "string", "enum": ["dsh-agent", "claude-agent"]},
            "brief": {"type": "string", "maxLength": 10000,
                      "description": "具体任务、约束及完成标准；最多 10000 UTF-8 字节。文件用 GUI 授权目录中的相对路径说明。"},
            "title": {"type": "string", "maxLength": 80},
            "input_ids": _EMPTY_INPUTS,
            "requested_outputs": {"type": "array", "maxItems": 8,
                                  "items": {"type": "string", "maxLength": 200},
-                                 "description": "期望文件名或产物描述；只转述给 DSH，不保证文件已收取或验证。"}},
+                                 "description": "期望文件名或产物描述；只转述给协作者，不保证文件已收取或验证。"}},
           ("name", "brief", "input_ids", "requested_outputs")),
     _tool("worker_task_status", "读取协作任务状态元数据，不读取消息正文。费用缺失为未知，不作零费用。",
           {"task_ids": {"type": "array", "maxItems": 20, "items": _TASK_ID,
@@ -99,7 +100,7 @@ def _arguments(name, value):
     if set(value) - allowed:
         raise ValueError("unsupported_fields")
     if name == "dispatch_worker":
-        if value.get("name") != "dsh-agent":
+        if value.get("name") not in ("dsh-agent", "claude-agent"):
             raise ValueError("unsupported_worker")
         _text(value.get("brief"), 10000)
         if "title" in value:
