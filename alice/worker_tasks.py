@@ -167,7 +167,7 @@ class WorkerLedger:
             return 'revoked'
         if task['expires_at'] <= time.time():
             return 'expired'
-        if task.get('bridge_instance') == 'local:claude-agent':
+        if task['bridge_instance'] == 'local:claude-agent':  # sqlite3.Row 无 .get()，统一下标
             # 本地轨（claude）任务的可见性按 claude_policy 判，不随 DSH 政策起落。
             try:
                 cp = self.conn.execute(

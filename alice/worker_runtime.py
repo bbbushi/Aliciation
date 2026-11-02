@@ -296,7 +296,12 @@ class WorkerRuntime(WorkerReportsMixin):
             return None
         policy = self.ledger.policy()
         self._admit_locked({**request, 'worker_policy_revision': policy['revision']})
-        if self.closing or self.paused or self.stop.is_set() or self.bridge is None:
+        # 引用目标为 claude 本地轨任务时不要求桥（工人身份按任务账面归属）。
+        target_task = self.ledger.conn.execute(
+            'SELECT bridge_instance FROM worker_tasks WHERE task_id=?',
+            (target['task_id'],)).fetchone()
+        is_local = bool(target_task and target_task['bridge_instance'] == 'local:claude-agent')
+        if self.closing or self.paused or self.stop.is_set() or (self.bridge is None and not is_local):
             raise ChannelError(409, 'worker_target_unavailable', '协作引用目标当前不可用，请重新选择')
         task = self.ledger.task(target['task_id'], request['session_epoch'])
         if (not self.ledger.visible(task) or task['archived'] or task['management_pending']
@@ -520,7 +525,7 @@ class WorkerRuntime(WorkerReportsMixin):
                                 raise ChannelError(400, 'invalid_request', '预期产物说明无效')
                             if outputs:
                                 brief += '\n用户预期产物（保存到工作目录）：\n' + '\n'.join(outputs)
-                            result = self._dispatch_claude_locked(brief, args, cp)
+                            result = self._dispatch_claude_locked(brief, args, cp, request_id, tool_call_id)
                             # claude 轨在此收口：登记/事件/线程已自洽，不得流入下方
                             # DSH 公共落账段（那里的路径改写与 INSERT 以 DSH 政策为准）。
                             self.ledger.receipt(epoch, request_id, receipt_payload, result)
@@ -580,7 +585,7 @@ class WorkerRuntime(WorkerReportsMixin):
             self._start_thread_locked()
             return {'result': result}
 
-    def _dispatch_claude_locked(self, brief, args, cp):
+    def _dispatch_claude_locked(self, brief, args, cp, request_id, tool_call_id):
         """claude-agent 本地轨登记（分支限定 ytq）：独立账本行 + 排队，由本地线程执行。
 
         与 DSH 分支共用 worker_tasks/messages/attempts/events 表与 GUI 任务卡；
@@ -601,33 +606,44 @@ class WorkerRuntime(WorkerReportsMixin):
                                f'claude-agent 当日预算已用完（已花 ${spent:.2f} / 帽 ${cp["budget_usd_per_day"]:.2f}）')
         task_id, now = uuid.uuid4().hex, time.time()
         title = args.get('title') or brief.splitlines()[0][:80]
-        self.ledger.conn.execute(
-            'INSERT INTO worker_tasks(task_id,epoch,policy_revision,state,title,created_at,updated_at,'
-            "expires_at,bridge_instance,workspace_root) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (task_id, self.service._channels.epoch, cp['revision'], 'queued', safe_text(title, 80),
-             now, now, now + 7 * 86400, 'local:claude-agent', cp['workspace_root']))
-        self.ledger.event(task_id, 'task_accepted',
+        message_id, attempt_id = uuid.uuid4().hex, uuid.uuid4().hex
+        with self.ledger.conn:  # 事务内完整登记：任务+输入消息+尝试+原请求身份（方案 §7.2）
+            self.ledger.conn.execute(
+                'INSERT INTO worker_tasks(task_id,epoch,policy_revision,state,title,created_at,updated_at,'
+                "expires_at,bridge_instance,workspace_root) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (task_id, self.service._channels.epoch, cp['revision'], 'queued', safe_text(title, 80),
+                 now, now, now + 7 * 86400, 'local:claude-agent', cp['workspace_root']))
+            self.ledger.conn.execute(
+                'INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,state,created_at) '
+                "VALUES(?,?,?,'alice',?,'queued',?)", (message_id, task_id, attempt_id, brief, now))
+            self.ledger.conn.execute(
+                'INSERT INTO worker_attempts(attempt_id,task_id,message_id,state,created_at,updated_at,'
+                'request_id,originating_request_id,tool_call_id) VALUES(?,?,?,?,?,?,?,?,?)',
+                (attempt_id, task_id, message_id, 'queued', now, now, request_id,
+                 request_id, tool_call_id))
+        self.ledger.event(task_id, 'task_accepted', attempt_id=attempt_id, message_id=message_id,
                           payload={'text': '已登记本地任务（claude-agent）；权限质询将在执行中逐条出现。'})
-        threading.Thread(target=self._run_claude, args=(task_id, brief, cp),
+        threading.Thread(target=self._run_claude,
+                         args=(task_id, brief, cp, attempt_id, message_id, tool_call_id),
                          daemon=True).start()
-        return {'task_id': task_id, 'state': 'queued', 'worker': 'claude-agent',
+        return {'task_id': task_id, 'message_id': message_id, 'attempt_id': attempt_id,
+                'state': 'queued', 'worker': 'claude-agent',
                 'message': '已排队；执行中如需权限会向 GUI 质询。'}
 
-    def _run_claude(self, task_id, brief, cp):
+    def _run_claude(self, task_id, brief, cp, attempt_id, message_id, tool_call_id):
         """claude 本地执行（锁外）：transport 全程，事件落 worker_events。"""
         from addons.claude_agent.local_transport import ClaudeLocalTransport
         from addons.claude_agent.permission_gate import claude_gate_dir
         now = time.time()
-        attempt_id = uuid.uuid4().hex
-        message_id = uuid.uuid4().hex  # 正典 attempts.message_id NOT NULL：claude 轨用独立 ID 占位
         sandbox = Path(cp['workspace_root']).resolve() / f"claude_task_{task_id[:8]}"
         gate_dir = claude_gate_dir(cp)
         with self.service._lock, self.ledger.conn:
+            # attempt/message 行已在 _dispatch_claude_locked 事务内登记——这里只推进状态。
             self.ledger.conn.execute(
-                'INSERT INTO worker_attempts(attempt_id,task_id,message_id,state,created_at,updated_at,request_id) '
-                'VALUES(?,?,?,?,?,?,?)', (attempt_id, task_id, message_id, 'starting', now, now, task_id))
+                'UPDATE worker_attempts SET state=?,updated_at=? WHERE attempt_id=?',
+                ('starting', now, attempt_id))
             self.ledger.conn.execute("UPDATE worker_tasks SET state='starting' WHERE task_id=?", (task_id,))
-            self.ledger.event(task_id, 'run_started', attempt_id=attempt_id,
+            self.ledger.event(task_id, 'run_started', attempt_id=attempt_id, message_id=message_id,
                               payload={'text': 'claude-agent 本地执行开始。'})
 
         def on_event(kind, payload):
@@ -643,13 +659,24 @@ class WorkerRuntime(WorkerReportsMixin):
             brief=brief, sandbox=sandbox, gate_mcp_config=_claude_mcp_config(sandbox, gate_dir, cp),
             max_turns=int(cp.get('max_turns') or 12), on_event=on_event,
             hard_deadline=min(float(cp.get('max_seconds') or 900), 1800.0))
+        if not hasattr(self, 'claude_transports'):
+            self.claude_transports = {}
+        self.claude_transports[task_id] = transport
         transport.start()
         while transport.terminal() is None:
             if self.stop.is_set():
                 transport.cancel('service_shutdown')
                 break
+            # 取消标记响应：GUI/模型请求取消 → 真正回收本地进程 → stopping 由终态收敛。
+            task_row = self.ledger.conn.execute(
+                'SELECT cancel_requested FROM worker_tasks WHERE task_id=?', (task_id,)).fetchone()
+            if task_row is not None and task_row['cancel_requested']:
+                transport.cancel('user_requested')
+                break
             time.sleep(0.4)
         term = transport.terminal() or {}
+        if getattr(self, 'claude_transports', {}).get(task_id) is transport:
+            self.claude_transports.pop(task_id, None)
         if term.get('frame') == 'result':
             payload = term['payload']
             usage = payload.get('usage', {}) or {}
@@ -657,8 +684,14 @@ class WorkerRuntime(WorkerReportsMixin):
             with self.service._lock, self.ledger.conn:
                 # 正典 event() 的 payload 白名单只有 text/summary/tool_name——
                 # 计费字段编码进 summary（结构化 JSON 串），供日预算查询与 GUI 展示。
-                self.ledger.event(task_id, 'claude_completed', attempt_id=attempt_id,
-                                  payload={'text': safe_text(str(payload.get('result')), 4000),
+                reply = safe_text(str(payload.get('result')), 4000)
+                reply_mid = uuid.uuid4().hex
+                self.ledger.conn.execute(
+                    'INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,version,state,created_at) '
+                    "VALUES(?,?,?,'agent',?,1,'completed',?)",
+                    (reply_mid, task_id, attempt_id, reply, time.time()))
+                self.ledger.event(task_id, 'claude_completed', attempt_id=attempt_id, message_id=reply_mid,
+                                  payload={'text': reply,
                                            'summary': json.dumps(
                                                {'cost_usd': cost,
                                                 'output_tokens': usage.get('output_tokens'),

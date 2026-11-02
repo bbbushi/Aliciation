@@ -96,15 +96,27 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             # 在本进程内，取消即收敛终态（transport 已死则直接判 failed 收尾）。
             if task['bridge_instance'] == 'local:claude-agent':
                 now = time.time()
+                running = task['state'] in ('starting', 'running', 'collecting')
                 self.ledger.conn.execute(
                     'UPDATE worker_tasks SET cancel_requested=1,state=?,updated_at=?,version=version+1 '
-                    'WHERE task_id=?', ('cancelled', now, task_id))
-                self.ledger.conn.execute(
-                    "UPDATE worker_attempts SET state='cancelled',updated_at=? WHERE task_id=? "
-                    "AND state IN ('queued','starting','running')", (now, task_id))
-                self.ledger.event(task_id, 'run_stopped', payload={
-                    'text': '已取消（claude 本地任务）：本地执行已停止，已消耗费用不作保证。'})
-                return {'task_id': task_id, 'cancel_requested': True, 'termination_confirmed': True}
+                    'WHERE task_id=?',
+                    ('stopping' if running else 'cancelled', now, task_id))
+                if not running:
+                    self.ledger.conn.execute(
+                        "UPDATE worker_attempts SET state='cancelled',updated_at=? WHERE task_id=? "
+                        "AND state IN ('queued','starting','running')", (now, task_id))
+                else:
+                    transport = getattr(self, 'claude_transports', {}).pop(task_id, None)
+                    if transport is not None:
+                        transport.cancel('user_cancel')  # 真回收：SIGTERM 进程组→宽限→SIGKILL
+                    # 执行循环观测到 cancel_requested 后收终态；迟到 result 由
+                    # 终态提交顺序裁决（terminal 已置则 local_failure 不覆盖）。
+                self.ledger.event(task_id, 'cancel_requested', payload={
+                    'text': ('已请求取消 claude 本地任务；正在回收进程，完成回收后确认终态。' if running
+                             else '已取消（claude 本地任务）：任务未在执行。')})
+                confirmed = not running
+                return {'task_id': task_id, 'cancel_requested': True,
+                        'termination_confirmed': confirmed}
             queued = task['state'] == 'queued'
             self.ledger.conn.execute('UPDATE worker_tasks SET cancel_requested=1,state=?,agent_idle=? WHERE task_id=?',
                                      ('cancelled' if queued else 'stopping' if task['state'] != 'unknown' else 'unknown',
@@ -226,8 +238,9 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         if not dsh_enabled and not claude_enabled:
             return None
         from .worker_tools import WorkerChatSession
-        session = WorkerChatSession(self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']})
-        session.available_workers = {'dsh-agent': dsh_enabled, 'claude-agent': claude_enabled}
+        session = WorkerChatSession(
+            self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']},
+            available_workers={'dsh-agent': dsh_enabled, 'claude-agent': claude_enabled})
         if claude_enabled and not dsh_enabled:
             # 仅 claude 轨启用时，绑定的政策 revision 用 claude_policy 的（授权检查按工人对表）。
             try:

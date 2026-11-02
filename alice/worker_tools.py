@@ -175,13 +175,14 @@ def _metadata(value, *, include_tasks=True):
 
 
 class WorkerChatSession:
-    def __init__(self, coordinator, request):
+    def __init__(self, coordinator, request, available_workers=None):
         self.coordinator = coordinator
         self.request = copy.deepcopy(request)
+        self.available_workers = available_workers  # 构造期传入，避免时序缺陷
         self.target = normalize_worker_target(self.request.get('worker_target'))
         self.tools = copy.deepcopy(TOOLS) if self.request.get("channel_id") == "gui" else []
         # 名单化：按协调器提供的可用工人过滤 dispatch 枚举（禁用的工人不进模型视野）。
-        available = getattr(self, "available_workers", None)
+        available = self.available_workers
         if available:
             names = [n for n in ("dsh-agent", "claude-agent") if available.get(n)]
             for tool in self.tools:
