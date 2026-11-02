@@ -139,7 +139,7 @@ P0 将这些选择记入本文实施记录。仅当缺失决定会阻止下一�
 | 阶段 | 状态 | 代码/证据 | 剩余问题 |
 |---|---|---|---|
 | P0 基线与数据演进 | ✅ 完成（2026-11-02，ZCode） | 见下方 P0 实施记录 | — |
-| P1 统一材料链与计账 | 待执行 | — | — |
+| P1 统一材料链与计账 | ✅ 代码完成（2026-11-02，ZCode，待 P7 人工验收） | 见下方 P1 实施记录 | 发布归并见记录 |
 | P2 自主兴趣与防循环 | 待执行 | — | — |
 | P3 价值与择要保存 | 待执行 | — | — |
 | P4 即时与分级思辨 | 待执行 | — | — |
@@ -198,5 +198,23 @@ P0 将这些选择记入本文实施记录。仅当缺失决定会阻止下一�
 - 全部用 `ALTER TABLE ADD COLUMN`（列级追加，幂等可重复，沿用 store._migrate 模式）；不重建表、不动 kind/pressure 的 CHECK；
 - 旧数据：value_tier='unknown'、basis='[]'、confidence=0、无 deliberation_seen 记录——**不批量伪造**；consolidation 对 unknown 按 normal 处理并在淘汰理由中写明"未分级"；
 - 迁移时机：动库阶段（P2/P3/P5）先停服务、备份 `user/data/alice.db` 至 `user/data/archive/backup-<阶段>-<时间戳>/`，再启动触发 `_migrate`；当前活库 16 轮对话 + 4 长期记忆，备份成本可忽略。
+
+## P1 实施记录（2026-11-02，ZCode）
+
+**交付**：`DiscoveryCoordinator` 新增三个共享方法，两条入口（后台 `_run` 轮 / 前台 `SearchSession.execute`）的搜索与读取段改调共享链，各自删除平行的手写分发。
+
+| 方法 | 职责 | 替代的重复代码 |
+|---|---|---|
+| `rank_candidates(platform, query, raw, *, settings, preferred_forums)` | 候选规范化、URL 去重、优先吧+相关度排序 | 后台 1688-1699 段与前台 execute 内同构段 |
+| `search_documents(job, cancel, settings, platform, query, deadline, *, limit, interest)` | 传输分发（原生/原生B站/浏览器）+ provider 构造 + 调 rank_candidates | 两处各自的 provider/browser/native_bili 三路 if-else |
+| `read_document(..., *, bilibili_public_view)` | 读取分发；`bilibili_public_view=True` 保留后台"B站浏览器搜索时读取走固定公开视图端点"的原有语义 | 两处读取三路 if-else |
+
+**保留的入口差异**（按计划"前台与后台仅保留各自任务目标、选材方式及调度差异"）：后台 plan（模型选题）/ interpret（模型成卡）/_publish_locked（含模型卡字段、interest 校验、观察入账）未动；前台缓存复用（`_cached_locked`）、run_id 落 discovery_runs（kind='chat_search'）、快路径 `_publish_locked`（节选卡）未动——**发布归并延后到 P3**（届时前后台都改走"AI 择要保存"统一入口，现在合并发布会被 P3 再改一遍）。
+
+**计账**：共享方法不自带预算（`_execute` 系列内部已逐步落 `discovery_attempts` 与 usage 归集），前台 SearchSession 的 discovery_runs 行已提供任务身份贯穿；未发现重复扣账路径（静态核对：`record_chat_locked` 只在回复后结算一次）。
+
+**检查**：compileall ✓；静态断言两入口均调 `search_documents/read_document` 且旧直调已清除；`_third_party` 等前台仍需的引用保留。
+
+**未做**：发布链归并（→P3）；任务上下文字段扩展（attempts 行补 entry 列，随 P3 动库时一并迁移）。
 
 执行者在此追加必要的参数选择、阶段结果及未决事项，保持简短。本轮仅编写计划，没有执行 P0～P7。

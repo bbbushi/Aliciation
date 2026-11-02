@@ -1672,31 +1672,8 @@ class DiscoveryCoordinator:
                                                     (time.time(), interest["id"], interest["version"]))
                     self.service.store.conn.execute("UPDATE discovery_runs SET interest_id=? WHERE id=?", (interest["id"], job["id"]))
             self._store_step(job, cancel, select_interest)
-            provider = {"kind": "native"} if not _third_party(plan["platform"], settings) else {
-                "kind": settings["provider_kind"], "api_key": settings["provider_key"],
-                "endpoint": settings["provider_endpoint"], "allow_loopback": True,
-                "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
-            native_bili = plan["platform"] == "bilibili" and settings["bilibili_access"] == "native"
-            browser = plan["platform"] in ("bilibili", "zhihu") and settings[plan["platform"] + "_access"] == "browser"
-            if browser:
-                response = self._execute_browser(job, cancel, settings, "search", plan["platform"], {"query": query}, deadline)
-            elif native_bili:
-                response = self._execute_bilibili(job, cancel, settings, "search", {"query": query, "limit": settings["search_results"]}, deadline)
-            else:
-                response = self._execute(job, cancel, settings, "search", {
-                    "platform": plan["platform"], "query": query, "provider": provider, "limit": settings["search_results"]}, deadline)
-            raw_candidates = response.get("candidates")
-            if not isinstance(raw_candidates, list) or len(raw_candidates) > settings["search_results"]:
-                raise _Stopped("worker_protocol")
-            candidates, urls = [], set()
-            for raw in raw_candidates:
-                candidate = normalize_candidate(raw, plan["platform"])
-                if candidate["url"] not in urls:
-                    candidates.append(candidate)
-                    urls.add(candidate["url"])
-            preferred = set(settings["_tieba_preferred_forums"]) if plan["platform"] == "tieba" else set()
-            candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
-                                           text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
+            # P1：前后台统一搜索链（候选规范化/去重/排序在共享方法内）
+            candidates = self.search_documents(job, cancel, settings, plan["platform"], query, deadline, interest=interest)
             if not candidates:
                 code = "search_no_candidates"
             evidence = []
@@ -1708,16 +1685,9 @@ class DiscoveryCoordinator:
                 if self._store_step(job, cancel, seen):
                     continue
                 try:
-                    if browser and plan["platform"] == "bilibili":
-                        # Browser session is needed for search; the fixed public
-                        # view endpoint supplies actual descriptions without playback.
-                        data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
-                    elif browser:
-                        data = self._execute_browser(job, cancel, settings, "read", plan["platform"], {"url": candidate["url"]}, deadline)
-                    elif native_bili:
-                        data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
-                    else:
-                        data = self._execute(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+                    # P1：前后台统一读取链；B站浏览器搜索的读取保留固定公开视图端点语义
+                    data = self.read_document(job, cancel, settings, plan["platform"], candidate, deadline,
+                                              bilibili_public_view=True)
                 except _Stopped as exc:
                     if (self._unavailable or exc.code.startswith("proxy_") or exc.code in (
                             "cancelled", "foreground_busy", "session_changed", "quota_exceeded",
@@ -1877,6 +1847,64 @@ class DiscoveryCoordinator:
                 self._note = {"card_id": card_id, "packet_id": packet_id, "text": texts["question"][:160],
                               "created_at": now, "expires_at": min(now + settings["candidate_ttl_hours"] * 3600, source["expires_at"])}
         return accepted
+
+    # ---------- P1 共享材料链：前后台统一调用（N07/N08） ----------
+    # 前台（SearchSession）与后台（_run 轮）此前各自实现候选排序、读取分发与发布，
+    # 两处逻辑平行漂移。以下三个方法提炼共享步骤；两条入口只保留各自的目标、
+    # 选材方式与调度差异。发布仍走原有 _publish_locked / SearchSession._publish_locked
+    # 两条（前者含模型卡字段与观察入账，后者是快路径节选卡），由统一包装按入口选择。
+
+    def rank_candidates(self, platform, query, raw_candidates, *, settings, preferred_forums=None):
+        """候选规范化、URL 去重与优先吧/相关度排序（前台后台同一次序）。"""
+        from .discovery_sources import normalize_candidate
+        if not isinstance(raw_candidates, list) or len(raw_candidates) > settings["search_results"]:
+            raise _Stopped("worker_protocol")
+        candidates, urls = [], set()
+        for raw in raw_candidates:
+            candidate = normalize_candidate(raw, platform)
+            if candidate["url"] not in urls:
+                candidates.append(candidate)
+                urls.add(candidate["url"])
+        preferred = set(preferred_forums or []) if platform == "tieba" else set()
+        candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
+                                       text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
+        return candidates
+
+    def read_document(self, job, cancel, settings, platform, candidate, deadline, *, bilibili_public_view=False):
+        """读取一个候选并做协议校验——三条传输路径（原生/原生B站/浏览器）的统一分发。
+
+        bilibili_public_view：B站浏览器模式下，读取用固定公开视图端点（无需播放）
+        而非通用浏览器会话——保留后台轮原有的这条语义。
+        """
+        browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
+        native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
+        if browser and platform == "bilibili" and bilibili_public_view:
+            return self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+        if browser:
+            return self._execute_browser(job, cancel, settings, "read", platform, {"url": candidate["url"]}, deadline)
+        if native_bili:
+            return self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+        return self._execute(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+
+    def search_documents(self, job, cancel, settings, platform, query, deadline, *, limit=None, interest=None):
+        """搜索一个平台并返回排序后的候选——前台后台同一次序、同一传输分发。"""
+        provider = {"kind": "native"} if not _third_party(platform, settings) else {
+            "kind": settings["provider_kind"], "api_key": settings["provider_key"],
+            "endpoint": settings["provider_endpoint"], "allow_loopback": True,
+            "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
+        browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
+        native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
+        payload = {"query": query, "limit": limit or settings["search_results"]}
+        if browser:
+            response = self._execute_browser(job, cancel, settings, "search", platform, {"query": query}, deadline)
+        elif native_bili:
+            response = self._execute_bilibili(job, cancel, settings, "search", payload, deadline)
+        else:
+            response = self._execute(job, cancel, settings, "search",
+                                     {"platform": platform, "query": query, "provider": provider, **payload}, deadline)
+        preferred = _preferred_forums(interest) if interest is not None else []
+        return self.rank_candidates(platform, query, response.get("candidates"),
+                                    settings=settings, preferred_forums=preferred)
 
 
 class _Stopped(Exception):
