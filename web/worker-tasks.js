@@ -15,7 +15,7 @@
     artifact_reported: "DSH 报告产物", artifact_accepted: "宿主已收取产物", usage_updated: "用量更新",
     cancel_requested: "已请求停止，等待确认", run_stopped: "运行停止", run_failed: "运行失败", connection_lost: "连接中断，执行状态待确认",
     run_completed: "本轮执行已结束", content_revoked: "任务正文已撤销", review_recorded: "人工核对记录", human_reviewed: "人工核对记录" };
-  let opened = false, settingsOpened = false, stopped = false, connected = false, timer = null, polling = false;
+  let opened = false, closing = false, closeFocus = false, settingsOpened = false, stopped = false, connected = false, timer = null, polling = false;
   let epoch = null, registry = null, nextBefore = null, selection = null, selectedTask = null, viewGeneration = 0;
   let eventCursor = 0, eventMore = false, listBusy = false, actionBusy = false, policyDirty = false;
   let archivedView = false, listGeneration = 0, listDepth = 40, management = null, taskSettingsDirty = false;
@@ -119,6 +119,7 @@
   function setupAvatarDrag(button) {
     const area = button.closest(".chat-conversation");
     const art = button.querySelector(".collaborator-avatar-art");
+    const decoration = button.querySelector(".collaborator-avatar-frame");
     const visualParts = [art, $("workers-avatar-status"), $("workers-count")];
     const portraits = [...button.querySelectorAll(".collaborator-avatar-image")];
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -136,34 +137,46 @@
     }
     function activate() { if (interactive()) opened ? close() : open(); }
     function stopSizeMotion() {
-      for (const animation of sizeAnimations) animation.cancel();
+      const animations = sizeAnimations;
       sizeAnimations = [];
+      for (const animation of animations) { animation.onfinish = null; animation.cancel(); }
+      delete button.dataset.sizeHover;
     }
     function cancelInteraction() { finish(true); stopSizeMotion(); }
     function setSize(size) {
       if (button.dataset.size === size) return;
+      if (closing) windowFrame.completeTransition();
       // Capture an in-flight transition before cancelling it, so reversing the
       // size change starts at the current visual position and opacity.
       const before = button.getBoundingClientRect();
+      const beforeFrame = decoration.getBoundingClientRect();
       const beforeParts = visualParts.map((part) => part.getBoundingClientRect());
       const opacity = portraits.map((image) => getComputedStyle(image).opacity);
+      const hovered = button.dataset.sizeHover ?? String(button.matches(":hover"));
       stopSizeMotion();
       clearClick(); finish(true);
       button.dataset.size = size;
       text("workers-avatar-help", `拖动调整位置；单击或 Enter 打开会话；${avatarSizeHint(button)}。`);
       renderList(); place();
       const after = button.getBoundingClientRect();
+      const afterFrame = decoration.getBoundingClientRect();
       const afterParts = visualParts.map((part) => part.getBoundingClientRect());
       if (reducedMotion.matches || typeof button.animate !== "function" || !interactive()
           || !before.width || !before.height || !after.width || !after.height) return;
-      // Commit layout once, then animate only transform/opacity. Drag bounds
-      // and ResizeObserver never have to follow an interpolated layout size.
+      // Commit button layout once. Only the absolute decorative frame changes
+      // dimensions during motion, so drag bounds and ResizeObserver stay stable.
       const timing = { duration: 240, easing: "cubic-bezier(.22, 1, .36, 1)" };
+      button.dataset.sizeHover = hovered;
       const dx = before.left - after.left, dy = before.top - after.top;
       const animations = [button.animate([
         { transform: `translate(${dx}px, ${dy}px)` },
         { transform: "none" },
       ], timing)];
+      animations.push(decoration.animate([
+        { width: `${beforeFrame.width}px`, height: `${beforeFrame.height}px`,
+          transform: `translate(${beforeFrame.left - afterFrame.left - dx}px, ${beforeFrame.top - afterFrame.top - dy}px)` },
+        { width: `${afterFrame.width}px`, height: `${afterFrame.height}px`, transform: "none" },
+      ], timing));
       // Scale only the square portrait, uniformly. Labels and badges move
       // between their old/new positions without stretching their text.
       visualParts.forEach((part, index) => {
@@ -201,7 +214,7 @@
       const box = bounds();
       // A collapsed conversation must not leave the avatar over the composer.
       // Visibility preserves its size, so the next resize can restore it.
-      button.style.visibility = box ? "" : "hidden";
+      button.style.visibility = box && !opened && !closing ? "" : "hidden";
       if (!box) return;
       button.style.left = `${box.left + position.x * box.width}px`;
       button.style.top = `${box.top + position.y * box.height}px`;
@@ -232,7 +245,6 @@
     }
     button.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || !event.isPrimary || drag || button.closest("[inert]")) return;
-      stopSizeMotion();
       const box = bounds();
       if (!box) return;
       // Hold a pending single click while a possible second press is down.
@@ -248,10 +260,19 @@
       if (button.closest("[inert]") || !bounds()) { finish(true); return; }
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      if (!drag.moved && sizeAnimations.length) {
+        // A press may become another double click. Finish motion only once a
+        // real drag starts, taking over its current position without a jump.
+        const current = button.getBoundingClientRect();
+        stopSizeMotion();
+        const settled = button.getBoundingClientRect();
+        drag.left += current.left - settled.left; drag.top += current.top - settled.top;
+        drag.x = event.clientX; drag.y = event.clientY;
+      }
       clearClick();
       drag.moved = true; button.dataset.dragging = "true";
       event.preventDefault();
-      move(drag.left + dx, drag.top + dy, drag.box);
+      move(drag.left + event.clientX - drag.x, drag.top + event.clientY - drag.y, drag.box);
     });
     button.addEventListener("pointerup", (event) => {
       if (drag && event.pointerId === drag.pointerId) finish();
@@ -299,6 +320,8 @@
     place();
     return {
       cancel: cancelInteraction,
+      layout: place,
+      targetRect() { return bounds() && button.getClientRects().length ? art.getBoundingClientRect() : null; },
       syncWork(data) {
         const used = data.policy?.runs_used;
         if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(data.revision)) return;
@@ -322,6 +345,10 @@
     const paired = registry?.connection?.connected === true && worker?.available === true;
     const statusLabel = !connected ? "状态待同步" : !paired ? "未连接" : running ? "工作中" : "已连接";
     button.dataset.state = !connected ? "unknown" : !paired ? "disconnected" : running ? "working" : "connected";
+    panel.dataset.state = button.dataset.state;
+    const portrait = $("workers-window-portrait"), source = button.querySelector(button.dataset.size === "small"
+      ? ".collaborator-avatar-small" : ".collaborator-avatar-large").src;
+    if (portrait.src !== source) portrait.src = source;
     button.dataset.unread = String(unread > 0);
     text("workers-avatar-status", statusLabel);
     text("workers-count", unread ? String(Math.min(unread, 99)) + (unread > 99 ? "+" : "") : "");
@@ -331,9 +358,39 @@
   }
   function setupWorkerWindow() {
     const handle = $("workers-window-handle"), dockButton = $("workers-window-dock");
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const storageKey = "alice.collaborator-window.v1.dsh-agent";
     const clamp = (n) => Math.max(0, Math.min(1, n));
     let mode = "floating", position = { x: 1, y: 0.08 }, drag = null, suppressClick = false;
+    let expansion = [], expansionArea = null, collapseDone = null;
+    const timing = { duration: 420, easing: "cubic-bezier(.4, 0, .2, 1)", fill: "both" };
+    function stopExpansion() {
+      const animations = expansion, done = collapseDone;
+      expansion = []; collapseDone = null;
+      for (const animation of animations) { animation.onfinish = null; animation.cancel(); }
+      if (done) done();
+    }
+    function foldedFrame(avatar, portrait, frame) {
+      const left = Math.max(0, portrait.left - frame.left - 5);
+      const top = Math.max(0, portrait.top - frame.top - 5);
+      const right = Math.max(0, frame.right - (portrait.left + avatar.width + 5));
+      const bottom = Math.max(0, frame.bottom - (portrait.top + avatar.height + 5));
+      return { transform: `translate(${avatar.left - portrait.left}px, ${avatar.top - portrait.top}px)`,
+        clipPath: `inset(${top}px ${right}px ${bottom}px ${left}px round 10px)` };
+    }
+    const expandedFrame = { transform: "none", clipPath: "inset(0 0 0 0 round 12px)" };
+    function animateWindow(avatar, portrait, frame, collapsing = false, from = null) {
+      const folded = foldedFrame(avatar, portrait, frame);
+      const animations = [panel.animate(collapsing ? [from?.panel || expandedFrame, folded] : [folded, expandedFrame], timing)];
+      // Desktop and window portraits share their size; only compact mode needs
+      // a size transition. Both directions use the same geometry and timing.
+      if (Math.abs(avatar.width - portrait.width) > .5 || from?.portrait && from.portrait !== "none") {
+        const small = { transform: `scale(${avatar.width / portrait.width})` }, large = { transform: "none" };
+        animations.push($("workers-window-portrait").animate(collapsing ? [{ transform: from?.portrait || "none" }, small] : [small, large], timing));
+      }
+      expansionArea = area(); expansion = animations;
+      animations[0].onfinish = () => { if (expansion === animations) stopExpansion(); };
+    }
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey));
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) position = { x: clamp(saved.x), y: clamp(saved.y) };
@@ -348,12 +405,13 @@
         width: Math.max(0, app.clientWidth - left - (parseFloat(style.paddingRight) || 0)),
         height: Math.max(0, app.clientHeight - top - (parseFloat(style.paddingBottom) || 0)) };
     }
-    const dockWidth = () => Math.min(600, Math.max(420, app.clientWidth * 0.36));
+    const dockWidth = () => Math.min(780, Math.max(620, window.innerWidth * 0.44));
     function canDock() { const box = area(); return box.width - dockWidth() >= 460 && box.height >= 320; }
     function save() {
       try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* Still movable. */ }
     }
     function render() {
+      if (closing) return;
       if (mode === "docked" && !canDock()) mode = "floating";
       panel.dataset.presentation = mode;
       app.classList.toggle("workers-docked", opened && mode === "docked");
@@ -367,7 +425,7 @@
       }
       const box = area();
       if (!box.width || !box.height) return;
-      const width = Math.min(720, box.width), height = Math.min(660, box.height);
+      const width = Math.min(960, box.width), height = Math.min(680, box.height);
       Object.assign(panel.style, { width: `${width}px`, height: `${height}px`, maxWidth: `${box.width}px`, maxHeight: `${box.height}px`,
         right: "auto", bottom: "auto", left: `${box.left + position.x * (box.width - width)}px`,
         top: `${box.top + position.y * (box.height - height)}px` });
@@ -405,6 +463,7 @@
       // including a press on the close/dock controls inside the drag handle.
       suppressClick = false;
       if (event.target.closest("button,a,input,select,textarea")) return;
+      stopExpansion();
       const rect = panel.getBoundingClientRect();
       drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
         mode, position: { ...position }, anchorX: clamp((event.clientX - rect.left) / rect.width),
@@ -417,7 +476,7 @@
       if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
       drag.moved = true; mode = "floating"; render(); panel.dataset.dragging = "true";
       const box = area(), rect = app.getBoundingClientRect();
-      const width = Math.min(720, box.width), height = Math.min(660, box.height);
+      const width = Math.min(960, box.width), height = Math.min(680, box.height);
       const left = event.clientX - rect.left - drag.anchorX * width;
       const top = event.clientY - rect.top - Math.min(drag.anchorY, Math.max(0, height - 36));
       position = { x: box.width > width ? clamp((left - box.left) / (box.width - width)) : position.x,
@@ -440,17 +499,73 @@
     }, true);
     dockButton.onclick = () => {
       if (!opened || dockButton.disabled) return;
-      finish(true); mode = mode === "docked" ? "floating" : "docked"; render();
+      stopExpansion(); finish(true); mode = mode === "docked" ? "floating" : "docked"; render();
     };
-    window.addEventListener("blur", () => finish(true));
-    document.addEventListener("visibilitychange", () => { if (document.hidden) finish(true); });
-    window.addEventListener("pagehide", () => finish(true));
+    window.addEventListener("blur", () => { stopExpansion(); finish(true); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) { stopExpansion(); finish(true); } });
+    window.addEventListener("pagehide", () => { stopExpansion(); finish(true); });
     window.addEventListener("pageshow", render);
+    reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopExpansion(); });
     return {
-      open() { finish(true); mode = "floating"; render(); },
-      close() { finish(true); preview(false); app.classList.remove("workers-docked"); },
-      layout() { if (!drag) render(); }
+      completeTransition: stopExpansion,
+      open(origin) {
+        stopExpansion(); finish(true); mode = "floating";
+        $("workers-list-view").closest(".worker-workspace").scrollLeft = 0;
+        const box = area(), rect = app.getBoundingClientRect();
+        const width = Math.min(960, box.width), height = Math.min(680, box.height);
+        if (origin?.width && origin?.height) {
+          // Keep the expanded workspace near its avatar, clamped to the main
+          // content area. The desktop avatar retains its own saved position.
+          position = { x: box.width > width ? clamp((origin.left - rect.left - box.left - 12) / (box.width - width)) : 0,
+            y: box.height > height ? clamp((origin.top - rect.top - box.top - 12) / (box.height - height)) : 0 };
+        }
+        render();
+        if (!origin?.width || !origin?.height || reducedMotion.matches || typeof panel.animate !== "function" || document.hidden) return;
+        const target = $("workers-window-portrait").getBoundingClientRect(), frame = panel.getBoundingClientRect();
+        if (!target.width || !target.height || !frame.width || !frame.height) return;
+        animateWindow(origin, target, frame);
+      },
+      close(done, animate = true) {
+        const style = getComputedStyle(panel);
+        const from = expansion.length ? { panel: { transform: style.transform, clipPath: style.clipPath },
+          portrait: getComputedStyle($("workers-window-portrait")).transform } : null;
+        stopExpansion(); finish(true); preview(false);
+        const frame = panel.getBoundingClientRect(), workspace = $("workers-list-view").closest(".worker-workspace");
+        const portrait = $("workers-window-portrait").getBoundingClientRect();
+        // Freeze a docked window before releasing its flex slot, so the main
+        // chat can settle and supply the avatar's final return position.
+        const rect = app.getBoundingClientRect();
+        panel.dataset.presentation = "floating";
+        Object.assign(panel.style, { left: `${frame.left - rect.left}px`, top: `${frame.top - rect.top}px`,
+          width: `${frame.width}px`, height: `${frame.height}px`, maxWidth: "none", maxHeight: "none", right: "auto", bottom: "auto" });
+        app.classList.remove("workers-docked"); avatarControl.layout();
+        const target = avatarControl.targetRect();
+        collapseDone = done;
+        if (!animate || reducedMotion.matches || typeof panel.animate !== "function" || document.hidden
+            || !target?.width || !target?.height || !frame.width || !frame.height || !portrait.width) { stopExpansion(); return; }
+        if (workspace.scrollLeft > 0) {
+          // On a narrow scrolled workspace the portrait is off-screen; fade
+          // the window rather than moving a clipped portrait across the chat.
+          const animations = [panel.animate([{ opacity: 1 }, { opacity: 0 }], timing)];
+          expansionArea = area(); expansion = animations;
+          animations[0].onfinish = () => { if (expansion === animations) stopExpansion(); };
+          return;
+        }
+        animateWindow(target, portrait, frame, true, from);
+      },
+      layout() {
+        if (expansion.length && expansionArea) {
+          const box = area();
+          if (["left", "top", "width", "height"].some((key) => box[key] !== expansionArea[key])) stopExpansion();
+        }
+        if (!drag) render();
+      }
     };
+  }
+  function showTaskDetail(yes) {
+    show("workers-list-view", true);
+    show("workers-detail", yes);
+    show("workers-chat-empty", !yes);
   }
   function resetList() {
     listGeneration++; listDepth = 40; nextBefore = null; savedListScroll = 0;
@@ -503,7 +618,7 @@
     if (typeof next !== "string" || !readIdentity.test(next)) throw new Error("服务未返回有效会话身份");
     if (epoch && epoch !== next) {
       seen.clear(); clearDetail(); selection = null; archivedView = false; resetList();
-      show("workers-detail", false); show("workers-list-view", true);
+      showTaskDetail(false);
       policyDirty = false; $("workers-token").value = ""; $("workers-advanced").open = false; $("workers-native-ack").checked = false;
       taskSettingsDirty = false;
       text("workers-pairing-result", ""); text("workers-policy-result", ""); text("workers-task-settings-result", "");
@@ -600,13 +715,16 @@
     $("workers-sync-delete").disabled = actionBusy || !epoch || !settingsKnown || taskSettings?.capabilities?.delete !== true;
     $("workers-task-settings-save").disabled = actionBusy || !epoch || !settingsKnown;
     for (const name of ["workers-unarchived", "workers-archived"]) $(name).disabled = actionBusy || !epoch;
-    $("workers-back").disabled = actionBusy;
     updateTaskControls();
     updateManagementControls();
   }
   function renderList() {
     const rows = [...tasks.values()].filter((task) => (task.archived === true) === archivedView)
       .sort((a, b) => Number(activeStates.has(b.state)) - Number(activeStates.has(a.state)) || Number(b.updated_at || 0) - Number(a.updated_at || 0));
+    // A main-chat reference can target an older conversation beyond the loaded
+    // page. Keep that explicitly selected conversation visible in the sidebar.
+    if (selectedTask?.task_id === selection && (selectedTask.archived === true) === archivedView
+        && !rows.some((task) => task.task_id === selection)) rows.unshift(selectedTask);
     const shown = new Set(rows.map((task) => task.task_id));
     for (const child of [...$("workers-list").children]) if (!shown.has(child.dataset.taskId)) child.remove();
     $("workers-unarchived").setAttribute("aria-pressed", String(!archivedView));
@@ -627,7 +745,7 @@
       }
       button.disabled = actionBusy;
       button.dataset.unread = String(hasUnread); button.setAttribute("aria-current", String(selection === task.task_id));
-      button.children[0].textContent = `DSH · ${task.title || "协作任务"}`;
+      button.children[0].textContent = task.title || "协作任务";
       const pending = managementNames[task.management_pending];
       const content = taskContentState(task);
       button.children[1].textContent = `${state(task.state)}${content.label ? ` · ${content.label}` : ""}${pending ? ` · ${pending}待确认` : ""}${hasUnread ? " · 未读" : ""}`;
@@ -683,7 +801,7 @@
   function selectArchiveView(archived) {
     if (actionBusy || archivedView === archived) return;
     controlGeneration++; archivedView = archived; selection = null; clearDetail(); resetList();
-    show("workers-detail", false); show("workers-list-view", true);
+    showTaskDetail(false);
     schedule(0);
   }
   function manageable(task) {
@@ -785,7 +903,7 @@
         // Archive/restore preserves the position actually read, not the latest sequence.
         if (choice.action === "restore") archivedView = false;
         selection = null; clearDetail(); resetList();
-        show("workers-detail", false); show("workers-list-view", true);
+        showTaskDetail(false);
         status(`已${managementNames[choice.action]} Alice 任务${data.synced_dsh === true ? `，并已同步${managementNames[choice.action]} DSH 专属会话。` : "；DSH 会话未改动。"}`);
         if (opened) $(archivedView ? "workers-archived" : "workers-unarchived").focus({ preventScroll: true });
       } else {
@@ -804,7 +922,7 @@
       closeManagement();
       if (choice.action === "delete") {
         selection = null; clearDetail(); resetList();
-        show("workers-detail", false); show("workers-list-view", true); invalidateChatSources();
+        showTaskDetail(false); invalidateChatSources();
       }
       const message = `操作结果未确认：${e.message}。请同步状态后重新确认；没有自动重试。`;
       text("workers-management-result", message); $("workers-management-result").dataset.error = "true"; status(message, true);
@@ -1185,13 +1303,18 @@
     catch (e) {
       if (e.code === "not_found" && current(selected, generation, session)) {
         controlGeneration++; forgetSeen(selected); selection = null; clearDetail(); resetList();
-        show("workers-detail", false); show("workers-list-view", true); invalidateChatSources();
+        showTaskDetail(false); invalidateChatSources();
         status("任务已不在当前记录中，列表正在重新同步。"); return;
       }
       if (["not_found", "session_changed", "epoch_changed"].includes(e.code) && current(selected, generation, session)) clearDetail();
       throw e;
     }
     if (!current(selected, generation, session) || data.task?.task_id !== selected || data.session_epoch && data.session_epoch !== session) return;
+    if ((data.task.archived === true) !== archivedView) {
+      // Align the sidebar for references into the other archive group without
+      // clearing the selected conversation or invalidating this detail read.
+      archivedView = data.task.archived === true; resetList(); schedule(0);
+    }
     if (!renderDetail(data)) {
       // An unavailable body still has a readable status; do not leave its
       // already-seen revocation/expiry notice permanently marked as unread.
@@ -1266,27 +1389,45 @@
     windowFrame.layout();
   }
   function open() {
+    if (opened) return;
+    closeFocus = false;
+    windowFrame.completeTransition();
     avatarControl.cancel();
+    const avatar = $("workers-btn");
+    const origin = getComputedStyle(avatar).visibility === "hidden" ? null
+      : avatar.querySelector(".collaborator-avatar-art").getBoundingClientRect();
     window.AliceObserver?.close(); window.AliceEvaluations?.close(); opened = true;
-    panel.classList.remove("hidden"); app.classList.add("workers-open"); $("workers-btn").setAttribute("aria-expanded", "true"); windowFrame.open();
-    $("workers-list-view").scrollTop = savedListScroll; renderList(); $("workers-close").focus({ preventScroll: true }); poll();
+    panel.classList.remove("hidden"); app.classList.add("workers-open"); avatar.setAttribute("aria-expanded", "true");
+    renderList(); windowFrame.open(origin); avatarControl.layout();
+    $("workers-list-view").scrollTop = savedListScroll;
+    $("workers-window-avatar").focus({ preventScroll: true }); poll();
   }
   function close(returnFocus = true) {
     avatarControl.cancel();
+    if (closing) { if (!returnFocus) { closeFocus = false; windowFrame.completeTransition(); } return; }
     if (!opened) return;
     closeManagement(); $("workers-task-menu").open = false;
-    opened = false; viewGeneration++; savedListScroll = $("workers-list-view").scrollTop;
-    windowFrame.close();
-    panel.classList.add("hidden"); app.classList.remove("workers-open"); $("workers-btn").setAttribute("aria-expanded", "false");
-    renderList();
-    if (returnFocus && !app.inert && !app.classList.contains("nav-open")) {
-      const avatar = $("workers-btn");
-      (avatar.getClientRects().length && getComputedStyle(avatar).visibility !== "hidden" ? avatar : $("input")).focus({ preventScroll: true });
-    }
+    const priorInert = panel.inert;
+    opened = false; closing = true; closeFocus = returnFocus; viewGeneration++; savedListScroll = $("workers-list-view").scrollTop;
+    panel.inert = true; panel.dataset.transition = "closing";
+    $("workers-btn").setAttribute("aria-expanded", "false");
+    const complete = () => {
+      if (!closing) return;
+      closing = false; delete panel.dataset.transition;
+      panel.classList.add("hidden"); app.classList.remove("workers-open");
+      panel.inert = priorInert || app.classList.contains("nav-open");
+      renderList(); avatarControl.layout();
+      if (closeFocus && !stopped && !document.hidden && document.hasFocus() && !settingsOpened && !app.inert && !app.classList.contains("nav-open")
+          && (document.activeElement === document.body || panel.contains(document.activeElement))) {
+        const avatar = $("workers-btn");
+        (avatar.getClientRects().length && getComputedStyle(avatar).visibility !== "hidden" ? avatar : $("input")).focus({ preventScroll: true });
+      }
+    };
+    windowFrame.close(complete, returnFocus && !stopped && !app.inert && !panel.closest(".nav-open"));
     schedule();
   }
   function setSettingsVisible(value) {
-    if (value) avatarControl.cancel();
+    if (value) { avatarControl.cancel(); if (closing) windowFrame.completeTransition(); }
     settingsOpened = value === true && !$("settings-modal").classList.contains("hidden")
       && !$("workers-config").classList.contains("hidden");
     if (!settingsOpened) {
@@ -1300,9 +1441,25 @@
     if (actionBusy) return;
     savedListScroll = $("workers-list-view").scrollTop;
     if (selection !== taskId) { clearDetail(); selection = taskId; }
-    show("workers-list-view", false); show("workers-detail", true);
-    $("workers-back").focus({ preventScroll: true });
-    try { await syncDetail(); } catch (e) { status(e.message, true); }
+    showTaskDetail(true); renderList();
+    if (!selectedTask) {
+      text("workers-task-title", tasks.get(taskId)?.title || "正在读取会话…");
+      clearEventView("正在读取会话…");
+    }
+    const generation = viewGeneration, session = epoch;
+    try { await syncDetail(); }
+    catch (e) { if (current(taskId, generation, session)) status(e.message, true); }
+    if (current(taskId, generation, session)) {
+      renderList();
+      const item = [...$("workers-list").children].find((child) => child.dataset.taskId === taskId);
+      const scroll = $("workers-list-view");
+      if (item) {
+        const itemRect = item.getBoundingClientRect(), viewport = scroll.getBoundingClientRect();
+        const top = viewport.top + $("workers-unarchived").parentElement.offsetHeight + 10;
+        if (itemRect.top < top) scroll.scrollTop += itemRect.top - top;
+        else if (itemRect.bottom > viewport.bottom) scroll.scrollTop += itemRect.bottom - viewport.bottom;
+      }
+    }
   }
   async function openTask(taskId) {
     if (stopped || app.inert || app.classList.contains("hidden") || app.classList.contains("nav-open")
@@ -1388,6 +1545,7 @@
   const windowFrame = setupWorkerWindow();
   const avatarControl = setupAvatarDrag($("workers-btn"));
   $("workers-close").onclick = () => close();
+  $("workers-window-avatar").onclick = () => close();
   $("workers-refresh").onclick = poll;
   $("workers-settings-refresh").onclick = poll;
   $("workers-unarchived").onclick = () => selectArchiveView(false);
@@ -1395,13 +1553,6 @@
   $("workers-more").onclick = () => syncList(true).catch((e) => status(e.message, true));
   $("workers-events-more").onclick = () => syncDetail(true).catch((e) => status(e.message, true));
   $("workers-events-restart").onclick = () => { clearDetail(); following = false; syncDetail(true).catch((e) => status(e.message, true)); };
-  $("workers-back").onclick = () => {
-    if (actionBusy) return;
-    closeManagement(); $("workers-task-menu").open = false;
-    viewGeneration++; show("workers-detail", false); show("workers-list-view", true);
-    $("workers-list-view").scrollTop = savedListScroll;
-    [...$("workers-list").children].find((child) => child.dataset.taskId === selection)?.focus({ preventScroll: true });
-  };
   $("workers-events").onscroll = () => {
     const el = $("workers-events"); following = el.scrollHeight - el.scrollTop - el.clientHeight < 35;
     show("workers-latest", !following);
@@ -1494,7 +1645,10 @@
   });
   document.addEventListener("visibilitychange", () => visible() ? poll() : clearTimeout(timer));
   new ResizeObserver(layout).observe(app);
-  new MutationObserver(() => { if (visible()) schedule(0); else clearTimeout(timer); }).observe(app, { attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(() => {
+    if (closing && (app.inert || app.classList.contains("hidden") || app.classList.contains("nav-open"))) windowFrame.completeTransition();
+    if (visible()) schedule(0); else clearTimeout(timer);
+  }).observe(app, { attributes: true, attributeFilter: ["class", "inert"] });
   window.addEventListener("pagehide", () => { $("workers-token").value = ""; clearTimeout(timer); controllers.forEach((controller) => controller.abort()); });
   window.AliceWorkers = { close, openTask, setSettingsVisible,
     noteTool(name) {
