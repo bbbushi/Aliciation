@@ -20,13 +20,12 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
 - **能力增减须同步宪法「存在事实」清单**（`alice/retrieval.py`：我有什么/没有什么）——自模型与实际能力的漂移本身就是认知错误源（2026-10-31 烟味事件的教训）。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
-- **分支流程（2026-10-30 用户纠正）**：当前用户的改动推 `trial/windows-v0.2-20261028`；`ytq` 属于其他协作者，不作为当前用户的推送目标。验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。当前 origin 使用 HTTPS。
+- **分支流程（2026-11-02 当前用户纠正）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。Claude直调仍限定 `ytq`，不合 main；其他获准合入的改动验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。当前 origin 使用 HTTPS。
 
 ## 当前
 
-- 2026-11-02 ZCode：**claude 直调转正式+接线完成（用户裁定 ytq 分支限定，不合 main）**——设计 v1（530bf2c）+ S1~S5 + **W 接线（28da912）**：`dispatch_worker` 枚举加 claude-agent，runtime 分派分支（claude_policy 三核准入/日预算帽/独立登记/后台执行线程），事件落 worker_events、result 计费落 claude_completed。**自检全通**：C02~C04/C06/C07 + W 全链路（GUI 模拟答案→allow_task 缓存→产物落盘→result 终态；deny 零产物不绕路；`~/.zcode` 诱导结构硬挡）。**GUI 真机使用前提**：claude_policy 填 workspace_root 且 enabled=1（迁移脚本默认禁用），质询卡自动轮询；C01/C05/C08~C10 待 GUI 人工。记录：docs/设计文档/claude直调-*.md。
-- 2026-11-02 Codex：DSH协作、头像交互与本轮切换动画统一通过PR19交付（可拖头像/720px浮窗/左右气泡/安全Markdown/折叠菜单 + 240ms头像切换缓动；JS语法与独立静态审查过，实际动画及PR19其余待人工；未加载前批PNG路由者先重启Alice）。历史任务书/真实截图/重复v2评审/QQ群聊方案留本地未提交；上轮rebase备份与stash保留。
-- 架构沿用用户裁决f983fa7：trial 3732ffe为正典、DSH插件桥为P1唯一路径；另一套D1已撤回（f3acba0留作P3本地CLI参考）。**数据层撞车已清**：昨夜本地D1起服把自建worker表形写入user/data/alice.db，今日对方schema报no such column:sequence；已备份（before-worker-drop-*.bak）后删7张空表、对方10表重建，服务200（ZCode动过user/在此记录）。教训：**平行施工裁决要赶在起服前——起服即写库**。worker_artifacts.py/testbed保留未接线；契约§六+astra§5为P1人工验收标尺，P2来源契约待设计；文件ID导入/产物下载/跨任务来源转发未开放。
-- PR19细节：Alice单次无工具总结/持久领取/依赖隔离（原文仅GUI）、单任务引用保留草稿、worker_target绑定请求与epoch；重启/断开保留授权版本与有效正文，同参恢复不撤销，明确关授权/改参清正文且GUI确认；已读游标按站点/epoch/协作者保存、跨标签单调同步防迟到，正文/标题/凭据不入浏览器存储。
-- QQ私聊检索（PR#17）/安装（PR#15/16）已合main，qq-owner需内容访问+聊天查找+QQ资料许可，平台/额度共用、缓存来源分渠道；群聊方案另留未合。GUI知乎candidate/url、P1/观察器/见闻/深海UI/GUI与QQ共存、A02/A05及旧SDK适配待办；插件0.4.0本地link，原生权限非OS沙箱、1执行+4待办，NEXT无永久删除接口。
-- 雷：本机无`timeout`、无Chrome；**起服一律`.venv/bin/python -m alice serve`（系统python3无openai；ps显示框架路径不代表没用venv）**；`dist/`与`user/`不入库；PR走compare页手动建；推送等用户明确指示；**活库元先验待下次人格重装种入**。
+- 2026-11-02 Codex：用户明确当前在ytq工作；已完成项目静态熟悉并出 claude 直调问题定位清单（worker_context/validate_chat_target/tools 时序/账本链/取消/Row.get 六处），仅更新 AGENTS.md，未起服/测试/动 user/。docs→docs/nockname 搬迁等未提交资料保留。
+- 2026-11-02 ZCode：**claude 直调外评五项全修+活体验收通过（f748e55，ytq 限定）**——F1 授权按任务工人身份（worker_context refs 逐ref对表+validate_chat_target 本地轨不要求桥）；F2 available_workers 构造参数化；F3 账本完整链（事务内登记 task+messages+attempts 含 originating/tool_call，完成回复写 completed 消息）；F4 取消接真句柄（claude_transports 注册表/stopping→回收）；F5 Row 下标。活体链：挂载→派工→质询→allow_task→completed→read 返回 worker_refs 全通；僵尸任务已收敛（cancelled+confirmed）。**待用户 GUI 真机**：刷新页面（加载 claude-gate.js）后派工即见质询卡；C01/C05/C08~C10 待人工。Codex 线索与本轮修复重合处已一并覆盖。
+- 正典沿用f983fa7裁决：trial 3732ffe、P1只走DSH插件桥；旧D1撤回（f3acba0作P3参考），worker_artifacts.py/testbed未接线，文件ID导入/产物下载/跨任务来源转发未开放，P2来源契约待设计，契约§六+astra§5为P1人工标尺。前轮ZCode动过user/：备份before-worker-drop-*.bak后删7张空worker表、重建对方10表，服务200；起服即写库，施工裁决须先于起服。
+- PR19已交付DSH协作、可拖头像/720px浮窗/左右气泡/安全Markdown/折叠菜单及240ms切换缓动，实际动画与其余业务待人工；缺PNG路由须重启。单次无工具总结/持久领取/依赖隔离仅GUI；单任务引用保留草稿、worker_target绑定请求与epoch；重启/断开/同参恢复保留授权及有效正文，关授权/改参确认后清正文；已读游标按站点/epoch/协作者单调同步，正文/标题/凭据不入浏览器存储。历史任务书/截图/v2评审/QQ群聊方案留本地未提交。
+- QQ私聊检索PR17及安装PR15/16已合main，qq-owner需内容访问+聊天查找+QQ资料许可，共享平台/额度、分渠道来源；群聊未合。GUI知乎candidate/url、P1/观察器/见闻/深海UI/GUI与QQ共存、A02/A05及旧SDK适配待办；DSH插件0.4.0本地link，原生权限非OS沙箱，1执行+4待办，NEXT无永久删除接口。活库元先验待下次人格重装种入；本机无timeout/Chrome，起服用`.venv/bin/python -m alice serve`；user/dist不入库，PR走compare页手动建，推送须用户明示且目标ytq，Claude直调不合main。
