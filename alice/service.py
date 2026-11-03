@@ -85,6 +85,7 @@ class ChatService:
         try:
             self.client = client if client is not None else make_client(self.cfg)
             self._lock = threading.RLock()  # 单一永久会话语义：所有读写串行
+            persona.recover_growth(self.store)  # No model call or old-file replay during recovery.
             self._observer_scope = uuid.uuid4().hex  # Ephemeral identity; never written to Alice's data.
             saved_thinking = self.store.meta_get("thinking")
             if saved_thinking in ("on", "off"):  # GUI 里改过的思考深度优先于 config 文件
@@ -96,6 +97,9 @@ class ChatService:
             self._channels = ChannelCoordinator(self)
             self._channels.set_ready(persona.persona_md() is not None)
             self._workers = WorkerCoordinator(self)
+            # C2 跨轮工作集：宿主持有（内存态；epoch 变化整体失效，重启自然清空）
+            from .context_workspace import WorkingSet
+            self._context_workspace = WorkingSet(self.cfg)
             self._discovery = DiscoveryCoordinator(self)
             self._discovery.start()
         except BaseException:
@@ -152,6 +156,25 @@ class ChatService:
         """当前人格全文 + 元信息 + 变更记录尾部（GUI 的人格面板用）。"""
         with self._lock:
             md = persona.persona_md() or ""
+            from . import persona_growth
+            display_md, growth_note, growth_states = md, "", {}
+            try:
+                raw_sections = persona_growth.bodies(md)
+            except ValueError:
+                raw_sections = None
+                display_md = "（人格小节重复，原文仍可下载查看；请先修正结构）"
+            if raw_sections is not None and persona_growth.MARKER in md:
+                try:
+                    sections = raw_sections
+                    projected, basis = persona_growth.project(sections, persona_growth.evidence_rows(self.store))
+                    display_md = persona_growth.replace_bodies(md, {
+                        title: projected[title] for title in persona_growth.EDITABLE
+                        if persona_growth.MARKER in sections.get(title, "")})
+                    growth_states = basis["sections"]
+                    growth_note = "生长内容按当前有效记忆展示；依据失效的内容暂不采用。下载保留原文和依据记录。"
+                except ValueError:
+                    display_md = "（人格小节或依据记录无法核对；原文仍可下载查看）"
+                    growth_note = "当前展示暂不可用，未修改原人格。"
             changelog: list[str] = []
             path = appconfig.PERSONA_CHANGELOG
             if path.exists():
@@ -159,6 +182,14 @@ class ChatService:
                 changelog = [ln for ln in lines if ln][-6:]
             return {
                 "md": md,
+                "display_md": display_md,
+                "growth_note": growth_note,
+                "growth_sections": growth_states,
+                "expression": {"revision": persona_growth.digest(md),
+                               "session_epoch": self.store.meta_get("session_epoch"),
+                               "sections": {title: raw_sections.get(title, "")
+                                            for title in persona_growth.EXPRESSION}}
+                              if md and raw_sections is not None else None,
                 "changelog": changelog,
                 "turns": self._turn_count(),
                 **self._persona_stats(),
@@ -352,6 +383,9 @@ class ChatService:
     def observer_detail(self, *, scope=None, **kwargs) -> dict:
         return self._observer_read(observation.detail, scope=scope, **kwargs)
 
+    def observer_context_basis(self, *, scope=None, limit="10") -> dict:
+        return self._observer_read(observation.context_basis, scope=scope, limit=limit)
+
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
         return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)
@@ -479,9 +513,9 @@ class ChatService:
                 if reset and "## 底色" not in md_text:
                     plan = persona.prepare_import(self.client, self.cfg, md_text, source, False)
                 if reset:
-                    self._archive_locked()
+                    archived = self._archive_locked()
                 if plan is not None:
-                    persona.commit_import_plan(self.store, self.cfg, plan)
+                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived)
                 else:
                     persona.install_persona(self.store, self.cfg, md_text, source=source,
                                             client=self.client)
@@ -496,6 +530,19 @@ class ChatService:
             with self._lock:
                 self._archive_locked()
                 return self.state()
+
+    def revise_persona_expression(self, payload) -> dict:
+        if (not isinstance(payload, dict) or set(payload) != {"revision", "sections", "session_epoch"}
+                or not isinstance(payload["revision"], str) or not isinstance(payload["session_epoch"], str)):
+            raise ValueError("表达修订参数无效")
+        from .persona_growth import digest
+        with self._channels.control(), self._workers.control_lock, self._lock:
+            if self.store.meta_get("session_epoch") != payload["session_epoch"]:
+                raise ChannelError(409, "session_changed", "会话已更换，请重新打开当前人格后再编辑")
+            if digest(persona.persona_md() or "") != payload["revision"]:
+                raise ChannelError(409, "persona_changed", "人格已变化，请重新打开编辑后再保存")
+            changed = persona.revise_expression(self.store, payload["revision"], payload["sections"])
+            return {"changed": changed, "state": self.state()}
 
     def _archive_locked(self) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
@@ -632,6 +679,7 @@ class ChatService:
                 source_allow_external_recall=source_explicit, source_usage_out=source_usage,
                 search_session=search_session, tool_round_limit=settings.get("tool_round_limit", 4),
                 worker_session=self._workers.prepare_chat_locked(request),
+                working_set=getattr(self, "_context_workspace", None),
             )
             try:
                 self._discovery.record_chat_locked(request, source_usage,

@@ -899,13 +899,13 @@ function showWelcome(s, reseting = false) {
 function validateMd(md) {
   const text = md.trim();
   if (!text) return { ok: false, msg: "" };
-  /* Alice 格式：认「## 底色」；外部角色提示词（无底色）：整份装进底色层 */
+  /* Alice 格式直接安装；外部角色文档走提取、样本适配与认知审查。 */
   const aliceShape = /^##\s*底色/m.test(text);
   const words = text.length;
   if (!aliceShape) {
     const msg = words > 12000
-      ? `没有「## 底色」：会整份放进底色层；但 ${words} 字偏长，每轮上下文都会被它占一块，建议压到 4000 字内。`
-      : "没有「## 底色」小节：把整份文档放进底色层（适合角色提示词 / 角色卡），生长三节自动补占位。";
+      ? `原始角色文档：先提取风格、情境和样本，再审查认知；原文不会直接常驻。${words} 字偏长，导入处理可能较慢。`
+      : "原始角色文档：先提取风格、情境和样本，再审查认知；准备成功后才安装，原文不会直接常驻。";
     return { ok: true, note: !words || words <= 12000, warn: words > 12000, msg };
   }
   if (words > 12000) {
@@ -1017,7 +1017,8 @@ async function openPersonaView() {
   }
   const meta = p.installed ? `${personaMeta(p)}${p.turns ? ` · 聊过 ${p.turns} 轮` : ""}` : "还没有人格";
   const body = p.installed
-    ? `<div class="md">${renderMd(p.md)}</div>` +
+    ? (p.growth_note ? `<p class="hint">${esc(p.growth_note)}</p>` : "") +
+      `<div class="md">${renderMd(p.display_md ?? p.md)}</div>` +
       (p.changelog && p.changelog.length
         ? `<div class="changelog"><div class="panel-title small">最近变更</div><ul>${p.changelog
             .map((x) => `<li>${esc(x)}</li>`)
@@ -1025,6 +1026,7 @@ async function openPersonaView() {
         : "")
     : `<p class="hint">还没有安装人格。点下面的按钮导入一份，或以气质标签生成。</p>`;
   openModal("当前人格", meta, body, [
+    ...(p.expression ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
     {
@@ -1046,6 +1048,35 @@ async function openPersonaView() {
       },
     },
     { label: "关闭", onClick: closeModal },
+  ]);
+}
+
+function openExpressionEditor(expression) {
+  const fields = Object.entries(expression.sections);
+  let saving = false;
+  const body = `<p class="hint">这是你明确选定的表达偏好。保留列表和样本格式，只编辑正文，每节最多 6000 字。</p>` +
+    fields.map(([title, text], index) =>
+      `<label class="expression-field">${esc(title)}<textarea id="expression-${index}" rows="7" spellcheck="false">${esc(text)}</textarea></label>`
+    ).join("");
+  openModal("编辑说话习惯", "保存后只修改这三节；对话、记忆与生长内容保留，旧版自动快照。", body, [
+    { label: "取消", onClick: () => { if (!saving) openPersonaView(); } },
+    { label: "保存表达偏好", cls: "btn primary", onClick: async () => {
+      if (saving) return;
+      const sections = Object.fromEntries(fields.map(([title], index) =>
+        [title, $(`#expression-${index}`).value]));
+      saving = true;
+      try {
+        const result = await postJSON("/api/persona/expression", {
+          revision: expression.revision, session_epoch: expression.session_epoch, sections });
+        state = result.state;
+        toast(result.changed ? "表达偏好已保存，旧版已快照" : "表达偏好没有变化");
+        await openPersonaView();
+      } catch (error) {
+        toast(`保存未能确认：${error.message}。请保留文本，核对当前人格后再操作。`);
+      } finally {
+        saving = false;
+      }
+    } },
   ]);
 }
 
@@ -1404,7 +1435,16 @@ function handleEvent(ev, node, userNode, requestId) {
     scrollBottom();
   } else if (ev.type === "tool") {
     window.AliceWorkers?.noteTool(ev.name);
-    sysline(ev.name === "remember" ? "（正在整理可保存的记忆…）" : ev.name === "discovery_search" ? "（正在查找资料…）" : "（翻了一下记忆…）");
+    const toolMessages = {
+      remember: "（正在整理可保存的记忆…）",
+      discovery_search: "（正在查找资料…）",
+      observe_interest: "（正在整理兴趣依据…）",
+      learn_from_sources: "（正在择要保存见闻…）",
+      reflect_on_sources: "（正在整理带来源的初步看法…）",
+      condense_observation: "（正在浓缩见闻…）",
+      reuse_observation: "（正在复用已有见闻…）"
+    };
+    sysline(toolMessages[ev.name] || "（翻了一下记忆…）");
   } else if (ev.type === "search") {
     window.AliceChatSearch?.progress(ev, node);
   } else if (ev.type === "meta") {

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
 from .observation_memory import ObservationStoreMixin
+from .learning import LearningStoreMixin
 from .worker_context import SCHEMA as WORKER_CONTEXT_SCHEMA, WORKER_SHADOW, WorkerStoreMixin
 
 SCHEMA = """
@@ -64,6 +65,32 @@ CREATE TABLE IF NOT EXISTS turn_metrics (
   ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_turn_metrics_module ON turn_metrics (module, ts);
+CREATE TABLE IF NOT EXISTS context_recaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_turn_id INTEGER NOT NULL,
+  end_turn_id INTEGER NOT NULL,
+  recap_md TEXT NOT NULL,
+  source_turn_ids TEXT NOT NULL DEFAULT '[]',
+  boundary_turn_id INTEGER NOT NULL,
+  chars INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  UNIQUE (start_turn_id, end_turn_id)
+);
+-- Legacy context_recaps is retained as audit evidence, never injected by v2.
+CREATE TABLE IF NOT EXISTS context_recap_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_turn_id INTEGER NOT NULL, end_turn_id INTEGER NOT NULL,
+  recap_md TEXT NOT NULL, source_turn_ids TEXT NOT NULL,
+  boundary_turn_id INTEGER NOT NULL, chars INTEGER NOT NULL,
+  created_at REAL NOT NULL, generation_key TEXT NOT NULL,
+  UNIQUE (start_turn_id, end_turn_id, generation_key)
+);
+CREATE TABLE IF NOT EXISTS memory_extraction_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
+  session_epoch TEXT NOT NULL, source_json TEXT NOT NULL,
+  candidates_json TEXT NOT NULL, review_json TEXT NOT NULL,
+  status TEXT NOT NULL, memory_ids TEXT NOT NULL
+);
 """
 
 _PUNCT = re.compile(r"[\s，。！？、,.!?~…—\-\"'「」《》()（）:：;；·]")
@@ -89,12 +116,11 @@ def text_score(query: str, text: str) -> float:
 
 def memory_score(m: sqlite3.Row, now: float) -> float:
     """记忆权重 = 提及×2 + 使用 + 近期使用加成。容量清理与排序共用。"""
-    anchor = m["last_used_at"] or m["created_at"]
-    recency = max(0.0, 3.0 - (now - anchor) / 86400)
-    return m["mention_count"] * 2 + m["use_count"] + recency
+    from .memory_policy import usage_score
+    return usage_score(m, now)
 
 
-class Store(WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
+class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
@@ -110,6 +136,7 @@ class Store(WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
         self._migrate()
         self.conn.executescript(SOURCE_SCHEMA)
         self.init_observation_memory()
+        self.init_learning()
         self.conn.executescript(WORKER_CONTEXT_SCHEMA)
         self.purge_source_packets()
 
@@ -134,6 +161,10 @@ class Store(WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
             ("source_url", "TEXT NOT NULL DEFAULT ''"),
             ("lifecycle", "TEXT NOT NULL DEFAULT 'memory'"),
             ("provenance_status", "TEXT NOT NULL DEFAULT 'valid'"),
+            ("value_tier", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("value_note", "TEXT NOT NULL DEFAULT ''"),
+            ("reflection_hint", "TEXT NOT NULL DEFAULT 'ordinary'"),
+            ("value_policy", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {declaration}")
@@ -266,11 +297,61 @@ class Store(WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
             "SELECT COUNT(*) AS c FROM memories WHERE layer=?", (layer,)
         ).fetchone()["c"]
 
+    def context_memory_rows(self, *, scope: str) -> list[sqlite3.Row]:
+        """C1 ordinary, independent memories only. Explicit audience, no GUI default.
+
+        Source/parent-linked records keep their existing source-aware read path;
+        no catalogue title is exposed before this qualification.
+        """
+        from .discovery_memory import SOURCE_SCOPES
+        if scope not in SOURCE_SCOPES:
+            return []
+        return self.conn.execute(
+            "SELECT m.* FROM memories m WHERE m.origin='conversation' "
+            "AND m.provenance_status='valid' AND m.source_url='' "
+            "AND (m.expires_at IS NULL OR m.expires_at>?) "
+            "AND NOT EXISTS(SELECT 1 FROM memory_dependencies d WHERE d.memory_id=m.id) "
+            "AND NOT EXISTS(SELECT 1 FROM memory_evidence_links e WHERE e.memory_id=m.id) "
+            "AND NOT EXISTS(SELECT 1 FROM source_memory_dependencies s WHERE s.memory_id=m.id) "
+            "ORDER BY m.created_at DESC,m.id DESC", (time.time(),)).fetchall()
+
     def count_pressure(self) -> int:
         """压力窗口记忆存量（活跃的）：给状态面板与"结构性沦陷"检查用。"""
         return self.conn.execute(
             "SELECT COUNT(*) AS c FROM memories WHERE pressure=1"
         ).fetchone()["c"]
+
+    def context_history_rounds(self, *, scope: str, before_id: int, limit: int = 200,
+                               user_id: int | None = None) -> list:
+        """C3: same-epoch/channel complete ordinary request pairs, never shadows.
+
+        Untagged legacy/CLI messages are deliberately outside this first adapter.
+        Filter attachments and notifications before LIMIT, even after expiry.
+        """
+        if scope not in ("gui", "qq-owner"):
+            return []
+        if not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_requests'").fetchone():
+            return []
+        report_filter = ""
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_reports'").fetchone():
+            report_filter = " AND NOT EXISTS(SELECT 1 FROM worker_reports w WHERE w.turn_id IN(u.id,a.id))"
+        sql = ("SELECT q.request_id,u.id AS user_id,u.ts AS user_ts,u.content AS user_content,"
+               "a.id AS assistant_id,a.ts AS assistant_ts,a.content AS assistant_content "
+               "FROM channel_requests q JOIN turns u ON u.id=q.user_turn_id "
+               "JOIN turns a ON a.id=q.assistant_turn_id "
+               "WHERE q.session_epoch=? AND q.channel_id=? "
+               "AND q.status IN('completed','completed_with_warning') "
+               "AND u.role='user' AND a.role='assistant' AND a.id>u.id AND a.id<? "
+               "AND NOT EXISTS(SELECT 1 FROM source_turns s WHERE s.turn_id IN(u.id,a.id)) "
+               "AND NOT EXISTS(SELECT 1 FROM worker_turns w WHERE w.turn_id IN(u.id,a.id)) "
+               + report_filter)
+        args = [self.meta_get("session_epoch"), scope, before_id]
+        if user_id is not None:
+            sql += " AND u.id=?"
+            args.append(user_id)
+        sql += " ORDER BY u.id DESC LIMIT ?"
+        args.append(min(max(limit, 1), 200))
+        return self.conn.execute(sql, args).fetchall()
 
     def alive_memories(self, *, include_external: bool = False) -> list[sqlite3.Row]:
         # Thought/persona/skills and extraction all use this default. External

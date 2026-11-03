@@ -61,8 +61,9 @@ def chat(
     model: str | None = None,
     tools: list[dict] | None = None,
     json_mode: bool = False,
+    retry: bool = True,
 ):
-    """非流式调用，失败自动重试一次。"""
+    """非流式调用，默认最多三次尝试；已计账的单步可关闭重试。"""
     kwargs: dict[str, Any] = {
         "model": model or cfg.llm.chat_model,
         "messages": messages,
@@ -76,12 +77,12 @@ def chat(
         kwargs["response_format"] = {"type": "json_object"}
 
     last_err: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(3 if retry else 1):
         try:
             return client.chat.completions.create(**kwargs)
         except Exception as e:  # 网络/限流等瞬时错误
             last_err = e
-            if attempt < 2:
+            if retry and attempt < 2:
                 import time
                 time.sleep(2 * (attempt + 1))  # 2s、4s 退避
     raise RuntimeError(f"LLM 调用失败：{safe_provider_error(last_err)}") from None

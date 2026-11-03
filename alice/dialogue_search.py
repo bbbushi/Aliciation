@@ -195,7 +195,9 @@ class SearchSession:
                 "url": packet["url"], "platform": packet["source_id"].split(":", 1)[0],
                 "fetched_at": packet["created_at"], "evidence": packet["evidence"],
                 "coverage": packet.get("coverage", packet.get("uncertainty", "")),
-                "source_version": packet["version"], "expires_at": packet["expires_at"], "reused": reused}
+                "source_version": packet["version"], "expires_at": packet["expires_at"], "reused": reused,
+                "source_version_kind": "host_read_content_identity",
+                "version_scope": "只标识取得文字的内容与宿主来源身份，不是网站修订号；相同只能证明取得范围一致，不能证明全文、未读部分或页面编辑历史没有变化"}
 
     def _cached_locked(self, key, wanted):
         from .discovery import _identity
@@ -408,15 +410,12 @@ class SearchSession:
         coverage = _coverage(doc.get("coverage"), doc)
         quote = doc["text"][:300]
         policy = {"tieba_reply_count": doc.get("tieba_reply_count", 0), "tieba_replies_requested": doc.get("tieba_replies_requested", False)}
-        packet = {"id": pid, "source_id": doc["platform"] + ":" + _identity(doc["url"]),
-                  # A fresh authorized read is a new version even if another
-                  # channel read the same bytes in the same wall-clock second.
-                  "version": digest + ":" + str(time.time_ns()), "title": doc["title"][:500], "url": doc["url"],
-                  "evidence": quote, "evidence_kind": "page_excerpt",
-                  "scope": ["gui", "qq-owner"] if self.scope == "qq-owner" else ["gui"], "created_at": now,
-                  "expires_at": now + settings["source_ttl_hours"] * 3600, "memory_eligible": False,
-                  "observation_eligible": True, "coverage": coverage, "reading_policy": policy,
-                  "uncertainty": "阅读范围：" + coverage + "；节选及作者声称尚未核实。"}
+        from .learning import material_packet
+        packet = material_packet(packet_id=pid,source_id=doc['platform']+':'+_identity(doc['url']),
+            version_id=digest+':'+str(time.time_ns()),title=doc['title'][:500],url=doc['url'],
+            text=doc['text'],quote=quote,created_at=now,expires_at=now+settings['source_ttl_hours']*3600,
+            scope=['gui','qq-owner'] if self.scope=='qq-owner' else ['gui'],coverage=coverage,reading_policy=policy,
+            uncertainty='阅读范围：'+coverage+'；节选及作者声称尚未核实。')
         with store.source_transaction():
             store.save_source_packet(packet)
             if doc["platform"] == "tieba":
@@ -447,12 +446,16 @@ class SearchSession:
         accepted = []
         cap = context["limits"]["chat_dependency_limit"]
         for item in result["items"]:
-            if self.service.store.get_source_packet(item["packet_id"], scope=self.scope) is None:
+            packet = self.service.store.get_source_packet(item["packet_id"], scope=self.scope)
+            if packet is None:
                 continue
             if item["packet_id"] not in ids:
                 if cap is not None and len(ids) >= cap:
                     continue
                 ids.append(item["packet_id"])
+            existing = self.service.store.matching_observations([packet],scope=self.scope)
+            item['existing_observations'] = existing
+            context['reusable_memory_ids'] = list(dict.fromkeys(context.get('reusable_memory_ids',[]) + [r['memory_id'] for r in existing]))
             accepted.append(item)
         if ids:
             self.service.store.protect_source_turn(context["user_turn_id"], ids, scope=self.scope)

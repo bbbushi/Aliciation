@@ -12,7 +12,29 @@ name = "Alice"       # AI 的名字
 evolve_every_memories = 15
 
 [context]
-recent_turns = 16              # 注入原文的最近对话轮数（1 轮 = 用户+AI 各一条）
+transform_review_enabled = true # 显式带引文改写/翻译：增加一次有界审查，失败保留原句，不流出未审草稿
+assembly_mode = "legacy"      # C1人工试用设indexed；不自动重装人格或迁移记忆
+total_budget_tokens = 100000   # 长度启发式估算；含工具/资料，非精确token上界；0关闭守卫
+reply_reserve_tokens = 4000
+memory_candidate_limit = 12
+memory_catalogue_chars = 3600  # 本轮累计目录预算；初始最多1800，搜索也计入
+memory_expanded_chars = 8000   # 完整条目与回执预算；超限拒读，不截限定条件
+memory_tool_calls = 2         # 仍受本轮总工具上限约束（含来源回忆）
+working_set_enabled = false   # C2 独立试用开关；还需 assembly_mode="indexed"
+working_set_max_items = 4
+working_set_max_chars = 4000   # 完整标题/正文的JSON容量，额外计入C1展开与总上下文预算
+working_set_ttl_turns = 12     # 当前渠道后续装配次数；重复keep不续期
+working_set_calls = 4          # keep/release合计，仍受本轮总工具上限约束
+history_enabled = false       # C3独立开关，需indexed；只读当前库同渠道的已完成普通往返
+history_max_chars = 8000      # 目录及完整原文回执累计预算；不截断后伪称完整
+history_calls = 2             # search/load合计，仍受本轮总工具上限约束
+recap_enabled = false         # C3普通旧往返前情；默认关闭，独立于indexed
+recap_min_rows = 4
+recap_span_max_rows = 60
+recap_max_chars = 600
+recap_inject_count = 2
+recap_inject_chars = 1200
+recent_turns = 16              # 最近消息条数上限，按完整往返选择；不是16次用户发送
 active_days = 2                # 活跃层/仓库层分界（天）
 survival_days = 7              # 生存过滤线（天）
 survival_min_uses = 1          # 跨过生存线存活所需的最少(提及+使用)次数
@@ -24,6 +46,14 @@ longterm_capacity = 2000       # 长期层容量上限
 [memory]
 extract_every_turns = 10       # 每累计多少用户轮跑一次记忆提取
 distill_every_memories = 30    # 数据触发：每累计 N 条新记忆提炼一次技能
+deliberate_every_memories = 15
+observation_value_review = true # 已分级新见闻：七天复核，高价值优先保留；来源期限不延长
+deliberate_early_high = true   # 高价值/冲突/重复材料提前；用户当轮讨论可立即提取
+interest_decay_days = 90       # 未获用户新表达支持时，置信度衰减
+observation_high_chars = 1200  # 见闻内容建议字数；保留必要条件，不机械截断
+observation_normal_chars = 600
+observation_low_chars = 180
+observation_condense_max_ratio = 0.8 # 至少缩减20%；无法保留关键条件时不强行改写
 
 # QQ 仅本人私聊；初始关闭。配置变更须排空并重启 Alice 后生效。
 # 令牌不同于 QQ AppSecret 和模型 API Key，核心仅保存其 SHA-256。

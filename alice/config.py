@@ -44,6 +44,28 @@ class PersonaConfig:
 @dataclass
 class ContextConfig:
     recent_turns: int = 16
+    transform_review_enabled: bool = True  # 显式带引文的文本变换：发布前一次角色/条件审查
+    assembly_mode: str = "legacy"  # indexed 为 C1 人工试用；不自动改本机配置
+    memory_candidate_limit: int = 12
+    memory_catalogue_chars: int = 3600  # 本轮目录累计预算；初始最多使用1800
+    memory_expanded_chars: int = 8000
+    memory_tool_calls: int = 2
+    # C2 跨轮工作集（context_keep/context_release；仅 indexed 模式挂载）
+    working_set_enabled: bool = False
+    working_set_max_items: int = 4
+    working_set_max_chars: int = 4000
+    working_set_ttl_turns: int = 12
+    working_set_calls: int = 4
+    history_enabled: bool = False  # C3普通旧原文；需indexed，不读归档/未标渠道旧数据
+    history_max_chars: int = 8000
+    history_calls: int = 2
+    # C3(a) 有来源前情：移出取数窗的原文经模型生成一次性前情卡（默认关，人工验收后开）
+    recap_enabled: bool = False
+    recap_min_rows: int = 4
+    recap_span_max_rows: int = 60
+    recap_max_chars: int = 600
+    recap_inject_count: int = 2
+    recap_inject_chars: int = 1200
     # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
     total_budget_tokens: int = 100_000
     reply_reserve_tokens: int = 4_000
@@ -54,6 +76,41 @@ class ContextConfig:
     active_full: int = 20
     longterm_top_k: int = 12
     longterm_capacity: int = 2000
+
+    def __post_init__(self):
+        if type(self.transform_review_enabled) is not bool:
+            raise ValueError('context.transform_review_enabled 必须为布尔值')
+        if self.assembly_mode not in ("legacy", "indexed"):
+            raise ValueError("context.assembly_mode 必须为 legacy 或 indexed")
+        if type(self.working_set_enabled) is not bool:
+            raise ValueError("context.working_set_enabled 必须为布尔值")
+        if type(self.recap_enabled) is not bool:
+            raise ValueError("context.recap_enabled 必须为布尔值")
+        if type(self.history_enabled) is not bool:
+            raise ValueError("context.history_enabled 必须为布尔值")
+        for name, low, high in (("memory_candidate_limit", 1, 12),
+                                ("memory_catalogue_chars", 512, 24000),
+                                ("memory_expanded_chars", 1200, 64000),
+                                ("memory_tool_calls", 0, 2),
+                                ("working_set_max_items", 1, 8),
+                                ("working_set_max_chars", 512, 16000),
+                                ("working_set_ttl_turns", 1, 50),
+                                ("working_set_calls", 0, 8),
+                                ("history_max_chars", 1200, 64000),
+                                ("history_calls", 0, 4),
+                                ("recap_min_rows", 2, 100),
+                                ("recap_span_max_rows", 2, 200),
+                                ("recap_max_chars", 100, 2000),
+                                ("recap_inject_count", 1, 4),
+                                ("recap_inject_chars", 200, 8000),
+                                ("recent_turns", 1, 1000),
+                                ("total_budget_tokens", 0, 2000000),
+                                ("reply_reserve_tokens", 0, 100000)):
+            value = getattr(self, name)
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"context.{name} 超出允许范围")
+        if self.recap_min_rows > self.recap_span_max_rows:
+            raise ValueError("recap_min_rows不能超过recap_span_max_rows")
 
 
 @dataclass

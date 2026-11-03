@@ -19,6 +19,7 @@ from . import config as paths
 
 STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
+EXPRESSION_POLICY_VERSION = 2
 _SAMPLE_LINE = re.compile(r"^- 【(?P<kind>[^·】]+)·(?P<sid>[A-Za-z0-9_-]+)】(?P<body>.*)$")
 
 
@@ -88,12 +89,14 @@ def render_expression_reference(snapshot: dict | None, purpose: str = "chat") ->
     style_text = _bounded(_style_items(snapshot), STYLE_BUDGET_CHARS, "条风格/情境")
     parts = []
     if style_text:
-        parts.append("【说话方式与情境（用户选定的长期表达偏好；普通演化不改写）】\n" + style_text)
+        parts.append("【说话方式与情境（用户选定的长期表达偏好；普通演化不改写）】\n"
+                     "用这些习惯组织你自己的回应；按当前任务调整正式程度，任务结束后继续日常表达。"
+                     "不用刻意堆口癖或复述这些规则。\n" + style_text)
     if purpose == "chat":
         if snapshot["samples"]:
             sample_lines = [f"【{s['kind']}·{s['id']}】{s['body']}" for s in snapshot["samples"]]
             parts.append("【表达样本（虚构的表达参考——示范说话方式，不是发生过的对话，"
-                         "样本中的事件不是记忆）】\n"
+                         "只参考措辞与节奏；事件、喜好、用户状态和关系前提不能移植到本轮）】\n"
                          + _bounded(sample_lines, SAMPLES_BUDGET_CHARS, "条样本"))
     elif purpose == "worker_summary":
         if snapshot["samples"]:

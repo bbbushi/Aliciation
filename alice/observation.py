@@ -20,12 +20,32 @@ class ObservationError(ValueError):
     """Fixed user-facing messages; never include database, path or provider text."""
 
 
+def context_basis(store, *, limit="10"):
+    """Read host-recorded assembly metadata; no recall, counters or model calls."""
+    count = _number(limit, default=10, maximum=20)
+    if count < 1:
+        raise ObservationError("记录条数须为1至20")
+    items = []
+    for row in store.conn.execute(
+            "SELECT id,ts,detail FROM turn_metrics WHERE module='context_basis' ORDER BY id DESC LIMIT ?",
+            (count,)):
+        if len(row["detail"]) > 64000:
+            continue
+        try:
+            value = json.loads(row["detail"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, dict):
+            items.append({"id": row["id"], "recorded_at": row["ts"], "basis": value})
+    return {"items": items}
+
+
 PAGE_SIZE = 25
 MANIFEST_LIMIT = 2000
 TEXT_HASH_LIMIT = 16000
 DETAIL_SIZE = 8000
 FILE_DETAIL_LIMIT = 4 * 1024 * 1024
-HISTORY_NAME = re.compile(r"v[0-9]{3,12}_[0-9]{8}\.md\Z")
+HISTORY_NAME = re.compile(r"v[0-9]{3,12}_[0-9]{8}(?:_[0-9]{6}_[0-9a-f]{6})?\.md\Z")
 MEMORY_META = (
     "id, created_at, layer, kind, salience, pressure, mention_count, "
     "use_count, last_used_at, promoted_at, origin, scope, expires_at, lifecycle, provenance_status"

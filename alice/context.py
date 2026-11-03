@@ -19,9 +19,10 @@ def estimate_tokens(text: str) -> int:
 
 
 def messages_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:
-    total = sum(estimate_tokens(m.get("content") or "") for m in messages)
+    import json
+    # Include tool arguments/IDs and message framing, not only visible content.
+    total = estimate_tokens(json.dumps(messages, ensure_ascii=False))
     if tools:
-        import json
         total += sum(estimate_tokens(json.dumps(t, ensure_ascii=False)) for t in tools)
     return total
 

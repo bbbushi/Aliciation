@@ -27,7 +27,7 @@ CHANNEL_PREFIX = "/api/channels/v1"
 GUI_READ_PATHS = {"/api/state", "/api/history", "/api/persona", "/api/settings",
                   "/api/metrics", "/api/chat/activity"}
 GUI_WRITE_PATHS = {"/api/persona", "/api/seed", "/api/reset", "/api/settings",
-                   "/api/metrics/toggle"}
+                   "/api/metrics/toggle", "/api/persona/expression"}
 
 
 def _strict_object(pairs):
@@ -478,7 +478,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._discovery_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
-            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail"):
+            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
@@ -515,6 +515,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/observer/snapshot": {"scope"},
                 "/api/observer/list": {"scope", "view", "layer", "kind", "q", "before", "ceiling"},
                 "/api/observer/detail": {"scope", "view", "id", "offset"},
+                "/api/observer/context": {"scope", "limit"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -532,7 +533,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 return
             reader = {"/api/observer/snapshot": svc.observer_snapshot,
                       "/api/observer/list": svc.observer_list,
-                      "/api/observer/detail": svc.observer_detail}[path]
+                      "/api/observer/detail": svc.observer_detail,
+                      "/api/observer/context": svc.observer_context_basis}[path]
             self._json(reader(**params))
 
         def _evaluation_route(self, path: str) -> None:
@@ -644,6 +646,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 return
             if path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
+            elif path == "/api/persona/expression":
+                try:
+                    self._json(svc.revise_persona_expression(self._body()))
+                except ChannelError:
+                    raise
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+                except Exception:
+                    self._json({"error": "表达修订未能确认，请先查看当前人格与修改记录"}, 500)
             elif path == "/api/persona":  # 已初始化之后也能替换人格（旧版自动快照）
                 body = self._body()
                 md_text = str(body.get("persona_md") or "").strip()
@@ -656,12 +667,14 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                         self._json(svc.install_persona(md_text, source, reset=reset))
                     except ValueError as e:
                         self._json({"error": str(e)}, 400)
+                    except Exception:
+                        self._json({"error": "人格安装未能确认，请先核对当前状态与导入记录，不要连续重试。"}, 500)
             elif path == "/api/seed":
                 body = self._body()
                 md_text = str(body.get("persona_md") or "").strip()
                 source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
                 reset = bool(body.get("reset"))
-                if md_text:  # 自定义初始人格导入（不走 LLM）
+                if md_text:  # 自定义导入；外部角色文档需要模型准备阶段
                     try:
                         self._json(svc.install_persona(md_text, source, reset=reset))
                     except ValueError as e:

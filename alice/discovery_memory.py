@@ -379,6 +379,7 @@ class SourceStoreMixin:
             removed = self.revoke_source_packets(ids)
             self.conn.execute("UPDATE source_turns SET content=''")
             self.conn.execute("DELETE FROM memories WHERE origin!='conversation'")
+            self.gc_retained_evidence()
             self.conn.execute("DELETE FROM source_memory_dependencies")
             if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='discovery_cards'").fetchone():
                 self.conn.execute("DELETE FROM discovery_cards")
