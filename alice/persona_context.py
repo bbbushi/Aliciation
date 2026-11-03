@@ -116,7 +116,7 @@ def render_full(snapshot: dict | None) -> str:
         sections.pop("底色 · 情境反应", None)
         sections.pop("底色 · 表达样本", None)
     title = "Alice"
-    head = re.match(r"^#\s+(.+)$", snapshot["raw"].strip())
+    head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
     if head:
         title = head.group(1).strip()
     order = ["底色 · 气质与风格", "底色 · 情境反应", "底色 · 表达样本",
