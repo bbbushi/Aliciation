@@ -65,9 +65,9 @@ def complete_round_suffix(rows: list[dict], max_messages: int,
     used = 0
     i = len(suffix) - 1
     while i >= 0:
-        # 从尾部整对回收：user 行与其后所有 assistant 行构成一个往返
+        # 从尾部整对回收：从 i 回扫过连续 assistant 行，落到本往返的 user 行
         start = i
-        while start > 0 and suffix[start - 1]["role"] == "assistant":
+        while start > 0 and suffix[start]["role"] == "assistant":
             start -= 1
         # start 现在指向一对往返的 user 行（或 0）
         if suffix[start]["role"] != "user":
