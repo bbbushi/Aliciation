@@ -167,6 +167,18 @@ class WorkerLedger:
             return 'revoked'
         if task['expires_at'] <= time.time():
             return 'expired'
+        if task['bridge_instance'] == 'local:claude-agent':  # sqlite3.Row 无 .get()，统一下标
+            # 本地轨（claude）任务的可见性按 claude_policy 判，不随 DSH 政策起落。
+            try:
+                cp = self.conn.execute(
+                    'SELECT revision,enabled FROM claude_policy WHERE id=1').fetchone()
+            except Exception:
+                return 'authorization_disabled'
+            if cp is None or not cp['enabled']:
+                return 'authorization_disabled'
+            if task['policy_revision'] != cp['revision']:
+                return 'policy_changed'
+            return None
         policy = self.policy()
         if task['policy_revision'] != policy['revision']:
             return 'policy_changed'

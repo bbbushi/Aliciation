@@ -52,10 +52,21 @@ class WorkerStoreMixin:
                 return False
             now = time.time() if now is None else now
             epoch = self.meta_get("session_epoch")
-            policy = self.conn.execute("SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
-            if policy is None or not policy["enabled"]:
-                return False
             for ref in refs:
+                # 授权按任务所属工人取对应政策表（bridge_instance 是工人身份的账面事实）。
+                task = self.conn.execute(
+                    "SELECT bridge_instance,epoch,policy_revision,expires_at,revoked,scope "
+                    "FROM worker_tasks WHERE task_id=?", (ref["task_id"],)).fetchone()
+                if task is None:
+                    return False
+                if task["bridge_instance"] == "local:claude-agent":
+                    policy = self.conn.execute(
+                        "SELECT revision,enabled FROM claude_policy WHERE id=1").fetchone()
+                else:
+                    policy = self.conn.execute(
+                        "SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
+                if policy is None or not policy["enabled"]:
+                    return False
                 if ref["epoch"] != epoch or ref["policy_revision"] != policy["revision"]:
                     return False
                 task = self.conn.execute("SELECT epoch,scope,policy_revision,expires_at,revoked "

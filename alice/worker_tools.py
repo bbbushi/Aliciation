@@ -40,16 +40,17 @@ def _tool(name, description, properties, required=()):
 
 TOOLS = [
     _tool("dispatch_worker",
-          "将用户要求的有界任务交给 DSH，在 GUI 已配对并授权的目录和原生工作模式内创建专属会话。"
+          "将用户要求的有界任务交给协作者（dsh-agent 经桥接插件；claude-agent 为本机终端直调的实验干将，"
+          "权限经宿主闸门逐条质询，非操作系统沙箱）。"
           "只发送完成任务所需的 brief，不发送无关历史、记忆、凭据或人格。回执不表示任务完成。",
-          {"name": {"type": "string", "enum": ["dsh-agent"]},
+          {"name": {"type": "string", "enum": ["dsh-agent", "claude-agent"]},
            "brief": {"type": "string", "maxLength": 10000,
                      "description": "具体任务、约束及完成标准；最多 10000 UTF-8 字节。文件用 GUI 授权目录中的相对路径说明。"},
            "title": {"type": "string", "maxLength": 80},
            "input_ids": _EMPTY_INPUTS,
            "requested_outputs": {"type": "array", "maxItems": 8,
                                  "items": {"type": "string", "maxLength": 200},
-                                 "description": "期望文件名或产物描述；只转述给 DSH，不保证文件已收取或验证。"}},
+                                 "description": "期望文件名或产物描述；只转述给协作者，不保证文件已收取或验证。"}},
           ("name", "brief", "input_ids", "requested_outputs")),
     _tool("worker_task_status", "读取协作任务状态元数据，不读取消息正文。费用缺失为未知，不作零费用。",
           {"task_ids": {"type": "array", "maxItems": 20, "items": _TASK_ID,
@@ -99,7 +100,7 @@ def _arguments(name, value):
     if set(value) - allowed:
         raise ValueError("unsupported_fields")
     if name == "dispatch_worker":
-        if value.get("name") != "dsh-agent":
+        if value.get("name") not in ("dsh-agent", "claude-agent"):
             raise ValueError("unsupported_worker")
         _text(value.get("brief"), 10000)
         if "title" in value:
@@ -174,11 +175,24 @@ def _metadata(value, *, include_tasks=True):
 
 
 class WorkerChatSession:
-    def __init__(self, coordinator, request):
+    def __init__(self, coordinator, request, available_workers=None):
         self.coordinator = coordinator
         self.request = copy.deepcopy(request)
+        self.available_workers = available_workers  # 构造期传入，避免时序缺陷
         self.target = normalize_worker_target(self.request.get('worker_target'))
         self.tools = copy.deepcopy(TOOLS) if self.request.get("channel_id") == "gui" else []
+        # 名单化：按协调器提供的可用工人过滤 dispatch 枚举（禁用的工人不进模型视野）。
+        available = self.available_workers
+        if available:
+            names = [n for n in ("dsh-agent", "claude-agent") if available.get(n)]
+            for tool in self.tools:
+                if tool["function"]["name"] == "dispatch_worker":
+                    props = tool["function"]["parameters"]["properties"]
+                    props["name"]["enum"] = names
+                    props["name"]["description"] = (
+                        "协作者名；当前可用：" + "、".join(names)
+                        + "（claude-agent=本机终端直调，权限经宿主闸门质询，非 OS 沙箱）"
+                          if "claude-agent" in names else "协作者名；当前可用：" + "、".join(names))
         if self.target is not None:
             task_id = self.target['task_id']
             self.tools = [tool for tool in self.tools if tool['function']['name'] != 'dispatch_worker']
@@ -196,7 +210,8 @@ class WorkerChatSession:
     def description(self):
         description = (
             "协作工具只在本机 GUI 配对及授权有效时提供。用户允许的任务目录、原生工作模式和执行次数由宿主控制，"
-            "工具不能扩大授权；DSH 原生模式不是操作系统读取或网络沙箱。"
+            "工具不能扩大授权；DSH 原生模式不是操作系统读取或网络沙箱；"
+            "claude-agent 的权限质询闸门也不是操作系统沙箱，产物以任务目录收取为准。"
             "任务使用 GUI 已授权目录中的文件，以相对路径指明；input_ids 文件导入和自动附件下载尚未开放。"
             "dispatch/send 回执只表示准入，先查状态，再用 worker_task_read 有界读取公开消息；"
             "GUI 自动协作通知仅供用户展示，不自动进入你的对话上下文；用户要求解读通知时先查状态并读取对应任务。"
@@ -282,8 +297,18 @@ class WorkerChatSession:
                 return False
         policy = store.conn.execute("SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
         revision = self.request.get("worker_policy_revision")
-        return (policy is not None and bool(policy["enabled"]) and type(revision) is int
-                and policy["revision"] == revision)
+        dsh_ok = (policy is not None and bool(policy["enabled"]) and type(revision) is int
+                  and policy["revision"] == revision)
+        if dsh_ok:
+            return True
+        # claude-agent 轨（分支限定）：claude_policy 启用且请求绑定其 revision 时等效授权。
+        try:
+            cp = store.conn.execute(
+                "SELECT revision,enabled FROM claude_policy WHERE id=1").fetchone()
+        except Exception:
+            return False
+        return (cp is not None and bool(cp["enabled"]) and type(revision) is int
+                and cp["revision"] == revision)
 
     def _read_locked(self, envelope, payload, context, store):
         task_id = _identity(envelope.get("task_id"))

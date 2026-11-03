@@ -225,6 +225,12 @@ class ObservationStoreMixin:
                     expiries.append(time.time() + retention * 3600)
                 self.conn.execute("UPDATE memories SET origin='external_derived',lifecycle='memory',scope=?,expires_at=? WHERE id=?",
                                   (_dump([scope]), min(expiries) if expiries else None, memory_id))
+                graded = [r for r in external if r['value_policy']==1 and r['value_tier'] in {'high','normal','low'}]
+                if graded:
+                    priority = {'high':2,'normal':1,'low':0}
+                    parent = max(graded,key=lambda r:priority[r['value_tier']])
+                    self.conn.execute('UPDATE memories SET value_policy=1,value_tier=?,value_note=? WHERE id=?',
+                                      (parent['value_tier'],'继承依据见闻的保留级别；观点仍可复核',memory_id))
                 self.conn.executemany("INSERT OR IGNORE INTO memory_evidence_links VALUES(?,?)", [(memory_id, eid) for eid in evidence])
 
     def dependent_memories(self, identities):
@@ -246,7 +252,8 @@ class ObservationStoreMixin:
                     continue
                 ordinary = row["origin"] == "conversation" and mid == memory_id
                 self.conn.execute("INSERT INTO memory_tombstones(memory_id,title,expired_at,reason) VALUES(?,?,?,?)",
-                    (mid, row["title"] if ordinary else "来源派生记忆已失效", time.time(), reason if ordinary else "来源或必要依据已不可用"))
+                    (mid, row["title"] if ordinary else "来源派生记忆已失效", time.time(),
+                     reason if ordinary or reason.startswith('价值维护：') else "来源或必要依据已不可用"))
                 self.conn.execute("DELETE FROM memories WHERE id=?", (mid,))
                 self.conn.execute("DELETE FROM memory_evidence_links WHERE memory_id=?", (mid,))
                 self.conn.execute("DELETE FROM source_memory_dependencies WHERE memory_id=?", (mid,))
@@ -256,6 +263,7 @@ class ObservationStoreMixin:
             self.gc_retained_evidence()
 
     def gc_retained_evidence(self):
+        self.conn.execute('DELETE FROM memory_condensations WHERE memory_id NOT IN (SELECT id FROM memories)')
         self.conn.execute("DELETE FROM memory_evidence_links WHERE memory_id NOT IN (SELECT id FROM memories)")
         self.conn.execute("UPDATE retained_evidence SET revoked=1,payload_json='{}' WHERE id NOT IN "
                           "(SELECT evidence_id FROM memory_evidence_links) AND revoked=0")
@@ -298,7 +306,10 @@ class ObservationStoreMixin:
             return None
         if row["origin"] != "conversation" and not self.observation_sources(memory_id, scope=scope):
             return None
-        return {"memory": dict(row), "sources": self.observation_sources(memory_id, scope=scope),
+        return {"memory": dict(row),
+                'revisions': [dict(r) for r in self.conn.execute('SELECT old_id,new_id,reason,created_at FROM view_revisions WHERE old_id=? OR new_id=?', (memory_id,memory_id))],
+                'condensations': [dict(r) for r in self.conn.execute('SELECT reason,created_at FROM memory_condensations WHERE memory_id=?', (memory_id,))],
+                "sources": self.observation_sources(memory_id, scope=scope),
                 "discussions": [dict(r) for r in self.conn.execute(
                     "SELECT d.turn_id,d.user_quote,d.created_at FROM discussion_records d WHERE d.scope=? AND "
                     "(d.memory_id=? OR d.turn_id IN (SELECT turn_id FROM discussion_memory_links WHERE memory_id=?))",

@@ -195,7 +195,9 @@ class SearchSession:
                 "url": packet["url"], "platform": packet["source_id"].split(":", 1)[0],
                 "fetched_at": packet["created_at"], "evidence": packet["evidence"],
                 "coverage": packet.get("coverage", packet.get("uncertainty", "")),
-                "source_version": packet["version"], "expires_at": packet["expires_at"], "reused": reused}
+                "source_version": packet["version"], "expires_at": packet["expires_at"], "reused": reused,
+                "source_version_kind": "host_read_content_identity",
+                "version_scope": "只标识取得文字的内容与宿主来源身份，不是网站修订号；相同只能证明取得范围一致，不能证明全文、未读部分或页面编辑历史没有变化"}
 
     def _cached_locked(self, key, wanted):
         from .discovery import _identity
@@ -320,30 +322,13 @@ class SearchSession:
                 settings["_network_proxy"] = resolve_system_proxy() if settings["network_mode"] == "system" else ""
                 for chosen in platforms:
                     self.emit(status="running", phase="search", run_id=job["id"], platform=chosen)
-                    browser = chosen in ("bilibili", "zhihu") and settings[chosen + "_access"] == "browser"
-                    native_bili = chosen == "bilibili" and settings["bilibili_access"] == "native"
-                    provider = {"kind": "native"} if not _third_party(chosen, settings) else {
-                        "kind": settings["provider_kind"], "api_key": settings["provider_key"], "endpoint": settings["provider_endpoint"],
-                        "allow_loopback": True, "engines": [v.strip() for v in settings["provider_engines"].split(",")]}
-                    if browser:
-                        response = c._execute_browser(job, self.cancel, settings, "search", chosen, {"query": query}, deadline)
-                    elif native_bili:
-                        response = c._execute_bilibili(job, self.cancel, settings, "search", {"query": query, "limit": settings["search_results"]}, deadline)
-                    else:
-                        response = c._execute(job, self.cancel, settings, "search", {"platform": chosen, "query": query,
-                            "provider": provider, "limit": settings["search_results"]}, deadline)
-                    raw = response.get("candidates")
-                    if not isinstance(raw, list) or len(raw) > settings["search_results"]:
+                    # P1：前后台统一搜索链（候选规范化/去重/排序在 coordinator 共享方法内）
+                    candidates = c.search_documents(job, self.cancel, settings, chosen, query, deadline)
+                    raw = [dict(c_, platform=chosen) for c_ in candidates]
+                    if len(raw) > settings["search_results"]:
                         raise _Stopped("worker_protocol")
                     result["counts"]["received"] += job.get("search_summary", {}).get("received", len(raw))
-                    candidates, seen = [], set()
-                    for value in raw:
-                        candidate = normalize_candidate(value, chosen)
-                        if candidate["url"] not in seen:
-                            candidates.append(candidate)
-                            seen.add(candidate["url"])
-                    preferred = settings["_tieba_preferred_forums"]
-                    candidates.sort(key=lambda x: x.get("forum_name") in preferred, reverse=True)
+                    # P1：排序去重已在共享 rank_candidates 完成；这里只统计与遍历
                     result["counts"]["accepted"] += len(candidates)
                     for candidate in _limit_rows(candidates, settings["read_candidates"]):
                         if wanted is not None and len(result["items"]) >= wanted:
@@ -355,12 +340,8 @@ class SearchSession:
                         self.emit(phase="read", counts=result["counts"])
                         result["counts"]["attempted"] += 1
                         try:
-                            if native_bili or browser and chosen == "bilibili":
-                                doc = c._execute_bilibili(job, self.cancel, settings, "read", {"candidate": candidate}, deadline)
-                            elif browser:
-                                doc = c._execute_browser(job, self.cancel, settings, "read", chosen, {"candidate": candidate}, deadline)
-                            else:
-                                doc = c._execute(job, self.cancel, settings, "read", {"candidate": candidate}, deadline)
+                            # P1：前后台统一读取链（传输分发集中在 coordinator.read_document）
+                            doc = c.read_document(job, self.cancel, settings, chosen, candidate, deadline)
                         except _Stopped as exc:
                             # Only a different, already selected unreadable page may be tried.
                             if exc.code in {"no_content", "insufficient_text", "unsupported_content", "not_found"}:
@@ -429,15 +410,12 @@ class SearchSession:
         coverage = _coverage(doc.get("coverage"), doc)
         quote = doc["text"][:300]
         policy = {"tieba_reply_count": doc.get("tieba_reply_count", 0), "tieba_replies_requested": doc.get("tieba_replies_requested", False)}
-        packet = {"id": pid, "source_id": doc["platform"] + ":" + _identity(doc["url"]),
-                  # A fresh authorized read is a new version even if another
-                  # channel read the same bytes in the same wall-clock second.
-                  "version": digest + ":" + str(time.time_ns()), "title": doc["title"][:500], "url": doc["url"],
-                  "evidence": quote, "evidence_kind": "page_excerpt",
-                  "scope": ["gui", "qq-owner"] if self.scope == "qq-owner" else ["gui"], "created_at": now,
-                  "expires_at": now + settings["source_ttl_hours"] * 3600, "memory_eligible": False,
-                  "observation_eligible": True, "coverage": coverage, "reading_policy": policy,
-                  "uncertainty": "阅读范围：" + coverage + "；节选及作者声称尚未核实。"}
+        from .learning import material_packet
+        packet = material_packet(packet_id=pid,source_id=doc['platform']+':'+_identity(doc['url']),
+            version_id=digest+':'+str(time.time_ns()),title=doc['title'][:500],url=doc['url'],
+            text=doc['text'],quote=quote,created_at=now,expires_at=now+settings['source_ttl_hours']*3600,
+            scope=['gui','qq-owner'] if self.scope=='qq-owner' else ['gui'],coverage=coverage,reading_policy=policy,
+            uncertainty='阅读范围：'+coverage+'；节选及作者声称尚未核实。')
         with store.source_transaction():
             store.save_source_packet(packet)
             if doc["platform"] == "tieba":
@@ -468,12 +446,16 @@ class SearchSession:
         accepted = []
         cap = context["limits"]["chat_dependency_limit"]
         for item in result["items"]:
-            if self.service.store.get_source_packet(item["packet_id"], scope=self.scope) is None:
+            packet = self.service.store.get_source_packet(item["packet_id"], scope=self.scope)
+            if packet is None:
                 continue
             if item["packet_id"] not in ids:
                 if cap is not None and len(ids) >= cap:
                     continue
                 ids.append(item["packet_id"])
+            existing = self.service.store.matching_observations([packet],scope=self.scope)
+            item['existing_observations'] = existing
+            context['reusable_memory_ids'] = list(dict.fromkeys(context.get('reusable_memory_ids',[]) + [r['memory_id'] for r in existing]))
             accepted.append(item)
         if ids:
             self.service.store.protect_source_turn(context["user_turn_id"], ids, scope=self.scope)

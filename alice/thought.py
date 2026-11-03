@@ -91,7 +91,7 @@ def _write_section(md: str, narrative: str) -> str:
     return rest.rstrip("\n") + "\n\n" + block if rest.strip() else block
 
 
-def _render_stances(store: Store, scope=None, allowed_memory_ids=None) -> str:
+def _render_stances(store: Store, scope=None, allowed_memory_ids=None, selected_ids=None) -> str:
     """从库内已接纳的 stance 确定性重建「我现在的想法」小节正文（A01）。
 
     只读长期层在库的观点：被拒/被丢的内容不在这张表里，天然混不进人格叙事。
@@ -100,6 +100,8 @@ def _render_stances(store: Store, scope=None, allowed_memory_ids=None) -> str:
     lines = []
     rows = (store.memory_rows(purpose="thought", scope=scope, kind="stance") if scope is not None
             else store.memories_in_layer("longterm", kind="stance"))
+    if selected_ids is not None:
+        rows = [m for m in rows if m['id'] in selected_ids]
     if allowed_memory_ids is not None:
         rows = [m for m in rows if m["origin"] == "conversation" or m["id"] in allowed_memory_ids]
     replaced = {m["content"].split("\n", 1)[0][4:].strip() for m in rows if m["content"].startswith("曾以为：")}
@@ -126,20 +128,37 @@ def deliberate(store: Store, client, cfg: Config) -> str:
     return drive(deliberate_steps(store, client, cfg))
 
 
-def deliberate_steps(store: Store, client, cfg: Config):
-    anchor = store.meta_get_time("last_deliberate_at") or store.meta_get_time("last_evolve_at")
-    events = store.memory_rows(purpose="thought", scope="gui", kind="event")
-    fresh = [m for m in events if m["created_at"] > anchor][:60]
-    if fresh:
-        material = fresh
-    elif not store.meta_get_time("last_deliberate_at"):
-        material = events[:30]  # 首次思辨：拿最近一批经历打底
-    else:
-        return "没有新经历可消化，想法不变。"
+def deliberation_inputs(store, memory_ids=None):
+    """Bound whole inputs, never truncate a memory's qualifiers mid-sentence."""
+    events = store.memory_rows(purpose='thought', scope='gui', kind='event')
+    if memory_ids is not None:
+        events = [row for row in events if row['id'] in memory_ids]
+    fresh = [row for row in events if not store.conn.execute(
+        'SELECT 1 FROM deliberation_seen WHERE memory_id=? AND input_version=?',
+        (row['id'], memory_version(row))).fetchone()]
+    rank = {'high':2,'normal':1,'unknown':1,'low':0}
+    fresh.sort(key=lambda row:rank.get(row['value_tier'],1),reverse=True)
+    def bounded(rows, maximum):
+        selected, used = [], 0
+        for row in rows:
+            size = len((row['title']+row['content']).encode('utf-8'))+200
+            if size+used <= maximum:
+                selected.append(row)
+                used += size
+            if len(selected) >= 60:
+                break
+        return selected
+    return bounded(fresh,48000), bounded(store.memory_rows(purpose='thought',scope='gui',kind='stance'),16000)
+
+
+def deliberate_steps(store: Store, client, cfg: Config, *, memory_ids=None, model_runner=None):
+    material, current_stances = deliberation_inputs(store,memory_ids)
+    if not material:
+        return '没有新的有效材料可消化，想法不变。'
 
     current_md = persona_md() or ""
-    current_stances = store.memory_rows(purpose="thought", scope="gui", kind="stance")
-    current_section = _render_stances(store, scope="gui")
+    persona_epoch = store.meta_get("session_epoch")
+    current_section = _render_stances(store, scope="gui",selected_ids={m['id'] for m in current_stances})
     input_rows = list({m["id"]: m for m in material + current_stances}.values())
     external_input = any(m["origin"] != "conversation" for m in input_rows)
     normal = [m for m in material if not m["pressure"]]
@@ -154,19 +173,33 @@ def deliberate_steps(store: Store, client, cfg: Config):
         current=current_section.strip() or "（尚未形成）",
         memories=mem_block or "（无）",
     )
-    resp = yield lambda: chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    reservation = store.reserve_learning_model(input_rows, reserve_budget=model_runner is None) if external_input else None
+    if external_input and reservation is None:
+        return '见闻思辨暂缓：未获额外模型额度、保存许可或相同输入已有未确认尝试。'
+    if model_runner is not None:
+        data = yield lambda: model_runner(prompt)
+    else:
+        resp = yield lambda: chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True, retry=not external_input)
+        try:
+            data = parse_json(resp.choices[0].message.content or "")
+        except ValueError:
+            return "思辨失败：模型输出无法解析（想法保持不变）。"
+    if reservation:
+        with store.source_transaction():
+            store.conn.execute("UPDATE learning_model_attempts SET state='completed' WHERE identity=?", (reservation,))
+        if not store._observation_settings().get('remember_observations'):
+            return '见闻保存许可已变化，本轮未写入观点。'
+
     available = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui")}
+    if (persona_md() or "") != current_md or store.meta_get("session_epoch") != persona_epoch:
+        return "人格在思辨期间已变更，本次未写入观点或旧人格快照。"
     if any(m["id"] not in available or memory_version(m) != memory_version(available[m["id"]]) for m in input_rows):
         return "思辨材料已变化或来源失效，本次未写入观点。"
-    try:
-        data = parse_json(resp.choices[0].message.content or "")
-    except ValueError:
-        return "思辨失败：模型输出无法解析（想法保持不变）。"
-
     views = [v for v in (data.get("views") or []) if isinstance(v, dict) and v.get("claim")][:8]
     verifications = [w for w in (data.get("verifications") or [])
                      if isinstance(w, dict) and str(w.get("claim", "")).strip()][:8]
     if not views and not verifications:
+        store.mark_thought_rows(material, 'no_new_view')
         store.meta_set("last_deliberate_at", time.time())
         return "思辨完成：这批记忆还不足以长出新观点。"
 
@@ -249,12 +282,21 @@ def deliberate_steps(store: Store, client, cfg: Config):
             f'状态：{"先验" if external_input else "验证"}'
         )
         replaces = str(v.get("replaces", "")).strip()
-        old = store.find_by_title(replaces) if replaces else None
+        old = (next((row for row in current_stances if row['title'] == replaces), None)
+               if external_input else store.find_by_title(replaces)) if replaces else None
         if old is not None and old["kind"] != "stance":
             old = None  # 只允许修订观点，不能借 replaces 删事件记忆
         if old is not None and old["title"] == claim:
             continue  # 原观点重申，不重复入库
         if old is not None:
+            if external_input:
+                from .learning import source_versions
+                old_sources = store.observation_sources(old['id'], scope='gui')
+                new_sources = [p for row in material if row['origin'] != 'conversation'
+                               for p in store.observation_sources(row['id'],scope='gui')]
+                if not old_sources or not set(source_versions(new_sources))-set(source_versions(old_sources)):
+                    rejected += 1
+                    continue
             # 有据让步门控（分层）：成熟观点的修订需新论据（校验后出处至少一个不在旧依据里）；
             # 先验（含刚被标记证伪的）走轻门控——它本就未经验证，被现实打磨是成熟不是翻案
             if _field_of(old["content"], "状态") not in {"先验", "证伪"}:
@@ -281,6 +323,10 @@ def deliberate_steps(store: Store, client, cfg: Config):
         except ValueError:
             dropped += 1
             continue
+        if old is not None:
+            with store.source_transaction():
+                store.conn.execute('INSERT OR IGNORE INTO view_revisions VALUES(?,?,?,?)',
+                    (old['id'], mid, '新证据修订，保留历史关系', time.time()))
         if old is not None and not external_input:
             if _field_of(old["content"], "状态") == "证伪":
                 store.expire_memory(old["id"],
@@ -318,6 +364,7 @@ def deliberate_steps(store: Store, client, cfg: Config):
             paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
             new_md = _write_section(current_md or f"# {cfg.persona.name} 的人格\n", narrative)
             paths.PERSONA_FILE.write_text(new_md, encoding="utf-8")
+    store.mark_thought_rows(material)
     _append_changelog(f"思辨：{summary}")
     store.meta_set("last_deliberate_at", time.time())
     return f"思辨完成：{summary}。" if changed else f"思辨完成：{summary}，想法不变。"
@@ -327,9 +374,16 @@ def deliberate_if_due(store: Store, client, cfg: Config) -> str | None:
     return drive(deliberate_if_due_steps(store, client, cfg))
 
 
-def deliberate_if_due_steps(store: Store, client, cfg: Config):
+def deliberate_if_due_steps(store: Store, client, cfg: Config, *, model_runner=None):
     """数据触发：自上次思辨起，新事件类记忆累计到阈值即思辨。安静就不变。"""
-    anchor = store.meta_get_time("last_deliberate_at") or store.meta_get_time("last_evolve_at")
-    if sum(m["created_at"] > anchor for m in store.memory_rows(purpose="thought", scope="gui", kind="event")) >= cfg.memory.deliberate_every_memories:
-        return (yield from deliberate_steps(store, client, cfg))
+    pending = store.pending_thought_rows()
+    # External batches run in the idle supervisor. Immediate user discussion
+    # already has reflect_on_sources, without a second model call after reply.
+    if model_runner is None and any(row['origin'] != 'conversation' for row in
+            pending + store.memory_rows(purpose='thought',scope='gui',kind='stance')):
+        return None
+    # Inputs already handled by an immediate viewpoint are excluded by version.
+    early = cfg.memory.deliberate_early_high and any(row['value_tier'] == 'high' or row['reflection_hint'] in {'conflict','repeated'} for row in pending)
+    if early or len(pending) >= cfg.memory.deliberate_every_memories:
+        return (yield from deliberate_steps(store, client, cfg, memory_ids={row['id'] for row in pending}, model_runner=model_runner))
     return None

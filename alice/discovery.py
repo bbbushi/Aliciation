@@ -356,6 +356,7 @@ class DiscoveryCoordinator:
         self._browser_results = {}
         conn = self.service.store.conn
         conn.executescript(SCHEMA)
+        self.service.store.migrate_interest_evidence()
         from .dialogue_search import migrate
         migrate(self)
         with conn:
@@ -592,9 +593,11 @@ class DiscoveryCoordinator:
 
     def snapshot_locked(self):
         revision, settings = self._config_locked()
+        self.service.store.decay_interests(self.service.cfg.memory.interest_decay_days)
         now = time.time()
         public = {k: copy.deepcopy(v) for k, v in settings.items() if k not in ("provider_key", "platforms")}
         public.update(revision=revision, provider_key_present=bool(settings["provider_key"]))
+        learning_preview = self.service.store.learning_preview(self.service.cfg)
         platforms = []
         for identity, label in PLATFORMS.items():
             available, reason = self._available(identity, settings)
@@ -632,6 +635,11 @@ class DiscoveryCoordinator:
         interests = []
         for row in self.service.store.conn.execute("SELECT * FROM discovery_interests ORDER BY created_at DESC"):
             item = dict(row)
+            if 'gui' not in json.loads(item.get('scope_json', '["gui"]')):
+                continue
+            item['basis_user_turn_ids'] = json.loads(item['basis_user_turn_ids'])
+            item['evidence_quotes'] = [r[0] for r in self.service.store.conn.execute(
+                "SELECT quote FROM interest_evidence WHERE interest_id=? AND scope='gui' ORDER BY created_at DESC LIMIT 3", (item['id'],))]
             item["enabled"], item["external_allowed"] = bool(item["enabled"]), bool(item["external_allowed"])
             item["preferred_forums"] = _preferred_forums(item)
             interests.append(item)
@@ -677,7 +685,7 @@ class DiscoveryCoordinator:
             task["reason_message"] = _reason(task.get("reason", ""))
             task["diagnostic"] = _diagnostic(task.get("diagnostic"))
             task["search_summary"] = _search_summary(task.get("search_summary"))
-        return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "platforms": platforms,
+        return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "learning_preview": learning_preview, "platforms": platforms,
                 "tieba_forum_check": forum_check,
                 "sharing_warning": "资料共享记录异常，已暂停本次会话的资料注入；普通聊天可继续，重新载入服务后再检查。" if self._sharing_failed else "",
                 "interests": interests, "task": task, "cards": cards,
@@ -773,8 +781,16 @@ class DiscoveryCoordinator:
                 if card is None:
                     raise ChannelError(409, "material_unavailable", "资料已失效")
                 packet = self.service.store.get_source_packet(card["packet_id"], scope="gui")
-                mid = self.service.store.save_observation([packet["id"]], title=card["title"][:24],
-                    content="读到《" + card["title"][:80] + "》中的节选：" + packet["evidence"], scope="gui")
+                try:
+                    result = self.service.store.save_learning(
+                        {'keep':True,'title':card['title'][:24],
+                         'content':'读到《'+card['title'][:80]+'》中的节选：'+packet['evidence'],
+                         'value_tier':'normal','reason':'用户在资料卡明确选择保存',
+                         'uncertainty':packet.get('uncertainty') or '节选与来源说法尚未独立核实'},
+                        {'scope':'gui','packet_ids':[packet['id']],'request_id':card['id']},purpose='user_save')
+                    mid = result.get('memory_id')
+                except ValueError:
+                    mid = None
                 if mid is None:
                     raise ChannelError(409, "memory_not_allowed", "请开启择要保存见闻，并确认来源与写入额度仍可用")
             elif action == "remember_user":
@@ -934,7 +950,7 @@ class DiscoveryCoordinator:
         with conn:
             conn.execute("INSERT INTO discovery_interests(id,topic,summary,enabled,external_allowed,origin,version,created_at,preferred_forums) "
                          "VALUES(?,?,?,?,?,'manual',1,?,?) ON CONFLICT(id) DO UPDATE SET topic=excluded.topic,summary=excluded.summary,"
-                         "enabled=excluded.enabled,external_allowed=excluded.external_allowed,preferred_forums=excluded.preferred_forums,"
+                         "enabled=excluded.enabled,external_allowed=excluded.external_allowed,preferred_forums=excluded.preferred_forums,origin='manual',"
                          "version=discovery_interests.version+1",
                          (identity, topic, summary, int(enabled), int(allowed), time.time(), _json(preferred)))
             conn.execute("UPDATE discovery_cards SET disabled=1 WHERE interest_id=?", (identity,))
@@ -958,6 +974,7 @@ class DiscoveryCoordinator:
         with self.service.store.conn:
             self.service.store.conn.execute("UPDATE discovery_cards SET disabled=1 WHERE interest_id=?", (identity,))
             self.service.store.conn.execute("DELETE FROM discovery_interests WHERE id=?", (identity,))
+            self.service.store.conn.execute('DELETE FROM interest_evidence WHERE interest_id=?', (identity,))
             self._bump_revision_locked()
         self._clear_pending_locked(interest_id=identity)
 
@@ -1088,18 +1105,8 @@ class DiscoveryCoordinator:
             if self._note and self._note["packet_id"] in packets:
                 self._note = None
         _, settings = self._config_locked()
-        # Exact first-person statements become reviewable candidates, never an
-        # automatically outward-facing inferred psychological profile.
-        if settings["allow_chat_interests"] and not usage.get("packet_ids"):
-            match = re.search(r"(?:我喜欢|我最近对|我想了解|我对)([^。！？\n]{2,60}?)(?:很感兴趣|感兴趣|[。！？\n]|$)", request["text"])
-            if match:
-                topic = match.group(1).strip(" ，,：:")[:60]
-                if topic and not conn.execute("SELECT 1 FROM discovery_interests WHERE topic=?", (topic,)).fetchone():
-                    if not _exceeds(conn.execute("SELECT COUNT(*) FROM discovery_interests").fetchone()[0], 1, settings["interest_capacity"]):
-                        with conn:
-                            conn.execute("INSERT INTO discovery_interests(id,topic,summary,enabled,external_allowed,origin,version,created_at) "
-                                         "VALUES(?,?,?,0,0,'conversation_candidate',1,?)", (uuid.uuid4().hex, topic, topic, time.time()))
-                            self._bump_revision_locked()
+        # Interest inference is handled by the current model's observe_interest
+        # tool with exact user-turn evidence, rather than a second regex path.
 
     def _schedule(self):
         next_tick = time.monotonic()
@@ -1116,14 +1123,120 @@ class DiscoveryCoordinator:
                 continue
             try:
                 self._purge_locked()
+                # A permanent desktop session must not wait for the next restart
+                # to perform hourly memory maintenance. No model/network here.
+                with self.service._channels.condition:
+                    if (self.service._channels.slot is None and not self.service._channels.closing
+                            and self.service._channels.activity()['status']=='ready'):
+                        from . import consolidation
+                        consolidation.run_if_due(self.service.store,self.service.cfg)
                 revision, settings = self._config_locked()
                 next_tick = time.monotonic() + settings["tick_minutes"] * 60
-                self._launch_locked(settings, revision, manual=False)
+                if not self._launch_thought_locked(settings, revision):
+                    self._launch_locked(settings, revision, manual=False)
             except Exception:
                 # Settings/conditions are visible through status; never log provider data.
                 pass
             finally:
                 self.service._lock.release()
+
+    def _launch_thought_locked(self, settings, revision):
+        """One idle, cancellable batch; never occupy the foreground writer slot."""
+        if (self._stop.is_set() or self._unavailable or not settings['enabled']
+                or not settings['background_enabled'] or not settings['allow_paid']
+                or not settings['remember_observations']):
+            return False
+        clock = datetime.now(DAY_ZONE).strftime('%H:%M')
+        start, end = settings['window_start'], settings['window_end']
+        if not (start <= clock < end if start < end else clock >= start or clock < end):
+            return False
+        with self._guard:
+            if self._worker is not None and self._worker.is_alive():
+                return False
+        if self.service._channels.activity()['status'] != 'ready':
+            return False
+        budget = self._budget_locked()
+        if (_exceeds(budget['models'],1,settings['daily_models'])
+                or _exceeds(budget['network'],1,settings['daily_network'])
+                or _exceeds(budget['body_bytes'],settings['model_response_bytes'],_response_budget(settings))):
+            return False
+        store = self.service.store
+        pending = store.pending_thought_rows()
+        stances = store.memory_rows(purpose='thought',scope='gui',kind='stance')
+        if not pending or not any(row['origin'] != 'conversation' for row in pending + stances):
+            return False
+        cfg = self.service.cfg.memory
+        early = cfg.deliberate_early_high and any(r['value_tier']=='high' or r['reflection_hint'] in {'conflict','repeated'} for r in pending)
+        if not early and len(pending) < cfg.deliberate_every_memories:
+            return False
+        from .thought import deliberation_inputs
+        material, stances = deliberation_inputs(store,{r['id'] for r in pending})
+        if not material:
+            return False
+        inputs = material + stances
+        identity = store.learning_model_identity(inputs)
+        if store.conn.execute('SELECT 1 FROM learning_model_attempts WHERE identity=?',(identity,)).fetchone():
+            return False  # An unknown call is not silently retried by the clock.
+        model = {'base_url': self.service.cfg.llm.base_url, 'api_key': self.service.cfg.llm.resolved_key(),
+                 'model': self.service.cfg.llm.cheap_model, 'allow_loopback':True}
+        if not all(model.get(k) for k in ('base_url','api_key','model')):
+            return False
+        now = time.time()
+        job = {'id':uuid.uuid4().hex, 'kind':'thought', 'epoch':self.dataset_id,
+               'revision':revision, 'generation':self._generation, 'day':_day(),
+               'state':'queued','phase':'queued','started_at':now,'cards':0}
+        cancel = threading.Event()
+        worker = threading.Thread(target=self._run_thought, args=(job,copy.deepcopy(settings),model,cancel),
+                                  name='alice-thought',daemon=False)
+        with self.service._channels.condition:
+            if self.service._channels.slot is not None or self.service._channels.closing:
+                return False
+            with store.conn:
+                store.conn.execute("INSERT INTO discovery_runs(id,epoch,revision,day,state,phase,started_at) VALUES(?,?,?,?,?,?,?)",
+                                   tuple(job[k] for k in ('id','epoch','revision','day','state','phase','started_at')))
+            self._cancel = cancel
+            with self._guard:
+                self._task, self._worker = dict(job), worker
+            worker.start()
+        return True
+
+    def _run_thought(self, job, settings, model, cancel):
+        from . import thought
+        deadline = time.monotonic()+settings['activity_timeout_seconds']
+        runner = lambda prompt: self._execute(job,cancel,settings,'reflect',{'model':model,'prompt':prompt},deadline)
+        steps = None
+        state, code = 'completed', 'ok'
+        try:
+            # Generator database steps are locked; its yielded I/O stays outside.
+            def create():
+                return thought.deliberate_if_due_steps(self.service.store,self.service.client,self.service.cfg,model_runner=runner)
+            steps = self._store_step(job,cancel,create)
+            value = None
+            while True:
+                try:
+                    operation = self._store_step(job,cancel,lambda: steps.send(value))
+                except StopIteration:
+                    break
+                value = operation()
+        except _Stopped as exc:
+            code = exc.code
+            state = 'cancelled' if code in {'cancelled','foreground_busy','session_changed'} else 'failed'
+        except Exception:
+            code, state = 'processing_failed','failed'
+        finally:
+            if steps is not None:
+                steps.close()
+            if self._unavailable:
+                code, state = 'worker_not_reaped','draining'
+            self._phase(job,'finished',state=state,reason=code)
+            def finish():
+                with self.service.store.conn:
+                    self.service.store.conn.execute("UPDATE discovery_runs SET state=?,phase='finished',reason=?,finished_at=? WHERE id=?",
+                                                    (state,code,time.time(),job['id']))
+            try:
+                self._store_step(job,cancel,finish,settle=True)
+            except Exception:
+                pass
 
     def _launch_locked(self, settings, revision, *, manual, interest_id=None):
         def reject(code, message):
@@ -1162,8 +1275,10 @@ class DiscoveryCoordinator:
                      and (not _third_party(identity, settings) or policy["allow_third_party"])]
         if not platforms:
             return reject("no_platform", "请先开放至少一个可用平台")
+        self.service.store.decay_interests(self.service.cfg.memory.interest_decay_days)
         interests = [dict(r) for r in self.service.store.conn.execute(
-            "SELECT * FROM discovery_interests WHERE enabled=1 AND external_allowed=1 ORDER BY last_selected,created_at")]
+            "SELECT * FROM discovery_interests WHERE enabled=1 AND external_allowed=1 "
+            "AND scope_json LIKE '%gui%' ORDER BY last_selected,created_at")]
         interests = _limit_rows(interests, settings["active_interest_capacity"])
         if interest_id is not None:
             interests = [row for row in interests if row["id"] == interest_id]
@@ -1366,7 +1481,7 @@ class DiscoveryCoordinator:
         diagnostic = _json(_diagnostic(job.get("diagnostic")))
         def reserve():
             budget = self._budget_locked(job["day"])
-            model = int(op in ("plan", "interpret"))
+            model = int(op in ("plan", "interpret", "reflect"))
             query = int(op == "search" or query_attempt)
             if (_exceeds(budget["network"], 1, settings["daily_network"]) or _exceeds(budget["models"], model, settings["daily_models"])
                     or _exceeds(budget["queries"], query, settings["daily_queries"])
@@ -1426,7 +1541,7 @@ class DiscoveryCoordinator:
             if op != "tieba_forum_check":
                 data = {**data, "tieba_options": _tieba_options(settings)}
         job["diagnostic"] = diagnostic
-        phase = "model" if op in ("plan", "interpret") else "read" if (op in ("read", "tieba_forum_check") or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
+        phase = "model" if op in ("plan", "interpret", "reflect") else "read" if (op in ("read", "tieba_forum_check") or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
         maximum = settings[phase + "_response_bytes"]
         output_limit = max(192 * 1024, maximum * 2 + 65536)
         remaining = deadline - time.monotonic()
@@ -1672,31 +1787,8 @@ class DiscoveryCoordinator:
                                                     (time.time(), interest["id"], interest["version"]))
                     self.service.store.conn.execute("UPDATE discovery_runs SET interest_id=? WHERE id=?", (interest["id"], job["id"]))
             self._store_step(job, cancel, select_interest)
-            provider = {"kind": "native"} if not _third_party(plan["platform"], settings) else {
-                "kind": settings["provider_kind"], "api_key": settings["provider_key"],
-                "endpoint": settings["provider_endpoint"], "allow_loopback": True,
-                "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
-            native_bili = plan["platform"] == "bilibili" and settings["bilibili_access"] == "native"
-            browser = plan["platform"] in ("bilibili", "zhihu") and settings[plan["platform"] + "_access"] == "browser"
-            if browser:
-                response = self._execute_browser(job, cancel, settings, "search", plan["platform"], {"query": query}, deadline)
-            elif native_bili:
-                response = self._execute_bilibili(job, cancel, settings, "search", {"query": query, "limit": settings["search_results"]}, deadline)
-            else:
-                response = self._execute(job, cancel, settings, "search", {
-                    "platform": plan["platform"], "query": query, "provider": provider, "limit": settings["search_results"]}, deadline)
-            raw_candidates = response.get("candidates")
-            if not isinstance(raw_candidates, list) or len(raw_candidates) > settings["search_results"]:
-                raise _Stopped("worker_protocol")
-            candidates, urls = [], set()
-            for raw in raw_candidates:
-                candidate = normalize_candidate(raw, plan["platform"])
-                if candidate["url"] not in urls:
-                    candidates.append(candidate)
-                    urls.add(candidate["url"])
-            preferred = set(settings["_tieba_preferred_forums"]) if plan["platform"] == "tieba" else set()
-            candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
-                                           text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
+            # P1：前后台统一搜索链（候选规范化/去重/排序在共享方法内）
+            candidates = self.search_documents(job, cancel, settings, plan["platform"], query, deadline, interest=interest)
             if not candidates:
                 code = "search_no_candidates"
             evidence = []
@@ -1708,16 +1800,9 @@ class DiscoveryCoordinator:
                 if self._store_step(job, cancel, seen):
                     continue
                 try:
-                    if browser and plan["platform"] == "bilibili":
-                        # Browser session is needed for search; the fixed public
-                        # view endpoint supplies actual descriptions without playback.
-                        data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
-                    elif browser:
-                        data = self._execute_browser(job, cancel, settings, "read", plan["platform"], {"url": candidate["url"]}, deadline)
-                    elif native_bili:
-                        data = self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
-                    else:
-                        data = self._execute(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+                    # P1：前后台统一读取链；B站浏览器搜索的读取保留固定公开视图端点语义
+                    data = self.read_document(job, cancel, settings, plan["platform"], candidate, deadline,
+                                              bilibili_public_view=True)
                 except _Stopped as exc:
                     if (self._unavailable or exc.code.startswith("proxy_") or exc.code in (
                             "cancelled", "foreground_busy", "session_changed", "quota_exceeded",
@@ -1751,7 +1836,9 @@ class DiscoveryCoordinator:
                 items, excerpt_only = None, False
                 if use_model and not _exceeds(budget["models"], 1, settings["daily_models"]):
                     try:
-                        interpretation = self._execute(job, cancel, settings, "interpret", {"model": model, "evidence": evidence}, deadline)
+                        from .learning import detail_targets
+                        interpretation = self._execute(job, cancel, settings, "interpret", {"model": model, "evidence": evidence,
+                            'detail_targets':detail_targets(self.service.cfg)}, deadline)
                         items = interpretation.get("items", [])
                     except _Stopped as exc:
                         if (exc.code in ("cancelled", "foreground_busy", "session_changed", "quota_exceeded")
@@ -1821,26 +1908,23 @@ class DiscoveryCoordinator:
                 continue
             texts = {key: _utf8(item.get(key, ""), maximum) for key, maximum in (
                 ("summary", 1200), ("author_view", 1800), ("interpretation", 2800), ("uncertainty", 1400), ("question", 600))}
-            # Native Wikipedia text has a known attribution-bearing public licence;
-            # no search API snippet is ever persisted as evidence.
-            eligible = bool(settings["remember_observations"])
+            # Only a model's explicit decision can admit a read document as memory.
+            eligible = bool(settings["remember_observations"]) and type(item.get("keep")) is bool
             packet_id, card_id = uuid.uuid4().hex, uuid.uuid4().hex
             title, url = _utf8(doc["title"], 1000), doc["url"]
             coverage = _coverage(doc.get("coverage"), doc)
             version = doc["content_hash"] + ":" + str(int(now))
             if doc["platform"] == "tieba":
                 version = doc["content_hash"] + ":" + settings["_tieba_policy_version"] + ":" + str(int(now))
-            source = {"id": packet_id, "source_id": doc["platform"] + ":" + _identity(url),
-                      "version": version, "title": title, "url": url,
-                      "evidence": quote, "evidence_kind": "page_excerpt", "origin": "external",
-                      "author_view": texts["author_view"], "model_interpretation": texts["interpretation"],
-                      "uncertainty": "阅读范围：" + coverage + "。" + texts["uncertainty"],
-                      "keywords": interest["summary"], "scope": ["gui", "qq-owner"] if settings["share_in_qq"] else ["gui"],
-                      "created_at": now, "expires_at": now + settings["source_ttl_hours"] * 3600,
-                      "memory_eligible": False}
-            source.update(observation_eligible=True, coverage=coverage,
-                          reading_policy={"tieba_reply_count": doc.get("tieba_reply_count", 0),
-                                          "tieba_replies_requested": doc.get("tieba_replies_requested", False)})
+            from .learning import material_packet
+            source = material_packet(packet_id=packet_id, source_id=doc['platform']+':'+_identity(url),
+                version_id=version,title=title,url=url,text=doc['text'],quote=quote,
+                created_at=now,expires_at=now+settings['source_ttl_hours']*3600,
+                scope=['gui','qq-owner'] if settings['share_in_qq'] else ['gui'],coverage=coverage,
+                reading_policy={'tieba_reply_count':doc.get('tieba_reply_count',0),
+                                'tieba_replies_requested':doc.get('tieba_replies_requested',False)},
+                author_view=texts['author_view'],interpretation=texts['interpretation'],
+                uncertainty='阅读范围：'+coverage+'。'+texts['uncertainty'],keywords=interest['summary'])
             source["uncertainty"] = _utf8(source["uncertainty"], 1500)
             # Savepoints keep packet/card/dedup publication atomic even though
             # the source store is also used independently by ordinary chat.
@@ -1869,14 +1953,75 @@ class DiscoveryCoordinator:
             job["cards"] = accepted
             if eligible:
                 try:
-                    self.service.store.save_observation([packet_id], title=title[:24],
-                        content="读取来源《" + title[:80] + "》时记下：" + quote[:200], keywords=interest["summary"], scope="gui")
+                    self.service.store.save_learning({
+                        'keep': item['keep'], 'title': title[:24], 'content': texts['summary'] + '\n暂时解读：' + texts['interpretation'],
+                        'uncertainty': texts['uncertainty'], 'value_tier': item['value_tier'],
+                        'reason': item['value_reason'], 'keywords': interest['summary']},
+                        {'scope':'gui','packet_ids':[packet_id],'request_id':job['id']})
                 except Exception:
                     job["memory_failed"] = True  # A valid temporary card remains useful.
             if texts["question"] and self._note is None:
                 self._note = {"card_id": card_id, "packet_id": packet_id, "text": texts["question"][:160],
                               "created_at": now, "expires_at": min(now + settings["candidate_ttl_hours"] * 3600, source["expires_at"])}
         return accepted
+
+    # ---------- P1 共享材料链：前后台统一调用（N07/N08） ----------
+    # 前台（SearchSession）与后台（_run 轮）此前各自实现候选排序、读取分发与发布，
+    # 两处逻辑平行漂移。以下三个方法提炼共享步骤；两条入口只保留各自的目标、
+    # 选材方式与调度差异。发布仍走原有 _publish_locked / SearchSession._publish_locked
+    # 两条（前者含模型卡字段与观察入账，后者是快路径节选卡），由统一包装按入口选择。
+
+    def rank_candidates(self, platform, query, raw_candidates, *, settings, preferred_forums=None):
+        """候选规范化、URL 去重与优先吧/相关度排序（前台后台同一次序）。"""
+        from .discovery_sources import normalize_candidate
+        if not isinstance(raw_candidates, list) or len(raw_candidates) > settings["search_results"]:
+            raise _Stopped("worker_protocol")
+        candidates, urls = [], set()
+        for raw in raw_candidates:
+            candidate = normalize_candidate(raw, platform)
+            if candidate["url"] not in urls:
+                candidates.append(candidate)
+                urls.add(candidate["url"])
+        preferred = set(preferred_forums or []) if platform == "tieba" else set()
+        candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
+                                       text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
+        return candidates
+
+    def read_document(self, job, cancel, settings, platform, candidate, deadline, *, bilibili_public_view=False):
+        """读取一个候选并做协议校验——三条传输路径（原生/原生B站/浏览器）的统一分发。
+
+        bilibili_public_view：B站浏览器模式下，读取用固定公开视图端点（无需播放）
+        而非通用浏览器会话——保留后台轮原有的这条语义。
+        """
+        browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
+        native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
+        if browser and platform == "bilibili" and bilibili_public_view:
+            return self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+        if browser:
+            return self._execute_browser(job, cancel, settings, "read", platform, {"url": candidate["url"]}, deadline)
+        if native_bili:
+            return self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+        return self._execute(job, cancel, settings, "read", {"candidate": candidate}, deadline)
+
+    def search_documents(self, job, cancel, settings, platform, query, deadline, *, limit=None, interest=None):
+        """搜索一个平台并返回排序后的候选——前台后台同一次序、同一传输分发。"""
+        provider = {"kind": "native"} if not _third_party(platform, settings) else {
+            "kind": settings["provider_kind"], "api_key": settings["provider_key"],
+            "endpoint": settings["provider_endpoint"], "allow_loopback": True,
+            "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
+        browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
+        native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
+        payload = {"query": query, "limit": limit or settings["search_results"]}
+        if browser:
+            response = self._execute_browser(job, cancel, settings, "search", platform, {"query": query}, deadline)
+        elif native_bili:
+            response = self._execute_bilibili(job, cancel, settings, "search", payload, deadline)
+        else:
+            response = self._execute(job, cancel, settings, "search",
+                                     {"platform": platform, "query": query, "provider": provider, **payload}, deadline)
+        preferred = _preferred_forums(interest) if interest is not None else []
+        return self.rank_candidates(platform, query, response.get("candidates"),
+                                    settings=settings, preferred_forums=preferred)
 
 
 class _Stopped(Exception):
