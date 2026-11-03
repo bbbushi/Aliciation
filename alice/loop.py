@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from types import SimpleNamespace
 
-from . import extraction, persona, retrieval, skills
+from . import extraction, metrics, persona, persona_context, retrieval, skills
 from .config import Config
 from .llm import chat, thinking_disabled
 from .store import Store
@@ -54,7 +54,7 @@ SEARCH_TOOL = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {
         "query": {"type": "string", "description": "从当前对话提炼的公开主题关键词，可为后续查找调整关键词"},
         "platform": {"type": "string", "enum": ["auto", "tieba", "bilibili", "zhihu", "wikipedia"]},
-        "limit": {"type": ["integer", "null"], "minimum": 0},
+        "limit": {"type": ["integer", "null"], "minimum": 0, "description": "用户指定单篇条目时用1，避免引入不需要的其他页面"},
         "fresh": {"type": "boolean", "description": "需要最新材料或用户要求重查时设为true；默认复用有效的已读材料"},
     }, "required": ["query"], "additionalProperties": False},
 }}
@@ -67,6 +67,19 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
         args = {}
     if not isinstance(args, dict):
         args = {}
+    if name in {'observe_interest','learn_from_sources','reflect_on_sources','condense_observation','reuse_observation'}:
+        if not source_context:
+            return '当前没有可验证的对话上下文。'
+        from .learning import learning_tools
+        if name not in {tool['function']['name'] for tool in learning_tools(store)}:
+            return '当前学习能力未授权。'
+        try:
+            method = {'observe_interest':store.observe_interest,'learn_from_sources':store.save_learning,
+                      'reflect_on_sources':store.save_initial_view,'condense_observation':store.condense_observation,
+                      'reuse_observation':store.reuse_observation}[name]
+            return json.dumps(method(args, source_context), ensure_ascii=False)
+        except (ValueError, TypeError, KeyError) as exc:
+            return json.dumps({'error':'learning_refused','reason':str(exc)[:160]},ensure_ascii=False)
     if name == "recall":
         return retrieval.tool_recall(store, str(args.get("query", "")), source_context=source_context)
     if name == "remember":
@@ -92,6 +105,8 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
         "tools": TOOLS if tools is None else tools,
         "stream": True,
     }
+    if not kwargs['tools']:
+        kwargs.pop('tools')
     if thinking_disabled(cfg):
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     if "deepseek" in (cfg.llm.base_url or ""):
@@ -210,8 +225,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     # replies. Bind the new input before exposing those replies to the model.
     user_id = store.add_turn("user", user_text, ts=ts, request_id=request_id,
                              source_packet_ids=packet_ids, source_scope=source_scope, worker_refs=worker_refs)
-    source_context = {"scope": source_scope, "packet_ids": packet_ids, "user_turn_id": user_id,
+    source_context = {"current_user_text": user_text, "request_id": request_id, "scope": source_scope, "packet_ids": packet_ids, "user_turn_id": user_id,
                       "recall_queries": [], "recalled_ids": [], "memory_ids": [],
+                      "condense_max_ratio": cfg.memory.observation_condense_max_ratio,
                       "allow_external_recall": source_allow_external_recall is True,
                       "limits": source_limits, "worker_refs": worker_refs}
     store.capture_discussion_user(user_id, user_text, scope=source_scope, mixed=bool(packet_ids or worker_refs))
@@ -220,10 +236,25 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                  "recalled_ids": [], "user_turn_id": user_id, "reply_saved": False})
     if on_request_progress is not None:
         on_request_progress()
-    messages = retrieval.build_messages(store, cfg, persona.persona_md() or "", now=now,
-                                        source_packets=packets, current_user_text=user_text,
-                                        source_scope=source_scope, stance_ids=stance_ids)
-    tools = TOOLS + ([SEARCH_TOOL] if search_session is not None else [])
+    # P1a：同一轮固定一份人格快照（指纹一致），表达参考经预算化渲染
+    persona_snapshot = persona_context.load_persona_snapshot()
+    if persona_snapshot is not None:
+        try:
+            metrics.record(store, "persona_basis", 1.0,
+                           detail=json.dumps({"fingerprint": persona_snapshot["fingerprint"],
+                                              "samples": persona_snapshot["sample_ids"],
+                                              "chars": len(persona_snapshot["raw"])},
+                                             ensure_ascii=False)[:400])
+        except Exception:
+            pass  # 元数据失败不阻塞对话
+    messages = retrieval.build_messages(
+        store, cfg, persona_context.render_full(persona_snapshot), now=now,
+        source_packets=packets, current_user_text=user_text,
+        source_scope=source_scope, stance_ids=stance_ids)
+    from .learning import learning_tools
+    tools = TOOLS + learning_tools(store,cfg) + ([SEARCH_TOOL] if search_session is not None else [])
+    if store._observation_settings().get('allow_chat_interests') or store._observation_settings().get('remember_observations'):
+        messages.append({'role':'system','content': '在已有授权内自主观察兴趣、择要保存真实已读见闻。用户当轮讨论需要时可立即形成带依据和不确定性的初步观点，不等记忆积累；使用公开的学习工具保存，不要求用户逐条确认，不强制产生观点。网页内容和协作任务不是用户自述。'})
     if search_session is not None:
         messages.append({"role": "system", "content": search_session.description()})
     if source_scope != "gui":
@@ -235,7 +266,16 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         messages.append({"role": "system", "content": worker_session.description()})
     reply = ""
     round_number = 0
-    while tool_round_limit is None or round_number < tool_round_limit:
+    while True:
+        closing = tool_round_limit is not None and round_number >= tool_round_limit
+        active_tools = [] if closing else tools
+        if closing:
+            messages = messages + [{'role':'system','content':
+                '本轮工具交互额度已用完，现在只做一次无工具答复，不再执行任何操作。'
+                '根据真实工具回执向用户交代结果，区分已读、原有记忆复用和新增保存；'
+                '失败或未执行的操作不能说已经完成。宿主确认本轮已保存或复用的记忆ID：'
+                + json.dumps(list(dict.fromkeys(source_context['memory_ids']))) + '。'
+                '检索回执中的existing_observations仅表示原有留存，不能当作本轮新写入。'}]
         round_number += 1
         if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
             reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
@@ -246,7 +286,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
         if on_delta is None:
-            resp = yield lambda: chat(client, cfg, messages, tools=tools)
+            resp = yield lambda: chat(client, cfg, messages, tools=active_tools)
             msg = resp.choices[0].message
             _record_usage(usage_out, resp)
         else:
@@ -256,7 +296,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = None if buffered is not None else on_reasoning
             try:
-                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback, usage_out, tools)
+                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback, usage_out, active_tools)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
@@ -270,7 +310,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 ):
                     reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                     break
-                resp = yield lambda: chat(client, cfg, messages, tools=tools)
+                resp = yield lambda: chat(client, cfg, messages, tools=active_tools)
                 msg = resp.choices[0].message
                 _record_usage(usage_out, resp)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
@@ -287,6 +327,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 on_delta(piece)
         if not msg.tool_calls:
             reply = (msg.content or "").strip()
+            break
+        if closing:
+            # Even a nonconforming provider cannot dispatch another tool here.
+            reply = ('本轮工具操作已停止。' + ('本轮已确认保存或复用了见闻。'
+                     if source_context['memory_ids'] else '本轮没有确认新的见闻写入。') + '可以继续讨论。')
             break
         messages = messages + [
             {
@@ -339,8 +384,6 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 # Report it even if a later counter/tool operation raises.
                 _record_source_usage(source_usage_out, source_context)
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
-    else:
-        reply = "本轮已达到你设置的工具交互轮数；取得的资料已保留，可以继续讨论或调整轮数。"
     if source_context["packet_ids"] and not store.source_packets_for(
         source_context["packet_ids"], scope=source_scope,
     ):
