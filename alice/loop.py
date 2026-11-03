@@ -496,7 +496,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = None if buffered is not None else on_reasoning
             try:
-                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback, usage_out, active_tools)
+                _mt0 = time.time()
+                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback,
+                                                  usage_out, active_tools)
+                metrics.record_llm_call(store, 'main_stream', _mt0, None, model=cfg.llm.chat_model)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
