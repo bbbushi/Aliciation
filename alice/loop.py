@@ -247,10 +247,6 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                              ensure_ascii=False)[:400])
         except Exception:
             pass  # 元数据失败不阻塞对话
-    messages = retrieval.build_messages(
-        store, cfg, persona_context.render_full(persona_snapshot), now=now,
-        source_packets=packets, current_user_text=user_text,
-        source_scope=source_scope, stance_ids=stance_ids)
     from .learning import learning_tools
     tools = TOOLS + learning_tools(store,cfg) + ([SEARCH_TOOL] if search_session is not None else [])
     if store._observation_settings().get('allow_chat_interests') or store._observation_settings().get('remember_observations'):
@@ -264,9 +260,22 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         tools += worker_session.tools
         worker_names = {tool["function"]["name"] for tool in worker_session.tools}
         messages.append({"role": "system", "content": worker_session.description()})
+    # C0：把工具 schema 从历史预算中预留，再装配（预算守卫在每次调用前复查）
+    from . import context as _ctx
+    reserved = _ctx.messages_tokens([], tools)
+    messages = retrieval.build_messages(
+        store, cfg, persona_context.render_full(persona_snapshot), now=now,
+        source_packets=packets, current_user_text=user_text,
+        source_scope=source_scope, stance_ids=stance_ids, reserved_tokens=reserved)
     reply = ""
     round_number = 0
     while True:
+        if cfg.context.total_budget_tokens:
+            # 工具结果入场后、下一次模型调用前的预算复查（设计 §7.1）
+            if _ctx.messages_tokens(messages, tools) > cfg.context.total_budget_tokens:
+                reply = ("（本轮材料已超出上下文预算：请缩小问题或材料范围后重试；"
+                         "已读取的内容不作猜测补全。）")
+                break
         closing = tool_round_limit is not None and round_number >= tool_round_limit
         active_tools = [] if closing else tools
         if closing:

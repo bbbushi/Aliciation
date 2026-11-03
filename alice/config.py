@@ -44,6 +44,9 @@ class PersonaConfig:
 @dataclass
 class ContextConfig:
     recent_turns: int = 16
+    # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
+    total_budget_tokens: int = 100_000
+    reply_reserve_tokens: int = 4_000
     active_days: int = 2
     survival_days: int = 7
     survival_min_uses: int = 1
@@ -55,6 +58,13 @@ class ContextConfig:
 
 @dataclass
 class MemoryConfig:
+    observation_value_review: bool = True  # 七天线复核已分级的新见闻；不延长来源许可
+    interest_decay_days: int = 90  # 实施初值，可配置；只按真实用户依据衰减
+    deliberate_early_high: bool = True
+    observation_high_chars: int = 1200  # 建议细节量，不作机械截断；仍受已有资料容量限制
+    observation_normal_chars: int = 600
+    observation_low_chars: int = 180
+    observation_condense_max_ratio: float = 0.8  # 浓缩后最多为原文的80%，不足时不写入
     extract_every_turns: int = 10
     distill_every_memories: int = 30  # 数据触发：每累计 N 条新记忆提炼一次技能
     deliberate_every_memories: int = 15  # 数据触发：每累计 N 条新事件记忆思辨一次（思想层）
