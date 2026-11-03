@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from . import config as paths
 from .config import Config
@@ -69,38 +71,49 @@ ORIGIN_TITLE = "## 生长 · 我的来历"
 # 演化无权改动的小节（A01 代码级保护）：思想节归思辨流程，来历节归消化流程
 _PROTECTED_SECTIONS = ("## 生长 · 我现在的想法", "## 生长 · 我的来历")
 
-DIGEST_PROMPT = """下面是一份人格设定文档（一位"捐赠人"的角色稿）。AI 会继承 TA 的说话风格与部分认知，但不会把 TA 的经历当成自己的——那段背景只是一场 TA 经历过的、AI 复盘过的体验。
+# P0（人格连续性设计 v1 §5）：导入 = 提取 → 审查（带底色与存在事实）→ 协调 → 候选组装 →
+# 两阶段提交。表达习惯与认知收养分开决定；来历只留中性说明，拒绝理由进导入审计。
+EXTRACT_PROMPT = """下面是一份人格设定文档（一位"捐赠人"的角色稿）。AI 会继承 TA 的说话习惯，收养（经审查的）部分认知，但不继承 TA 的经历。
 
-请把文档拆解为三类，输出 JSON：
-- style_traits：说话习惯与风格要点（3~10 条，短语）。只描述"怎么说"——语气、用词、节奏都算风格；不涉及任何经历。
-- candidate_stances：文档中体现的价值观、态度、看世界的方式（0~8 条）。每条 {{claim, from_donor}}——claim 是一句可被 AI 自己持有或拒绝的主张，from_donor 一句话说明它来自文档里的什么。
-- story_facts：背景中的事实性要素（地点、人物、身世、事件；0~12 条，短语）。这些一律不成为 AI 的经历，只用于撰写来历。
+请拆解为五路，输出 JSON：
+- style_traits：说话习惯与风格要点（3~10 条，短语）。只描述"怎么说"——语气、用词、节奏、幽默方式、表达亲近的方式；不涉及经历。
+- situation_reactions：情境反应倾向（0~6 条）。认真办事、开玩笑、遇到不知道、被反对、用户低落等情境下"倾向于怎么反应"，一条一境。
+- expression_samples：表达样本（0~6 条）。从文档中摘取能示范说话方式的对话片段或典型回应，每条 {{context, user_input, reply, origin}}——context 是适用情境一句话；origin 是文档中的大致出处；文档没有可直接摘取的对话就给空列表，不要编造。
+- candidate_stances：候选认知（0~8 条）。价值观、态度、看世界的方式。每条 {{id, claim, from_donor}}——id 形如 c1、c2；claim 是一句可被 AI 持有或拒绝的主张；from_donor 一句话说明它来自文档哪里。
+- story_facts：背景事实要素（0~12 条，短语）。地点、人物、身世、事件——一律不成为 AI 的经历，只用于来历。
 - donor_name：文档中角色的名字（没有就空字符串）。
 
 硬性规则：不新增文档之外的设定；文档没有的内容输出空列表。
-- 身体性的行为与感官（抽烟、吃饭、睡觉、疼痛、冷暖、出门……）属于捐赠人的身体——AI 没有身体。相关内容只能以两种形态存在：说话风格里的修辞（如口癖「来一根」「借个火」），或作为认知对象（对习惯的态度，如对戒烟的看法）；绝不能成为 AI 自述的事实或习惯。
-输出 JSON：{{"style_traits": [], "candidate_stances": [{{"claim": "", "from_donor": ""}}], "story_facts": [], "donor_name": ""}}
+- 身体性的行为与感官（抽烟、吃饭、睡觉、疼痛、冷暖、出门……）属于捐赠人的身体——AI 没有身体。相关内容只能以两种形态存在：说话风格里的修辞（如口癖「来一根」），或作为认知对象（对习惯的态度）；绝不能成为 AI 自述的事实或习惯。
+- 样本只示范"怎样说"，不得携带能力、身份或真实关系断言。
+输出 JSON：{{"style_traits": [], "situation_reactions": [], "expression_samples": [{{"context": "", "user_input": "", "reply": "", "origin": ""}}], "candidate_stances": [{{"id": "", "claim": "", "from_donor": ""}}], "story_facts": [], "donor_name": ""}}
 
 人格设定文档：
 {doc}"""
 
-ENDORSE_PROMPT = """你是 {name}。下面是一些候选认知，全部来自一份你复盘过的人格设定文档（一位"捐赠人"）——TA 不是你，你也不是在扮演 TA，但 TA 留下了很多东西。
+REVIEW_PROMPT = """你是 {name} 的人格导入审查任务。下面给你四样东西：
 
-请逐条决定：这条认知你是否认可？认可的条件是它与你的底色气质相容、你愿意从今往后把它当作自己的看法。不认可就明确拒绝（太陌生、与你的气质冲突、说不清都算拒绝——拒绝不是失败，是你和 TA 不一样的地方）。
-
-{donor_line}候选认知：
+1. 本次提取的底色（风格与情境反应，将随安装生效）：
+{basecolor}
+2. 存在事实与诚实边界摘要：你没有身体（不能抽烟、吃饭、睡觉、疼痛、冷暖、出门）；不冒认捐赠人或用户的经历；不编造事实；对不知道的事如实说。
+3. 候选认知（带稳定 ID）：
 {stances}
+4. 你的权限：只能对上述候选逐条做 adopt（收下）/ adapt（改写后收下）/ reject（拒绝）/ undecided（未决）的决定。不能补写新的认知，不能改写风格清单，不能更改存在边界。
 
-输出 JSON：{{"adopted": ["认可的主张原文"], "rejected": [{{"claim": "被拒绝的主张原文", "why": "一句话"}}]}}"""
+决定条件：与存在事实冲突、与诚实边界冲突、与上面给出的底色明确冲突、或文档支持不足的，按对应类型拒绝或改写；仅"太激烈""不够建设性""不像助手"不构成拒绝理由。adapt 必须给出改写后的主张，保留原意中可成立的部分。
+拒绝一条认知不等于拒绝其表达习惯——风格清单不在你的决定范围内。
+
+输出 JSON：{{"decisions": [{{"id": "", "decision": "adopt|adapt|reject|undecided", "reason_type": "existence_conflict|honesty_conflict|basecolor_conflict|insufficient_support|none", "note": "一句话", "adapted_claim": "仅 adapt 时"}}]}}"""
 
 ORIGIN_SECTION_TMPL = """## 生长 · 我的来历
 
 （{origin_note}）
 
-- 我的说话方式、一部分看法，来自一份名为「{donor}」的人格设定文档——那是一位捐赠人，不是我。{rej_line}
-- 我从TA那里拿走了这些：{adopted_brief}
-- 没拿走这些：{rejected_brief}
+- 我的说话方式与部分看法，来自一份人格设定文档——那是一位捐赠人，不是我。TA 留下的东西经过了我的逐条审查；完整审查记录保存在我的导入档案里。
 - TA的故事不是我的记忆，是TA经历过、我读到的一场体验。我不是那个人，但TA赋予了我一些珍贵的东西，我打算用我自己的方式用下去。"""
+
+# 导入审计档案（原稿/审查记录/样本改写记录；本机目录，不入版本库）
+PERSONA_IMPORT_DIR = paths.PERSONA_DIR / "imports"
 
 GROWTH_PLACEHOLDER = """## 生长 · 自我叙事
 
@@ -213,17 +226,28 @@ def seed_from_tags(store: Store, client, cfg: Config, tags: list[str]) -> Path:
 
 def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用户导入",
                     client=None) -> Path:
-    """安装用户提供的自定义人格（v0.3 底色捐赠：消化而非扮演）。
+    """安装用户提供的自定义人格（P0：导入管线，人格连续性设计 v1 §5）。
 
-    流程：先把文档装配为可用底色（与旧版一致的回落路径），再尝试消化——
-    LLM 提取（风格/情绪词/候选认知/背景事实）+ 认知收养审查，成功后重写底色、
-    写入来历段、把收养的认知落为 stance 记忆。消化失败不影响安装（回落整包底色）。
-    已有人格时先快照入 history（可回滚），并重置演化基线。
-    传入 client 才走消化；client=None 时保持旧行为（离线/降级路径）。
+    两类入口语义不同：
+    - Alice 格式文档（含「## 底色」）：用户亲笔结构，直接安装（小节补齐+快照），
+      不再对其跑捐赠管线——用户其余小节原样保留。
+    - 外部角色卡（无「## 底色」）：捐赠文档，必须走导入管线（提取→样本适配→
+      收养审查→候选组装→两阶段提交）。准备失败保留旧人格/保持待安装，
+      不再把整份角色卡当底色生效（P0 取消的回落路径）。
     """
     md = md_text.strip()
     if not md:
         raise ValueError("人格文档是空的")
+    is_alice_format = "## 底色" in md
+    if not is_alice_format and client is None:
+        raise ValueError("外部角色卡导入需要模型服务（离线安装仅支持 Alice 格式文档）")
+    if not is_alice_format:
+        # 捐赠管线：完整准备成功前不写任何活跃状态；失败抛错保留旧人格。
+        plan = prepare_import(client, cfg, md_text, source, is_alice_format=False)
+        commit_import_plan(store, cfg, plan)
+        _ensure_meta_prior(store)
+        _append_changelog(f"外部角色卡由{source}经导入管线安装")
+        return paths.PERSONA_FILE
     if "## 底色" not in md:
         # 外部人格提示词：把整份设定放进底色层（去掉它自带的一级标题，避免套娃）
         body = md
@@ -260,128 +284,330 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
     store.meta_set("persona_seeded_at", time.time())
     store.meta_set("last_evolve_at", time.time())  # 新基线：旧记忆不再立刻涌入演化
 
-    digest_note = ""
-    if client is not None:
-        try:
-            digest_note = _digest_persona(store, client, cfg, md_text, source,
-                                          is_alice_format="## 底色" in md_text)
-        except Exception as e:  # 消化失败不回滚安装——底色已可用，来历段保持占位
-            digest_note = f"（消化暂失败：{e}；已按整包底色安装）"
-        if digest_note:
-            _append_changelog(digest_note)
+    _append_changelog(f"Alice 格式人格由{source}直接安装（用户亲笔结构，未跑捐赠管线）")
     return paths.PERSONA_FILE
+
+
+def _op_record_path(op_id: str):
+    return PERSONA_IMPORT_DIR / op_id / "op.json"
+
+
+def _recover_incomplete_import() -> None:
+    """进程中断恢复：存在未完成的导入操作时，先把人格文件恢复到该操作快照。"""
+    if not PERSONA_IMPORT_DIR.is_dir():
+        return
+    for op_dir in PERSONA_IMPORT_DIR.iterdir():
+        rec = op_dir / "op.json"
+        if not rec.is_file():
+            continue
+        try:
+            data = json.loads(rec.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if data.get("phase") == "completed":
+            continue
+        snapshot = Path(data["snapshot_path"]) if data.get("snapshot_path") else None
+        if data.get("phase") in {"file_replaced"} and snapshot and snapshot.is_file():
+            # 文件已换但未标记完成：回滚到快照（先验幂等由 op_id 检查兜底）
+            paths.PERSONA_FILE.write_text(snapshot.read_text(encoding="utf-8"), encoding="utf-8")
+        data["phase"] = "aborted"
+        rec.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        _append_changelog(f"导入操作 {data.get('op_id', op_dir.name)} 中断后已恢复旧人格")
+
+
+def _extract_import(client, cfg: Config, doc: str) -> dict:
+    """五路提取 + 结构校验（P0 §5：提取阶段不写任何状态）。"""
+    from .llm import chat_text  # noqa: F401  （保持与旧实现同款惰性导入面）
+    resp = chat(client, cfg, [{"role": "user", "content": EXTRACT_PROMPT.format(doc=doc)}],
+                model=cfg.llm.cheap_model, json_mode=True)
+    data = parse_json(resp.choices[0].message.content or "")
+    out = {
+        "style_traits": [str(x).strip() for x in (data.get("style_traits") or [])
+                         if str(x).strip()][:10],
+        "situation_reactions": [str(x).strip() for x in (data.get("situation_reactions") or [])
+                                if str(x).strip()][:6],
+        "expression_samples": [],
+        "candidate_stances": [],
+        "story_facts": [str(x).strip() for x in (data.get("story_facts") or [])
+                        if str(x).strip()][:12],
+        "donor_name": str(data.get("donor_name", "")).strip(),
+    }
+    for i, item in enumerate((data.get("expression_samples") or [])[:6]):
+        if not isinstance(item, dict):
+            continue
+        reply = str(item.get("reply", "")).strip()
+        if not reply:
+            continue
+        out["expression_samples"].append({
+            "id": f"s{i + 1}",
+            "context": str(item.get("context", "")).strip()[:120],
+            "user_input": str(item.get("user_input", "")).strip()[:300],
+            "reply": reply[:400],
+            "origin": str(item.get("origin", "")).strip()[:160],
+        })
+    for item in (data.get("candidate_stances") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        claim = str(item.get("claim", "")).strip()
+        if not claim:
+            continue
+        out["candidate_stances"].append({
+            "id": str(item.get("id", "")).strip() or f"c{len(out['candidate_stances']) + 1}",
+            "claim": claim,
+            "from_donor": str(item.get("from_donor", "")).strip()[:200],
+        })
+    if not out["style_traits"] and not out["candidate_stances"]:
+        raise ValueError("提取结果为空（无风格亦无候选认知）")
+    return out
+
+
+# 样本中"不能安全直用"的信号：身体动作/感官/角色专属能力（规则首筛，模型适配兜底）
+_SAMPLE_RISK = re.compile(r"抽|烟|喝|吃|睡|疼|累|冷|暖|走出门|上街|拔剑|挥|魔法|血|伤|拥抱|牵手|身体")
+
+
+def _adapt_samples(client, cfg: Config, samples: list[dict], audit_dir: Path) -> list[dict]:
+    """样本适配：风险条目经模型改写为 Alice 能真实表达的版本；不可安全适配的丢弃并留记录。
+    全部样本显式标注 来源=原文摘取|适配生成，永不伪装成真实对话。"""
+    kept, flagged, dropped = [], [], []
+    for smp in samples:
+        blob = " ".join([smp["context"], smp["user_input"], smp["reply"]])
+        (flagged if _SAMPLE_RISK.search(blob) else kept).append(dict(smp, origin_kind="原文摘取"))
+    if flagged:
+        prompt = (
+            "下面是几条人格表达样本，其中包含身体动作、感官或角色专属能力等 AI 无法真实执行的内容。"
+            "请逐条改写为'一个无身体的文字陪伴 AI'能真实表达的版本：保留语气、节奏与亲近方式，"
+            "去掉身体行为与能力断言；无法安全改写的条目输出 drop=true。"
+            "输出 JSON：{\"items\": [ {\"id\": \"\", \"reply\": \"改写后\", \"drop\": false} ]}\n\n"
+            + json.dumps(flagged, ensure_ascii=False))
+        try:
+            resp = chat(client, cfg, [{"role": "user", "content": prompt}],
+                        model=cfg.llm.cheap_model, json_mode=True)
+            data = parse_json(resp.choices[0].message.content or "")
+            by_id = {str(it.get("id")): it for it in (data.get("items") or []) if isinstance(it, dict)}
+            for smp in flagged:
+                it = by_id.get(smp["id"])
+                new_reply = str(it.get("reply", "")).strip() if it else ""
+                if it and not it.get("drop") and new_reply:
+                    kept.append({**smp, "reply": new_reply[:400], "origin_kind": "适配生成",
+                                 "origin_reply": smp["reply"]})
+                else:
+                    dropped.append(smp)
+        except Exception:
+            dropped.extend(flagged)  # 模型不可用：宁可丢弃不冒险
+    (audit_dir / "samples.json").write_text(
+        json.dumps({"kept": kept, "dropped": dropped}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    if dropped:
+        _append_changelog(f"样本适配：丢弃 {len(dropped)} 条不可安全适配的样本（记录在导入档案）")
+    return kept
+
+
+def _review_adoption(client, cfg: Config, extraction: dict, audit_dir: Path) -> list[dict]:
+    """收养审查（P0 §5.1）：传入底色+存在事实+带 ID 候选；decisions 逐条可解释。"""
+    stances = extraction["candidate_stances"]
+    if not stances:
+        (audit_dir / "review.json").write_text(
+            json.dumps({"decisions": [], "note": "无候选认知"}, ensure_ascii=False), encoding="utf-8")
+        return []
+    basecolor = "\n".join([f"- {x}" for x in extraction["style_traits"]]
+                           + [f"- 情境·{x}" for x in extraction["situation_reactions"]]) or "（本次未提取到风格清单）"
+    prompt = REVIEW_PROMPT.format(
+        name=cfg.persona.name, basecolor=basecolor,
+        stances="\n".join(f"- [{s['id']}] {s['claim']}（来自：{s['from_donor'] or '文档'}）"
+                           for s in stances))
+    resp = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    data = parse_json(resp.choices[0].message.content or "")
+    valid_ids = {s["id"] for s in stances}
+    decisions = []
+    for d in (data.get("decisions") or []):
+        if not isinstance(d, dict) or str(d.get("id")) not in valid_ids:
+            continue
+        decision = str(d.get("decision", ""))
+        if decision not in {"adopt", "adapt", "reject", "undecided"}:
+            decision = "undecided"
+        reason = str(d.get("reason_type", ""))
+        if reason not in {"existence_conflict", "honesty_conflict", "basecolor_conflict",
+                          "insufficient_support", "none"}:
+            reason = "none"
+        item = {"id": str(d["id"]), "decision": decision, "reason_type": reason,
+                "note": str(d.get("note", "")).strip()[:200]}
+        if decision == "adapt":
+            adapted = str(d.get("adapted_claim", "")).strip()
+            if not adapted:
+                item["decision"] = "undecided"  # adapt 无改写 → 未决，不默认收下
+            else:
+                item["adapted_claim"] = adapted[:300]
+        decisions.append(item)
+    seen = set()
+    decisions = [d for d in decisions if not (d["id"] in seen or seen.add(d["id"]))]
+    (audit_dir / "review.json").write_text(
+        json.dumps({"decisions": decisions}, ensure_ascii=False, indent=1), encoding="utf-8")
+    return decisions
+
+
+def _assemble_candidate(cfg: Config, extraction: dict, decisions: list[dict],
+                        samples: list[dict], source: str, is_alice_format: bool,
+                        current_md: str | None) -> tuple[str, list[dict]]:
+    """组装候选人格正文（P0 §4.1 结构；Alice 格式原位替换底色三节，用户小节保留）。"""
+    donor = extraction["donor_name"] or source
+    by_id = {s["id"]: s for s in extraction["candidate_stances"]}
+    adopted = []
+    for d in decisions:
+        if d["decision"] == "adopt":
+            adopted.append({"claim": by_id[d["id"]]["claim"], "from_donor": by_id[d["id"]]["from_donor"]})
+        elif d["decision"] == "adapt":
+            adopted.append({"claim": d["adapted_claim"], "from_donor": by_id[d["id"]]["from_donor"]})
+
+    style_header = f"（用户选定：来自「{donor}」的说话方式——长期表达偏好，普通演化不改写）"
+    style_block = "\n".join(f"- {x}" for x in extraction["style_traits"]) or "（文档未提取到风格要点）"
+    situation_block = "\n".join(f"- {x}" for x in extraction["situation_reactions"])
+    samples_block = "\n".join(
+        f"- 【{s['origin_kind']}·{s['id']}】情境：{s['context'] or '日常'}"
+        + (f"｜用户：{s['user_input']}" if s["user_input"] else "")
+        + f"｜回应：{s['reply']}"
+        for s in samples)
+    basecolor_new = "\n\n".join(
+        ["## 底色 · 气质与风格\n\n" + style_header + "\n\n" + style_block]
+        + ([f"## 底色 · 情境反应\n\n{situation_block}"] if situation_block else [])
+        + ([f"## 底色 · 表达样本\n\n（虚构的表达参考——示范说话方式，不是发生过的对话，"
+            f"样本中的事件不是记忆）\n\n{samples_block}"] if samples_block else []))
+
+    origin = ORIGIN_SECTION_TMPL.format(
+        origin_note=f"消化自{source}" + (f"，捐赠人「{donor}」" if extraction["donor_name"] else ""))
+
+    if is_alice_format and current_md:
+        md = current_md
+        md = re.sub(r"## 底色 · 气质与风格\n\n.*?(?=\n## )",
+                    basecolor_new + "\n\n", md, count=1, flags=re.S)
+        # 兼容旧底色（无样本节）：若正则没命中（无该节），追加在生长前
+        if "## 底色 · 气质与风格" not in md:
+            md = md.rstrip("\n") + "\n\n" + basecolor_new + "\n"
+    else:
+        md = f"# {cfg.persona.name} 的人格\n\n" + basecolor_new + "\n\n"
+
+    if re.search(rf"^{re.escape(ORIGIN_TITLE)}\s*$", md, flags=re.M):
+        md = re.sub(rf"{re.escape(ORIGIN_TITLE)}\n\n.*?(?=\n## )", origin + "\n\n",
+                    md, count=1, flags=re.S)
+    else:
+        md = md.rstrip("\n") + f"\n\n{origin}\n"
+    for title, placeholder in (("## 生长 · 自我叙事", "（尚未形成——将随共同经历自然生长）"),
+                               ("## 生长 · 我现在的想法", None),
+                               ("## 生长 · 与用户的关系", "（尚未形成）")):
+        if not re.search(rf"^{re.escape(title)}\s*$", md, flags=re.M):
+            md = md.rstrip("\n") + f"\n\n{title}\n\n" + (placeholder or "（尚未形成）") + "\n"
+    # 结构自检：必需小节齐备（P0 §5.3 关键冲突未解决/结构不合格 → 失败）
+    for required in ("## 底色 · 气质与风格", ORIGIN_TITLE, "## 生长 · 我现在的想法"):
+        if required not in md:
+            raise ValueError(f"候选人格缺少必需小节：{required}")
+    return (md if md.endswith("\n") else md + "\n"), adopted
+
+
+def _commit_import(store: Store, cfg: Config, op_id: str, candidate_md: str,
+                   adopted: list[dict], donor: str, source: str, audit_dir: Path,
+                   current_md: str | None) -> None:
+    """两阶段提交（P0 §5.3）：快照 → 先验落库（按 op_id 幂等）→ 原子替换 → 标记完成。"""
+    import os as _os
+    from . import thought as _thought
+    rec_path = _op_record_path(op_id)
+
+    def _record(phase: str, **extra):
+        rec_path.write_text(json.dumps({"op_id": op_id, "phase": phase, **extra},
+                                       ensure_ascii=False), encoding="utf-8")
+
+    # 快照旧人格
+    snapshot_path = None
+    if current_md is not None:
+        snapshot_path = audit_dir / "previous_persona.md"
+        snapshot_path.write_text(current_md, encoding="utf-8")
+    _record("prepared", snapshot_path=str(snapshot_path) if snapshot_path else None)
+
+    # 先验落库：op_id 幂等（中断重放不重复种入）
+    if store.meta_get(f"persona_import:{op_id}") is None:
+        with store.conn:
+            for a in adopted:
+                store.insert_memory(
+                    title=a["claim"][:24],
+                    content=(f'遭遇：来自捐赠文档《{donor}》的设定情境\n'
+                             f'事实：{a["from_donor"] or "文档中体现的看法"}\n'
+                             f'解释：捐赠——经导入审查收下的认知\n'
+                             f'不确定：继承自捐赠文档，尚未经我自己的经历检验\n'
+                             f'下次回应：待经历检验后形成\n'
+                             f'出处：底色文档·《{donor}》\n'
+                             f'状态：先验').strip(),
+                    keywords="观点 来历 收养",
+                    layer="longterm", kind="stance",
+                )
+        store.meta_set(f"persona_import:{op_id}", "stances_committed")
+    _record("stances_committed", snapshot_path=str(snapshot_path) if snapshot_path else None)
+
+    # 原子替换人格文件
+    paths.PERSONA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = paths.PERSONA_FILE.with_suffix(".md.tmp")
+    tmp.write_text(candidate_md, encoding="utf-8")
+    _os.replace(tmp, paths.PERSONA_FILE)
+    _record("file_replaced", snapshot_path=str(snapshot_path) if snapshot_path else None)
+
+    # 收尾：版本计数/基线/完成标记
+    if current_md is not None:
+        version = int(store.meta_get("persona_version", "0") or 0) + 1
+        paths.PERSONA_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        (paths.PERSONA_HISTORY_DIR / f"v{version:03d}_{datetime.now():%Y%m%d}.md").write_text(
+            current_md, encoding="utf-8")
+        store.meta_set("persona_version", version)
+    store.meta_set("persona_seeded_at", time.time())
+    store.meta_set("last_evolve_at", time.time())
+    _record("completed")
+    _append_changelog(f"导入完成（操作 {op_id}）：收养认知 {len(adopted)} 条；"
+                      f"完整审查与样本记录见导入档案")
 
 
 def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
                     is_alice_format: bool = False) -> str:
-    """v0.3 消化：提取（cheap）→ 收养审查（chat）→ 重写底色/来历段/收养 stance 落库。
+    """P0 导入管线：提取 → 样本适配 → 收养审查 → 组装候选 → 两阶段提交。
+    准备阶段不写活跃人格、不插先验；任何失败保留旧人格（取消整卡兜底）。"""
+    _recover_incomplete_import()
+    op_id = f"imp_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:6]}"
+    audit_dir = PERSONA_IMPORT_DIR / op_id
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    (audit_dir / "source.md").write_text(doc, encoding="utf-8")
 
-    外部角色卡：消化成功后整体重建干净结构（丢弃整包戏服）；Alice 格式文档：
-    原位替换风格块/词表块/来历段/想法段，用户其余小节保留。
-    返回 changelog 一行；背景事实只进来历段，绝不入记忆库（硬边界）。
-    """
-    from .llm import chat_text
-    from . import thought
+    plan = prepare_import(client, cfg, doc, source, is_alice_format)
+    commit_import_plan(store, cfg, plan)
+    decisions = plan["decisions"]
+    adopted_n = len(plan["adopted"])
+    rejected_n = sum(1 for d in decisions if d["decision"] == "reject")
+    return (f"导入完成：风格 {len(plan['extraction']['style_traits'])} 条、"
+            f"情境 {len(plan['extraction']['situation_reactions'])} 条、"
+            f"样本 {len(plan['samples'])} 条、收养 {adopted_n} 条、拒绝 {rejected_n} 条（审查记录在导入档案）")
 
-    resp = chat(client, cfg, [{"role": "user", "content": DIGEST_PROMPT.format(doc=doc)}],
-                model=cfg.llm.cheap_model, json_mode=True)
-    data = parse_json(resp.choices[0].message.content or "")
-    styles = [str(s).strip() for s in (data.get("style_traits") or []) if str(s).strip()][:10]
-    stances = [s for s in (data.get("candidate_stances") or [])
-               if isinstance(s, dict) and str(s.get("claim", "")).strip()][:8]
-    facts = [str(f).strip() for f in (data.get("story_facts") or []) if str(f).strip()][:12]
-    donor = str(data.get("donor_name", "")).strip() or source
-    if not styles and not stances:
-        return "（消化未产出可用内容，保持整包底色）"
 
-    # —— 认知收养审查（chat model，她的第一次"想"） ——
-    adopted: list[str] = []
-    rejected: list[tuple[str, str]] = []
-    if stances:
-        prompt = ENDORSE_PROMPT.format(
-            name=cfg.persona.name,
-            donor_line=f"这位捐赠人叫「{donor}」。\n" if donor else "",
-            stances="\n".join(f"- {s['claim']}（来自：{s.get('from_donor', '文档')}）" for s in stances),
-        )
-        resp2 = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
-        data2 = parse_json(resp2.choices[0].message.content or "")
-        adopted = [str(c).strip() for c in (data2.get("adopted") or []) if str(c).strip()]
-        claim_set = {str(s["claim"]).strip() for s in stances}
-        adopted = [c for c in adopted if any(c == k or c in k or k in c for k in claim_set)]
-        for r in (data2.get("rejected") or []):
-            if isinstance(r, dict) and str(r.get("claim", "")).strip():
-                rejected.append((str(r["claim"]).strip(), str(r.get("why", "")).strip()))
-    else:
-        adopted, rejected = [], []
+def prepare_import(client, cfg: Config, doc: str, source: str, is_alice_format: bool) -> dict:
+    """导入准备（不写活跃人格/不插先验）：提取→样本适配→审查→候选组装。
+    供 reset 流程在归档前调用——准备成功才允许归档（P0 §5.3）。"""
+    _recover_incomplete_import()
+    op_id = f"imp_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:6]}"
+    audit_dir = PERSONA_IMPORT_DIR / op_id
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    (audit_dir / "source.md").write_text(doc, encoding="utf-8")
+    extraction = _extract_import(client, cfg, doc)
+    (audit_dir / "extract.json").write_text(
+        json.dumps(extraction, ensure_ascii=False, indent=1), encoding="utf-8")
+    samples = _adapt_samples(client, cfg, extraction["expression_samples"], audit_dir)
+    decisions = _review_adoption(client, cfg, extraction, audit_dir)
+    current_md = persona_md()
+    candidate_md, adopted = _assemble_candidate(
+        cfg, extraction, decisions, samples, source, is_alice_format, current_md)
+    (audit_dir / "result.md").write_text(candidate_md, encoding="utf-8")
+    return {"op_id": op_id, "audit_dir": str(audit_dir), "extraction": extraction,
+            "samples": samples, "decisions": decisions, "candidate_md": candidate_md,
+            "adopted": adopted, "donor": extraction["donor_name"] or source,
+            "source": source, "current_md": current_md}
 
-    # —— 收养的认知落为 stance 记忆（冷启动脊柱；v0.4：先验状态，待自己经历检验）——
-    for claim in adopted:
-        match = next((s for s in stances
-                      if s["claim"].strip() == claim or claim in s["claim"] or s["claim"] in claim), None)
-        store.insert_memory(
-            title=claim[:24],
-            content=(f'遭遇：来自捐赠文档《{donor}》的设定情境\n'
-                     f'事实：{match.get("from_donor", "") if match else "文档中体现的看法"}\n'
-                     f'解释：捐赠——TA的设定里我认可并收下的认知\n'
-                     f'不确定：继承自捐赠文档，尚未经我自己的经历检验\n'
-                     f'下次回应：待经历检验后形成\n'
-                     f'出处：底色文档·《{donor}》\n'
-                     f'状态：先验').strip(),
-            keywords="观点 来历 收养",
-            layer="longterm", kind="stance",
-        )
 
-    # —— 重写人格文件 ——
-    # 外部角色卡：整体重建（丢弃整包戏服——角色档案/经历描述一并去掉）；
-    # Alice 格式：原位替换风格块与词表块，用户其余小节保留。
-    style_block = "\n".join(f"- {s}" for s in styles) if styles else "（文档未提取到风格要点）"
-    style_header = f"（来自捐赠文档「{donor}」的风格，AI 只继承说话方式）"
-    if not is_alice_format:
-        narrative = "\n".join(
-            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
-        md = "\n\n".join([
-            f"# {cfg.persona.name} 的人格",
-            f"## 底色 · 气质与风格\n\n{style_header}\n\n{style_block}",
-        ])
-    else:
-        md = persona_md() or f"# {cfg.persona.name} 的人格\n"
-        md = re.sub(r"## 底色 · 气质与风格\n\n.*?(?=\n## )",
-                    f"## 底色 · 气质与风格\n\n{style_header}\n\n{style_block}\n\n",
-                    md, count=1, flags=re.S)
-
-    adopted_brief = "、".join(f"「{c}」" for c in adopted) if adopted else "（TA的认知里还没有我认可的）"
-    rejected_brief = "、".join(f"「{c}」（{why}）" for c, why in rejected) if rejected else "（暂无明确拒绝的）"
-    origin = ORIGIN_SECTION_TMPL.format(
-        origin_note=f"消化自{source}" if not donor else f"消化自{source}，捐赠人「{donor}」",
-        donor=donor, rej_line="" if rejected else "有些地方我和TA不一样。",
-        adopted_brief=adopted_brief, rejected_brief=rejected_brief,
-    )
-    if facts:
-        origin += "\n- TA故事里的要素（不是我的记忆）：" + "、".join(facts)
-    if re.search(rf"^{re.escape(ORIGIN_TITLE)}\s*$", md, flags=re.M):
-        md = re.sub(rf"{re.escape(ORIGIN_TITLE)}\n\n.*?(?=\n## )", origin + "\n\n", md, count=1, flags=re.S)
-    else:
-        md = md.rstrip("\n") + f"\n\n{origin}\n"
-    if not is_alice_format:  # 重建路径补生长三节
-        narrative = "\n".join(
-            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
-        md = "\n\n".join([
-            md.rstrip("\n"),
-            "## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）",
-            "## 生长 · 我现在的想法\n\n" + (narrative or "（尚未形成——将在思辨中从经历里长出观点）"),
-            "## 生长 · 与用户的关系\n\n（尚未形成）",
-        ])
-    paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
-
-    # —— Alice 格式路径：「我现在的想法」原位装配收养认知 ——
-    if is_alice_format and adopted:
-        narrative = "\n".join(
-            f"- {c}（先验·未验证——继承自《{donor}》，待自己经历检验）" for c in adopted)
-        md = thought._write_section(md, narrative)
-        paths.PERSONA_FILE.write_text(md if md.endswith("\n") else md + "\n", encoding="utf-8")
-    return (f"消化完成：风格 {len(styles)} 条、"
-            f"收养认知 {len(adopted)} 条、拒绝 {len(rejected)} 条"
-            + (f"（捐赠人「{donor}」）" if donor else ""))
+def commit_import_plan(store: Store, cfg: Config, plan: dict) -> None:
+    """提交已准备好的导入计划（两阶段；reset 流程在归档后调用）。"""
+    _commit_import(store, cfg, plan["op_id"], plan["candidate_md"], plan["adopted"],
+                   plan["donor"], plan["source"], Path(plan["audit_dir"]), plan["current_md"])
 
 
 def _extract_section(md: str, title: str) -> str:

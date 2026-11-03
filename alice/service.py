@@ -444,7 +444,7 @@ class ChatService:
                     events.append(
                         f"记忆维护：{summary['to_warehouse']} 条进入仓库，"
                         f"{len(summary['promoted'])} 条晋升长期，"
-                        f"{summary['expired']} 条自然遗忘，{summary['evicted']} 条容量淘汰"
+                        f"{len(summary['expired'])} 条自然遗忘，{len(summary['evicted'])} 条容量淘汰"
                     )
             events.extend(self._watchers_due())
         return events
@@ -473,10 +473,18 @@ class ChatService:
                 self._workers.drain()
                 self._workers.join_worker_reports()
             with self._lock:
+                # P0 §5.3：reset 时先完成导入准备（外部卡跑完整管线），成功后才归档
+                # 旧会话——准备失败不清空旧数据。Alice 格式直接安装无需准备段。
+                plan = None
+                if reset and "## 底色" not in md_text:
+                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False)
                 if reset:
                     self._archive_locked()
-                persona.install_persona(self.store, self.cfg, md_text, source=source,
-                                        client=self.client)  # v0.3：传 client 走消化流程
+                if plan is not None:
+                    persona.commit_import_plan(self.store, self.cfg, plan)
+                else:
+                    persona.install_persona(self.store, self.cfg, md_text, source=source,
+                                            client=self.client)
                 self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
