@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS worker_management_settings (
 );
 INSERT OR IGNORE INTO worker_management_settings(id) VALUES(1);
 """
-ACTIVE = frozenset({'queued', 'starting', 'running', 'collecting', 'stopping'})
+ACTIVE = frozenset({'queued', 'starting', 'running', 'waiting_permission', 'collecting', 'stopping'})
 TERMINAL = frozenset({'succeeded', 'failed', 'cancelled', 'interrupted', 'unknown'})
 
 
@@ -196,7 +196,7 @@ class WorkerLedger:
                               'authorization_disabled': '任务资料待恢复授权'}
         return {**{k: task[k] for k in ('task_id', 'state', 'updated_at', 'created_at', 'last_sequence',
                                        'review', 'version', 'cancel_requested', 'termination_confirmed')},
-                'name': 'dsh-agent', 'agent_idle': bool(task['agent_idle']),
+                'name': 'claude-agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh-agent', 'agent_idle': bool(task['agent_idle']),
                 'session_closed': bool(task['session_closed']),
                 'archived': bool(task['archived']), 'deleted': bool(task['deleted']),
                 'management_pending': task['management_pending'],
@@ -277,16 +277,16 @@ class WorkerLedger:
         """Startup/reset never replays a send or kills a historical PID."""
         with self.conn:
             rows = self.conn.execute("SELECT task_id FROM worker_tasks WHERE state IN "
-                                     "('queued','starting','running','collecting','stopping')").fetchall()
+                                     "('queued','starting','running','waiting_permission','collecting','stopping')").fetchall()
             for row in rows:
                 attempts = (self.conn.execute(
                     "SELECT attempt_id FROM worker_attempts WHERE task_id=? AND state IN "
-                    "('queued','starting','running','collecting','stopping')", (row['task_id'],)).fetchall()
+                    "('queued','starting','running','waiting_permission','collecting','stopping')", (row['task_id'],)).fetchall()
                     if report is not None else [])
                 self.conn.execute("UPDATE worker_tasks SET state='unknown',cancel_requested=1 WHERE task_id=?",
                                   (row['task_id'],))
                 self.conn.execute("UPDATE worker_attempts SET state='unknown',updated_at=? WHERE task_id=? "
-                                  "AND state IN ('queued','starting','running','collecting','stopping')",
+                                  "AND state IN ('queued','starting','running','waiting_permission','collecting','stopping')",
                                   (time.time(), row['task_id']))
                 self.event(row['task_id'], 'connection_lost', payload={
                     'text': '宿主连接中断；执行和费用未知。没有自动重发，也没有按历史 PID 终止进程。'})

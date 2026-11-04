@@ -72,6 +72,34 @@ def record(store: Store, module: str, value: float, detail: str = "") -> None:
     store.conn.commit()
 
 
+def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
+                    error: str | None = None, fallback: bool = False,
+                    model: str | None = None) -> None:
+    """Step1 分调用观测（剩余工作评估 §2.3）：每次模型调用的用途/耗时/usage/结果。
+    供应商未返回的数据记未知（不记零）；观测失败不阻塞原调用。value=毫秒。"""
+    try:
+        now = time.time()
+        usage = {}
+        if resp is not None:
+            u = getattr(resp, "usage", None)
+            if u is not None:
+                for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+                    v = getattr(u, src, None)
+                    if type(v) is int and v >= 0:
+                        usage[dst] = v
+        detail = json.dumps({
+            "purpose": purpose, "duration_ms": int((now - started) * 1000),
+            "usage": usage or "unknown", "status": "error" if error else "ok",
+            "error_type": error, "fallback": bool(fallback),
+            "model": model or "unknown"}, ensure_ascii=False)[:400]
+        store.conn.execute(
+            "INSERT INTO turn_metrics (module, value, detail, ts) VALUES (?, ?, ?, ?)",
+            (f"llm_call:{purpose}", int((now - started) * 1000), detail, now))
+        store.conn.commit()
+    except Exception:
+        pass  # 观测失败不影响调用本身
+
+
 def judge_turn(store: Store, client, cfg: Config, user: str, reply: str,
                tools: list[str]) -> dict | None:
     """一次廉价模型调用，产出全部评审型指标。失败返回 None（不影响对话）。"""

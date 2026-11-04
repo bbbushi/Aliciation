@@ -37,6 +37,8 @@ class LlmConfig:
 @dataclass
 class PersonaConfig:
     name: str = "Alice"
+    # P1b 近位表达提醒（默认关；人工对照开关，效果未验不预填）
+    expression_anchor: bool = False
     # 数据触发：每累计 N 条新记忆演化一次。安静则不变（无时间兜底，特性而非缺陷）
     evolve_every_memories: int = 15
 

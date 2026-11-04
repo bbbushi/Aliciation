@@ -7,6 +7,7 @@ api_key = ""                   # 直接填在这里（user/ 不入 git，不会�
 # 也可以改走环境变量：删掉上一行，export ALICE_API_KEY=...（api_key_env 可改变量名）
 
 [persona]
+expression_anchor = false  # P1b 近位表达提醒（默认关；人工对照开关）
 name = "Alice"       # AI 的名字
 # 数据触发：每累计 N 条新记忆演化一次人格。安静则不变（没有时间兜底）
 evolve_every_memories = 15

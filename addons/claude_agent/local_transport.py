@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import subprocess
@@ -23,6 +24,29 @@ GRACE_SECONDS = 5.0
 DEFAULT_TIMEOUT = 600.0
 
 EVENT_TYPES = {"system", "assistant", "user", "result"}
+
+
+def normalize_result(payload):
+    """Translate native Claude result facts; content acceptance remains separate."""
+    subtype = payload.get('subtype')
+    if subtype == 'success' and payload.get('is_error') is False and isinstance(payload.get('result'), str):
+        state = 'succeeded'
+    elif payload.get('is_error') is True or subtype in {
+            'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
+            'error_max_structured_output_retries'}:
+        state = 'failed'
+    else:
+        state = 'unknown'
+    cost = payload.get('total_cost_usd')
+    if type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0:
+        cost = None
+    text = payload.get('result')
+    if not isinstance(text, str):
+        errors = payload.get('errors')
+        text = '\n'.join(value for value in errors[:8] if isinstance(value, str)) if isinstance(errors, list) else ''
+    return {'state': state, 'text': text[:24000], 'cost_usd': cost,
+            'subtype': subtype if isinstance(subtype, str) else 'unrecognized_result',
+            'usage': payload.get('usage') if isinstance(payload.get('usage'), dict) else {}}
 
 
 class LocalTransportError(Exception):
@@ -72,6 +96,10 @@ class ClaudeLocalTransport:
         self._terminal: dict | None = None
         self._lock = threading.Lock()
         self._threads: list[threading.Thread] = []
+        self._reap_lock = threading.Lock()
+        self._ready = threading.Event()
+        self._finished = threading.Event()
+        self.termination_confirmed = False
 
     # ---- 生命周期 ----
 
@@ -81,8 +109,10 @@ class ClaudeLocalTransport:
             self._argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, cwd=str(self._sandbox),
             start_new_session=(os.name == "posix"))
-        threading.Thread(target=self._pump_stderr, daemon=True).start()
-        threading.Thread(target=self._pump_stdout, daemon=True).start()
+        for target in (self._pump_stderr, self._pump_stdout, self._watchdog):
+            thread = threading.Thread(target=target, daemon=True)
+            self._threads.append(thread)
+            thread.start()
         self._send_task()
 
     def _send_task(self) -> None:
@@ -104,25 +134,27 @@ class ClaudeLocalTransport:
     # ---- 事件泵 ----
 
     def _pump_stdout(self) -> None:
-        started = time.time()
         try:
             assert self._proc and self._proc.stdout
-            for line in self._proc.stdout:
-                if len(line) > MAX_LINE_BYTES:
+            while True:
+                line = self._proc.stdout.readline(MAX_LINE_BYTES + 1)
+                if not line:
+                    break
+                if len(line.encode('utf-8')) > MAX_LINE_BYTES:
                     raise LocalTransportError("line_oversize", "事件行超限")
-                if time.time() - started > self._deadline:
-                    self.fail_local("failed", "deadline", "超过硬期限")
-                    return
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # claude 偶发警告文本混流（如 unrecognized_model），丢弃不致命
                 if not isinstance(ev, dict) or ev.get("type") not in EVENT_TYPES:
                     continue
+                if ev['type'] == 'system' and ev.get('subtype') == 'init':
+                    self._ready.set()
                 if ev["type"] == "result":
                     with self._lock:
                         if self._terminal is None:
                             self._terminal = {"frame": "result", "payload": ev}
+                    self._finished.set()
                     self._emit("result", ev)
                     return
                 self._emit(ev["type"], ev)
@@ -154,6 +186,7 @@ class ClaudeLocalTransport:
             if self._terminal is not None:
                 return
             self._terminal = {"frame": "local", "state": state, "code": code, "message": message}
+        self._finished.set()
         self._emit("local_failure", {"state": state, "code": code, "message": message})
         self.kill_tree()
 
@@ -164,27 +197,61 @@ class ClaudeLocalTransport:
     def cancel(self, reason: str = "user_requested") -> None:
         self.fail_local("cancelled", "user_cancel", reason[:200])
 
-    def kill_tree(self) -> None:
+    def _watchdog(self):
+        started = time.monotonic()
+        while not self._finished.wait(0.1):
+            elapsed = time.monotonic() - started
+            if elapsed >= self._deadline:
+                self.fail_local('failed', 'deadline', '超过任务总时限')
+                return
+            if not self._ready.is_set() and elapsed >= self._ready_timeout:
+                self.fail_local('failed', 'ready_timeout', 'CLI 初始化超时')
+                return
+
+    def _group_alive(self):
         proc = self._proc
-        if proc is None or proc.poll() is not None:
-            return
+        if proc is None:
+            return False
+        proc.poll()  # reap the owned leader before checking for descendants
+        if os.name != 'posix':
+            return proc.poll() is None
         try:
-            if os.name == "posix":
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                time.sleep(0.3)
-                if proc.poll() is None:
-                    time.sleep(GRACE_SECONDS)
-                    if proc.poll() is None:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            else:
-                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                               capture_output=True, check=False)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.wait(timeout=GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            pass
+            os.killpg(proc.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def kill_tree(self) -> bool:
+        # Result/cancel/watchdog may race. Only one owner performs the reaping.
+        with self._reap_lock:
+            proc = self._proc
+            if proc is None:
+                self.termination_confirmed = True
+                return True
+            try:
+                if self._group_alive():
+                    if os.name == 'posix':
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        deadline = time.monotonic() + GRACE_SECONDS
+                        while self._group_alive() and time.monotonic() < deadline:
+                            time.sleep(0.05)
+                        if self._group_alive():
+                            os.killpg(proc.pid, signal.SIGKILL)
+                    else:
+                        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
+                                       capture_output=True, check=False, timeout=GRACE_SECONDS)
+                proc.wait(timeout=GRACE_SECONDS)
+            except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
+                pass
+            self.termination_confirmed = not self._group_alive()
+            return self.termination_confirmed
+
+    def reap(self) -> bool:
+        self._finished.set()
+        self.wait(timeout=1)
+        return self.kill_tree()
 
     def wait(self, timeout: float | None = None) -> int | None:
         if self._proc is None:

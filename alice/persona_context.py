@@ -132,3 +132,31 @@ def render_full(snapshot: dict | None) -> str:
         if key not in order and body:
             out.append(f"## {key}\n\n{body}")
     return "\n\n".join(out) + "\n"
+
+ANCHOR_BUDGET_CHARS = 500
+
+
+def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参考，不是记忆") -> str:
+    """P1b 近位表达提醒（设计 §6.2）：精简气质 + 关键边界 + 一条完整样本，≤500 字。
+    每次模型请求前重建、同一时刻只保留一份；不授权、不改诚实边界。"""
+    if not snapshot:
+        return ""
+    style_items = _style_items(snapshot)
+    style = _bounded(style_items[:2], 220, "条") if style_items else ""
+    sample_line = ""
+    for s in snapshot["samples"]:
+        line = f"【{s['kind']}·{s['id']}】{s['body']}"
+        if len(line) <= 220:
+            sample_line = line
+            break
+    if not sample_line and snapshot["samples"]:
+        sample_line = f"【{snapshot['samples'][0]['kind']}】（样本过长未展示）"
+    parts = ["【表达提醒（长期习惯，非本轮新要求；样本为虚构参考，不是记忆）】"]
+    if style:
+        parts.append(style)
+    if sample_line:
+        parts.append(sample_line)
+    parts.append(boundary)
+    text = "\n".join(parts)
+    return text[:ANCHOR_BUDGET_CHARS + 60]  # 硬上限兜底（标题行+边界行不计入样本预算）
+
