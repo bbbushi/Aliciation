@@ -65,8 +65,9 @@ def chat(
     json_mode: bool = False,
     retry: bool = True,
     observation: dict | None = None,
+    on_attempt_usage=None,
 ):
-    """非流式调用，默认最多三次尝试；已计账的单步可关闭重试。"""
+    """非流式调用；每次实际尝试回报用量，默认最多三次尝试。"""
     kwargs: dict[str, Any] = {
         "model": model or cfg.llm.chat_model,
         "messages": messages,
@@ -94,6 +95,13 @@ def chat(
             e = exc  # 网络/限流等瞬时错误
             last_err = e
         finally:
+            if on_attempt_usage is not None:
+                try:
+                    on_attempt_usage(response, incomplete=failure is not None)
+                except Exception:
+                    # Accounting must not replace the response/cancellation or
+                    # trigger another provider request. It performs no SQL.
+                    pass
             if observation:
                 from . import metrics
                 metrics.record_llm_call(observation.get("store"), observation.get("purpose", "unspecified"),

@@ -1,0 +1,78 @@
+{
+  "source_snapshot_sha256": "b7255c901ccf4202035095cc0228d5affc0de5035c6fc156440375359f35e18a",
+  "independent_cases": 25,
+  "passed": 25,
+  "failed": 0,
+  "runs": [
+    {
+      "path": "final-run",
+      "passed": 24,
+      "failed": 0
+    },
+    {
+      "path": "delta-run",
+      "passed": 1,
+      "failed": 0,
+      "variants": 5
+    }
+  ],
+  "initial_run": {
+    "path": "initial-run",
+    "passed": 23,
+    "failed": 1,
+    "classification": "diagnostic_harness_expected_exception_but_existing_budget_path_returns_persisted_notice"
+  },
+  "guard_attempts": [],
+  "historical_95_case_report_unchanged": true,
+  "no_source_or_database_archived": true,
+  "archived_script_checks": [
+    {
+      "run": "initial-run",
+      "path": "check_support.py",
+      "sha256": "7711a54699f5fd259000f193bb7dfe8c970be40363359c266c4e8c543f102903",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "initial-run",
+      "path": "observability/check_observability.py",
+      "sha256": "95519e1fa1b136aecb3424ba006075a30373f516d403ed0ed3ecb723988f7fd4",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "initial-run",
+      "path": "usage_aggregation/check_usage_aggregation.py",
+      "sha256": "e41d053c2871294970bed2e8a6c10af4b58da9567119761555ddc34e80f11766",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "final-run",
+      "path": "check_support.py",
+      "sha256": "7711a54699f5fd259000f193bb7dfe8c970be40363359c266c4e8c543f102903",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "final-run",
+      "path": "observability/check_observability.py",
+      "sha256": "95519e1fa1b136aecb3424ba006075a30373f516d403ed0ed3ecb723988f7fd4",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "final-run",
+      "path": "usage_aggregation/check_usage_aggregation.py",
+      "sha256": "25847ccdfcd4f34b068024d456687fd6627da4a47bb5e1851fc787618fce0d3a",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "delta-run",
+      "path": "check_support.py",
+      "sha256": "7711a54699f5fd259000f193bb7dfe8c970be40363359c266c4e8c543f102903",
+      "matches_pre_execution_manifest": true
+    },
+    {
+      "run": "delta-run",
+      "path": "usage_aggregation/check_usage_aggregation.py",
+      "sha256": "f2d9d90c19c97bc7cb49ce0a663af8f93799b3c78b75852e803fd6e2adbb7061",
+      "matches_pre_execution_manifest": true
+    }
+  ]
+}

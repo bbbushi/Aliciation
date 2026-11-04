@@ -1,0 +1,286 @@
+{
+  "source_root": "D:\\alice",
+  "files": [
+    {
+      "path": "alice/bilibili_transport.py",
+      "sha256": "58475733c37e34ed60a7ff0f168fe52dc541ba267af15b26a32e8a1553b5c16b"
+    },
+    {
+      "path": "alice/browser_transport.py",
+      "sha256": "a36229ae866f64c7537ffbb10c0b0b236586dddfa337f29ef5022e58487204d4"
+    },
+    {
+      "path": "alice/channels.py",
+      "sha256": "e0d0d08d376267f86b2a6223b94b9983dc7526d201ea7c7e7adf24dc78efb531"
+    },
+    {
+      "path": "alice/cli.py",
+      "sha256": "283e420da82bedcaef0c8cb1e992425f95fbf42da45073c37430aadbe2bcf07e"
+    },
+    {
+      "path": "alice/collaborators.py",
+      "sha256": "adfdca0834c60ea3e734425851021b4a6d0256ffa12854146f16f19f0af6c21e"
+    },
+    {
+      "path": "alice/config.py",
+      "sha256": "e734aba836e244702232f62095195b74bd84e3a803e43d8f050f50ab5bbb4de9"
+    },
+    {
+      "path": "alice/config_edit.py",
+      "sha256": "da9df7138d2f8128f3538f08aae529146bd195e9b707d1122c3748e548f8d15e"
+    },
+    {
+      "path": "alice/connector_setup.py",
+      "sha256": "a27ed8860c57c838133e09010936c4ad12491c78a1de624383932d1ab5a4cd55"
+    },
+    {
+      "path": "alice/consolidation.py",
+      "sha256": "1dcfdf574f68d39094724c3db563f475472b6efa98dda65293d6b0cdbbeb61c6"
+    },
+    {
+      "path": "alice/context.py",
+      "sha256": "725bea7a14c4bdc02268a758dc0550cc4133766c56ca880394fcaae9d9d58156"
+    },
+    {
+      "path": "alice/context_history.py",
+      "sha256": "849abfdcf7c3085e579e82c5e6668b8b99e99d95e0ca9fd079a352b265bd96a1"
+    },
+    {
+      "path": "alice/context_memory.py",
+      "sha256": "c9a90fcdc1c9e81407b614c03998806bfab105c01df599eb4c1671339ea9dd91"
+    },
+    {
+      "path": "alice/context_recap.py",
+      "sha256": "7e280b075c8660bf5fcdb35e5102ffcc10757f5e33e30c50c5c8298253927af4"
+    },
+    {
+      "path": "alice/context_workspace.py",
+      "sha256": "559942caff67c8755e5baec75b53f8e19b6078e9494a409a4f5d974894fe44fc"
+    },
+    {
+      "path": "alice/dialogue_search.py",
+      "sha256": "71659197088ebdee7ef17fe0167e86a69209e66ad6866a1fbad8b61f5a5b80fe"
+    },
+    {
+      "path": "alice/discovery.py",
+      "sha256": "b42b83bdc1603eacd76e99236dbfdda6bf9868963561bc9416d2b628011c848a"
+    },
+    {
+      "path": "alice/discovery_memory.py",
+      "sha256": "43b6c7468cb7d9fcefc26cc11c928886d830bef511e85440fa527f66e742c0fd"
+    },
+    {
+      "path": "alice/discovery_network.py",
+      "sha256": "7c5ca3137381b44b7e0e8f65078c87d68756ba97eb5c620aa3b79ccb5b00dec4"
+    },
+    {
+      "path": "alice/discovery_sources.py",
+      "sha256": "8014f06e14d759f636b8427023bac009be34548bef92bb4cc5c3e5bbf3aed484"
+    },
+    {
+      "path": "alice/discovery_tieba.py",
+      "sha256": "966b074e04493f284d597ca2f5f4a22f544031108bc7fc04f106761b0379e194"
+    },
+    {
+      "path": "alice/discovery_worker.py",
+      "sha256": "b5830cbc50542dd8c9d7918e78021de5eeecbcfdd424b0d256deb29d5470f5bb"
+    },
+    {
+      "path": "alice/discovery_zhihu.py",
+      "sha256": "830dd237e1e6f2e093103ff7220d02f5fa9da4587294d542361ba4506fce819a"
+    },
+    {
+      "path": "alice/evaluation.py",
+      "sha256": "0a2a6b588711d25b57b56223ded0d448c8b0fe052e6a23ee7ffa47ece707f1f0"
+    },
+    {
+      "path": "alice/evaluation_service.py",
+      "sha256": "99c0d06872ad6f8da934150c729b9dfe66f245e8b6ed2029c05d31f257bf2dee"
+    },
+    {
+      "path": "alice/extraction.py",
+      "sha256": "5dd12cc779367f754fc6a3a9f7c3da0e1f7361d5c09036d2caf1ff90b07fbf5c"
+    },
+    {
+      "path": "alice/grounding.py",
+      "sha256": "2701bb98de042ca7c93f8689102f162bd22832848195ce9b4679c0d0c67ade2f"
+    },
+    {
+      "path": "alice/learning.py",
+      "sha256": "99eac5fa8d2a8699792795cc3fd6ef7de9766f20263839548b6054dc387cd9d6"
+    },
+    {
+      "path": "alice/llm.py",
+      "sha256": "a8eb80d01430a2ccebe777e005e85e282a6ac0663f4202b3e52d2f083b2196a5"
+    },
+    {
+      "path": "alice/local_connector.py",
+      "sha256": "6178fe3182215c4ada489861c2b098b91b3f1c259f8c479ceb03938d2845bf91"
+    },
+    {
+      "path": "alice/loop.py",
+      "sha256": "c48c4283e4b051b66bc9b6f97b2f3e61ca05b3b72b44fbf87eeda4d6b4316abb"
+    },
+    {
+      "path": "alice/memory_policy.py",
+      "sha256": "5c8f7fff11d0e1a74e51c53f2bd82c2ad3e8097de9266811d67ec0c046ba8d18"
+    },
+    {
+      "path": "alice/metrics.py",
+      "sha256": "e564e787e045a5b78cab3e63aa98ccaf962d10b6271160e4d172e7bbcd17a3c5"
+    },
+    {
+      "path": "alice/observation.py",
+      "sha256": "77fa07cc1a19e92624fd40873a9e670cab22720cf75b0cf773b1d54f05c0b7cb"
+    },
+    {
+      "path": "alice/observation_memory.py",
+      "sha256": "f81152c06ef7a7700907610cc97723082435720722b25fd367cceafd8eb37de7"
+    },
+    {
+      "path": "alice/persona.py",
+      "sha256": "d8074cc5a19dcbf247aacc8f4d82a90c10a32a321bfe2d5e4cae0cff252485f9"
+    },
+    {
+      "path": "alice/persona_context.py",
+      "sha256": "31c5dcc65d97300399230fcb73414cdb2cea08781b8d3610a9c86dc6c21213db"
+    },
+    {
+      "path": "alice/persona_growth.py",
+      "sha256": "7559d46c67799588c322e234abbe77510912d0b3cef918271c02d20e20c3687e"
+    },
+    {
+      "path": "alice/persona_reset.py",
+      "sha256": "6e0043e9c06d838a22bf9aca0a8954bd3777a662e55a539988702c29e604d0c0"
+    },
+    {
+      "path": "alice/persona_transaction.py",
+      "sha256": "a55eb8ae241eea0013a4916d497a26d0928d1cb63cc3542518310df2368f745b"
+    },
+    {
+      "path": "alice/retrieval.py",
+      "sha256": "893d703a7ef6ca51b936fe1dd79ede6be7964e1d80471bee43811bd6850a826a"
+    },
+    {
+      "path": "alice/server.py",
+      "sha256": "0efc001115f023eb2e4ea62bdd84d2136b551671f8c1b39e60ee796c7f57857f"
+    },
+    {
+      "path": "alice/service.py",
+      "sha256": "912e3bb4b9e80e64c2354d4a4e492e4cd32314967d78c5ad6a631b4beb7e73dd"
+    },
+    {
+      "path": "alice/skills.py",
+      "sha256": "fd6b79f1eb2a221f6d53f34ea0717598177c4b0280590ef2addbcb82b6cc00ef"
+    },
+    {
+      "path": "alice/steps.py",
+      "sha256": "154ecc851620ed154df553c0251f6d34d23e50a396ef603d56dca18a718360c5"
+    },
+    {
+      "path": "alice/store.py",
+      "sha256": "8496e943ccc8bd0d5045d4bcd3c28d7f2002575aa6d34c9f3c8a7a2f051c6203"
+    },
+    {
+      "path": "alice/thought.py",
+      "sha256": "12fe8d0370274b46c47bfca65039a4d552996ff859af05ed07743d09c0841dab"
+    },
+    {
+      "path": "alice/worker_artifacts.py",
+      "sha256": "c801f3f7c90dbdf9c0212d728c3d49c5bbcfa9beece8f8c202eb05d24ccc12b9"
+    },
+    {
+      "path": "alice/worker_context.py",
+      "sha256": "71fa235bb6417ada5372e438078b87ec9de7d5ad87451d1b56601c39fbc91059"
+    },
+    {
+      "path": "alice/worker_credentials.py",
+      "sha256": "143f069fd229d3211bc2859eaea1e258634f83c64d09107ee8822c05363a4903"
+    },
+    {
+      "path": "alice/worker_management.py",
+      "sha256": "58e5932464fc1aecb8674f05b95785f61ba81f69337e11c6f2e8ad702604b312"
+    },
+    {
+      "path": "alice/worker_permissions.py",
+      "sha256": "1f5794be14a032931f69095458a1cdf4cb0bf01ea2bc3e377845a079868ee4ea"
+    },
+    {
+      "path": "alice/worker_process.py",
+      "sha256": "c915e1ce4dd608b73267b22aaf1f6d1a15ab56803943ee528a48d2ccbada1bb5"
+    },
+    {
+      "path": "alice/worker_reports.py",
+      "sha256": "5d01e56db14b359b8ec27b4991d6b4896a78c105baab0a69198b5d3824a25ef7"
+    },
+    {
+      "path": "alice/worker_runtime.py",
+      "sha256": "8344e418c964a67b566064b7ad6531eb8eb150c38f56b61a1bb55a8aeef02160"
+    },
+    {
+      "path": "alice/worker_tasks.py",
+      "sha256": "ae31c28a652f7c5dab5a266df1b5f56e05c3b2e63d36a6a0256c2d239b192566"
+    },
+    {
+      "path": "alice/worker_tools.py",
+      "sha256": "46709861a9d12416939b6d9b8019b10262d9b1ed45961ee070dfba319a751605"
+    },
+    {
+      "path": "alice/worker_transport.py",
+      "sha256": "ffc360014e465b8d3742fa24b4e2087538ecbaf8a938478ba4de983e9e7e63d0"
+    },
+    {
+      "path": "alice/__init__.py",
+      "sha256": "b8940f2ff45e9e046b36e07d6153b8b39105781bef1400a6d16e757ecdc54588"
+    },
+    {
+      "path": "alice/__main__.py",
+      "sha256": "36c083855f67c602fccf04c3a45e725f2248a63583c0c5b8bd512361972afd3d"
+    },
+    {
+      "path": "alice/metrics_prompts/__init__.py",
+      "sha256": "4044cb9bfb8dcd69756b2e4f0686bc69e7c3005bf76c43f0072040523b655149"
+    },
+    {
+      "path": "addons/claude_agent/adapter.py",
+      "sha256": "fbe285b5610f336f593a31d026f00d5beb3ba589769f9cb3bb2fe182d6e73846"
+    },
+    {
+      "path": "addons/claude_agent/demo_dispatch.py",
+      "sha256": "171431cec8bdf453bf0da289ac3c3c50123c8566476f1b714638ba5e57b027c4"
+    },
+    {
+      "path": "addons/claude_agent/gate_server.py",
+      "sha256": "5101f86a5414d84ac4981ed180cb115be894bb767edd93b342942c64bb4e1487"
+    },
+    {
+      "path": "addons/claude_agent/local_transport.py",
+      "sha256": "16dbee464228e1294c59935a8beb71678d5ce332cca47a9f60259aa3f014ae15"
+    },
+    {
+      "path": "addons/claude_agent/migrate_claude_policy.py",
+      "sha256": "c98f0cb9b6c9d47b941523721927d62e61326f5ccb9e40bf23656d188a8cdf74"
+    },
+    {
+      "path": "addons/claude_agent/permission_gate.py",
+      "sha256": "93d0889ac8ee749a1075b0ee67534ec59b02953648d45183be7acda5bd0fce99"
+    },
+    {
+      "path": "addons/claude_agent/run_task.py",
+      "sha256": "171431cec8bdf453bf0da289ac3c3c50123c8566476f1b714638ba5e57b027c4"
+    },
+    {
+      "path": "web/claude-gate.js",
+      "sha256": "786079008b1df9e30203f57bcf4fa9a7d84f4f4883fc68260ec2dc9cddc08f68"
+    },
+    {
+      "path": "web/worker-tasks.js",
+      "sha256": "5937886ba5ed416e441e47738a9eeec63baa67dfce57b30b708a42a78ef30015"
+    },
+    {
+      "path": "config.example.toml",
+      "sha256": "15a8bce2f413c7655d42739fcb17e7c580ad829d6042d9b508d2b94310eb6469"
+    }
+  ],
+  "snapshot_sha256": "b7255c901ccf4202035095cc0228d5affc0de5035c6fc156440375359f35e18a"
+}

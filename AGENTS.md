@@ -25,8 +25,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-04 Codex按用户指示整理本地架构更新并提交推送至trial/windows-v0.2-20261028；基于main b1dba3e，fetch后远端trial仍5fe643d，无分叉。交付146个白名单文件：W1—W4/R01—R07实现、交接、20份设计/复审/快照和88份隔离检测证据；不建PR、不合并或直推main。推送前备份.git/push-delivery/20261104-200434，原回退分支/stash/其他worktree保留。
-- 已有隔离检测仍为95场景93通过、2失败（同一P2），本轮未修：partial_receipt回退或未知失败attempt后成功时，usage_out及context_basis.usage缺incomplete=true（loop.py:213/241/550、llm.py:97）。报告为docs/设计文档/整体设计迭代概览/Alice架构完善-隔离自动检测与人工交接-20261104.md，两失败main_loop_partial_stream_aggregate/main_loop_retry_unknown_aggregate需后续修复复跑，不能宣告验收完成。
-- 推送前核对70源码/87证据文件原始SHA均与历史manifest一致，tracked diff检查无误；历史权限11、Windows受控进程8、安装/reset异常24+中断恢复10、人格20、历史12通过，观测8通过2失败。历史67Python/2JS/TOML检查不代表本轮重跑；真实部署共存/模型回执/Claude与DSH许可/GUI报告编辑/长期人格体验仍待人工，W5未改通过。
-- 本轮仅更新交接及Git交付，未改业务源码、运行测试、读写user/、启停Alice、调用真实模型/工人/QQ或迁移安装。W6—W9/前情退休为设计交付，D1—D5/蓝图待裁决、P1b默认关；未开放文件下载/跨任务/worker正式见闻。旧4份私有资料及待确认头像方案继续留本地、不入本次提交；本用户仍HTTPS、trial经PR合main。
-- 并行头像：小图selected-edits-v5/small-crown-v5.png冻结，V9头发已认可不再改；用户认可V10方向，V11已协调大小眼与浅笑，最新指出嘴线未随脸倾斜且偏高。pixel_avatar_design经内置image_gen唯一调用，以V11底图＋原画9c4138654feaa7222f3747026adcef01.png共同输入生成V12，仅将嘴线略下移、整条浅笑随脸倾斜（画面右端略高），保留眉眼/头发/抱书/Q版细腻像素。1254×1254透明RGBA与完整prompts.txt在docs/assets/avatar-concepts/orange-flower-20261104/selected-edits-v12/large-mouth-alignment-v12.png旁，已看图核alpha/无损保存，待用户确认；非目标结构未见明显漂移、细纹有生成差异。后续每轮必须加入原画作结构/气质参照，禁只沿生成图递推、粗块或阴冷半闭眼；旧图保留、v4中止。本头像轮未改源码/UI/user/、运行应用测试或提交推送。
+- 2026-11-04 Codex按用户“最新修复审核后推送个人分支”指示完成P2复审，审核通过、无新增高置信阻挡问题；交付目标origin/trial/windows-v0.2-20261028，父提交b1ffbd74be2e6407f975edfe59296b50bb44e6ca，fetch后本远端0/0无分叉。提交包含llm.py/loop.py修复及对应文档证据；提交号与推送完成状态以git log和远端核对为准，不建PR、不合并/直推main。
+- 复审报告docs/设计文档/整体设计迭代概览/Alice架构完善-P2修复推送前复审-20261104.md；独立复跑25项全过并补前情生成/审查3场景4轨迹全过，合计28/28。原P2两例分别精确30/12与20/8且incomplete=true、无双计；前情子usage与总量/落库同步，后续成功不清未知。原95项93/2及修复轮25项历史均保留。
+- 新证据P2用量聚合-推送复审证据-20261104/；70文件当前源码、source与三套实际workspace全SHA一致，快照b7255c901ccf4202035095cc0228d5affc0de5035c6fc156440375359f35e18a；原修复93份归档哈希一致。改动2Python AST/内存编译及diff检查通过，guard为空；未重跑无关Windows/崩溃套件。模型/人格装载/等待为替身，前情回答审查分支与字典alias仅静态核对，不夸大动态覆盖。
+- 本轮仅审查、临时隔离诊断、报告/当前与Git交付，未另外改业务代码，未读写真实user/、启停Alice、调用真实模型/Claude/DSH/QQ或迁移安装。真实部署共存/模型回执/工人许可/GUI/长期体验仍待人工，W5未改通过；W6—W9/前情退休为设计，D1—D5/蓝图待裁决、P1b默认关。原私有资料/头像素材不纳入提交，备份/回退分支/stash/其他worktree保留，仍HTTPS、trial经PR合main。
+- 并行头像：V14 C2仍为当前首选（face-variants-v14/c2-clear-taper-v14.png，preferred.json已记录）；新附件0cf0c346与C2字节一致，用户要求在其基础上再收下巴。pixel_avatar_design以内置image_gen单次编辑C2＋原画，生成轻收底部圆宽的V15：docs/assets/avatar-concepts/orange-flower-20261104/chin-trial-v15/c2-chin-taper-v15.png及prompts.txt，1254×1254透明RGBA，已看图/核alpha/无损保存。底弧略集中、变化轻，脸长/表情/头发/抱书总体保持，细纹有生成漂移；V15待用户确认，未覆盖首选。后续始终带原画作结构/气质参照，保留已认可头发/眼眉/嘴倾角，小图v5冻结，V13双基线与V14四候选保留。未改运行时头像/源码/UI/user/、运行应用测试或提交推送。

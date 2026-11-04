@@ -1,0 +1,2 @@
+{"name": "zero_invalid_usage_matrix", "status": "passed", "seconds": 2.906}
+{"passed": 1, "failed": 0, "guard_attempts": []}

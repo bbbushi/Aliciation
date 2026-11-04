@@ -210,7 +210,8 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
         raise
     finally:
         receipt = SimpleNamespace(usage=receipt_usage, model=actual_model)
-        _record_usage(usage_out, receipt)
+        incomplete = failure is not None or not last_chunk_had_usage
+        _record_usage(usage_out, receipt, incomplete=incomplete)
         if observation:
             from .llm import safe_provider_error
             metrics.record_llm_call(observation["store"], observation["purpose"], started, receipt,
@@ -218,7 +219,7 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
                 model=cfg.llm.chat_model, request_id=observation.get("request_id"), call_id=call_id,
                 context=observation.get("context"),
                 status="cancelled" if failure and not isinstance(failure, Exception) else "error" if failure else "ok",
-                usage_state=("partial_receipt" if receipt_usage and (failure or not last_chunk_had_usage)
+                usage_state=("partial_receipt" if receipt_usage and incomplete
                              else "reported" if receipt_usage else "unknown"))
         if stream is not None and callable(getattr(stream, "close", None)):
             try:
@@ -238,7 +239,8 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     )
 
 
-def _record_usage(usage_out: dict | None, resp) -> None:
+def _record_usage(usage_out: dict | None, resp, *, incomplete: bool = False) -> None:
+    """Accumulate one actual attempt once; uncertainty survives later receipts."""
     if usage_out is None:
         return
     u = getattr(resp, "usage", None)
@@ -249,7 +251,7 @@ def _record_usage(usage_out: dict | None, resp) -> None:
             usage_out[target] = usage_out.get(target, 0) + value
         else:
             known = False
-    if not known:
+    if incomplete or not known:
         usage_out["incomplete"] = True
 
 
@@ -295,6 +297,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                      "tool_names": [t["function"]["name"] for t in active_tools]}
         return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
+    def attempt_usage(detail=None):
+        def record(response, *, incomplete=False):
+            _record_usage(usage_out, response, incomplete=incomplete)
+            if detail is not None and detail is not usage_out:
+                _record_usage(detail, response, incomplete=incomplete)
+        return record
     if source_usage_out is not None:
         # Reused output dictionaries must not report a previous successful turn
         # when source validation or persistence fails before this one starts.
@@ -450,9 +458,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     recap_calls += 1
                     resp = yield lambda: chat(client, cfg, recap_messages,
                                               model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                              observation=observe("recap_generate"))
-                    _record_usage(recap_usage, resp)
-                    _record_usage(usage_out, resp)
+                                              observation=observe("recap_generate"),
+                                              on_attempt_usage=attempt_usage(recap_usage))
                     recap_raw = resp.choices[0].message.content or ''
                     recap_md = recap_session.parse(recap_raw, span_rows)
                     if recap_md:
@@ -465,9 +472,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             recap_calls += 1
                             reviewed = yield lambda: chat(client, cfg, review_messages,
                                 model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                observation=observe("recap_review"))
-                            _record_usage(recap_usage, reviewed)
-                            _record_usage(usage_out, reviewed)
+                                observation=observe("recap_review"),
+                                on_attempt_usage=attempt_usage(recap_usage))
                             verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                             recap_session.review = verdict
                             if verdict['valid']:
@@ -550,9 +556,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         if on_delta is None:
             resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
                                       retry=memory_session is None and not growth_refs and not recap_exposed,
-                                      observation=observe("main"))
+                                      observation=observe("main"), on_attempt_usage=attempt_usage())
             msg = resp.choices[0].message
-            _record_usage(usage_out, resp)
         else:
             # Task-bound text waits for the post-I/O licence check; a policy
             # revocation during model generation must not publish late deltas.
@@ -584,9 +589,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     break
                 resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
                                           retry=memory_session is None and not growth_refs and not recap_exposed,
-                                          observation=observe("main_fallback", fallback=True))
+                                          observation=observe("main_fallback", fallback=True),
+                                          on_attempt_usage=attempt_usage())
                 msg = resp.choices[0].message
-                _record_usage(usage_out, resp)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
                 if (r and on_reasoning and not reply_review_selected and not source_context["worker_refs"] and not growth_refs and not recap_exposed
                         and not (memory_session and memory_session.exposed)):
@@ -628,9 +633,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     review_audit['calls'] += 1
                     reviewed = yield lambda: chat(client, cfg, review_messages,
                         model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review"))
-                    _record_usage(usage_out, reviewed)
-                    _record_usage(review_audit['usage'], reviewed)
+                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review"),
+                        on_attempt_usage=attempt_usage(review_audit['usage']))
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                     review_audit['status'] = 'accepted' if verdict['valid'] else 'original_preserved'
                     review_audit['reason'] = verdict['reason']

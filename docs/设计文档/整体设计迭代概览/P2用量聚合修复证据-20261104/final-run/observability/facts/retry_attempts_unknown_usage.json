@@ -1,0 +1,69 @@
+{
+  "calls": 3,
+  "backoff_replaced_seconds": [
+    2,
+    4
+  ],
+  "events": [
+    {
+      "purpose": "fixture",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "请求受限或账户额度不足",
+      "fallback": false,
+      "model": "fixture-requested-model",
+      "model_source": "requested",
+      "request_id": "retry_request",
+      "call_id": "5ce80192ddbf4c60a91ae9998d48c221",
+      "attempt": 1,
+      "ts": 1793794795.2747228,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "pending"
+    },
+    {
+      "purpose": "fixture",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "连接超时，请检查网络后重试",
+      "fallback": false,
+      "model": "fixture-requested-model",
+      "model_source": "requested",
+      "request_id": "retry_request",
+      "call_id": "5ce80192ddbf4c60a91ae9998d48c221",
+      "attempt": 2,
+      "ts": 1793794795.2747228,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "pending"
+    },
+    {
+      "purpose": "fixture",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "ok",
+      "error_type": null,
+      "fallback": false,
+      "model": "fixture-receipt-model",
+      "model_source": "receipt",
+      "request_id": "retry_request",
+      "call_id": "5ce80192ddbf4c60a91ae9998d48c221",
+      "attempt": 3,
+      "ts": 1793794795.2747228,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "pending"
+    }
+  ]
+}
