@@ -1,0 +1,810 @@
+{
+  "failed": 0,
+  "suite": "recovery_hard_exit",
+  "suffix": "first",
+  "cases": [
+    {
+      "name": "hard_exit_after_prepared",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "prepared",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791693.6057577,
+            "last_evolve_at": 1793791693.6057577
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "rolled_back",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791693.6057577,
+            "last_evolve_at": 1793791693.6057577
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_prepared",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_after_first_insert",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "prepared",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791694.8557303,
+            "last_evolve_at": 1793791694.8557303
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "rolled_back",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791694.8557303,
+            "last_evolve_at": 1793791694.8557303
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_first_insert",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_after_marker_before_commit",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "prepared",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791696.0990062,
+            "last_evolve_at": 1793791696.0990062
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "rolled_back",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791696.0990062,
+            "last_evolve_at": 1793791696.0990062
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_marker_before_commit",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_after_db_commit",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          },
+          {
+            "id": 2,
+            "title": "先验二"
+          }
+        ],
+        "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791697.322736, \"last_evolve_at\": 1793791697.322736}, \"inserted\": [{\"id\": 1, \"sha256\": \"631cc527d37d59c0e60c9bf6af25cc222efb2d916f8966f5d5e7ddeeb835e0e2\"}, {\"id\": 2, \"sha256\": \"4c8c8e76c1c5e16bddeaecec98f79b1501785174c546f86ee133a5e6860f1e07\"}]}",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "prepared",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791697.322736,
+            "last_evolve_at": 1793791697.322736
+          },
+          "inserted": []
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "rolled_back",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791697.322736,
+            "last_evolve_at": 1793791697.322736
+          },
+          "inserted": [
+            {
+              "id": 1,
+              "sha256": "631cc527d37d59c0e60c9bf6af25cc222efb2d916f8966f5d5e7ddeeb835e0e2"
+            },
+            {
+              "id": 2,
+              "sha256": "4c8c8e76c1c5e16bddeaecec98f79b1501785174c546f86ee133a5e6860f1e07"
+            }
+          ]
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_db_commit",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_after_file_replace",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          },
+          {
+            "id": 2,
+            "title": "先验二"
+          }
+        ],
+        "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791698.582804, \"last_evolve_at\": 1793791698.582804}, \"inserted\": [{\"id\": 1, \"sha256\": \"3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454\"}, {\"id\": 2, \"sha256\": \"ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5\"}]}",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "db_committed",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791698.582804,
+            "last_evolve_at": 1793791698.582804
+          },
+          "inserted": [
+            {
+              "id": 1,
+              "sha256": "3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454"
+            },
+            {
+              "id": 2,
+              "sha256": "ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5"
+            }
+          ]
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          },
+          {
+            "id": 2,
+            "title": "先验二"
+          }
+        ],
+        "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791698.582804, \"last_evolve_at\": 1793791698.582804}, \"inserted\": [{\"id\": 1, \"sha256\": \"3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454\"}, {\"id\": 2, \"sha256\": \"ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5\"}]}",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "completed",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791698.582804,
+            "last_evolve_at": 1793791698.582804
+          },
+          "inserted": [
+            {
+              "id": 1,
+              "sha256": "3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454"
+            },
+            {
+              "id": 2,
+              "sha256": "ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5"
+            }
+          ]
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_file_replace",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_after_file_journal",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          },
+          {
+            "id": 2,
+            "title": "先验二"
+          }
+        ],
+        "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791699.8489175, \"last_evolve_at\": 1793791699.8489175}, \"inserted\": [{\"id\": 1, \"sha256\": \"1df2d87897b1498b8107302da8e4822a639ec1da997f3c3fa5f906515c988d26\"}, {\"id\": 2, \"sha256\": \"e3abb046acc4cf3cd68e6b807586eeca8cb1168d901cb7e282a8536c08c3be9e\"}]}",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "file_replaced",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791699.8489175,
+            "last_evolve_at": 1793791699.8489175
+          },
+          "inserted": [
+            {
+              "id": 1,
+              "sha256": "1df2d87897b1498b8107302da8e4822a639ec1da997f3c3fa5f906515c988d26"
+            },
+            {
+              "id": 2,
+              "sha256": "e3abb046acc4cf3cd68e6b807586eeca8cb1168d901cb7e282a8536c08c3be9e"
+            }
+          ]
+        },
+        "reset": null
+      },
+      "after_recovery": {
+        "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          },
+          {
+            "id": 2,
+            "title": "先验二"
+          }
+        ],
+        "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791699.8489175, \"last_evolve_at\": 1793791699.8489175}, \"inserted\": [{\"id\": 1, \"sha256\": \"1df2d87897b1498b8107302da8e4822a639ec1da997f3c3fa5f906515c988d26\"}, {\"id\": 2, \"sha256\": \"e3abb046acc4cf3cd68e6b807586eeca8cb1168d901cb7e282a8536c08c3be9e\"}]}",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": {
+          "kind": "persona_import_v2",
+          "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "phase": "completed",
+          "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+          "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+          "before_exists": true,
+          "before_meta": {
+            "persona_version": null,
+            "persona_seeded_at": null,
+            "last_evolve_at": null
+          },
+          "after_meta": {
+            "persona_version": 1,
+            "persona_seeded_at": 1793791699.8489175,
+            "last_evolve_at": 1793791699.8489175
+          },
+          "inserted": [
+            {
+              "id": 1,
+              "sha256": "1df2d87897b1498b8107302da8e4822a639ec1da997f3c3fa5f906515c988d26"
+            },
+            {
+              "id": 2,
+              "sha256": "e3abb046acc4cf3cd68e6b807586eeca8cb1168d901cb7e282a8536c08c3be9e"
+            }
+          ]
+        },
+        "reset": null
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_file_journal",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_reset_partial_move",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          }
+        ],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "6d4ceba2fcf549a5b46f6948b9cca0f4",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "53c7fe9854cd46d0a6213bd79d43c1bb",
+          "archive": "20261104-120000",
+          "phase": "rolled_back",
+          "plan": {
+            "op_id": "imp_065e87afe95b4eebb813c30641ee4926",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "646c44b690aef8710c85cb2f57a22d9f54c538c18d75bac81fac177bb517b75b",
+          "files": {
+            "alice.db": "0d45ab37ce891490b503ed05e499495a012bf25fd31b6b0cbb00cd8cf2ce2ad1",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "after_recovery": {
+        "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+        "memories": [
+          {
+            "id": 1,
+            "title": "先验一"
+          }
+        ],
+        "marker": null,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "6d4ceba2fcf549a5b46f6948b9cca0f4",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "53c7fe9854cd46d0a6213bd79d43c1bb",
+          "archive": "20261104-120000",
+          "phase": "rolled_back",
+          "plan": {
+            "op_id": "imp_065e87afe95b4eebb813c30641ee4926",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "646c44b690aef8710c85cb2f57a22d9f54c538c18d75bac81fac177bb517b75b",
+          "files": {
+            "alice.db": "0d45ab37ce891490b503ed05e499495a012bf25fd31b6b0cbb00cd8cf2ce2ad1",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_reset_partial_move",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_reset_after_archive",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": null,
+        "memories": [],
+        "marker": null,
+        "epoch": null,
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "9a358136227d47f39c29703c5c451e93",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "2d0803f9c8fe4ab982d421225bb8b336",
+          "archive": "20261104-120000",
+          "phase": "archived",
+          "plan": {
+            "op_id": "imp_0cb4a68da7d74dd8a2b8312b97fb0b9a",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "0d9d499d9b60545c19ebacc1cd90d2b83eb486274b5b04be283fe01aab82470f",
+          "files": {
+            "alice.db": "a64f50acdef0a5085dfd5bc126635652002efe00b6e8d684299c073439cc23fd",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "after_recovery": {
+        "file_sha256": "5bb5273d3f6a653ede05b3ab2c676bccc00ee1a8b8a3d445d98e1b3a6573cd59",
+        "memories": [
+          {
+            "id": 1,
+            "title": "我的内部细节不主动递交"
+          },
+          {
+            "id": 2,
+            "title": "对话的继续与结束由用户主导"
+          }
+        ],
+        "marker": null,
+        "epoch": "2d0803f9c8fe4ab982d421225bb8b336",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "9a358136227d47f39c29703c5c451e93",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "2d0803f9c8fe4ab982d421225bb8b336",
+          "archive": "20261104-120000",
+          "phase": "completed",
+          "plan": {
+            "op_id": "imp_0cb4a68da7d74dd8a2b8312b97fb0b9a",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "0d9d499d9b60545c19ebacc1cd90d2b83eb486274b5b04be283fe01aab82470f",
+          "files": {
+            "alice.db": "a64f50acdef0a5085dfd5bc126635652002efe00b6e8d684299c073439cc23fd",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_reset_after_archive",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_reset_fresh_db_without_epoch",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": null,
+        "memories": [],
+        "marker": null,
+        "epoch": null,
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "d986317e216c4a05b61b427af3f3f816",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "8fee1302ccc54c299d7e687b543d160c",
+          "archive": "20261104-120000",
+          "phase": "archived",
+          "plan": {
+            "op_id": "imp_12db8d3863d941e380f5b9138191afb0",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "53d374153cbd2a9999299e50c072c75b6df72a50656a150bc505201fa841ee5d",
+          "files": {
+            "alice.db": "dc669ac61a1f20b36d7309232bcf6a61c1eef265e0082509a3e5777c515f6a36",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "after_recovery": {
+        "file_sha256": "5bb5273d3f6a653ede05b3ab2c676bccc00ee1a8b8a3d445d98e1b3a6573cd59",
+        "memories": [
+          {
+            "id": 1,
+            "title": "我的内部细节不主动递交"
+          },
+          {
+            "id": 2,
+            "title": "对话的继续与结束由用户主导"
+          }
+        ],
+        "marker": null,
+        "epoch": "8fee1302ccc54c299d7e687b543d160c",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "d986317e216c4a05b61b427af3f3f816",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "8fee1302ccc54c299d7e687b543d160c",
+          "archive": "20261104-120000",
+          "phase": "completed",
+          "plan": {
+            "op_id": "imp_12db8d3863d941e380f5b9138191afb0",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "53d374153cbd2a9999299e50c072c75b6df72a50656a150bc505201fa841ee5d",
+          "files": {
+            "alice.db": "dc669ac61a1f20b36d7309232bcf6a61c1eef265e0082509a3e5777c515f6a36",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_reset_fresh_db_without_epoch",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    },
+    {
+      "name": "hard_exit_reset_after_install",
+      "status": "passed",
+      "before_recovery": {
+        "file_sha256": "5bb5273d3f6a653ede05b3ab2c676bccc00ee1a8b8a3d445d98e1b3a6573cd59",
+        "memories": [
+          {
+            "id": 1,
+            "title": "我的内部细节不主动递交"
+          },
+          {
+            "id": 2,
+            "title": "对话的继续与结束由用户主导"
+          }
+        ],
+        "marker": null,
+        "epoch": "0f169104b0134a8399a6d4673622ca88",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "eb056e65dbf14f4bb6d2e01f85816df9",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "0f169104b0134a8399a6d4673622ca88",
+          "archive": "20261104-120000",
+          "phase": "installing",
+          "plan": {
+            "op_id": "imp_fe6e1ac2e7044f8f9e970f141b97c20f",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "78b5a1728a800853206c9a55d326bf4fbbc692ba67b2bd8caaa90568d29a587b",
+          "files": {
+            "alice.db": "a7ce8b3ecaf8aefcdbdc7f3e361c2eb1a1520b53858fc1161b4cce94ad6e6f3c",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "after_recovery": {
+        "file_sha256": "5bb5273d3f6a653ede05b3ab2c676bccc00ee1a8b8a3d445d98e1b3a6573cd59",
+        "memories": [
+          {
+            "id": 1,
+            "title": "我的内部细节不主动递交"
+          },
+          {
+            "id": 2,
+            "title": "对话的继续与结束由用户主导"
+          }
+        ],
+        "marker": null,
+        "epoch": "0f169104b0134a8399a6d4673622ca88",
+        "journal": null,
+        "reset": {
+          "v": 1,
+          "op_id": "eb056e65dbf14f4bb6d2e01f85816df9",
+          "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_epoch": "0f169104b0134a8399a6d4673622ca88",
+          "archive": "20261104-120000",
+          "phase": "completed",
+          "plan": {
+            "op_id": "imp_fe6e1ac2e7044f8f9e970f141b97c20f",
+            "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+            "adopted": [],
+            "donor": "hard-exit probe",
+            "source": "hard-exit probe",
+            "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+            "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "audit_dir": null
+          },
+          "plan_sha256": "78b5a1728a800853206c9a55d326bf4fbbc692ba67b2bd8caaa90568d29a587b",
+          "files": {
+            "alice.db": "a7ce8b3ecaf8aefcdbdc7f3e361c2eb1a1520b53858fc1161b4cce94ad6e6f3c",
+            "alice.db-wal": null,
+            "alice.db-shm": null,
+            "persona": {
+              "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+            }
+          }
+        }
+      },
+      "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_reset_after_install",
+      "blocked_attempts": [],
+      "limitation": "os._exit crash is not power-loss proof"
+    }
+  ],
+  "passed": 10
+}

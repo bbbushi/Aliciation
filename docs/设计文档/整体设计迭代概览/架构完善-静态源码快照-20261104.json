@@ -1,0 +1,144 @@
+{
+  "baseline": "b1dba3e9821dcca05eed0fc42b044bde95e9002f",
+  "date": "2026-11-04",
+  "scope": "source-only-static-snapshot",
+  "snapshot_sha256": "3369aa2bfb1b22765dcd63fcdb855f625264347fa8e6d31b9448a08d71c99043",
+  "files": [
+    {
+      "path": "addons/claude_agent/adapter.py",
+      "sha256": "0a5f0a6238362f65125dd8971ba598dab8eeee40c492860ba7a49d51d6c4fdfb"
+    },
+    {
+      "path": "addons/claude_agent/gate_server.py",
+      "sha256": "5101f86a5414d84ac4981ed180cb115be894bb767edd93b342942c64bb4e1487"
+    },
+    {
+      "path": "addons/claude_agent/local_transport.py",
+      "sha256": "51cb9312651f5f62784e3b015b2423a667d1fa6c475784f410049ce93479d9aa"
+    },
+    {
+      "path": "addons/claude_agent/migrate_claude_policy.py",
+      "sha256": "c98f0cb9b6c9d47b941523721927d62e61326f5ccb9e40bf23656d188a8cdf74"
+    },
+    {
+      "path": "addons/claude_agent/permission_gate.py",
+      "sha256": "93d0889ac8ee749a1075b0ee67534ec59b02953648d45183be7acda5bd0fce99"
+    },
+    {
+      "path": "addons/claude_agent/run_task.py",
+      "sha256": "e5949447851556bbb2c1c6c259b6c81fb7094e8df3f93f5580f08a42c8a2fe27"
+    },
+    {
+      "path": "alice/cli.py",
+      "sha256": "283e420da82bedcaef0c8cb1e992425f95fbf42da45073c37430aadbe2bcf07e"
+    },
+    {
+      "path": "alice/collaborators.py",
+      "sha256": "adfd61c520bdf71feeeb5ae19117e2c56886b28fccbd4cb44c22c3a90e693425"
+    },
+    {
+      "path": "alice/context.py",
+      "sha256": "6bc41d3e2181f877c9303cde8870d8250a76312acfdde38e60603996aa37fba6"
+    },
+    {
+      "path": "alice/context_history.py",
+      "sha256": "849abfdcf7c3085e579e82c5e6668b8b99e99d95e0ca9fd079a352b265bd96a1"
+    },
+    {
+      "path": "alice/context_recap.py",
+      "sha256": "7e280b075c8660bf5fcdb35e5102ffcc10757f5e33e30c50c5c8298253927af4"
+    },
+    {
+      "path": "alice/extraction.py",
+      "sha256": "5dd12cc779367f754fc6a3a9f7c3da0e1f7361d5c09036d2caf1ff90b07fbf5c"
+    },
+    {
+      "path": "alice/llm.py",
+      "sha256": "e4c5d2e18f33d54099f91a19d23ac5f6feea71cfa787ee9c7b690db02c631f17"
+    },
+    {
+      "path": "alice/loop.py",
+      "sha256": "7879a280c61943e757386c79f1f993006443b7ad9299b63fd2def4500b314a1b"
+    },
+    {
+      "path": "alice/metrics.py",
+      "sha256": "e564e787e045a5b78cab3e63aa98ccaf962d10b6271160e4d172e7bbcd17a3c5"
+    },
+    {
+      "path": "alice/observation.py",
+      "sha256": "77fa07cc1a19e92624fd40873a9e670cab22720cf75b0cf773b1d54f05c0b7cb"
+    },
+    {
+      "path": "alice/persona.py",
+      "sha256": "13e653e6eb66cf14835b9940bc2c80b47b8d9c76a0097fd180e0065787584335"
+    },
+    {
+      "path": "alice/persona_context.py",
+      "sha256": "bb6d946f30b7649a3916ae71657dc2bc78b45d5338910db0f99363af2ce0c572"
+    },
+    {
+      "path": "alice/persona_reset.py",
+      "sha256": "6e0043e9c06d838a22bf9aca0a8954bd3777a662e55a539988702c29e604d0c0"
+    },
+    {
+      "path": "alice/persona_transaction.py",
+      "sha256": "a55eb8ae241eea0013a4916d497a26d0928d1cb63cc3542518310df2368f745b"
+    },
+    {
+      "path": "alice/retrieval.py",
+      "sha256": "81b68711e0e6542a2a400d47283426f4b975d8307b85c51fbeb894ab641f3f99"
+    },
+    {
+      "path": "alice/server.py",
+      "sha256": "0efc001115f023eb2e4ea62bdd84d2136b551671f8c1b39e60ee796c7f57857f"
+    },
+    {
+      "path": "alice/service.py",
+      "sha256": "a710d6249429c90b6d570b1f8c4d4d219b4598f6eb405833d6bc0c22a0c73646"
+    },
+    {
+      "path": "alice/store.py",
+      "sha256": "8496e943ccc8bd0d5045d4bcd3c28d7f2002575aa6d34c9f3c8a7a2f051c6203"
+    },
+    {
+      "path": "alice/thought.py",
+      "sha256": "9f4cad432f62cfc893a5ea863573ce08c6bf3e4fe5f43c9e5df85a934929ec59"
+    },
+    {
+      "path": "alice/worker_permissions.py",
+      "sha256": "77e7aa8c7a6cd60df236f3a505765ebbf581605491b7267e35cee5a3b275f039"
+    },
+    {
+      "path": "alice/worker_process.py",
+      "sha256": "1f65d71c8a66f4053abcd851421b8b4ef9a11f65101cd557bca527af42fe5db0"
+    },
+    {
+      "path": "alice/worker_reports.py",
+      "sha256": "eb6314dbcc774ebad9b04f18159184b44bf897c8214b81be01345c5edf1ae311"
+    },
+    {
+      "path": "alice/worker_runtime.py",
+      "sha256": "8344e418c964a67b566064b7ad6531eb8eb150c38f56b61a1bb55a8aeef02160"
+    },
+    {
+      "path": "alice/worker_tasks.py",
+      "sha256": "ae31c28a652f7c5dab5a266df1b5f56e05c3b2e63d36a6a0256c2d239b192566"
+    },
+    {
+      "path": "config.example.toml",
+      "sha256": "15a8bce2f413c7655d42739fcb17e7c580ad829d6042d9b508d2b94310eb6469"
+    },
+    {
+      "path": "web/claude-gate.js",
+      "sha256": "586df9502c2da0a944708480bed7e444ec3640a4d4ee540800b02c47f849949b"
+    },
+    {
+      "path": "web/worker-tasks.js",
+      "sha256": "0012f3acf5e96d7ff20b59f5aaaf489d97f17ea5731d258e28dcabaa484ecb4b"
+    }
+  ],
+  "python_ast_compileall_count": 30,
+  "example_toml_parsed": true,
+  "runtime_executed": false,
+  "manual_acceptance": "not_executed"
+}

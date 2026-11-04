@@ -1,0 +1,137 @@
+{
+  "boundary": {
+    "exclusions": [
+      {
+        "id": 2,
+        "reason": "message_limit"
+      },
+      {
+        "id": 3,
+        "reason": "message_limit"
+      },
+      {
+        "id": 4,
+        "reason": "message_limit"
+      },
+      {
+        "id": 5,
+        "reason": "message_limit"
+      },
+      {
+        "id": 6,
+        "reason": "message_limit"
+      },
+      {
+        "id": 7,
+        "reason": "message_limit"
+      },
+      {
+        "id": 8,
+        "reason": "message_limit"
+      },
+      {
+        "id": 9,
+        "reason": "message_limit"
+      },
+      {
+        "id": 10,
+        "reason": "message_limit"
+      },
+      {
+        "id": 11,
+        "reason": "message_limit"
+      },
+      {
+        "id": 12,
+        "reason": "message_limit"
+      },
+      {
+        "id": 13,
+        "reason": "message_limit"
+      },
+      {
+        "id": 14,
+        "reason": "message_limit"
+      },
+      {
+        "id": 15,
+        "reason": "message_limit"
+      },
+      {
+        "id": 16,
+        "reason": "message_limit"
+      },
+      {
+        "id": 17,
+        "reason": "message_limit"
+      },
+      {
+        "id": 18,
+        "reason": "orphan_prefix"
+      }
+    ],
+    "minimum_retained_over_budget": false,
+    "current_user_over_budget": false,
+    "retained_ids": [
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33
+    ],
+    "first_retained_id": 19,
+    "excluded_ids": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "message_limit": 16,
+    "history_token_budget": 94815,
+    "policy": "complete_suffix_then_budget",
+    "recap_reserved_tokens": 0
+  },
+  "loaded": {
+    "ref": "history:17@8221b599e25c37ca:e6a10ad891be13fa",
+    "status": "loaded",
+    "turns": [
+      {
+        "role": "user",
+        "id": 17,
+        "ts": 1793750427.0,
+        "content": "主题09 用户完整限制：仅限本地，不许传给其他渠道。"
+      },
+      {
+        "role": "assistant",
+        "id": 18,
+        "ts": 1793750428.0,
+        "content": "主题09 AI当时回应：保留条件且不把旧话当授权。"
+      }
+    ]
+  },
+  "recap_floor": 19,
+  "same_boundary_object": true
+}

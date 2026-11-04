@@ -307,6 +307,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     payload = self._bounded_body(32768)
                     if path == "/api/collaborators":
                         result = svc.collaborators(payload)
+                    elif path == "/api/claude-policy":
+                        result = svc.claude_policy(payload)
                     elif path == "/api/worker-task-settings":
                         result = svc.worker_task_settings(payload)
                     elif path == "/api/worker-inputs":
@@ -314,7 +316,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     elif path == "/api/worker-artifacts/download":
                         result = svc.worker_artifacts(payload)
                     elif path in {"/api/worker-tasks/" + action for action in
-                                  ("detail", "events", "cancel", "review", "revoke", "archive", "restore", "delete")}:
+                                  ("detail", "events", "cancel", "review", "revoke", "archive", "restore", "delete", "recover_local")}:
                         result = svc.worker_tasks(path.rsplit("/", 1)[1], payload)
                     elif path == "/api/worker-permissions/list":
                         result = svc.worker_permissions("list")
@@ -325,6 +327,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                         return
                 elif path == "/api/collaborators" and not query:
                     result = svc.collaborators()
+                elif path == "/api/claude-policy" and not query:
+                    result = svc.claude_policy()
                 elif path == "/api/worker-permissions/list" and not query:
                     result = svc.worker_permissions("list")
                 elif path == "/api/worker-tasks":
@@ -474,13 +478,13 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.chat_activity())
             elif path == "/api/connectors/qq":
                 self._connector_route()
-            elif path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list"):
+            elif path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list", "/api/claude-policy"):
                 self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
-            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context"):
+            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
@@ -518,6 +522,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/observer/list": {"scope", "view", "layer", "kind", "q", "before", "ceiling"},
                 "/api/observer/detail": {"scope", "view", "id", "offset"},
                 "/api/observer/context": {"scope", "limit"},
+                "/api/observer/calls": {"scope", "limit", "request_id"},
+                "/api/observer/persona-operations": {"scope", "limit"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -536,7 +542,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             reader = {"/api/observer/snapshot": svc.observer_snapshot,
                       "/api/observer/list": svc.observer_list,
                       "/api/observer/detail": svc.observer_detail,
-                      "/api/observer/context": svc.observer_context_basis}[path]
+                      "/api/observer/context": svc.observer_context_basis,
+                      "/api/observer/calls": svc.observer_llm_calls,
+                      "/api/observer/persona-operations": svc.observer_persona_operations}[path]
             self._json(reader(**params))
 
         def _evaluation_route(self, path: str) -> None:
@@ -620,7 +628,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         def _route_post(self, path: str) -> None:
             if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download",
-                         "/api/worker-task-settings", "/api/worker-permissions/answer")
+                         "/api/worker-task-settings", "/api/worker-permissions/answer", "/api/claude-policy")
                     or path.startswith("/api/worker-tasks/")):
                 self._worker_route(path)
                 return

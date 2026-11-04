@@ -40,6 +40,67 @@ def context_basis(store, *, limit="10"):
     return {"items": items}
 
 
+def llm_calls(store, *, limit="100", request_id=None):
+    """Receipt-only public projection, including queued observations after failures."""
+    count = _number(limit, default=100, maximum=500)
+    if count < 1 or (request_id is not None and
+                     (not isinstance(request_id, str) or len(request_id) > 160)):
+        raise ObservationError("调用观察参数无效")
+    items = []
+    # Bounded scan; filtering does not execute maintenance or flush pending rows.
+    for row in store.conn.execute(
+            "SELECT detail FROM turn_metrics WHERE module LIKE 'llm_call:%' ORDER BY id DESC LIMIT 2000"):
+        try:
+            event = json.loads(row["detail"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict) and (request_id is None or event.get("request_id") == request_id):
+            items.append({**event, "storage": "committed"})
+    with store._llm_event_lock:
+        items += [{**event, "storage": "pending"} for event in store._llm_events
+                  if request_id is None or event.get("request_id") == request_id]
+        dropped = store._llm_events_dropped
+    items.sort(key=lambda e: e.get("ts", 0), reverse=True)
+    return {"items": items[:count], "scan_limit": 2000, "pending_dropped": dropped,
+            "notice": "无正文调用回执；usage未知不等于零，pending未承诺跨崩溃持久。"}
+
+
+def persona_operations(store, *, limit="20"):
+    """Read bounded import journal metadata; no recovery, migration or content replay."""
+    count = _number(limit, default=20, maximum=50)
+    if count < 1:
+        raise ObservationError("记录条数无效")
+    from .persona_transaction import public_status
+    projection = public_status(store, limit=count)
+    items = projection["items"]
+    reset = None
+    path = paths.DATA_DIR / "reset-op.json"
+    try:
+        from .persona_transaction import _plain_stat
+        _plain_stat(paths.DATA_DIR)
+        info = _plain_stat(path)
+        if info.st_size > 4 * 1024 * 1024:
+            raise ValueError()
+        with path.open("rb") as stream:
+            payload = stream.read(4 * 1024 * 1024 + 1)
+        if len(payload) > 4 * 1024 * 1024:
+            raise ValueError()
+        rec = json.loads(payload.decode("utf-8"))
+        if not isinstance(rec, dict):
+            raise ValueError()
+        reset = {key: rec.get(key) if re.fullmatch(r"[0-9a-f]{32}", str(rec.get(key))) else None
+                 for key in ("op_id", "old_epoch", "new_epoch")}
+        reset["phase"] = rec.get("phase") if rec.get("phase") in {
+            "moving", "archived", "installing", "completed", "rolled_back"} else "unknown"
+        reset["archive"] = rec.get("archive") if re.fullmatch(
+            r"[0-9]{8}-[0-9]{6}(?:-[0-9]+)?", str(rec.get("archive"))) else None
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        reset = {"phase": "journal_unreadable"}
+    return {**projection, "reset": reset, "notice": "只读操作元数据，不触发恢复；启动已被恢复阻止时此接口不可用。"}
+
+
 PAGE_SIZE = 25
 MANIFEST_LIMIT = 2000
 TEXT_HASH_LIMIT = 16000

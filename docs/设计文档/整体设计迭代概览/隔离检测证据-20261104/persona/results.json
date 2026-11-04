@@ -1,0 +1,666 @@
+{
+  "suite": "persona",
+  "cases": [
+    {
+      "name": "parser_indentation_newline_read_write_matrix",
+      "status": "passed",
+      "detail": {
+        "variants": 15
+      },
+      "seconds": 0.0
+    },
+    {
+      "name": "parser_explicit_rejections",
+      "status": "passed",
+      "detail": {
+        "explicitly_rejected_variants": 8
+      },
+      "seconds": 0.0
+    },
+    {
+      "name": "multiline_samples_roundtrip_and_summary_isolation",
+      "status": "passed",
+      "detail": {
+        "sample_ids": [
+          "s1",
+          "s2"
+        ],
+        "continuation_preserved": true
+      },
+      "seconds": 0.0
+    },
+    {
+      "name": "cross_section_injection_rejection_matrix",
+      "status": "passed",
+      "detail": {
+        "rejected_cross_section_variants": 24
+      },
+      "seconds": 0.0
+    },
+    {
+      "name": "chat_summary_budget_boundary_matrix",
+      "status": "passed",
+      "detail": {
+        "variants": 178,
+        "accepted": 88,
+        "rejected": 90,
+        "max_accepted_style_payload": 1121,
+        "min_rejected_style_payload": 1122,
+        "observations": [
+          {
+            "length": 1,
+            "summary_chars": 80,
+            "anchor_chars": 94
+          },
+          {
+            "length": 18,
+            "summary_chars": 97,
+            "anchor_chars": 111
+          },
+          {
+            "length": 35,
+            "summary_chars": 114,
+            "anchor_chars": 128
+          },
+          {
+            "length": 52,
+            "summary_chars": 131,
+            "anchor_chars": 145
+          },
+          {
+            "length": 69,
+            "summary_chars": 148,
+            "anchor_chars": 162
+          },
+          {
+            "length": 86,
+            "summary_chars": 165,
+            "anchor_chars": 179
+          },
+          {
+            "length": 103,
+            "summary_chars": 182,
+            "anchor_chars": 196
+          },
+          {
+            "length": 120,
+            "summary_chars": 199,
+            "anchor_chars": 213
+          },
+          {
+            "length": 137,
+            "summary_chars": 216,
+            "anchor_chars": 230
+          },
+          {
+            "length": 154,
+            "summary_chars": 233,
+            "anchor_chars": 247
+          },
+          {
+            "length": 171,
+            "summary_chars": 250,
+            "anchor_chars": 264
+          },
+          {
+            "length": 188,
+            "summary_chars": 267,
+            "anchor_chars": 281
+          },
+          {
+            "length": 205,
+            "summary_chars": 284,
+            "anchor_chars": 298
+          },
+          {
+            "length": 222,
+            "summary_chars": 301,
+            "anchor_chars": 315
+          },
+          {
+            "length": 239,
+            "summary_chars": 318,
+            "anchor_chars": 332
+          },
+          {
+            "length": 256,
+            "summary_chars": 335,
+            "anchor_chars": 349
+          },
+          {
+            "length": 273,
+            "summary_chars": 352,
+            "anchor_chars": 366
+          },
+          {
+            "length": 290,
+            "summary_chars": 369,
+            "anchor_chars": 383
+          },
+          {
+            "length": 307,
+            "summary_chars": 386,
+            "anchor_chars": 400
+          },
+          {
+            "length": 324,
+            "summary_chars": 403,
+            "anchor_chars": 417
+          },
+          {
+            "length": 341,
+            "summary_chars": 420,
+            "anchor_chars": 434
+          },
+          {
+            "length": 358,
+            "summary_chars": 437,
+            "anchor_chars": 451
+          },
+          {
+            "length": 375,
+            "summary_chars": 454,
+            "anchor_chars": 468
+          },
+          {
+            "length": 392,
+            "summary_chars": 471,
+            "anchor_chars": 485
+          },
+          {
+            "length": 409,
+            "summary_chars": 488,
+            "anchor_chars": 468
+          },
+          {
+            "length": 426,
+            "summary_chars": 505,
+            "anchor_chars": 485
+          },
+          {
+            "length": 443,
+            "summary_chars": 522,
+            "anchor_chars": 80
+          },
+          {
+            "length": 460,
+            "summary_chars": 539,
+            "anchor_chars": 80
+          },
+          {
+            "length": 477,
+            "summary_chars": 556,
+            "anchor_chars": 80
+          },
+          {
+            "length": 494,
+            "summary_chars": 573,
+            "anchor_chars": 80
+          },
+          {
+            "length": 511,
+            "summary_chars": 590,
+            "anchor_chars": 80
+          },
+          {
+            "length": 528,
+            "summary_chars": 607,
+            "anchor_chars": 80
+          },
+          {
+            "length": 545,
+            "summary_chars": 624,
+            "anchor_chars": 80
+          },
+          {
+            "length": 562,
+            "summary_chars": 641,
+            "anchor_chars": 80
+          },
+          {
+            "length": 579,
+            "summary_chars": 658,
+            "anchor_chars": 80
+          },
+          {
+            "length": 596,
+            "summary_chars": 675,
+            "anchor_chars": 80
+          },
+          {
+            "length": 613,
+            "summary_chars": 692,
+            "anchor_chars": 80
+          },
+          {
+            "length": 630,
+            "summary_chars": 709,
+            "anchor_chars": 80
+          },
+          {
+            "length": 647,
+            "summary_chars": 726,
+            "anchor_chars": 80
+          },
+          {
+            "length": 664,
+            "summary_chars": 743,
+            "anchor_chars": 80
+          },
+          {
+            "length": 681,
+            "summary_chars": 760,
+            "anchor_chars": 80
+          },
+          {
+            "length": 698,
+            "summary_chars": 777,
+            "anchor_chars": 80
+          },
+          {
+            "length": 715,
+            "summary_chars": 794,
+            "anchor_chars": 80
+          },
+          {
+            "length": 732,
+            "summary_chars": 811,
+            "anchor_chars": 80
+          },
+          {
+            "length": 749,
+            "summary_chars": 828,
+            "anchor_chars": 80
+          },
+          {
+            "length": 766,
+            "summary_chars": 845,
+            "anchor_chars": 80
+          },
+          {
+            "length": 783,
+            "summary_chars": 862,
+            "anchor_chars": 80
+          },
+          {
+            "length": 800,
+            "summary_chars": 879,
+            "anchor_chars": 80
+          },
+          {
+            "length": 817,
+            "summary_chars": 896,
+            "anchor_chars": 80
+          },
+          {
+            "length": 834,
+            "summary_chars": 913,
+            "anchor_chars": 80
+          },
+          {
+            "length": 851,
+            "summary_chars": 930,
+            "anchor_chars": 80
+          },
+          {
+            "length": 868,
+            "summary_chars": 947,
+            "anchor_chars": 80
+          },
+          {
+            "length": 885,
+            "summary_chars": 964,
+            "anchor_chars": 80
+          },
+          {
+            "length": 902,
+            "summary_chars": 981,
+            "anchor_chars": 80
+          },
+          {
+            "length": 919,
+            "summary_chars": 998,
+            "anchor_chars": 80
+          },
+          {
+            "length": 936,
+            "summary_chars": 1015,
+            "anchor_chars": 80
+          },
+          {
+            "length": 953,
+            "summary_chars": 1032,
+            "anchor_chars": 80
+          },
+          {
+            "length": 970,
+            "summary_chars": 1049,
+            "anchor_chars": 80
+          },
+          {
+            "length": 987,
+            "summary_chars": 1066,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1004,
+            "summary_chars": 1083,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1021,
+            "summary_chars": 1100,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1038,
+            "summary_chars": 1117,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1055,
+            "summary_chars": 1134,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1072,
+            "summary_chars": 1151,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1089,
+            "summary_chars": 1168,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1106,
+            "summary_chars": 1185,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1100,
+            "summary_chars": 1179,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1101,
+            "summary_chars": 1180,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1102,
+            "summary_chars": 1181,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1103,
+            "summary_chars": 1182,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1104,
+            "summary_chars": 1183,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1105,
+            "summary_chars": 1184,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1106,
+            "summary_chars": 1185,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1107,
+            "summary_chars": 1186,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1108,
+            "summary_chars": 1187,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1109,
+            "summary_chars": 1188,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1110,
+            "summary_chars": 1189,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1111,
+            "summary_chars": 1190,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1112,
+            "summary_chars": 1191,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1113,
+            "summary_chars": 1192,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1114,
+            "summary_chars": 1193,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1115,
+            "summary_chars": 1194,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1116,
+            "summary_chars": 1195,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1117,
+            "summary_chars": 1196,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1118,
+            "summary_chars": 1197,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1119,
+            "summary_chars": 1198,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1120,
+            "summary_chars": 1199,
+            "anchor_chars": 80
+          },
+          {
+            "length": 1121,
+            "summary_chars": 1200,
+            "anchor_chars": 80
+          }
+        ]
+      },
+      "seconds": 0.047
+    },
+    {
+      "name": "whole_entry_and_metadata_properties",
+      "status": "passed",
+      "detail": {
+        "seed": 20261104,
+        "documents": 100
+      },
+      "seconds": 0.047
+    },
+    {
+      "name": "explicit_edit_growth_and_evidence_withdrawal",
+      "status": "passed",
+      "detail": {
+        "saved_samples": [
+          "s1"
+        ],
+        "growth_patch_count": 1,
+        "evidence_invalidated": true
+      },
+      "seconds": 0.547
+    },
+    {
+      "name": "long_claim_same_prefix_verification_and_withdrawal",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、验证先验 1 条。",
+        "verified_id": 1,
+        "unaffected_id": 2,
+        "withdrawal_cascaded": true
+      },
+      "seconds": 0.593
+    },
+    {
+      "name": "long_claim_same_prefix_falsification",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、证伪先验 1 条。",
+        "retired_id": 1,
+        "remaining_id": 2
+      },
+      "seconds": 0.579
+    },
+    {
+      "name": "batch_证伪_new_basis_False",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、修订 1 条、证伪先验 1 条。",
+        "kind": "证伪",
+        "new_basis": false,
+        "revised": true
+      },
+      "seconds": 0.593
+    },
+    {
+      "name": "batch_证伪_new_basis_True",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、修订 1 条、证伪先验 1 条。",
+        "kind": "证伪",
+        "new_basis": true,
+        "revised": true
+      },
+      "seconds": 0.61
+    },
+    {
+      "name": "batch_证实_new_basis_False",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、验证先验 1 条、拒绝无据修订 1 条。",
+        "kind": "证实",
+        "new_basis": false,
+        "revised": false
+      },
+      "seconds": 0.578
+    },
+    {
+      "name": "batch_证实_new_basis_True",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、修订 1 条、验证先验 1 条。",
+        "kind": "证实",
+        "new_basis": true,
+        "revised": true
+      },
+      "seconds": 0.609
+    },
+    {
+      "name": "invalid_identity_version_receipts_no_mutation",
+      "status": "passed",
+      "detail": {
+        "rejected_receipts": 8,
+        "variants": [
+          "unknown",
+          "stale",
+          "bool_id",
+          "missing_version",
+          "text_ref",
+          "duplicate_verdict",
+          "duplicate_replacement",
+          "oversize_claim"
+        ]
+      },
+      "seconds": 4.172
+    },
+    {
+      "name": "inputs_changed_during_model_boundary",
+      "status": "passed",
+      "detail": {
+        "interleavings": 4
+      },
+      "seconds": 2.078
+    },
+    {
+      "name": "revision_insert_link_retirement_transaction_rollback",
+      "status": "passed",
+      "detail": {
+        "mechanism": "temporary SQLite trigger aborts old-ID DELETE",
+        "model_boundary_calls": 1,
+        "atomic_rollback": true
+      },
+      "seconds": 0.531
+    },
+    {
+      "name": "descendant_cannot_validate_or_replace_ancestor",
+      "status": "passed",
+      "detail": {
+        "result": "思辨完成：新增 0 条观点、拒绝无据修订 1 条，想法不变。",
+        "independent_basis_required": true
+      },
+      "seconds": 0.657
+    },
+    {
+      "name": "claim_heading_injection_all_newlines",
+      "status": "passed",
+      "detail": {
+        "newline_variants": 8,
+        "sections_preserved": true
+      },
+      "seconds": 3.765
+    },
+    {
+      "name": "missing_and_invalid_persona_safety",
+      "status": "passed",
+      "detail": {
+        "missing_persona_creates_no_file": true,
+        "invalid_persona_model_calls": 0
+      },
+      "seconds": 0.969
+    },
+    {
+      "name": "adoption_decision_reason_cartesian_matrix",
+      "status": "passed",
+      "detail": {
+        "combinations": 20,
+        "accepted": 10,
+        "rejected": 10
+      },
+      "seconds": 0.609
+    }
+  ],
+  "passed": 20,
+  "failed": 0,
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\persona\\workspace-run1",
+  "source_root": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\persona\\workspace-run1",
+  "guard_attempts": [],
+  "model": "deterministic fake responses only; zero network or real models",
+  "scope": "temporary copied source and synthetic SQLite fixtures; host contracts only",
+  "human_remaining": [
+    "real model semantics and adoption quality",
+    "real Windows filesystem recovery/deployment",
+    "long-term persona quality"
+  ]
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 import json
 import hashlib
 from datetime import datetime
@@ -52,7 +53,7 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
     return drive(extract_pending_steps(store, client, cfg, force=force))
 
 
-def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = False):
+def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = False, request_id=None):
     """把自上次提取后的对话提炼为记忆。返回新增条数；失败不动游标，下次重试。"""
     cursor = int(store.meta_get("extract_cursor", "0") or 0)
     pending = store.turns_since(cursor)
@@ -81,14 +82,14 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
     request = [{"role": "user", "content": prompt}]
     if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
         return 0
-    _et0 = time.time()
+    observation_id = request_id or uuid.uuid4().hex
     resp = yield lambda: chat(
         client, cfg,
         request,
         model=cfg.llm.cheap_model,
         json_mode=True, retry=False,
+        observation={"store": store, "purpose": "extraction", "request_id": observation_id},
     )
-    metrics.record_llm_call(store, 'extraction', _et0, resp, model=cfg.llm.cheap_model)
     raw = resp.choices[0].message.content or ''
     def invalid_output(reason):
         current = store.ordinary_turns([r for r in store.turns_since(cursor) if r['id'] <= pending[-1]['id']])
@@ -100,8 +101,8 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
             payload['raw'] = raw
         u = getattr(resp, 'usage', None)
         audit = {'error': reason, 'calls': 1,
-                 'usage': [{'prompt': getattr(u, 'prompt_tokens', 0) or 0,
-                            'completion': getattr(u, 'completion_tokens', 0) or 0}]}
+                 'usage': [{'prompt': getattr(u, 'prompt_tokens', None),
+                            'completion': getattr(u, 'completion_tokens', None)}]}
         with store.source_transaction():
             store.conn.execute('INSERT INTO memory_extraction_batches '
                 '(created_at,session_epoch,source_json,candidates_json,review_json,status,memory_ids) VALUES(?,?,?,?,?,?,?)',
@@ -134,8 +135,8 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
              'policy_sha256': hashlib.sha256(grounding.REVIEW_POLICY.encode()).hexdigest()}
     def account(response):
         u = getattr(response, 'usage', None)
-        audit['usage'].append({'prompt': getattr(u, 'prompt_tokens', 0) or 0,
-                               'completion': getattr(u, 'completion_tokens', 0) or 0})
+        audit['usage'].append({'prompt': getattr(u, 'prompt_tokens', None),
+                               'completion': getattr(u, 'completion_tokens', None)})
     account(resp)
     status = 'reviewed'
     if candidates:
@@ -148,8 +149,8 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
             audit['calls'] += 1
             _et0 = time.time()
             response = yield lambda: chat(client, cfg, review_messages,
-                                  model=cfg.llm.cheap_model, json_mode=True, retry=False)
-            metrics.record_llm_call(store, 'memory_review', _et0, response, model=cfg.llm.cheap_model)
+                                  model=cfg.llm.cheap_model, json_mode=True, retry=False,
+                                  observation={"store": store, "purpose": "memory_review", "request_id": observation_id})
             account(response)
             audit['decisions'] = grounding.decisions(response.choices[0].message.content or '', len(candidates))
         except Exception as exc:

@@ -1,0 +1,39 @@
+{
+  "interrupted": {
+    "file_sha256": "3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4",
+    "phase": "prepared",
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_ff3d7613412349f4866dd0b02b4ee8e2\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4\", \"after_sha256\": \"094876fe14afae2233e73c214fd397655fb039954972e95f8b33fa86655d4c9e\", \"before_exists\": true, \"before_meta\": {\"persona_version\": \"4\", \"persona_seeded_at\": \"100\", \"last_evolve_at\": \"200\"}, \"after_meta\": {\"persona_version\": 5, \"persona_seeded_at\": 1793791593.9911995, \"last_evolve_at\": 1793791593.9911995}, \"inserted\": [{\"id\": 1, \"sha256\": \"a9ecd08c24ac993f28791de70d52a12dc9385f550a80e8be986947967db48733\"}, {\"id\": 2, \"sha256\": \"3f802ec2e6ed13a66a0ae5ba7bfc0a1214f149b5c45fc1c5fe9b58c1591356cd\"}]}",
+    "rows": [
+      {
+        "id": 1,
+        "title": "首个完整先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      },
+      {
+        "id": 2,
+        "title": "第二个先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      }
+    ],
+    "meta": {
+      "session_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "persona_version": "5",
+      "persona_seeded_at": "1793791593.9911995",
+      "last_evolve_at": "1793791593.9911995"
+    }
+  },
+  "edit": null,
+  "error": null,
+  "recovered": {
+    "file_sha256": "3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4",
+    "phase": "rolled_back",
+    "marker": null,
+    "rows": [],
+    "meta": {
+      "session_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "persona_version": "4",
+      "persona_seeded_at": "100",
+      "last_evolve_at": "200"
+    }
+  }
+}

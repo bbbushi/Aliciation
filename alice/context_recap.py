@@ -25,11 +25,6 @@ turn_id填该发言的user_id或assistant_id。不能拼接不同句段、改人
 原文：{doc}'''
 
 
-def window_floor(store, cfg):
-    rows = store.model_history_turns(cfg.context.recent_turns * 2)
-    return min((row['id'] for row in rows), default=0)
-
-
 def _record(raw, epoch, scope, generation_key):
     try:
         data = json.loads(raw)
@@ -47,14 +42,15 @@ def _record(raw, epoch, scope, generation_key):
 
 
 class RecapContext:
-    def __init__(self, store, cfg, scope):
+    def __init__(self, store, cfg, scope, *, boundary):
         self.store, self.cfg, self.scope = store, cfg.context, scope
         self.epoch = store.meta_get('session_epoch')
         # Model, prompt, review policy and output limits all define cache fitness.
         self.generation_key = hashlib.sha256(json.dumps([
             2, self.epoch, scope, RECAP_PROMPT, REVIEW_POLICY, cfg.llm.base_url, cfg.llm.cheap_model,
             self.cfg.recap_max_chars], ensure_ascii=False).encode()).hexdigest()
-        self.floor = window_floor(store, cfg)
+        self.floor = boundary["first_retained_id"]
+        self.boundary = boundary
         self.refs, self.card_ids = [], []
         self.generation = 'disabled_or_no_span'
         self.review = None
@@ -133,8 +129,6 @@ class RecapContext:
                    'source_refs': refs, 'generation': self.generation, 'review': self.review,
                    'candidate_sha256': hashlib.sha256(raw.encode()).hexdigest(),
                    'candidate_chars': len(raw)}
-        if len(raw) <= 16000:
-            payload['candidate_raw'] = raw
         metrics.record(self.store, 'recap_attempt', 1.0, json.dumps(payload, ensure_ascii=False))
 
     def _valid_refs(self, refs):
@@ -190,7 +184,7 @@ class RecapContext:
         return self._valid_refs(self.refs)
 
     def metadata(self):
-        return {'scope': self.scope, 'generation': self.generation, 'card_ids': self.card_ids,
+        return {'boundary': self.boundary, 'scope': self.scope, 'generation': self.generation, 'card_ids': self.card_ids,
                 'generation_key': self.generation_key, 'storage': 'context_recap_cards',
                 'review': self.review,
                 'source_pairs': len(self.refs), 'valid_at_finish': self.valid()}

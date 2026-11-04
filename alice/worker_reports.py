@@ -5,8 +5,8 @@ import json
 import re
 import threading
 import time
+import uuid
 
-from . import persona
 from .channels import ChannelError
 from .worker_context import WORKER_SHADOW
 
@@ -16,7 +16,6 @@ REQUEST_FINISHED = frozenset({'completed', 'completed_with_warning', 'failed', '
 PENDING = ('pending', 'pending_notice')
 MAX_REPLY_CHARS = 6000
 MAX_INPUT_CHARS = 3000
-MAX_STYLE_CHARS = 1200
 MAX_SUMMARY_CHARS = 900
 STATUS_TEXT = {
     'succeeded': '协作者这轮已结束，结果还未复核；原始回复和执行记录在协作会话里。',
@@ -38,11 +37,8 @@ SUMMARY_PROMPT = """你是 Alice，正在向用户回报刚结束的一轮协作
 def _style_excerpt():
     """P1a：共用表达解析（purpose=worker_summary）——仅风格/情境，不读样本正文与关系。"""
     from . import persona_context
-    try:
-        snapshot = persona_context.load_persona_snapshot()
-    except (OSError, UnicodeError):
-        return ''
-    return persona_context.render_expression_reference(snapshot, purpose="worker_summary")[:MAX_STYLE_CHARS]
+    snapshot = persona_context.load_persona_snapshot()
+    return persona_context.render_expression_reference(snapshot, purpose="worker_summary")
 
 
 class WorkerReportsMixin:
@@ -137,6 +133,11 @@ class WorkerReportsMixin:
             if token is not None:
                 self.service._channels.release(token)
             with self.service._lock:
+                try:
+                    from .metrics import flush_calls
+                    flush_calls(self.service.store)
+                except Exception:
+                    pass  # Observation cannot keep the report slot occupied.
                 if self.report_thread is threading.current_thread():
                     self.report_thread = None
             # Do not wake the execution loop on a busy GUI slot: that would
@@ -202,10 +203,21 @@ class WorkerReportsMixin:
             (task['task_id'], attempt_id, 'agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh')).fetchone()
         use_model = (report['report_state'] == 'pending' and report['kind'] == 'status'
                      and original is not None and reply is not None)
+        style, style_error = '', False
+        if use_model:
+            try:
+                style = _style_excerpt()
+            except (ValueError, OSError, UnicodeError):
+                style_error, use_model = True, False
         with store.source_transaction():
             refs = [self._report_anchor_locked(task, report)]
             if not use_model:
-                self._deliver_worker_report_locked(report, STATUS_TEXT[report['outcome']], refs, 'status')
+                notice = STATUS_TEXT[report['outcome']]
+                if style_error:
+                    notice += '\n表达资料暂不可用，本次未调用总结模型；原报告仍可在协作会话查看。'
+                    self.ledger.event(task['task_id'], 'report_style_unavailable', attempt_id=attempt_id,
+                                      payload={'text': '表达资料准备失败，本次降为状态通知，未调用总结模型。'})
+                self._deliver_worker_report_locked(report, notice, refs, 'status')
                 return None
             messages = [original]
             if current is not None and current['message_id'] != original['message_id']:
@@ -225,7 +237,9 @@ class WorkerReportsMixin:
             return {'attempt_id': attempt_id, 'task_id': task['task_id'], 'epoch': epoch,
                     'outcome': report['outcome'], 'refs': refs, 'client': self.service.client,
                     'model': llm.chat_model, 'base_url': llm.base_url,
-                    'style': _style_excerpt(), 'original': original['body'][:MAX_INPUT_CHARS],
+                    'style': style, 'store': store, 'request_id': attempt['originating_request_id'],
+                    'worker_id': 'claude-agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh-agent',
+                    'original': original['body'][:MAX_INPUT_CHARS],
                     'current': current['body'][:MAX_INPUT_CHARS] if current is not None
                                and current['message_id'] != original['message_id'] else '',
                     'reply': reply['body'][:MAX_REPLY_CHARS],
@@ -249,6 +263,8 @@ class WorkerReportsMixin:
             hostname = ''
         if hostname == 'api.deepseek.com':
             kwargs['extra_body'] = {'thinking': {'type': 'disabled'}}
+        started, response, failure = time.monotonic(), None, None
+        call_id = uuid.uuid4().hex
         try:
             # make_client already sets max_retries=0. Do not call llm.chat(),
             # whose outer retry loop could charge/repeat an ambiguous request.
@@ -270,9 +286,22 @@ class WorkerReportsMixin:
                     or len(original) >= 120 and original in compact):
                 return None
             return text
-        except Exception:
+        except BaseException as exc:
+            failure = exc
+            if not isinstance(exc, Exception):
+                raise
             # Provider exception text can include the prompt, URL or credentials.
             return None
+        finally:
+            from . import metrics
+            from .llm import safe_provider_error
+            metrics.record_llm_call(snapshot['store'], 'worker_summary', started, response,
+                model=snapshot['model'], request_id=snapshot['request_id'], call_id=call_id,
+                error=safe_provider_error(failure) if failure else None,
+                status='cancelled' if failure and not isinstance(failure, Exception) else 'error' if failure else 'ok',
+                context={'trigger': 'worker_report', 'task_id': snapshot['task_id'],
+                         'worker_attempt_id': snapshot['attempt_id'], 'epoch': snapshot['epoch'],
+                         'worker_id': snapshot['worker_id']})
 
     def _complete_worker_report_locked(self, snapshot, summary):
         rows = self._report_rows_locked(snapshot['attempt_id'], snapshot['epoch'], states=('summarizing',))

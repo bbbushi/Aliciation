@@ -1,0 +1,97 @@
+{
+  "name": "hard_exit_after_file_replace",
+  "status": "passed",
+  "before_recovery": {
+    "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+    "memories": [
+      {
+        "id": 1,
+        "title": "先验一"
+      },
+      {
+        "id": 2,
+        "title": "先验二"
+      }
+    ],
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791698.582804, \"last_evolve_at\": 1793791698.582804}, \"inserted\": [{\"id\": 1, \"sha256\": \"3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454\"}, {\"id\": 2, \"sha256\": \"ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5\"}]}",
+    "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "journal": {
+      "kind": "persona_import_v2",
+      "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "db_committed",
+      "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+      "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+      "before_exists": true,
+      "before_meta": {
+        "persona_version": null,
+        "persona_seeded_at": null,
+        "last_evolve_at": null
+      },
+      "after_meta": {
+        "persona_version": 1,
+        "persona_seeded_at": 1793791698.582804,
+        "last_evolve_at": 1793791698.582804
+      },
+      "inserted": [
+        {
+          "id": 1,
+          "sha256": "3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454"
+        },
+        {
+          "id": 2,
+          "sha256": "ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5"
+        }
+      ]
+    },
+    "reset": null
+  },
+  "after_recovery": {
+    "file_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+    "memories": [
+      {
+        "id": 1,
+        "title": "先验一"
+      },
+      {
+        "id": 2,
+        "title": "先验二"
+      }
+    ],
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791698.582804, \"last_evolve_at\": 1793791698.582804}, \"inserted\": [{\"id\": 1, \"sha256\": \"3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454\"}, {\"id\": 2, \"sha256\": \"ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5\"}]}",
+    "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "journal": {
+      "kind": "persona_import_v2",
+      "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "completed",
+      "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+      "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+      "before_exists": true,
+      "before_meta": {
+        "persona_version": null,
+        "persona_seeded_at": null,
+        "last_evolve_at": null
+      },
+      "after_meta": {
+        "persona_version": 1,
+        "persona_seeded_at": 1793791698.582804,
+        "last_evolve_at": 1793791698.582804
+      },
+      "inserted": [
+        {
+          "id": 1,
+          "sha256": "3ff0af97aab3d9b42d8cb20910f71334b83d97b269ab6a5bf84da295b73ca454"
+        },
+        {
+          "id": 2,
+          "sha256": "ffe9592224f3a17e5b9eb2064ff0b233cc50b92c58b975940401e7d5cb969ad5"
+        }
+      ]
+    },
+    "reset": null
+  },
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_file_replace",
+  "blocked_attempts": [],
+  "limitation": "os._exit crash is not power-loss proof"
+}

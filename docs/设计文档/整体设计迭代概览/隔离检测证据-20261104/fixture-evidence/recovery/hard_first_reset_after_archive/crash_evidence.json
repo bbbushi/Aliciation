@@ -1,0 +1,31 @@
+{
+  "stage": "reset_after_archive",
+  "reset": {
+    "v": 1,
+    "op_id": "9a358136227d47f39c29703c5c451e93",
+    "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "new_epoch": "2d0803f9c8fe4ab982d421225bb8b336",
+    "archive": "20261104-120000",
+    "phase": "archived",
+    "plan": {
+      "op_id": "imp_0cb4a68da7d74dd8a2b8312b97fb0b9a",
+      "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+      "adopted": [],
+      "donor": "hard-exit probe",
+      "source": "hard-exit probe",
+      "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "audit_dir": null
+    },
+    "plan_sha256": "0d9d499d9b60545c19ebacc1cd90d2b83eb486274b5b04be283fe01aab82470f",
+    "files": {
+      "alice.db": "a64f50acdef0a5085dfd5bc126635652002efe00b6e8d684299c073439cc23fd",
+      "alice.db-wal": null,
+      "alice.db-shm": null,
+      "persona": {
+        "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+      }
+    }
+  },
+  "blocked_attempts": []
+}

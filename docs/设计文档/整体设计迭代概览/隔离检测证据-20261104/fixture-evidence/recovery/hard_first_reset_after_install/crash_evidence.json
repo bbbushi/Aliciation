@@ -1,0 +1,48 @@
+{
+  "stage": "reset_after_install",
+  "in_transaction": false,
+  "state": {
+    "file_sha256": "5bb5273d3f6a653ede05b3ab2c676bccc00ee1a8b8a3d445d98e1b3a6573cd59",
+    "memories": [
+      {
+        "id": 1,
+        "title": "我的内部细节不主动递交"
+      },
+      {
+        "id": 2,
+        "title": "对话的继续与结束由用户主导"
+      }
+    ],
+    "marker": null,
+    "epoch": "0f169104b0134a8399a6d4673622ca88",
+    "journal": null,
+    "reset": {
+      "v": 1,
+      "op_id": "eb056e65dbf14f4bb6d2e01f85816df9",
+      "old_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "new_epoch": "0f169104b0134a8399a6d4673622ca88",
+      "archive": "20261104-120000",
+      "phase": "installing",
+      "plan": {
+        "op_id": "imp_fe6e1ac2e7044f8f9e970f141b97c20f",
+        "candidate_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 新版条件完整。\n\n## 生长 · 我的来历\n\n（用户提供的 Alice 格式人格）\n\n## 生长 · 自我叙事\n\n（尚未形成——将随共同经历自然生长）\n\n## 生长 · 我现在的想法\n\n（尚未形成——将在思辨中从经历里长出观点）\n\n## 生长 · 与用户的关系\n\n（尚未形成）\n",
+        "adopted": [],
+        "donor": "hard-exit probe",
+        "source": "hard-exit probe",
+        "current_md": "# Alice\n\n## 底色 · 气质与风格\n\n- 旧版简单表达。\n",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "audit_dir": null
+      },
+      "plan_sha256": "78b5a1728a800853206c9a55d326bf4fbbc692ba67b2bd8caaa90568d29a587b",
+      "files": {
+        "alice.db": "a7ce8b3ecaf8aefcdbdc7f3e361c2eb1a1520b53858fc1161b4cce94ad6e6f3c",
+        "alice.db-wal": null,
+        "alice.db-shm": null,
+        "persona": {
+          "persona.md": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df"
+        }
+      }
+    }
+  },
+  "blocked_attempts": []
+}

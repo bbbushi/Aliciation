@@ -1,0 +1,50 @@
+{
+  "interrupted": {
+    "file_sha256": "3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4",
+    "phase": "prepared",
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_79fcf58724044f6f8b8121335148cea7\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4\", \"after_sha256\": \"094876fe14afae2233e73c214fd397655fb039954972e95f8b33fa86655d4c9e\", \"before_exists\": true, \"before_meta\": {\"persona_version\": \"4\", \"persona_seeded_at\": \"100\", \"last_evolve_at\": \"200\"}, \"after_meta\": {\"persona_version\": 5, \"persona_seeded_at\": 1793791596.3897185, \"last_evolve_at\": 1793791596.3897185}, \"inserted\": [{\"id\": 1, \"sha256\": \"66d9ed05c3f1f42ee0e87e5bd3bbe469eb9e6b6fb067c777c611596bb9435618\"}, {\"id\": 2, \"sha256\": \"13e2f057eba837e63a65ff8356c301d132c1ef7de8636d6d75883d7441f8db36\"}]}",
+    "rows": [
+      {
+        "id": 1,
+        "title": "首个完整先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      },
+      {
+        "id": 2,
+        "title": "第二个先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      }
+    ],
+    "meta": {
+      "session_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "persona_version": "5",
+      "persona_seeded_at": "1793791596.3897185",
+      "last_evolve_at": "1793791596.3897185"
+    }
+  },
+  "edit": "epoch",
+  "error": "人格安装记录与当前会话不符；拒绝跨代际恢复",
+  "recovered": {
+    "file_sha256": "3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4",
+    "phase": "prepared",
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_79fcf58724044f6f8b8121335148cea7\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"3cc1edacbe5b3ea0a033903c004007c43c10d3bc6eed0efcb7b245e4aaceafd4\", \"after_sha256\": \"094876fe14afae2233e73c214fd397655fb039954972e95f8b33fa86655d4c9e\", \"before_exists\": true, \"before_meta\": {\"persona_version\": \"4\", \"persona_seeded_at\": \"100\", \"last_evolve_at\": \"200\"}, \"after_meta\": {\"persona_version\": 5, \"persona_seeded_at\": 1793791596.3897185, \"last_evolve_at\": 1793791596.3897185}, \"inserted\": [{\"id\": 1, \"sha256\": \"66d9ed05c3f1f42ee0e87e5bd3bbe469eb9e6b6fb067c777c611596bb9435618\"}, {\"id\": 2, \"sha256\": \"13e2f057eba837e63a65ff8356c301d132c1ef7de8636d6d75883d7441f8db36\"}]}",
+    "rows": [
+      {
+        "id": 1,
+        "title": "首个完整先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      },
+      {
+        "id": 2,
+        "title": "第二个先验",
+        "content": "主张：只在条件成立时适用。\n状态：先验"
+      }
+    ],
+    "meta": {
+      "session_epoch": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "persona_version": "5",
+      "persona_seeded_at": "1793791596.3897185",
+      "last_evolve_at": "1793791596.3897185"
+    }
+  }
+}

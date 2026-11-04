@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from collections import deque
 import re
 import sqlite3
 import time
@@ -122,6 +124,9 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
 
 class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
     def __init__(self, db_path: Path):
+        self._llm_event_lock = threading.Lock()
+        self._llm_events = deque(maxlen=2000)
+        self._llm_events_dropped = 0
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -173,6 +178,8 @@ class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceS
             self.conn.commit()
 
     def close(self) -> None:
+        from .metrics import flush_calls
+        flush_calls(self)
         self.conn.close()
 
     # ---------- meta ----------
@@ -181,12 +188,14 @@ class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceS
         return row["value"] if row else default
 
     def meta_set(self, key: str, value) -> None:
+        owned = not self.conn.in_transaction
         self.conn.execute(
             "INSERT INTO meta (key, value) VALUES (?, ?) "
             "ON CONFLICT (key) DO UPDATE SET value=excluded.value",
             (key, str(value)),
         )
-        self.conn.commit()
+        if owned:
+            self.conn.commit()
 
     def meta_get_time(self, key: str) -> float:
         v = self.meta_get(key)

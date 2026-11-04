@@ -1,0 +1,500 @@
+{
+  "suite": "permissions",
+  "cases": [
+    {
+      "name": "atomic_first_answer_16_concurrent_writers",
+      "status": "passed",
+      "detail": {
+        "os_link": "real Windows filesystem hard-link publication",
+        "writers": [
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "allow_task",
+            "result": "accepted"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          },
+          {
+            "decision": "deny",
+            "result": "conflict"
+          }
+        ],
+        "winner": "allow_task",
+        "single_immutable_answer": true
+      },
+      "seconds": 1.344
+    },
+    {
+      "name": "same_answer_replay_after_pending_consumed",
+      "status": "passed",
+      "detail": {
+        "first": {
+          "id": "pq_af4a8332967a404a968babb592aeb4e1",
+          "decision": "allow_task",
+          "delivered": true,
+          "scope": "exact_action_until_expiry"
+        },
+        "replay": {
+          "id": "pq_af4a8332967a404a968babb592aeb4e1",
+          "decision": "allow_task",
+          "delivered": true,
+          "replayed": true
+        },
+        "different_answer": "PermissionAnswerConflict",
+        "original_expiry_preserved": true
+      },
+      "seconds": 1.203
+    },
+    {
+      "name": "actual_gate_vs_200ms_cache_poll",
+      "status": "passed",
+      "detail": {
+        "gate_response": {
+          "behavior": "allow",
+          "updatedInput": {
+            "file_path": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\permissions\\fixtures_1793791600016964700\\gate_allow\\claude_task_task_300\\result.txt",
+            "content": "first"
+          }
+        },
+        "cache_poll_seconds": 0.2,
+        "cache_polls": [
+          {
+            "active_attempts": 1,
+            "scanned_entries": 2,
+            "read_bytes": 643,
+            "valid_pending": 0,
+            "answered_pending": 1,
+            "ignored_entries": 0,
+            "exhausted": false,
+            "reason": null,
+            "read_errors": 0
+          },
+          {
+            "active_attempts": 1,
+            "scanned_entries": 2,
+            "read_bytes": 643,
+            "valid_pending": 0,
+            "answered_pending": 1,
+            "ignored_entries": 0,
+            "exhausted": false,
+            "reason": null,
+            "read_errors": 0
+          }
+        ],
+        "timing_injection": "gate sleep held until two real 0.2s cache polls; production gate main executed in process",
+        "first_answer_preserved": true,
+        "revoked_after_answer_before_consume": false
+      },
+      "seconds": 1.688
+    },
+    {
+      "name": "revocation_after_answer_before_gate_consumes",
+      "status": "passed",
+      "detail": {
+        "gate_response": {
+          "behavior": "deny",
+          "message": "宿主已撤回本次执行权限"
+        },
+        "cache_poll_seconds": 0.2,
+        "cache_polls": [
+          {
+            "active_attempts": 1,
+            "scanned_entries": 2,
+            "read_bytes": 644,
+            "valid_pending": 0,
+            "answered_pending": 1,
+            "ignored_entries": 0,
+            "exhausted": false,
+            "reason": null,
+            "read_errors": 0
+          },
+          {
+            "active_attempts": 1,
+            "scanned_entries": 2,
+            "read_bytes": 644,
+            "valid_pending": 0,
+            "answered_pending": 1,
+            "ignored_entries": 0,
+            "exhausted": false,
+            "reason": null,
+            "read_errors": 0
+          }
+        ],
+        "timing_injection": "gate sleep held until two real 0.2s cache polls; production gate main executed in process",
+        "first_answer_preserved": true,
+        "revoked_after_answer_before_consume": true
+      },
+      "seconds": 1.718
+    },
+    {
+      "name": "exact_action_cache_scope",
+      "status": "passed",
+      "detail": {
+        "same_full_action": "cached allow_once",
+        "changed_body": "pending",
+        "changed_file": "pending",
+        "different_task": "pending",
+        "shell_allow_task": "once only"
+      },
+      "seconds": 1.063
+    },
+    {
+      "name": "expiry_policy_epoch_cancel_attempt_boundaries",
+      "status": "passed",
+      "detail": [
+        {
+          "condition": "expired_request",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "expired_grant",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "policy_changed",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "task_revoked",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "cancel_requested",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "epoch_changed",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "attempt_ended",
+          "new_cached_authorization": false
+        },
+        {
+          "condition": "host_stopping",
+          "new_cached_authorization": false
+        }
+      ],
+      "seconds": 7.734
+    },
+    {
+      "name": "historical_pending_cannot_hide_active_request",
+      "status": "passed",
+      "detail": {
+        "old_tasks": 900,
+        "old_same_task_attempt_pending": 160,
+        "active_scan": {
+          "active_attempts": 1,
+          "scanned_entries": 1,
+          "read_bytes": 623,
+          "valid_pending": 1,
+          "answered_pending": 0,
+          "ignored_entries": 0,
+          "exhausted": false,
+          "reason": null,
+          "read_errors": 0
+        }
+      },
+      "seconds": 8.0
+    },
+    {
+      "name": "bounded_scan_exhaustion_and_read_diagnostics",
+      "status": "passed",
+      "detail": [
+        {
+          "cause": "valid pending volume",
+          "returned": 56,
+          "scan": {
+            "active_attempts": 1,
+            "scanned_entries": 56,
+            "read_bytes": 35248,
+            "valid_pending": 56,
+            "answered_pending": 0,
+            "ignored_entries": 0,
+            "exhausted": true,
+            "reason": "scan_budget_exhausted",
+            "read_errors": 0
+          }
+        },
+        {
+          "cause": "directory entries",
+          "scan": {
+            "active_attempts": 1,
+            "scanned_entries": 512,
+            "read_bytes": 0,
+            "valid_pending": 0,
+            "answered_pending": 0,
+            "ignored_entries": 0,
+            "exhausted": true,
+            "reason": "scan_budget_exhausted",
+            "read_errors": 0
+          }
+        },
+        {
+          "cause": "active attempt count",
+          "scan": {
+            "active_attempts": 8,
+            "scanned_entries": 0,
+            "read_bytes": 0,
+            "valid_pending": 0,
+            "answered_pending": 0,
+            "ignored_entries": 0,
+            "exhausted": true,
+            "reason": "active_attempt_limit",
+            "read_errors": 0
+          }
+        },
+        {
+          "cause": "malformed request",
+          "scan": {
+            "active_attempts": 1,
+            "scanned_entries": 1,
+            "read_bytes": 1,
+            "valid_pending": 0,
+            "answered_pending": 0,
+            "ignored_entries": 0,
+            "exhausted": false,
+            "reason": null,
+            "read_errors": 1
+          }
+        }
+      ],
+      "seconds": 5.532
+    },
+    {
+      "name": "answer_fault_stays_local_to_permission",
+      "status": "passed",
+      "detail": {
+        "fault_injection": [
+          "PermissionAnswerConflict",
+          "OSError"
+        ],
+        "diagnostic": {
+          "count": 2,
+          "last_code": "answer_write_unavailable"
+        },
+        "exception_escaped_cache_poll": false
+      },
+      "seconds": 0.984
+    },
+    {
+      "name": "bad_expression_once_then_later_reports_and_usage_identity",
+      "status": "passed",
+      "detail": {
+        "style_failure": "ValueError injected at expression boundary",
+        "fallback_deliveries": 1,
+        "style_error_events": 1,
+        "later_reports": 2,
+        "synthetic_provider_calls": 2,
+        "metrics": [
+          {
+            "purpose": "worker_summary",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 17,
+              "completion": 9
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "diagnostic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "id_06ad616bd62c496699d02052f3361e22",
+            "call_id": "94ec8a2c80084ae2a5a712a6ecf957a4",
+            "attempt": 1,
+            "ts": 1793791630.2442474,
+            "stage": "transport_attempt",
+            "context": {
+              "trigger": "worker_report",
+              "task_id": "task_a53bf5f746b44f8fa5263acd55084a42",
+              "worker_attempt_id": "id_bec30f5507a5416d9ebfb3c77fb381e3",
+              "epoch": "epoch_diagnostic",
+              "worker_id": "claude-agent"
+            }
+          },
+          {
+            "purpose": "worker_summary",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 17,
+              "completion": 9
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "diagnostic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "id_cb4cffe7fe8140408573138701208cb8",
+            "call_id": "eff63fe5bd7f49968cf13c2d6a1128ca",
+            "attempt": 1,
+            "ts": 1793791630.3118596,
+            "stage": "transport_attempt",
+            "context": {
+              "trigger": "worker_report",
+              "task_id": "task_7d2611d75291463abe693baf9c3c875e",
+              "worker_attempt_id": "id_99f1a51849be431c9e5981cbf94721f8",
+              "epoch": "epoch_diagnostic",
+              "worker_id": "dsh-agent"
+            }
+          }
+        ],
+        "ordinary_memory_writes": 0,
+        "channel_slot": "stub reserve/release; six matched",
+        "real_model_calls": 0
+      },
+      "seconds": 1.047
+    },
+    {
+      "name": "worker_usage_runs_and_revocation_identity",
+      "status": "passed",
+      "detail": {
+        "runs_used": {
+          "claude": 2,
+          "dsh": 1
+        },
+        "claude_usage": {
+          "known": true,
+          "cost_known": true,
+          "source": "claude_reported",
+          "coverage": "owned_agent_only",
+          "billing": "reported_only",
+          "unknown_attempts": 0,
+          "unknown_launch_attempts": 0,
+          "reported_cost_usd": 0.0,
+          "attempts": [
+            {
+              "attempt_id": "id_0f3525d059d0413b8f236d13370ff1f8",
+              "state": "running",
+              "sent": true,
+              "launched_at": 1793791631.291788,
+              "source": "claude_reported",
+              "cost_known": true,
+              "cost_usd": 0.0
+            }
+          ],
+          "reported_input_tokens": 3,
+          "reported_output_tokens": 4
+        },
+        "dsh_usage": {
+          "known": true,
+          "cost_known": false,
+          "source": "dsh_reported",
+          "coverage": "owned_agent_only",
+          "billing": "reported_only",
+          "unknown_attempts": 1,
+          "unknown_launch_attempts": 0,
+          "reported_cost_usd": null,
+          "attempts": [
+            {
+              "attempt_id": "id_79a1281fe6b84704876611029c13f483",
+              "state": "running",
+              "sent": false,
+              "launched_at": null,
+              "source": "dsh_reported",
+              "cost_known": false,
+              "cost_usd": null
+            }
+          ],
+          "reported_input_tokens": 100,
+          "reported_output_tokens": 50
+        },
+        "unknown_usage": {
+          "known": false,
+          "cost_known": false,
+          "source": "claude_reported",
+          "coverage": "owned_agent_only",
+          "billing": "reported_only",
+          "unknown_attempts": 1,
+          "unknown_launch_attempts": 1,
+          "reported_cost_usd": null,
+          "attempts": [
+            {
+              "attempt_id": "id_0b5d4978be3d4f32aed5763cc89f86e3",
+              "state": "running",
+              "sent": true,
+              "launched_at": null,
+              "source": "claude_reported",
+              "cost_known": false,
+              "cost_usd": null
+            }
+          ]
+        },
+        "DSH_policy_revocation": "Claude remains visible; DSH hidden"
+      },
+      "seconds": 0.984
+    }
+  ],
+  "passed": 11,
+  "failed": 0,
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\permissions\\workspace_1793791599609673100",
+  "fixtures": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\permissions\\fixtures_1793791600016964700",
+  "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+  "os": "nt",
+  "guard_attempts": [],
+  "production_source_mutated": false,
+  "real_provider_calls": 0,
+  "real_subprocesses": 0,
+  "evidence": "Real Windows filesystem/os.link, threads and SQLite; synthetic records; explicit gate timing and provider/channel/style/file-error stubs.",
+  "limitations": [
+    "No real Claude/DSH/QQ/service or network",
+    "No GUI rendering",
+    "No Windows Job process-tree or POSIX verification",
+    "Gate main is in-process; JSON-RPC pipe/CLI version compatibility not covered",
+    "Synthetic SQLite data is not live user data"
+  ]
+}

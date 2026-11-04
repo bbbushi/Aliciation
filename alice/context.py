@@ -38,6 +38,7 @@ class Block:
 class ContextManifest:
     """一次请求的装配清单（只读记录，供观察与预算决策）。"""
     blocks: list[Block] = field(default_factory=list)
+    history: dict = field(default_factory=dict)
 
     def add(self, kind: str, name: str, content: str) -> None:
         self.blocks.append(Block(kind, name, estimate_tokens(content)))
@@ -50,18 +51,29 @@ class ContextManifest:
 
 
 def complete_round_suffix(rows: list[dict], max_messages: int,
-                          token_budget: int | None = None) -> list[dict]:
+                          token_budget: int | None = None, *, selection_out: dict | None = None) -> list[dict]:
     """从最近端取连续后缀，按完整往返（user 起）组织（设计 §8.1）。
 
     - 不产生"无对应问题的孤立答复"：切掉开头的 assistant 孤行；
     - token 预算耗尽时停在最后一个能完整放下的往返；
     - max_messages 仍作为条数上限（现有 recent_turns 语义保留）。
     """
-    suffix = rows[-max_messages:] if max_messages and len(rows) > max_messages else list(rows)
+    dropped = max(0, len(rows) - max_messages) if max_messages else 0
+    suffix = list(rows[dropped:])
+    excluded = [{"id": r.get("id"), "reason": "message_limit"} for r in rows[:dropped]]
     while suffix and suffix[0]["role"] != "user":
-        suffix.pop(0)  # 孤立答复/残首丢弃，保完整交流
+        row = suffix.pop(0)
+        excluded.append({"id": row.get("id"), "reason": "orphan_prefix"})
+    def finish(kept, used=0):
+        if selection_out is not None:
+            selection_out.update(exclusions=excluded,
+                minimum_retained_over_budget=token_budget is not None and used > token_budget,
+                current_user_over_budget=bool(token_budget is not None and kept and
+                    kept[-1]["role"] == "user" and messages_tokens([
+                        {"role": "user", "content": kept[-1]["content"]}]) > token_budget))
+        return kept
     if token_budget is None:
-        return suffix
+        return finish(suffix)
     kept: list[dict] = []
     used = 0
     i = len(suffix) - 1
@@ -74,10 +86,11 @@ def complete_round_suffix(rows: list[dict], max_messages: int,
         if suffix[start]["role"] != "user":
             break
         pair = suffix[start:i + 1]
-        cost = sum(estimate_tokens(r["content"]) for r in pair)
+        cost = messages_tokens([{ "role": r["role"], "content": r["content"]} for r in pair])
         if kept and used + cost > token_budget:
+            excluded.extend({"id": r.get("id"), "reason": "token_budget"} for r in suffix[:i + 1])
             break
         kept = pair + kept
         used += cost
         i = start - 1
-    return kept or suffix[-2:]  # 至少保最近一轮（预算极小也不切空）
+    return finish(kept, used)  # 最新用户原话完整保留；无法容纳时由总预算守卫明确拒绝。

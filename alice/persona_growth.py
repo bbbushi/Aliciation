@@ -25,27 +25,21 @@ def digest(text: str) -> str:
 
 
 def bodies(md: str) -> dict[str, str]:
-    headers = list(re.finditer(r"^## ([^\n]+)\n?", md, re.M))
-    result = {}
-    for i, header in enumerate(headers):
-        title = header[1].strip()
-        if title in result:
-            raise ValueError("人格含重复小节，暂不演化")
-        end = headers[i + 1].start() if i + 1 < len(headers) else len(md)
-        result[title] = md[header.end():end].strip()
-    return result
+    from .persona_context import section_spans
+    return {span["title"]: md[span["body_start"]:span["end"]].strip()
+            for span in section_spans(md)}
 
 
 def replace_bodies(md: str, changes: dict[str, str], *, allowed=EDITABLE) -> str:
-    """Replace target bodies; preserve every other byte, including user sections."""
-    known = bodies(md)
+    """Use the same section boundaries as input rendering; keep other bytes."""
+    from .persona_context import section_spans, validate_section_body
     for title, body in changes.items():
         if title not in allowed:
             raise ValueError("普通演化无权修改此小节")
-        if title in known:
-            pattern = rf"(^## {re.escape(title)}[ \t]*\n).*?(?=^## |\Z)"
-            md = re.sub(pattern, lambda m: m[1] + "\n" + body + "\n\n",
-                        md, count=1, flags=re.M | re.S)
+        validate_section_body(title, body)
+        span = next((item for item in section_spans(md) if item["title"] == title), None)
+        if span is not None:
+            md = md[:span["body_start"]] + "\n" + body + "\n\n" + md[span["end"]:]
         else:
             md = md.rstrip("\n") + f"\n\n## {title}\n\n{body}\n"
     return md
@@ -165,7 +159,7 @@ def apply_proposal(current: str, data, supplied: dict, available: dict) -> tuple
             raise ValueError("演化提案基于旧小节，暂不提交")
         text, reason, ids = patch["content"], patch["reason"], patch["evidence_ids"]
         if (not isinstance(text, str) or not text.strip() or len(text) > MAX_SECTION_CHARS
-                or re.search(r"^#{1,6}\s", text, re.M) or "<!--" in text
+                or re.search(r"^[ \t]*#{1,6}\s", text, re.M) or "<!--" in text
                 or not isinstance(reason, str) or not reason.strip() or len(reason) > 600
                 or not isinstance(ids, list) or not 1 <= len(ids) <= MAX_EVIDENCE
                 or any(type(mid) is not int for mid in ids) or len(set(ids)) != len(ids)):

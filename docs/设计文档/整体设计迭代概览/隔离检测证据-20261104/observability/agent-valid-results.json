@@ -1,0 +1,1586 @@
+{
+  "suite": "observability",
+  "cases": [
+    {
+      "name": "retry_attempts_unknown_usage",
+      "status": "passed",
+      "detail": {
+        "calls": 3,
+        "backoff_replaced_seconds": [
+          2,
+          4
+        ],
+        "events": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "retry_request",
+            "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+            "attempt": 1,
+            "ts": 1793792133.4408193,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "连接超时，请检查网络后重试",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "retry_request",
+            "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+            "attempt": 2,
+            "ts": 1793792133.4408193,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "fixture-receipt-model",
+            "model_source": "receipt",
+            "request_id": "retry_request",
+            "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+            "attempt": 3,
+            "ts": 1793792133.4408193,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ]
+      },
+      "seconds": 0.531
+    },
+    {
+      "name": "terminal_error_and_cancel",
+      "status": "passed",
+      "detail": {
+        "terminal_error": "LLM 调用失败：令牌无效或已过期",
+        "failed_attempts": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "令牌无效或已过期",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "failure_request",
+            "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+            "attempt": 1,
+            "ts": 1793792133.9728959,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "令牌无效或已过期",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "failure_request",
+            "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+            "attempt": 2,
+            "ts": 1793792133.9728959,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "令牌无效或已过期",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "failure_request",
+            "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+            "attempt": 3,
+            "ts": 1793792133.9728959,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ],
+        "cancelled": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "cancelled",
+            "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "cancel_request",
+            "call_id": "751313c4ad7443be88d573738b48a2ab",
+            "attempt": 1,
+            "ts": 1793792133.973895,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ]
+      },
+      "seconds": 0.531
+    },
+    {
+      "name": "successful_partial_stream_receipt",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 9,
+          "incomplete": true
+        },
+        "events": [
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 9
+            },
+            "usage_state": "partial_receipt",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "fixture-stream-model",
+            "model_source": "receipt",
+            "request_id": "request_fixture",
+            "call_id": "021f72a6fd4b409198d99f5a9f1ef227",
+            "attempt": 1,
+            "ts": 1793792134.4878464,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ],
+        "closed": true
+      },
+      "seconds": 0.516
+    },
+    {
+      "name": "streaming_unknown_and_failure",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "incomplete": true
+        },
+        "events": [
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "无法连接接口地址，请检查网络与地址",
+            "fallback": false,
+            "model": "fixture-stream-model",
+            "model_source": "receipt",
+            "request_id": "request_fixture",
+            "call_id": "c43804586d7645cc9840f63f37b85584",
+            "attempt": 1,
+            "ts": 1793792135.0135474,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ],
+        "closed": true
+      },
+      "seconds": 0.531
+    },
+    {
+      "name": "queue_flush_does_not_commit_business",
+      "status": "passed",
+      "detail": {
+        "outer_business_rolled_back": true,
+        "event_survived_in_queue": true,
+        "event_later_flushed": true,
+        "real_sqlite_independent_reader": true
+      },
+      "seconds": 0.641
+    },
+    {
+      "name": "observer_readonly_no_flush",
+      "status": "passed",
+      "detail": {
+        "events": {
+          "items": [
+            {
+              "purpose": "fixture",
+              "duration_ms": 0,
+              "usage": "unknown",
+              "usage_state": "unknown",
+              "status": "ok",
+              "error_type": null,
+              "fallback": false,
+              "model": "unknown",
+              "model_source": "requested",
+              "request_id": "pending",
+              "call_id": "c2",
+              "attempt": 1,
+              "ts": 1793792136.3539236,
+              "stage": "transport_attempt",
+              "context": null,
+              "storage": "pending"
+            },
+            {
+              "purpose": "fixture",
+              "duration_ms": 0,
+              "usage": {
+                "prompt": 20,
+                "completion": 8
+              },
+              "usage_state": "reported",
+              "status": "ok",
+              "error_type": null,
+              "fallback": false,
+              "model": "fixture-receipt-model",
+              "model_source": "receipt",
+              "request_id": "committed",
+              "call_id": "c1",
+              "attempt": 1,
+              "ts": 1793792136.3424096,
+              "stage": "transport_attempt",
+              "context": null,
+              "storage": "committed"
+            }
+          ],
+          "scan_limit": 2000,
+          "pending_dropped": 0,
+          "notice": "无正文调用回执；usage未知不等于零，pending未承诺跨崩溃持久。"
+        },
+        "write_authorizer_attempts": [],
+        "queue_unchanged": true,
+        "outer_transaction_still_open": true
+      },
+      "seconds": 0.703
+    },
+    {
+      "name": "observation_write_failure_no_model_repeat",
+      "status": "passed",
+      "detail": {
+        "sqlite_fault": "trigger RAISE(FAIL) on receipt INSERT",
+        "failed_flushes": 3,
+        "provider_calls": 1,
+        "pending_before_recovery": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "fixture-receipt-model",
+            "model_source": "receipt",
+            "request_id": "write_failure_request",
+            "call_id": "680b7166f72d4c869cb1cb68199e1fba",
+            "attempt": 1,
+            "ts": 1793792137.0931375,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "pending"
+          }
+        ],
+        "after_recovery": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "fixture-receipt-model",
+            "model_source": "receipt",
+            "request_id": "write_failure_request",
+            "call_id": "680b7166f72d4c869cb1cb68199e1fba",
+            "attempt": 1,
+            "ts": 1793792137.0931375,
+            "stage": "transport_attempt",
+            "context": {
+              "fixture": "synthetic"
+            },
+            "storage": "committed"
+          }
+        ]
+      },
+      "seconds": 0.766
+    },
+    {
+      "name": "main_loop_unknown_stream_fallback",
+      "status": "passed",
+      "detail": {
+        "reply": "Synthetic final reply.",
+        "aggregate": {
+          "incomplete": true,
+          "prompt": 20,
+          "completion": 8
+        },
+        "events": [
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "无法连接接口地址，请检查网络与地址",
+            "fallback": false,
+            "model": "fixture-requested-model",
+            "model_source": "requested",
+            "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+            "call_id": "5b95fa128ab647d3b912484d50ae0c7d",
+            "attempt": 1,
+            "ts": 1793792137.9492505,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main_fallback",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": true,
+            "model": "fixture-receipt-model",
+            "model_source": "receipt",
+            "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+            "call_id": "099b269288b94398aa59d21c5ec71402",
+            "attempt": 1,
+            "ts": 1793792137.9508328,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "context_basis_usage": {
+          "incomplete": true,
+          "prompt": 20,
+          "completion": 8
+        },
+        "provider_calls": 2,
+        "backoff_replaced_seconds": [],
+        "turns": [
+          {
+            "role": "user",
+            "content": "请回应这条隔离诊断消息。"
+          },
+          {
+            "role": "assistant",
+            "content": "Synthetic final reply."
+          }
+        ],
+        "streamed_deltas": [],
+        "stubs": [
+          "synthetic parsed persona snapshot loader",
+          "fake provider",
+          "backoff sleep only"
+        ],
+        "real_path": "loop.chat_turn -> steps.drive -> assembly -> provider methods -> SQLite turns/context_basis/receipts"
+      },
+      "seconds": 0.875
+    },
+    {
+      "name": "main_loop_partial_stream_aggregate",
+      "status": "failed",
+      "exception": "AssertionError",
+      "message": "Partial stream receipt must keep aggregate incomplete; observed {\"prompt\": 30, \"completion\": 12}",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\check_support.py\", line 86, in check\n    detail = callback()\n             ^^^^^^^^^^\n  File \"C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\observability\\check_observability.py\", line 238, in main_loop_partial_stream_aggregate\n    assert data['aggregate'].get('incomplete') is True, 'Partial stream receipt must keep aggregate incomplete; observed '+json.dumps(data['aggregate'])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Partial stream receipt must keep aggregate incomplete; observed {\"prompt\": 30, \"completion\": 12}\n",
+      "seconds": 0.843
+    },
+    {
+      "name": "main_loop_retry_unknown_aggregate",
+      "status": "failed",
+      "exception": "AssertionError",
+      "message": "Unknown usage on failed attempts must keep aggregate incomplete; observed {\"prompt\": 20, \"completion\": 8}",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\check_support.py\", line 86, in check\n    detail = callback()\n             ^^^^^^^^^^\n  File \"C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\observability\\check_observability.py\", line 247, in main_loop_retry_unknown_aggregate\n    assert data['aggregate'].get('incomplete') is True, 'Unknown usage on failed attempts must keep aggregate incomplete; observed '+json.dumps(data['aggregate'])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Unknown usage on failed attempts must keep aggregate incomplete; observed {\"prompt\": 20, \"completion\": 8}\n",
+      "seconds": 0.829
+    }
+  ],
+  "passed": 8,
+  "failed": 2,
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\observability\\workspace_1793792132351383800",
+  "fixtures": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\observability\\fixtures_1793792132912740400",
+  "facts": {
+    "retry_attempts_unknown_usage": {
+      "calls": 3,
+      "backoff_replaced_seconds": [
+        2,
+        4
+      ],
+      "events": [
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "retry_request",
+          "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+          "attempt": 1,
+          "ts": 1793792133.4408193,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "连接超时，请检查网络后重试",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "retry_request",
+          "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+          "attempt": 2,
+          "ts": 1793792133.4408193,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "retry_request",
+          "call_id": "9ec4fa9279f84581a9e334b90be464c5",
+          "attempt": 3,
+          "ts": 1793792133.4408193,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ]
+    },
+    "terminal_error_and_cancel": {
+      "terminal_error": "LLM 调用失败：令牌无效或已过期",
+      "failed_attempts": [
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "令牌无效或已过期",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "failure_request",
+          "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+          "attempt": 1,
+          "ts": 1793792133.9728959,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "令牌无效或已过期",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "failure_request",
+          "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+          "attempt": 2,
+          "ts": 1793792133.9728959,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "令牌无效或已过期",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "failure_request",
+          "call_id": "b1d3194f210f4dbfa7edafedb4a7f63c",
+          "attempt": 3,
+          "ts": 1793792133.9728959,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ],
+      "cancelled": [
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "cancelled",
+          "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "cancel_request",
+          "call_id": "751313c4ad7443be88d573738b48a2ab",
+          "attempt": 1,
+          "ts": 1793792133.973895,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ]
+    },
+    "successful_partial_stream_receipt": {
+      "aggregate": {
+        "prompt": 9,
+        "incomplete": true
+      },
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 9
+          },
+          "usage_state": "partial_receipt",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "fixture-stream-model",
+          "model_source": "receipt",
+          "request_id": "request_fixture",
+          "call_id": "021f72a6fd4b409198d99f5a9f1ef227",
+          "attempt": 1,
+          "ts": 1793792134.4878464,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ],
+      "closed": true
+    },
+    "streaming_unknown_and_failure": {
+      "aggregate": {
+        "incomplete": true
+      },
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "无法连接接口地址，请检查网络与地址",
+          "fallback": false,
+          "model": "fixture-stream-model",
+          "model_source": "receipt",
+          "request_id": "request_fixture",
+          "call_id": "c43804586d7645cc9840f63f37b85584",
+          "attempt": 1,
+          "ts": 1793792135.0135474,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ],
+      "closed": true
+    },
+    "queue_flush_does_not_commit_business": {
+      "outer_business_rolled_back": true,
+      "event_survived_in_queue": true,
+      "event_later_flushed": true,
+      "real_sqlite_independent_reader": true
+    },
+    "observer_readonly_no_flush": {
+      "events": {
+        "items": [
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "unknown",
+            "model_source": "requested",
+            "request_id": "pending",
+            "call_id": "c2",
+            "attempt": 1,
+            "ts": 1793792136.3539236,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "pending"
+          },
+          {
+            "purpose": "fixture",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "fixture-receipt-model",
+            "model_source": "receipt",
+            "request_id": "committed",
+            "call_id": "c1",
+            "attempt": 1,
+            "ts": 1793792136.3424096,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "committed"
+          }
+        ],
+        "scan_limit": 2000,
+        "pending_dropped": 0,
+        "notice": "无正文调用回执；usage未知不等于零，pending未承诺跨崩溃持久。"
+      },
+      "write_authorizer_attempts": [],
+      "queue_unchanged": true,
+      "outer_transaction_still_open": true
+    },
+    "observation_write_failure_no_model_repeat": {
+      "sqlite_fault": "trigger RAISE(FAIL) on receipt INSERT",
+      "failed_flushes": 3,
+      "provider_calls": 1,
+      "pending_before_recovery": [
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "write_failure_request",
+          "call_id": "680b7166f72d4c869cb1cb68199e1fba",
+          "attempt": 1,
+          "ts": 1793792137.0931375,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "pending"
+        }
+      ],
+      "after_recovery": [
+        {
+          "purpose": "fixture",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "write_failure_request",
+          "call_id": "680b7166f72d4c869cb1cb68199e1fba",
+          "attempt": 1,
+          "ts": 1793792137.0931375,
+          "stage": "transport_attempt",
+          "context": {
+            "fixture": "synthetic"
+          },
+          "storage": "committed"
+        }
+      ]
+    },
+    "main_loop_unknown_stream_fallback": {
+      "reply": "Synthetic final reply.",
+      "aggregate": {
+        "incomplete": true,
+        "prompt": 20,
+        "completion": 8
+      },
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "无法连接接口地址，请检查网络与地址",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+          "call_id": "5b95fa128ab647d3b912484d50ae0c7d",
+          "attempt": 1,
+          "ts": 1793792137.9492505,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main_fallback",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": true,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+          "call_id": "099b269288b94398aa59d21c5ec71402",
+          "attempt": 1,
+          "ts": 1793792137.9508328,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_e3fca037cad6402e8c2d798536630a48",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "context_basis_usage": {
+        "incomplete": true,
+        "prompt": 20,
+        "completion": 8
+      },
+      "provider_calls": 2,
+      "backoff_replaced_seconds": [],
+      "turns": [
+        {
+          "role": "user",
+          "content": "请回应这条隔离诊断消息。"
+        },
+        {
+          "role": "assistant",
+          "content": "Synthetic final reply."
+        }
+      ],
+      "streamed_deltas": [],
+      "stubs": [
+        "synthetic parsed persona snapshot loader",
+        "fake provider",
+        "backoff sleep only"
+      ],
+      "real_path": "loop.chat_turn -> steps.drive -> assembly -> provider methods -> SQLite turns/context_basis/receipts"
+    },
+    "main_loop_partial_stream_aggregate": {
+      "reply": "Synthetic final reply.",
+      "aggregate": {
+        "prompt": 30,
+        "completion": 12
+      },
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 10,
+            "completion": 4
+          },
+          "usage_state": "partial_receipt",
+          "status": "error",
+          "error_type": "无法连接接口地址，请检查网络与地址",
+          "fallback": false,
+          "model": "fixture-stream-model",
+          "model_source": "receipt",
+          "request_id": "request_a71fe59da1614a3fa9e66d10f6967775",
+          "call_id": "26b8f7a255a64b5496bc8902e115095b",
+          "attempt": 1,
+          "ts": 1793792138.7791662,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_a71fe59da1614a3fa9e66d10f6967775",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main_fallback",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": true,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "request_a71fe59da1614a3fa9e66d10f6967775",
+          "call_id": "3cb496fa89af403e9a3d1c76676c8e3d",
+          "attempt": 1,
+          "ts": 1793792138.7811568,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_a71fe59da1614a3fa9e66d10f6967775",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "context_basis_usage": {
+        "prompt": 30,
+        "completion": 12
+      },
+      "provider_calls": 2,
+      "backoff_replaced_seconds": [],
+      "turns": [
+        {
+          "role": "user",
+          "content": "请回应这条隔离诊断消息。"
+        },
+        {
+          "role": "assistant",
+          "content": "Synthetic final reply."
+        }
+      ],
+      "streamed_deltas": [
+        "partial text"
+      ],
+      "stubs": [
+        "synthetic parsed persona snapshot loader",
+        "fake provider",
+        "backoff sleep only"
+      ],
+      "real_path": "loop.chat_turn -> steps.drive -> assembly -> provider methods -> SQLite turns/context_basis/receipts"
+    },
+    "main_loop_retry_unknown_aggregate": {
+      "reply": "Synthetic final reply.",
+      "aggregate": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+          "call_id": "4e381ac2f8394f5290e66348f250fa09",
+          "attempt": 1,
+          "ts": 1793792139.6158004,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "连接超时，请检查网络后重试",
+          "fallback": false,
+          "model": "fixture-requested-model",
+          "model_source": "requested",
+          "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+          "call_id": "4e381ac2f8394f5290e66348f250fa09",
+          "attempt": 2,
+          "ts": 1793792139.6172915,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "fixture-receipt-model",
+          "model_source": "receipt",
+          "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+          "call_id": "4e381ac2f8394f5290e66348f250fa09",
+          "attempt": 3,
+          "ts": 1793792139.6172915,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "request_03980368629e4c3896b81ff90fd6f983",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "context_basis_usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "provider_calls": 3,
+      "backoff_replaced_seconds": [
+        2,
+        4
+      ],
+      "turns": [
+        {
+          "role": "user",
+          "content": "请回应这条隔离诊断消息。"
+        },
+        {
+          "role": "assistant",
+          "content": "Synthetic final reply."
+        }
+      ],
+      "streamed_deltas": [],
+      "stubs": [
+        "synthetic parsed persona snapshot loader",
+        "fake provider",
+        "backoff sleep only"
+      ],
+      "real_path": "loop.chat_turn -> steps.drive -> assembly -> provider methods -> SQLite turns/context_basis/receipts"
+    }
+  },
+  "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+  "guard_attempts": [],
+  "production_source_mutated": false,
+  "real_provider_calls": 0,
+  "real_subprocesses": 0,
+  "evidence": "Real copied llm/loop/metrics/observation with SQLite; provider responses/exceptions and persona loader are synthetic; retry sleep replaced.",
+  "limitations": [
+    "No real provider/network/GUI/service",
+    "No live persona/config/user data",
+    "Synthetic receipts verify accounting/control flow, not provider charging or model behavior"
+  ]
+}

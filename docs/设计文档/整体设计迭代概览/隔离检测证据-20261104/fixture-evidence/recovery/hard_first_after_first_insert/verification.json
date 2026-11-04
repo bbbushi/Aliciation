@@ -1,0 +1,61 @@
+{
+  "name": "hard_exit_after_first_insert",
+  "status": "passed",
+  "before_recovery": {
+    "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+    "memories": [],
+    "marker": null,
+    "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "journal": {
+      "kind": "persona_import_v2",
+      "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "prepared",
+      "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+      "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+      "before_exists": true,
+      "before_meta": {
+        "persona_version": null,
+        "persona_seeded_at": null,
+        "last_evolve_at": null
+      },
+      "after_meta": {
+        "persona_version": 1,
+        "persona_seeded_at": 1793791694.8557303,
+        "last_evolve_at": 1793791694.8557303
+      },
+      "inserted": []
+    },
+    "reset": null
+  },
+  "after_recovery": {
+    "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+    "memories": [],
+    "marker": null,
+    "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "journal": {
+      "kind": "persona_import_v2",
+      "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "rolled_back",
+      "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+      "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+      "before_exists": true,
+      "before_meta": {
+        "persona_version": null,
+        "persona_seeded_at": null,
+        "last_evolve_at": null
+      },
+      "after_meta": {
+        "persona_version": 1,
+        "persona_seeded_at": 1793791694.8557303,
+        "last_evolve_at": 1793791694.8557303
+      },
+      "inserted": []
+    },
+    "reset": null
+  },
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd\\recovery\\hard_first_after_first_insert",
+  "blocked_attempts": [],
+  "limitation": "os._exit crash is not power-loss proof"
+}

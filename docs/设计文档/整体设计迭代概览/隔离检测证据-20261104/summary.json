@@ -1,0 +1,70 @@
+{
+  "baseline": "b1dba3e9821dcca05eed0fc42b044bde95e9002f",
+  "snapshot_sha256": "bd5a3daf66292d3b545e6b652b3b7639ac9f7a44fa710c84aef8c15ef34cbf9b",
+  "copied_source_files": 70,
+  "rechecked_snapshot_files": 36,
+  "source_differences": [],
+  "snapshot_differences": [],
+  "passed": 93,
+  "failed": 2,
+  "suites": [
+    {
+      "suite": "permissions",
+      "passed": 11,
+      "failed": 0,
+      "results": "permissions/results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "windows",
+      "passed": 8,
+      "failed": 0,
+      "results": "windows/results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "recovery",
+      "passed": 24,
+      "failed": 0,
+      "results": "recovery/results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "recovery_hard_exit",
+      "passed": 10,
+      "failed": 0,
+      "results": "recovery/crash_results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "persona",
+      "passed": 20,
+      "failed": 0,
+      "results": "persona/results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "history",
+      "passed": 12,
+      "failed": 0,
+      "results": "history/results.json",
+      "failed_cases": []
+    },
+    {
+      "suite": "observability",
+      "passed": 8,
+      "failed": 2,
+      "results": "observability/results.json",
+      "failed_cases": [
+        "main_loop_partial_stream_aggregate",
+        "main_loop_retry_unknown_aggregate"
+      ]
+    }
+  ],
+  "distinct_product_findings": 1,
+  "real_provider_calls": 0,
+  "original_temporary_run": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-checks-20261104-pip3botd",
+  "detailed_fixture_evidence_files": 56,
+  "git_head": "b1dba3e9821dcca05eed0fc42b044bde95e9002f",
+  "git_branch": "trial/windows-v0.2-20261028"
+}

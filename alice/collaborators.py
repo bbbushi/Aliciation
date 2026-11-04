@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 
 from .channels import ChannelError
@@ -94,6 +95,7 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             self.cancel_attempted.discard(task_id)
             # Record intent only; the local execution owner reaps outside this lock.
             if task['bridge_instance'] == 'local:claude-agent':
+                self._revoke_permission_files_locked(task)
                 now = time.time()
                 owned = task_id in self.claude_threads
                 self.ledger.conn.execute(
@@ -129,6 +131,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
 
     def tasks(self, action='list', payload=None):
         payload = payload or {}
+        if action == 'recover_local':
+            return self.recover_local(payload)
         if action in {'archive', 'restore', 'delete'}:
             return self.manage_task(action, payload)
         with self.service._lock:
@@ -163,7 +167,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                         'WHERE task_id=? ORDER BY created_at DESC,message_id DESC LIMIT 50', (task['task_id'],)).fetchall()
                     messages = [dict(row) for row in reversed(rows)]
                 return {'session_epoch': epoch, 'task': self.ledger.summary(task),
-                        'messages': messages, 'artifacts': [], 'tool_details_available': bool(self.bridge),
+                        'messages': messages, 'artifacts': [],
+                        'tool_details_available': task['bridge_instance'] != 'local:claude-agent' and bool(self.bridge),
                         'usage': self.ledger.usage(task['task_id']), 'sources_verified': False}
             if action == 'events':
                 limit = bounded_int(payload.get('limit'), 60, 1, 100)
@@ -213,6 +218,67 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                 result['session_epoch'] = epoch
                 self.ledger.receipt(epoch, payload['request_id'], {'action': action, **payload}, result)
             return result
+
+    def recover_local(self, payload):
+        """Explicit human recovery, never a kill by historical PID or a quota refund."""
+        allowed = {'session_epoch', 'task_id', 'request_id', 'revision', 'confirmed_stopped', 'cost_usd', 'launched_at'}
+        if not isinstance(payload, dict) or set(payload) - allowed or payload.get('confirmed_stopped') is not True:
+            raise ChannelError(400, 'recovery_confirmation_required', '先人工核实本任务及子进程已经停止，再确认恢复')
+        cost = payload.get('cost_usd')
+        if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0):
+            raise ChannelError(400, 'invalid_cost', '核对费用须为非负数或保留未知')
+        launched_at = payload.get('launched_at')
+        if launched_at is not None and (type(launched_at) not in (int, float)
+                or not math.isfinite(launched_at) or not 0 < launched_at <= time.time()):
+            raise ChannelError(400, 'invalid_launch_time', '核对启动时间须为有效的过去时间戳')
+        with self.control_lock:
+            with self.service._lock:
+                epoch = self._epoch(payload)
+                old = self.ledger.replay(epoch, payload.get('request_id'), {'action': 'recover_local', **payload})
+                if old is not None:
+                    return old
+                task = self.ledger.task(payload.get('task_id'), epoch)
+                if (task['bridge_instance'] != 'local:claude-agent' or task['state'] not in
+                        {'unknown', 'succeeded', 'failed', 'cancelled', 'interrupted'}
+                        or task['task_id'] in self.claude_threads or task['version'] != payload.get('revision')):
+                    raise ChannelError(409, 'recovery_unavailable', '任务仍有执行线程或版本已变化，请刷新')
+                transport = self.claude_transports.get(task['task_id'])
+            # Reap only the still-owned handle. No historical PID is consulted.
+            confirmed = transport.reap() if transport else bool(task['termination_confirmed'])
+            human_recovery = transport is not None and not confirmed and transport.can_accept_human_recovery()
+            with self.service._lock, self.ledger.conn:
+                self.service._channels.check_epoch(epoch)
+                current = self.ledger.task(task['task_id'], epoch)
+                if current['version'] != task['version']:
+                    raise ChannelError(409, 'task_changed', '任务已变化，请刷新')
+                if transport is not None and not confirmed and not human_recovery:
+                    raise ChannelError(409, 'termination_unknown', '监督进程仍在运行或自有Job无法核实停止；保留未知与占槽')
+                self.ledger.conn.execute(
+                    "UPDATE worker_tasks SET agent_idle=1,termination_confirmed=?,recovery_basis=?,version=version+1 WHERE task_id=?",
+                    (int(confirmed), 'owned_tree_empty' if confirmed else 'human_attested', task['task_id']))
+                if cost is not None or launched_at is not None:
+                    attempt = self.ledger.conn.execute('SELECT attempt_id,usage_json,launched_at FROM worker_attempts WHERE task_id=? '
+                        'ORDER BY created_at DESC LIMIT 1', (task['task_id'],)).fetchone()
+                    usage = json.loads(attempt['usage_json'])
+                    if cost is not None and usage.get('cost_known') is True:
+                        raise ChannelError(409, 'cost_already_reported', '已有费用报告，不覆盖原记录')
+                    if cost is not None:
+                        usage.update(cost_usd=cost, cost_known=True, source='human_reported', billing='reported_only')
+                    if launched_at is not None:
+                        if attempt['launched_at'] is not None:
+                            raise ChannelError(409, 'launch_time_known', '已有宿主启动时间，不覆盖原记录')
+                        self.ledger.conn.execute('UPDATE worker_attempts SET launched_at=? WHERE attempt_id=?',
+                                                 (launched_at, attempt['attempt_id']))
+                    self.ledger.conn.execute('UPDATE worker_attempts SET usage_json=? WHERE attempt_id=?',
+                                             (json.dumps(usage), attempt['attempt_id']))
+                self.ledger.event(task['task_id'], 'human_recovery', payload={'text':
+                    '已核实停止并解除占槽；未重派、未退款。停止依据：' + ('宿主整树为空。' if confirmed else '人工确认，非宿主OS证据。')})
+                result = {'session_epoch': epoch, 'task_id': task['task_id'], 'agent_idle': True,
+                          'termination_confirmed': confirmed, 'recovery_basis': 'owned_tree_empty' if confirmed else 'human_attested'}
+                self.ledger.receipt(epoch, payload['request_id'], {'action': 'recover_local', **payload}, result)
+                self.claude_transports.pop(task['task_id'], None)
+                self.wake.set()
+                return result
 
     def prepare_chat_locked(self, request):
         if request.get('worker_target') is not None:
