@@ -20,7 +20,7 @@ MAX_READ_CHARS = 24000
 _IDENTITY = re.compile(r"[A-Za-z0-9_-]{16,128}\Z")
 _CODE = re.compile(r"[A-Za-z0-9_-]{1,100}\Z")
 _STATES = frozenset({
-    "queued", "starting", "preparing", "running", "working", "collecting",
+    "queued", "starting", "preparing", "running", "working", "collecting", "waiting_permission",
     "stopping", "waiting", "waiting_input", "succeeded", "completed", "failed",
     "cancelled", "stopped", "interrupted", "unknown", "revoked", "blocked",
     "accepted", "sent", "idle", "ready", "unavailable", "disabled",
@@ -295,20 +295,12 @@ class WorkerChatSession:
                 self.coordinator.validate_chat_target_locked(self.request)
             except ChannelError:
                 return False
-        policy = store.conn.execute("SELECT revision,enabled FROM worker_policy WHERE id=1").fetchone()
-        revision = self.request.get("worker_policy_revision")
-        dsh_ok = (policy is not None and bool(policy["enabled"]) and type(revision) is int
-                  and policy["revision"] == revision)
-        if dsh_ok:
-            return True
-        # claude-agent 轨（分支限定）：claude_policy 启用且请求绑定其 revision 时等效授权。
-        try:
-            cp = store.conn.execute(
-                "SELECT revision,enabled FROM claude_policy WHERE id=1").fetchone()
-        except Exception:
-            return False
-        return (cp is not None and bool(cp["enabled"]) and type(revision) is int
-                and cp["revision"] == revision)
+        revisions = self.request.get('worker_policy_revisions', {})
+        for worker, revision in revisions.items():
+            policy = self.coordinator._worker_policy_locked(worker)
+            if policy['enabled'] and type(revision) is int and revision == policy['revision']:
+                return True
+        return False
 
     def _read_locked(self, envelope, payload, context, store):
         task_id = _identity(envelope.get("task_id"))
@@ -320,7 +312,8 @@ class WorkerChatSession:
         task = store.conn.execute("SELECT * FROM worker_tasks WHERE task_id=?", (task_id,)).fetchone()
         if (task is None or task["scope"] != "gui" or task["revoked"]
                 or task["epoch"] != self.request["session_epoch"]
-                or task["policy_revision"] != self.request["worker_policy_revision"]
+                or task["policy_revision"] != self.request.get("worker_policy_revisions", {}).get(
+                    self.coordinator._task_worker(task))
                 or task["expires_at"] is None or task["expires_at"] <= time.time()):
             raise ValueError("task_unavailable")
         combined = merge_worker_refs(context.get("worker_refs", []), refs)
@@ -341,7 +334,7 @@ class WorkerChatSession:
             created = row["created_at"]
             messages.append({
                 "message_id": row["message_id"], "version": row["version"],
-                "actor": row["actor"] if row["actor"] in {"alice", "dsh", "host", "user", "assistant"} else "unknown",
+                "actor": row["actor"] if row["actor"] in {"alice", "dsh", "agent", "host", "user", "assistant"} else "unknown",
                 "state": row["state"] if row["state"] in _STATES else "unknown",
                 "body": body, "truncated": (bool(row["truncated"]) if "truncated" in row.keys() else True)
                     or len(body) != len(row["body"]),

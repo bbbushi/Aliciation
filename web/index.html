@@ -518,7 +518,8 @@
 <script src="/observer.js"></script>
 <script src="/evaluations.js"></script>
 <script src="/worker-tasks.js"></script>
-<script src="/claude-gate.js"></script>
+<p id="claude-gate-load-error" class="claude-gate-panel" role="alert" hidden>权限面板加载失败，请更新服务后重新载入页面。</p>
+<script src="/claude-gate.js" onerror="document.getElementById('claude-gate-load-error').hidden=false"></script>
 <script src="/qq.js"></script>
 <link rel="stylesheet" href="/chat-search.css">
 <script src="/chat-search.js"></script>

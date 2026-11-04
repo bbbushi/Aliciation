@@ -13,6 +13,7 @@
     <div class="discovery-scroll">
       <p id="discovery-status" class="discovery-status" role="status" aria-live="polite">打开后读取设置和资料。</p>
       <p id="discovery-sharing-warning" class="discovery-status hidden" data-kind="waiting" role="status" aria-live="polite"></p>
+      <details id="discovery-learning-preview"><summary>见闻维护预览</summary><p>高价值优先保留，低价值优先遗忘；保留仍受来源期限限制。预览随新材料与实际使用更新。</p><div id="discovery-learning-items"></div></details>
       <div class="discovery-overview"><div class="discovery-overview-copy"><p id="discovery-context">正在读取寻找范围…</p><p id="discovery-tieba-scope" class="discovery-hint hidden"></p><p id="discovery-mode" class="discovery-hint"></p><button id="discovery-toggle-enabled" class="link" type="button" data-write>开启发现</button></div><div class="discovery-actions">
         <button id="discovery-run" class="btn primary" type="button" data-write>现在找一轮</button>
         <button id="discovery-cancel" class="btn ghost hidden" type="button" data-write>停止这次寻找</button>
@@ -80,10 +81,11 @@
                 <p class="discovery-hint">请求数不是金额上限；已发出但取消的请求也可能计费。不使用后台模型时，将模型额度设为 0。</p>
               </details>
               <details class="discovery-policy-section"><summary>聊天取材与记忆</summary>
-              <label class="discovery-check"><input id="discovery-chat-interests" type="checkbox"><span>允许从聊天中明确表达的普通兴趣整理候选，供我确认</span></label>
+              <label class="discovery-check"><input id="discovery-chat-interests" type="checkbox"><span>允许 Alice 从自然聊天中察觉并整理我的兴趣</span></label>
+              <p class="discovery-hint">依据仅限你的表达；可以查看、纠正或停用，无需逐条确认。</p>
               <label class="discovery-check"><input id="discovery-share-qq" type="checkbox"><span>允许本人 QQ 私聊搜索和使用资料；搜索还需开启上方的聊天查找许可，不主动发送</span></label>
               <p class="discovery-hint">QQ 与网页共用已开放的平台和搜索额度。开关与额度仍在本机设置，QQ 消息不能自行修改。</p>
-              <label class="discovery-check"><input id="discovery-remember-observations" type="checkbox"><span>允许择要保存带出处的见闻，随普通记忆遗忘</span></label>
+              <label class="discovery-check"><input id="discovery-remember-observations" type="checkbox"><span>允许择要保存带出处的见闻，按价值与实际使用复核</span></label>
               </details>
               <details class="discovery-policy-section"><summary>活动节奏与库存目标</summary><div id="discovery-rhythm-settings" class="discovery-policy-grid"></div></details>
               <details class="discovery-policy-section"><summary>资料、兴趣与对话容量</summary>
@@ -152,6 +154,7 @@
   const taskLabels = { idle: "等待下一次合格活动", queued: "等待开始", starting: "正在准备", running: "正在寻找", plan: "正在选择角度", search: "正在寻找材料", read: "正在读取内容", interpret: "正在整理材料与看法", bili_search: "正在准备 B站搜索", bili_read: "正在准备读取视频信息", bili_http: "正在访问 B站公开接口", planning: "正在选择角度", searching: "正在寻找材料", reading: "正在读取内容", synthesizing: "正在整理材料与看法", committing: "正在保存资料", completed: "本次寻找已完成", succeeded: "本次寻找已完成", skipped: "本次未继续寻找", cancelled: "本次已停止", cancelling: "正在停止", draining: "正在收回本次任务", failed: "本次寻找未完成", unavailable: "发现服务暂不可用", interrupted: "本次寻找已中断" };
   const biliStages = { device: "匿名设备准备", wbi_keys: "搜索参数准备", search: "视频搜索", video_info: "视频信息读取" };
   taskLabels.tieba_forum_check = "正在检测吧名";
+  taskLabels.reflect = "正在消化见闻与修订看法";
   taskLabels.browser_search = "正在通过独立浏览器搜索";
   taskLabels.browser_read = "正在读取指定页面正文";
   taskLabels.browser_resource = "正在加载获准的浏览器资源";
@@ -165,7 +168,7 @@
     { key: "daily_memory_writes", label: "每日正式见闻条数", group: "daily", integer: true, nullable: true },
     { key: "chat_search_calls", label: "每轮对话搜索调用次数", group: "execution", integer: true, nullable: true, note: "相同请求复用已取得的结果，不重复访问。" },
     { key: "chat_search_results", label: "每次对话搜索返回材料", group: "execution", integer: true, nullable: true, note: "同时受本轮资料和来源依赖数量约束。" },
-    { key: "tool_round_limit", label: "每轮聊天工具交互轮数", group: "execution", integer: true, nullable: true },
+    { key: "tool_round_limit", label: "每轮聊天工具交互轮数", group: "execution", integer: true, nullable: true, note: "用完后不再执行工具，再用一次无工具答复交代实际结果。0 表示只答复、不执行工具。" },
     { key: "chat_search_timeout_seconds", label: "每次对话搜索等待期限（秒）", group: "execution", positive: true },
     { key: "activity_interval_minutes", label: "两次活动间隔（分钟）", group: "rhythm", note: "0 表示不设最小间隔。" },
     { key: "share_interval_minutes", label: "两次自动分享间隔（分钟）", group: "rhythm", note: "0 表示不设最小间隔。" },
@@ -371,6 +374,17 @@
   function renderOverview() {
     const s = snapshot?.settings;
     if (!s) return;
+    const preview = $("discovery-learning-items");
+    preview.replaceChildren();
+    for (const item of list(snapshot.learning_preview)) {
+      const action = {keep:'继续保留',warehouse:'移入仓库',promote:'保留到长期层',expire:'将遗忘',dependent:'随必要依据遗忘'}[item.retention_action] || '等待复核';
+      const row = node('p', `${item.title} · ${action} · 建议保留${item.compression}`);
+      row.append(node('span', ` · ${item.retention_reason || item.reason || '尚未记录维护理由'}`));
+      if (item.reason) row.append(node('span', ` · 价值依据：${item.reason}`));
+      row.append(button('查看依据', () => window.AliceChatSearch?.showMemory(item.memory_id, snapshot.dataset_id), 'link'));
+      preview.append(row);
+    }
+    if (!preview.children.length) preview.append(node('p','暂无已分级见闻。'));
     const platforms = list(snapshot.platforms).filter((p) => p.enabled).map((p) => p.name || p.label);
     const interests = list(snapshot.interests).filter((i) => i.enabled && i.external_allowed).map((i) => i.topic);
     const names = (rows, empty) => rows.length ? rows.slice(0, 3).join("、") + (rows.length > 3 ? ` 等 ${rows.length} 项` : "") : empty;
@@ -669,6 +683,12 @@
       card.append(head);
       if (item.summary && item.summary !== item.topic) card.append(node("p", item.summary, "discovery-hint"));
       if (list(item.preferred_forums).length) card.append(node("p", `优先吧：${words(item.preferred_forums)}；无合适内容时可找其他吧。`, "discovery-hint"));
+      if (item.origin === 'conversation_inferred') {
+        const attitude = {interested:'感兴趣',likes:'喜欢',dislikes:'不喜欢',concerned:'关注',curious:'好奇',neutral:'中立'}[item.attitude] || '待明确';
+        card.append(node('p', `从聊天察觉 · ${attitude} · 置信度 ${Math.round((item.confidence || 0)*100)}% · ${list(item.basis_user_turn_ids).length} 条用户表达依据`, 'discovery-hint'));
+        if (item.evidence_reason) card.append(node('p', item.evidence_reason, 'discovery-hint'));
+        for (const quote of list(item.evidence_quotes)) card.append(node('p', `表达依据：“${quote}”`, 'discovery-hint'));
+      }
       if (item.origin === "conversation_candidate") card.append(node("p", item.external_allowed ? "来自聊天，已允许搜索。" : "来自聊天，确认后才会用于搜索。", "discovery-hint"));
       const actions = node("div", null, "discovery-actions");
       actions.append(button("修改", () => editInterest(item)), button(item.enabled ? "停用兴趣" : "启用兴趣", () => {

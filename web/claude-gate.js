@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   var POLL_MS = 3000;
-  var box, list, note, timer;
+  var box, list, note, timer, polling = false;
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -15,20 +15,20 @@
 
   function summary(input) {
     try {
-      var keys = Object.keys(input || {});
-      return keys.map(function (k) {
-        var v = String(input[k]);
-        return k + "=" + (v.length > 60 ? v.slice(0, 60) + "…" : v);
-      }).join("，");
+      return JSON.stringify(input || {}, null, 2);
     } catch (e) { return "(无法展示)"; }
   }
 
-  function answer(id, decision, card) {
+  function answer(req, decision, card) {
     fetch("/api/worker-permissions/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Alice-Intent": "workers" },
-      body: JSON.stringify({ id: id, decision: decision })
-    }).then(function (r) { return r.json(); }).then(function (res) {
+      body: JSON.stringify({ id: req.id, decision: decision, task_id: req.task_id,
+        attempt_id: req.attempt_id, epoch: req.epoch, policy_revision: req.policy_revision })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('服务暂不可用，请同步后重试（' + r.status + '）');
+      return r.json();
+    }).then(function (res) {
       if (res && res.delivered) {
         card.remove();
         note.textContent = "已答复：" + decision;
@@ -56,7 +56,7 @@
       var actions = el("div", "claude-gate-actions");
       [["允许一次", "allow_once"], ["本任务内允许", "allow_task"], ["拒绝", "deny"]].forEach(function (pair) {
         var b = el("button", "claude-gate-btn claude-gate-" + pair[1], pair[0]);
-        b.addEventListener("click", function () { answer(req.id, pair[1], card); });
+        b.addEventListener("click", function () { answer(req, pair[1], card); });
         actions.appendChild(b);
       });
       card.appendChild(actions);
@@ -66,10 +66,23 @@
   }
 
   function poll() {
+    if (polling) return;
+    polling = true;
     fetch("/api/worker-permissions/list", { headers: { "X-Alice-Intent": "workers" } })
-      .then(function (r) { return r.json(); })
-      .then(function (res) { render(res && res.pending); })
-      .catch(function () { /* 服务不可达时静默，下轮重试 */ });
+      .then(function (r) {
+      if (!r.ok) throw new Error('服务暂不可用，请同步后重试（' + r.status + '）');
+      return r.json();
+    })
+      .then(function (res) {
+        if (!res || !Array.isArray(res.pending)) throw new Error('权限列表格式无效');
+        note.textContent = '';
+        render(res.pending);
+      })
+      .catch(function () {
+        note.textContent = '权限请求读取失败，正在重试。';
+        box.hidden = false;
+        list.querySelectorAll('button').forEach(function (button) { button.disabled = true; });
+      }).finally(function () { polling = false; });
   }
 
   function init() {

@@ -92,31 +92,24 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         task = self.ledger.task(task_id, epoch)
         if task['state'] in ACTIVE | {'unknown'}:
             self.cancel_attempted.discard(task_id)
-            # 本地轨（claude-agent）：不进 DSH 的 stopping/unknown 语义——执行线程
-            # 在本进程内，取消即收敛终态（transport 已死则直接判 failed 收尾）。
+            # Record intent only; the local execution owner reaps outside this lock.
             if task['bridge_instance'] == 'local:claude-agent':
                 now = time.time()
-                running = task['state'] in ('starting', 'running', 'collecting')
+                owned = task_id in self.claude_threads
                 self.ledger.conn.execute(
-                    'UPDATE worker_tasks SET cancel_requested=1,state=?,updated_at=?,version=version+1 '
-                    'WHERE task_id=?',
-                    ('stopping' if running else 'cancelled', now, task_id))
-                if not running:
-                    self.ledger.conn.execute(
-                        "UPDATE worker_attempts SET state='cancelled',updated_at=? WHERE task_id=? "
-                        "AND state IN ('queued','starting','running')", (now, task_id))
-                else:
-                    transport = getattr(self, 'claude_transports', {}).pop(task_id, None)
-                    if transport is not None:
-                        transport.cancel('user_cancel')  # 真回收：SIGTERM 进程组→宽限→SIGKILL
-                    # 执行循环观测到 cancel_requested 后收终态；迟到 result 由
-                    # 终态提交顺序裁决（terminal 已置则 local_failure 不覆盖）。
-                self.ledger.event(task_id, 'cancel_requested', payload={
-                    'text': ('已请求取消 claude 本地任务；正在回收进程，完成回收后确认终态。' if running
-                             else '已取消（claude 本地任务）：任务未在执行。')})
-                confirmed = not running
-                return {'task_id': task_id, 'cancel_requested': True,
-                        'termination_confirmed': confirmed}
+                    'UPDATE worker_tasks SET cancel_requested=1,state=?,updated_at=?,version=version+1 WHERE task_id=?',
+                    ('stopping' if owned else 'cancelled' if task['state'] == 'queued' else 'unknown', now, task_id))
+                queued = not owned and task['state'] == 'queued'
+                if queued:
+                    attempts = self.ledger.conn.execute("SELECT attempt_id FROM worker_attempts WHERE task_id=? AND state='queued'", (task_id,)).fetchall()
+                    for attempt in attempts:
+                        self._finish_locked(task_id, attempt['attempt_id'], 'cancelled', idle=True, text='排队任务已取消。')
+                    self.ledger.conn.execute("UPDATE worker_messages SET state='cancelled' WHERE task_id=? AND state='queued'", (task_id,))
+                    self.ledger.conn.execute('UPDATE worker_tasks SET termination_confirmed=1 WHERE task_id=?', (task_id,))
+                self.ledger.event(task_id, 'cancel_requested', payload={'text':
+                    '已请求停止；等待本地执行器确认回收。' if owned else '排队任务已取消。' if queued else '执行器句柄未知，无法确认停止。'})
+                self.wake.set()
+                return {'task_id': task_id, 'cancel_requested': True, 'termination_confirmed': queued}
             queued = task['state'] == 'queued'
             self.ledger.conn.execute('UPDATE worker_tasks SET cancel_requested=1,state=?,agent_idle=? WHERE task_id=?',
                                      ('cancelled' if queued else 'stopping' if task['state'] != 'unknown' else 'unknown',
@@ -226,31 +219,14 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             self.validate_chat_target_locked(request)
         if request.get('channel_id') != 'gui' or self.closing or self.paused:
             return None
-        # 任一工人政策启用即挂载协作工具（各工人在 runtime 分派时各自核验）。
-        dsh_enabled = bool(self.ledger.policy()['enabled'])
-        claude_enabled = False
-        try:
-            row = self.ledger.store.conn.execute(
-                'SELECT enabled FROM claude_policy WHERE id=1').fetchone()
-            claude_enabled = bool(row and row['enabled'])
-        except Exception:
-            pass  # 未迁移（无 claude_policy 表）时视为未启用
-        if not dsh_enabled and not claude_enabled:
+        policies = {name: self._worker_policy_locked(name) for name in ('dsh-agent', 'claude-agent')}
+        enabled = {name: bool(policy['enabled']) for name, policy in policies.items()}
+        if not any(enabled.values()):
             return None
         from .worker_tools import WorkerChatSession
-        session = WorkerChatSession(
-            self, {**request, 'worker_policy_revision': self.ledger.policy()['revision']},
-            available_workers={'dsh-agent': dsh_enabled, 'claude-agent': claude_enabled})
-        if claude_enabled and not dsh_enabled:
-            # 仅 claude 轨启用时，绑定的政策 revision 用 claude_policy 的（授权检查按工人对表）。
-            try:
-                cp_rev = self.ledger.store.conn.execute(
-                    'SELECT revision FROM claude_policy WHERE id=1').fetchone()
-                if cp_rev is not None:
-                    session.request['worker_policy_revision'] = cp_rev['revision']
-            except Exception:
-                pass
-        return session
+        return WorkerChatSession(self, {**request, 'worker_policy_revisions': {
+            name: policy['revision'] for name, policy in policies.items() if enabled[name]}},
+            available_workers=enabled)
 
     def begin_shutdown(self):
         self.closing = True

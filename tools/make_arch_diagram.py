@@ -1,7 +1,7 @@
 """生成 Alice harness 架构图 → docs/架构图.png（主图）+ docs/架构图/历史版本/（自动留档）
 运行：.venv/bin/python tools/make_arch_diagram.py
 每次改版：只改下面 VERSION/SUBTITLE/CHANGELOG_LINE 三行；历史版本文件重跑不覆盖。
-版本史：v0.1（2026-10-26 MVP）→ v0.2（2026-10-28 思想层/压力卫生/表达层）→ v0.3（2026-10-29 底色捐赠）。
+版本史：v0.1（2026-10-26 MVP）→ v0.2（2026-10-28 思想层/压力卫生/表达层）→ v0.3（2026-10-29 底色捐赠）→ v0.4（2026-10-31 观点生命周期）→ v0.5（2026-11-04 共同组装与协作）。
 """
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
 # ---------- 版本信息（改版只动这里） ----------
-VERSION = "v0.4"
-SUBTITLE = "观点生命周期"
-CHANGELOG_LINE = "v0.4（2026-10-31）：思想层认识论结构化——观点七字段 schema（遭遇/事实/解释四值来源/不确定/下次回应/出处/状态）与生命周期（先验→验证→修订/退役）；分寸机制（诚实≠透明契约·元先验·提取配对事件）；QQ 桥入 addons/；数据迁 user/。"
+VERSION = "v0.5"
+SUBTITLE = "共同组装与协作"
+CHANGELOG_LINE = "v0.5（2026-11-04）：上下文共同组装实装——C0 块级装配清单与总预算（100k+回复预留4k·每次调用前终检·宪法四态）、C1 记忆索引（memory_search/load·nonce 引用·六态回执）、C2 跨轮工作集（context_keep/release·TTL/容量/版本/代际裁决）、C3 旧原文只读检索与逐字引文前情（发言者标签）；Step1 模型调用观测九处（unknown 不记零）；人格 P0 导入管线（两阶段提交）·P1a/P1b 表达参考（锚默认关）；协作者双轨入图（DSH 桥正典＋claude 本地轨 ytq·MCP 闸门三层＋GUI 质询）。"
 
 
 def _setup_font() -> None:
@@ -88,7 +88,7 @@ def arrow(x1, y1, x2, y2, label="", color="#555", lw=1.6,
 ax.text(50, 94.8, "用户", ha="center", fontsize=15, fontweight="bold",
         bbox=dict(boxstyle="circle,pad=0.45", fc="#EEE", ec="#666"))
 box(16, 84.6, 68, 9.4, "渠道层 · GUI / CLI / QQ（service.ChatService 单写者锁串行）",
-    ["GUI：server.py（SSE 流式 · 观察器 · 在线改配置 · 优雅退出）+ web/ 纯文本渲染",
+    ["GUI：server.py（SSE 流式 · 观察器 · 在线改配置 · worker 权限质询卡 · 优雅退出）+ web/ 纯文本渲染",
      "CLI：python -m alice（serve / chat / deliberate / seed / memory …）｜ QQ 桥：addons/qq/（本人私聊）"],
     color=C["channel"], line_size=9.8)
 arrow(50, 94.0, 50, 94.2, color=C["channel"])
@@ -103,8 +103,8 @@ ax.text(5.0, 81.6, "运行时核心", fontsize=13, color="#888", style="italic",
 box(6, 71.2, 88, 9.2, "对话循环 loop.chat_turn —— 单一永久会话 = 每轮确定性重组上下文",
     color=C["loop"], title_size=14.5)
 steps = [
-    ("① 组装上下文\n（retrieval）", 8.5),
-    ("② 调 LLM · 含工具轮\nrecall / remember", 30.0),
+    ("① 组装上下文\n（C0~C3 · retrieval）", 8.5),
+    ("② 调 LLM · 工具轮\nmemory/history/协作", 30.0),
     ("③ 回复入库\n（store.add_turn）", 52.5),
     ("④ 触发器检查\n演化·思辨·提炼", 74.5),
 ]
@@ -115,21 +115,27 @@ for text, x in steps:
 for i in range(3):
     x = steps[i][1] + 17.0
     arrow(x, 74.5, x + 4.5, 74.5, color=C["loop"], lw=1.5)
+# ②→① 回环：工具轮读取会回到装配约束下重装下一次请求（模型参与组装的主通道）
+ax.annotate("", xy=(19, 71.7), xytext=(36, 71.7),
+            arrowprops=dict(arrowstyle="-|>", color=C["loop"], lw=1.3,
+                            linestyle="--", connectionstyle="arc3,rad=0.25"), zorder=5)
+ax.text(27.5, 69.9, "工具轮→重装下一请求", ha="center", fontsize=7.8, color=C["loop"],
+        zorder=6, bbox=dict(fc="white", ec="none", alpha=0.88, pad=1.0))
 
-# ---- 左：上下文组装 ----
-box(5, 42.5, 25, 26.5, "上下文组装（retrieval）", [
-    "┌ 稳定前缀（吃 prompt 缓存）",
-    "│ 1 宪法（契约）：三分法·四分·",
-    "│   记忆区读法·诚实≠透明（无",
-    "│   说全部的义务·被问如实）",
-    "│ 2 人格：底色 · 生长 ·「我现",
-    "│   在的想法」（思辨维护，演",
-    "│   化不覆写·代码级保护）",
-    "│ 3 记忆区：长期 top-k ·",
-    "│   仓库索引 · 近期（未列出=",
-    "│   不记得）",
-    "└ 4 近期原文 N 轮 · 注入时间",
-], color=C["loop"], line_size=8.7, line_gap=1.8)
+# ---- 左：上下文共同组装（C0~C3） ----
+box(5, 42.5, 25, 26.5, "上下文共同组装（C0~C3）", [
+    "┌ C0 块级清单：稳定前缀（宪法·",
+    "│  人格·表达参考）＋资料块去重",
+    "│  总预算 100k＋回复4k·终检明报",
+    "├ C1 memory_search/load：候选目录",
+    "│  →nonce 引用展开·六态回执",
+    "├ C2 context_keep/release 工作集",
+    "│  TTL·容量·版本·代际裁决",
+    "└ C3 history 旧原文·recap 前情",
+    "   （逐字引文＋发言者标签）",
+    "宪法四态：未载入≠遗忘·未命中",
+    "≠未发生·普通知识≠共同经历",
+], color=C["loop"], line_size=8.3, line_gap=1.86)
 arrow(17.5, 71.2, 17.5, 69.1, color=C["loop"], label="① 读", lx=20.6, ly=70.2, fs=9)
 
 # ---- 中：记忆子系统 ----
@@ -168,69 +174,85 @@ arrow(76, 71.9, 72.3, 67.6, color=C["memory"], lw=1.4, dashed=True,
 box(74, 42.5, 22, 26.5, "LLM 访问层（llm / config）", [
     "· chat_model 对话/评审",
     "· cheap_model 提取/演化/",
-    "  思辨/提炼",
+    "  思辨/提炼/前情",
     "· 流式：思考增量+usage",
-    "· 3 次重试 + 退避",
-    "· 宽松 JSON 解析",
-], color=C["llm"], line_size=9.4)
+    "· 3 次重试 + 退避·宽松 JSON",
+    "· 观测 record_llm_call→",
+    "  turn_metrics（九处接线·",
+    "  unknown 不记零·不阻塞）",
+], color=C["llm"], line_size=9.2, line_gap=2.5)
 ax.text(85, 40.2, "OpenAI 兼容 API\n（智谱 / DeepSeek / …）", ha="center", fontsize=9.6,
         color=C["llm"], zorder=4,
         bbox=dict(boxstyle="round,pad=0.45", fc="white", ec=C["llm"], lw=1.3))
 arrow(83, 71.2, 83, 69.1, color=C["llm"], label="②", lx=85.2, ly=70.2, fs=9)
 arrow(85, 41.4, 85, 42.2, color=C["llm"])
 
-# ---- 底排左：人格子系统（v0.3 底色捐赠 + 分寸元先验） ----
-box(5, 24.5, 24.5, 16.5, "人格子系统（persona · v0.3/4）", [
-    "标签种子 / 导入消化（install）",
-    "导入文档=捐赠人：风格→底色；",
-    "认知→收养审查（认可→收养＝",
-    "先验·拒绝→记「没拿走」）",
-    "元先验：内部细节不主动递交",
-    "背景事实零落库·只进来历段",
+# ---- 底排左：人格子系统（P0 导入管线 + P1 表达参考） ----
+box(5, 24.5, 22, 16.5, "人格子系统（persona）", [
+    "P0 导入管线：五路提取→样本",
+    "适配→收养审查→两阶段提交",
+    "（快照+op_id 幂等+原子替换）",
+    "P1a 表达参考：purpose 分权",
+    "（chat 全量·worker 不读样本）",
+    "P1b 近位锚（默认关·未验）",
     "演化：援引依据 · 快照回滚",
-], color=C["persona"], line_size=8.6, line_gap=1.62)
-arrow(40, 42.5, 24, 41.1, color=C["persona"], lw=1.5,
-      label="≥15 新记忆→演化", lx=34.5, ly=41.9, fs=8.6)
-arrow(17.5, 42.5, 20, 41.1, color=C["persona"], lw=1.2, dashed=True,
-      label="注入上下文", lx=14.2, ly=41.9, fs=8.6)
-arrow(29.5, 37.5, 31.5, 37.5, color=C["persona"], lw=1.5,
-      label="收养认知→stance", lx=30.5, ly=39.4, fs=8.2)
+], color=C["persona"], line_size=8.1, line_gap=1.5)
+arrow(38, 42.5, 16, 41.1, color=C["persona"], lw=1.5,
+      label="≥15 新记忆→演化", lx=29, ly=41.9, fs=8.4)
+arrow(12, 42.5, 13.5, 41.1, color=C["persona"], lw=1.2, dashed=True)
+arrow(27.2, 32.7, 29.3, 32.7, color=C["persona"], lw=1.5,
+      label="收养→stance", lx=28.2, ly=34.5, fs=7.8)
 
 # ---- 底排中：思想层（v0.4 核心） ----
-box(31.5, 24.5, 28.5, 16.5, "思想层（thought · v0.4）", [
-    "观点七字段：遭遇/事实/解释（来",
-    "源：经历·推断·用户·捐赠）/不确",
-    "定/下次回应/出处/状态",
-    "生命周期：先验→验证→修订/退役",
-    "verifications 裁决：证实→翻状态",
-    "+兑现检查；证伪→轻门控修订",
-    "门控分层：先验轻·成熟重（A01）",
-], color=C["thought"], line_size=8.6, line_gap=1.62)
-arrow(49, 42.5, 46, 41.1, color=C["thought"], lw=1.6,
-      label="≥15 新事件→思辨", lx=49.8, ly=41.9, fs=8.6)
-arrow(56.5, 41.1, 60, 42.5, color=C["thought"], lw=1.4,
-      label="stance 落库", lx=63.3, ly=41.9, fs=8.6)
-arrow(31.5, 32.7, 29.6, 32.7, color=C["thought"], lw=1.5,
-      label="写小节", lx=30.5, ly=34.6, fs=8.2)
+box(29.5, 24.5, 21, 16.5, "思想层（thought）", [
+    "观点七字段：遭遇/事实/解释",
+    "（四值来源）/不确定/下次回",
+    "应/出处/状态",
+    "生命周期：先验→验证→修订",
+    "verifications 裁决：证实→翻状",
+    "态+兑现检查；证伪→轻门控修订",
+    "门控分层：先验轻·成熟重",
+], color=C["thought"], line_size=8.1, line_gap=1.5)
+arrow(44, 42.5, 39, 41.1, color=C["thought"], lw=1.6,
+      label="≥15 新事件→思辨", lx=44.8, ly=41.9, fs=8.4)
+arrow(48.3, 41.1, 50.2, 42.5, color=C["thought"], lw=1.4,
+      label="stance 落库", lx=53.5, ly=40.6, fs=8.2)
+arrow(29.4, 32.7, 28.0, 32.7, color=C["thought"], lw=1.5,
+      label="写小节", lx=28.7, ly=34.6, fs=7.8)
 
 # ---- 底排中右：技能库 ----
-box(62.5, 24.5, 14.5, 16.5, "技能库（skills）", [
+box(52, 24.5, 10.5, 16.5, "技能库（skills）", [
     "新记忆≥30",
     "→ distill",
     "提炼「怎么做」",
     "· 可溯源",
     "· 按频次淘汰",
-], color="#8C8C00", line_size=8.8, line_gap=2.2)
-arrow(70, 42.5, 69.5, 41.1, color="#8C8C00", lw=1.5,
-      label="≥30 条", lx=73.3, ly=41.9, fs=8.6)
+], color="#8C8C00", line_size=8.2, line_gap=2.0)
+arrow(56, 42.5, 56.5, 41.1, color="#8C8C00", lw=1.5,
+      label="≥30 条", lx=59.8, ly=41.9, fs=8.4)
+
+# ---- 底排右二：协作者调度（v0.5 入图） ----
+box(64, 24.5, 17.5, 16.5, "协作者调度（collaborators）", [
+    "双轨：DSH 桥正典（18765）",
+    "＋claude 本地 CLI 轨（ytq）",
+    "claude 闸门三层：结构禁区→",
+    "任务内缓存→GUI 质询",
+    "（allow_once/allow_task/deny）",
+    "单槽串行·worker_* 双账本",
+    "计费按已报告费用·日预算帽",
+], color="#B0736C", line_size=7.9, line_gap=1.55)
+arrow(72.5, 42.5, 72.5, 41.2, color="#B0736C", lw=1.5,
+      label="dispatch_worker 派工", lx=72.5, ly=42.0, fs=8.2)
 
 # ---- 底排右：存储 ----
-box(79.5, 24.5, 17.5, 13.6, "存储（user/ · 本机 only）", [
-    "user/config.toml（配置）",
+box(83, 24.5, 14, 16.5, "存储（user/ · 本机 only）", [
+    "user/config.toml",
     "user/data/alice.db",
-    " user/data/persona/",
-    "  persona.md+history+CHANGELOG",
-], color=C["storage"], line_size=8.3, line_gap=1.95)
+    "user/data/persona/",
+    " persona.md+history",
+    " ＋CHANGELOG＋导入审计",
+    "turn_metrics 观测",
+], color=C["storage"], line_size=8.0, line_gap=1.7)
 
 # ================= 底部：横切测试 =================
 box(3, 5.2, 94, 16.8, "横切层 · 测试与验证（tests/pressure · DSH）", [

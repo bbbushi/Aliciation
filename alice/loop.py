@@ -361,6 +361,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         extra_messages.append({"role": "system", "content": worker_session.description()})
     # C0：把工具 schema 从历史预算中预留，再装配（预算守卫在每次调用前复查）
     from . import context as _ctx
+    # P1b 近位表达提醒（默认关）：锚在每次模型请求前重建替换，保持一份不堆积
+    anchor_msg = None
+    if cfg.persona.expression_anchor and persona_snapshot is not None:
+        _anchor_text = persona_context.render_anchor(persona_snapshot)
+        if _anchor_text:
+            anchor_msg = {"role": "system", "content": _anchor_text}
     reserved = _ctx.messages_tokens(extra_messages, tools)
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
@@ -379,8 +385,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 recap_raw = ''
                 try:
                     recap_calls += 1
+                    _rt0 = time.time()
                     resp = yield lambda: chat(client, cfg, recap_messages,
                                               model=cfg.llm.cheap_model, json_mode=True, retry=False)
+                    metrics.record_llm_call(store, 'recap_generate', _rt0, resp, model=cfg.llm.cheap_model)
                     _record_usage(recap_usage, resp)
                     _record_usage(usage_out, resp)
                     recap_raw = resp.choices[0].message.content or ''
@@ -393,8 +401,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             recap_session.generation = 'review_budget_exceeded'
                         else:
                             recap_calls += 1
+                            _rt0 = time.time()
                             reviewed = yield lambda: chat(client, cfg, review_messages,
                                 model=cfg.llm.cheap_model, json_mode=True, retry=False)
+                            metrics.record_llm_call(store, 'recap_review', _rt0, reviewed, model=cfg.llm.cheap_model)
                             _record_usage(recap_usage, reviewed)
                             _record_usage(usage_out, reviewed)
                             verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
@@ -447,6 +457,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 '检索回执中的existing_observations仅表示原有留存，不能当作本轮新写入。'}]
             for manifest in manifests:
                 manifest.add("stable", "closing_rule", messages[-1]["content"])
+        if anchor_msg is not None:
+            # P1b：锚每次请求前重建替换（同一份不堆积；工具回执后同样生效）
+            messages = [m for m in messages
+                        if not (m.get("role") == "system" and m.get("content") == anchor_msg["content"])]
+            messages.append(dict(anchor_msg))
         if (cfg.context.total_budget_tokens and _ctx.messages_tokens(messages, active_tools)
                 + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
             reply = "本轮材料已超出上下文预算，请缩小问题或材料范围；未读取的内容不作猜测补全。"
@@ -467,8 +482,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
         if on_delta is None:
+            _mt0 = time.time()
             resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
                                       retry=memory_session is None and not growth_refs and not recap_exposed)
+            metrics.record_llm_call(store, "main", _mt0, resp, model=cfg.llm.chat_model)
             msg = resp.choices[0].message
             _record_usage(usage_out, resp)
         else:
@@ -479,7 +496,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = None if buffered is not None else on_reasoning
             try:
-                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback, usage_out, active_tools)
+                _mt0 = time.time()
+                msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback,
+                                                  usage_out, active_tools)
+                metrics.record_llm_call(store, 'main_stream', _mt0, None, model=cfg.llm.chat_model)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
@@ -542,8 +562,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
                         raise ValueError('review_budget_exceeded')
                     review_audit['calls'] += 1
+                    _xt0 = time.time()
                     reviewed = yield lambda: chat(client, cfg, review_messages,
                         model=cfg.llm.cheap_model, json_mode=True, retry=False)
+                    metrics.record_llm_call(store, 'rewrite_review' if transform_inputs else 'recap_reply_review',
+                                            _xt0, reviewed, model=cfg.llm.cheap_model)
                     _record_usage(usage_out, reviewed)
                     _record_usage(review_audit['usage'], reviewed)
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]

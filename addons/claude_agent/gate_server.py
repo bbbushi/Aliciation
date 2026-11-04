@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 import sys
 import time
 from pathlib import Path
@@ -79,6 +80,10 @@ def main() -> int:
     ap.add_argument("--sandbox", required=True)
     ap.add_argument("--gate-dir", required=True, help="质询 pending/answers 目录（宿主与 GUI 共享）")
     ap.add_argument("--label", default="claude-agent")
+    ap.add_argument('--task-id', default='')
+    ap.add_argument('--attempt-id', default='')
+    ap.add_argument('--epoch', default='')
+    ap.add_argument('--policy-revision', type=int, default=0)
     args = ap.parse_args()
 
     audit_path, sandbox = Path(args.audit), Path(args.sandbox).resolve()
@@ -132,12 +137,16 @@ def main() -> int:
                 message = "命中本任务内允许缓存"
             # 3. 宿主质询
             elif decision == "allow":
-                req_id = f"pq_{int(time.time()*1000)}"
+                req_id = 'pq_' + uuid.uuid4().hex
                 pending = {"id": req_id, "ts": time.time(), "label": args.label,
+                           "task_id": args.task_id, "attempt_id": args.attempt_id,
+                           "epoch": args.epoch, "policy_revision": args.policy_revision,
                            "tool": tool_name, "input": tool_input,
                            "reason_hint": str(call_args.get("reason", ""))[:300]}
-                (gate_dir / f"{req_id}.pending.json").write_text(
-                    json.dumps(pending, ensure_ascii=False, indent=1), encoding="utf-8")
+                pending_file = gate_dir / f'{req_id}.pending.json'
+                temporary = gate_dir / f'{req_id}.tmp'
+                temporary.write_text(json.dumps(pending, ensure_ascii=False), encoding='utf-8')
+                temporary.replace(pending_file)
                 print(f"[闸门] 质询挂起 {req_id}：{tool_name} 等待宿主三层答案…",
                       file=sys.stderr, flush=True)
                 deadline = time.time() + PENDING_TIMEOUT

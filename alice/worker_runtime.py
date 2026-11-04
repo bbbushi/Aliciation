@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
 from pathlib import Path
 import re
 import threading
@@ -23,7 +24,8 @@ def day_start() -> float:
     return time.mktime(now.replace(hour=0, minute=0, second=0, microsecond=0).timetuple())
 
 
-def _claude_mcp_config(sandbox: Path, gate_dir: Path | None, cp: dict) -> Path:
+def _claude_mcp_config(sandbox: Path, gate_dir: Path | None, cp: dict, *,
+                       task_id: str, attempt_id: str, epoch: str) -> Path:
     """为本次任务生成闸门 MCP 配置（写在任务沙箱内，任务结束随目录留档）。"""
     import sys
     gate_dir = gate_dir or (sandbox / "gate")
@@ -34,7 +36,9 @@ def _claude_mcp_config(sandbox: Path, gate_dir: Path | None, cp: dict) -> Path:
         "args": [str(repo / "addons/claude_agent/gate_server.py"),
                  "--audit", str(sandbox / "permission_audit.jsonl"),
                  "--sandbox", str(sandbox), "--gate-dir", str(gate_dir),
-                 "--label", "claude-agent"]}}}
+                 "--label", "claude-agent", "--task-id", task_id,
+                 "--attempt-id", attempt_id, "--epoch", epoch,
+                 "--policy-revision", str(cp['revision'])]}}}
     path = gate_dir / "mcp.json"
     path.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
@@ -51,6 +55,8 @@ class WorkerRuntime(WorkerReportsMixin):
         self.stop = threading.Event()
         self.thread = None
         self.report_thread = None
+        self.claude_threads = {}
+        self.claude_transports = {}
         self.cancel_attempted = set()
         self.credentials = ManagedCredential()
         self.credential_status = self.credentials.metadata()
@@ -264,51 +270,66 @@ class WorkerRuntime(WorkerReportsMixin):
             return False
         return bool(row and row['enabled'] and row['native_sandbox_ack'] and row['workspace_root'])
 
-    def _admit_locked(self, request, *, execution=False):
+    @staticmethod
+    def _task_worker(task):
+        return 'claude-agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh-agent'
+
+    def _worker_policy_locked(self, worker):
+        if worker == 'dsh-agent':
+            return self.ledger.policy()
+        if worker != 'claude-agent':
+            raise ChannelError(400, 'unknown_worker', '未知协作者')
+        try:
+            row = self.ledger.conn.execute('SELECT * FROM claude_policy WHERE id=1').fetchone()
+        except Exception:
+            row = None
+        return dict(row) if row else {'revision': 0, 'enabled': False}
+
+    def _admit_locked(self, request, *, execution=False, worker=None):
         self.service._channels.check_epoch(request.get('session_epoch'))
-        policy = self.ledger.policy()
-        dsh_ready = (policy['enabled'] and policy['native_permissions_ack']
-                     and policy['permission_mode'] in {'read-only', 'workspace-write'}
-                     and bool(policy['workspace_root'])
-                     and request.get('worker_policy_revision') == policy['revision'])
-        if not dsh_ready:
-            # DSH 未就绪时不立即拒绝：claude-agent 政策开启且请求未点名 DSH 时按本地轨放行。
-            claude_ok = self._claude_policy_admitted()
-            requested = (request.get('worker_target') is not None
-                         or (request.get('name') == 'dsh-agent'))
-            if claude_ok and not requested:
-                return {**policy, 'claude_only': True}
+        if request.get('channel_id') != 'gui':
+            raise ChannelError(403, 'gui_only', '协作仅供本机 GUI 使用')
+        if worker is None:
+            target = normalize_worker_target(request.get('worker_target'))
+            if target:
+                worker = self._task_worker(self.ledger.task(target['task_id'], request['session_epoch']))
+            else:
+                snapshots = request.get('worker_policy_revisions', {})
+                worker = next((name for name in ('dsh-agent', 'claude-agent')
+                               if name in snapshots and self._worker_policy_locked(name)['enabled']), None)
+                if worker is None:
+                    worker = 'claude-agent' if self._claude_policy_admitted() else 'dsh-agent'
+        policy = self._worker_policy_locked(worker)
+        revisions = request.get('worker_policy_revisions')
+        revision = (revisions.get(worker) if isinstance(revisions, dict)
+                    else request.get('worker_policy_revision', policy['revision']))
+        if not policy['enabled'] or revision != policy['revision']:
             raise ChannelError(403, 'worker_not_authorized', '协作授权已失效')
-        if execution and (self.closing or self.paused or self.bridge is None or self.connection_state != 'connected'):
-            # DSH 已授权但桥未连：仅当请求可由 claude 承接（未点名 dsh）时降级放行。
-            claude_ok = self._claude_policy_admitted()
-            requested_dsh = (request.get('worker_target') is not None
-                             or request.get('name') == 'dsh-agent')
-            if execution and claude_ok and not requested_dsh:
-                return {**policy, 'claude_only': True}
+        if worker == 'claude-agent':
+            ready = policy.get('native_sandbox_ack') and policy.get('workspace_root')
+        else:
+            ready = (policy['native_permissions_ack'] and policy['workspace_root']
+                     and policy['permission_mode'] in {'read-only', 'workspace-write'})
+        if not ready:
+            raise ChannelError(403, 'worker_not_authorized', '协作授权尚未就绪')
+        if execution and (self.closing or self.paused):
+            raise ChannelError(409, 'worker_draining', '协作正在退出')
+        if execution and worker == 'dsh-agent' and (self.bridge is None or self.connection_state != 'connected'):
             raise ChannelError(409, 'not_connected', 'DSH 连接不可用，未提交任务')
-        return policy
+        return {**policy, 'worker_id': worker, 'claude_only': worker == 'claude-agent'}
 
     def validate_chat_target_locked(self, request):
-        """Validate routing metadata without importing any task/message body."""
         target = normalize_worker_target(request.get('worker_target'))
         if target is None:
             return None
-        policy = self.ledger.policy()
-        self._admit_locked({**request, 'worker_policy_revision': policy['revision']})
-        # 引用目标为 claude 本地轨任务时不要求桥（工人身份按任务账面归属）。
-        target_task = self.ledger.conn.execute(
-            'SELECT bridge_instance FROM worker_tasks WHERE task_id=?',
-            (target['task_id'],)).fetchone()
-        is_local = bool(target_task and target_task['bridge_instance'] == 'local:claude-agent')
-        if self.closing or self.paused or self.stop.is_set() or (self.bridge is None and not is_local):
-            raise ChannelError(409, 'worker_target_unavailable', '协作引用目标当前不可用，请重新选择')
         task = self.ledger.task(target['task_id'], request['session_epoch'])
-        if (not self.ledger.visible(task) or task['archived'] or task['management_pending']
-                or task['session_closed'] or task['bridge_instance'] != self.bridge.instance_id):
-            raise ChannelError(409, 'worker_target_unavailable', '协作引用已失效或会话已关闭，请重新选择')
-        # Running/unknown targets may still be inspected/stopped. Only the send
-        # branch decides whether this same task is currently resumable.
+        worker = self._task_worker(task)
+        self._admit_locked(request, worker=worker)
+        if (self.closing or self.paused or not self.ledger.visible(task) or task['archived']
+                or task['management_pending'] or task['session_closed']):
+            raise ChannelError(409, 'worker_target_unavailable', '协作引用已失效或会话已关闭')
+        if worker == 'dsh-agent' and (self.bridge is None or task['bridge_instance'] != self.bridge.instance_id):
+            raise ChannelError(409, 'worker_target_unavailable', '原 DSH 会话当前不可用')
         return target
 
     def worker_target_view_locked(self, target, epoch):
@@ -376,7 +397,10 @@ class WorkerRuntime(WorkerReportsMixin):
     def _preflight_followup(self, request, args, tool_call_id):
         """Read one existing session before charging/queuing; never resume or send."""
         with self.service._lock:
-            policy = self._admit_locked(request, execution=True)
+            target_task = self.ledger.task(args.get('task_id'), request['session_epoch'])
+            if self._task_worker(target_task) == 'claude-agent':
+                raise ChannelError(409, 'worker_resume_unavailable', 'Claude 本地任务暂不支持续聊，可读取结果或请求停止')
+            policy = self._admit_locked(request, execution=True, worker='dsh-agent')
             args = self._target_tool_args_locked(request, 'send_worker_message', args)
             self._check_forwarding_locked(request, 'send_worker_message', args)
             request_id, payload = self._tool_receipt({**request, 'tool_call_id': tool_call_id},
@@ -398,7 +422,7 @@ class WorkerRuntime(WorkerReportsMixin):
         except BridgeError as exc:
             error = exc
         with self.service._lock:
-            policy = self._admit_locked(request, execution=True)
+            policy = self._admit_locked(request, execution=True, worker='dsh-agent')
             self._validate_followup_check_locked(check, policy)
             args = self._target_tool_args_locked(request, 'send_worker_message', args)
             self._check_forwarding_locked(request, 'send_worker_message', args)
@@ -447,7 +471,10 @@ class WorkerRuntime(WorkerReportsMixin):
         if checked is not None and 'replayed' in checked:
             return {'result': checked['replayed']}
         with self.service._lock:
-            policy = self._admit_locked(request, execution=name in {'dispatch_worker', 'send_worker_message'})
+            worker = args.get('name') if name == 'dispatch_worker' else None
+            if args.get('task_id'):
+                worker = self._task_worker(self.ledger.task(args['task_id'], request['session_epoch']))
+            policy = self._admit_locked(request, execution=name in {'dispatch_worker', 'send_worker_message'}, worker=worker)
             if checked is not None:
                 self._validate_followup_check_locked(checked, policy)
             args = self._target_tool_args_locked(request, name, args)
@@ -482,7 +509,7 @@ class WorkerRuntime(WorkerReportsMixin):
                                                 (task['task_id'], rowid, limit)).fetchall()
                 return {'worker_refs': [{'task_id': task['task_id'], 'message_id': r['message_id'],
                                         'version': r['version'], 'epoch': epoch,
-                                        'policy_revision': policy['revision']} for r in rows],
+                                        'policy_revision': task['policy_revision']} for r in rows],
                         'result': {'task_id': task['task_id'], 'state': task['state']}}
             request_id, receipt_payload = self._tool_receipt({**request, 'tool_call_id': tool_call_id}, name, args, policy)
             old = self.ledger.replay(epoch, request_id, receipt_payload)
@@ -525,7 +552,7 @@ class WorkerRuntime(WorkerReportsMixin):
                                 raise ChannelError(400, 'invalid_request', '预期产物说明无效')
                             if outputs:
                                 brief += '\n用户预期产物（保存到工作目录）：\n' + '\n'.join(outputs)
-                            result = self._dispatch_claude_locked(brief, args, cp, request_id, tool_call_id)
+                            result = self._dispatch_claude_locked(brief, args, cp, request_id, tool_call_id, request['request_id'])
                             # claude 轨在此收口：登记/事件/线程已自洽，不得流入下方
                             # DSH 公共落账段（那里的路径改写与 INSERT 以 DSH 政策为准）。
                             self.ledger.receipt(epoch, request_id, receipt_payload, result)
@@ -585,12 +612,12 @@ class WorkerRuntime(WorkerReportsMixin):
             self._start_thread_locked()
             return {'result': result}
 
-    def _dispatch_claude_locked(self, brief, args, cp, request_id, tool_call_id):
+    def _dispatch_claude_locked(self, brief, args, cp, request_id, tool_call_id, originating_request_id):
         """claude-agent 本地轨登记（分支限定 ytq）：独立账本行 + 排队，由本地线程执行。
 
         与 DSH 分支共用 worker_tasks/messages/attempts/events 表与 GUI 任务卡；
         不触碰 bridge/session 语义（bridge_instance 记 'local:claude-agent'）。
-        预算帽硬断：本次派工前核验当日已花是否超 claude_policy.budget_usd_per_day。
+        按已报告费用拒绝后续超额派工；此记录不构成最终账单硬上限。
         """
         spent = 0.0
         for row in self.ledger.conn.execute(
@@ -607,117 +634,196 @@ class WorkerRuntime(WorkerReportsMixin):
         task_id, now = uuid.uuid4().hex, time.time()
         title = args.get('title') or brief.splitlines()[0][:80]
         message_id, attempt_id = uuid.uuid4().hex, uuid.uuid4().hex
-        with self.ledger.conn:  # 事务内完整登记：任务+输入消息+尝试+原请求身份（方案 §7.2）
-            self.ledger.conn.execute(
-                'INSERT INTO worker_tasks(task_id,epoch,policy_revision,state,title,created_at,updated_at,'
-                "expires_at,bridge_instance,workspace_root) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (task_id, self.service._channels.epoch, cp['revision'], 'queued', safe_text(title, 80),
-                 now, now, now + 7 * 86400, 'local:claude-agent', cp['workspace_root']))
-            self.ledger.conn.execute(
-                'INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,state,created_at) '
-                "VALUES(?,?,?,'alice',?,'queued',?)", (message_id, task_id, attempt_id, brief, now))
-            self.ledger.conn.execute(
-                'INSERT INTO worker_attempts(attempt_id,task_id,message_id,state,created_at,updated_at,'
-                'request_id,originating_request_id,tool_call_id) VALUES(?,?,?,?,?,?,?,?,?)',
-                (attempt_id, task_id, message_id, 'queued', now, now, request_id,
-                 request_id, tool_call_id))
+        self.ledger.conn.execute(
+            'INSERT INTO worker_tasks(task_id,epoch,policy_revision,state,title,created_at,updated_at,'
+            "expires_at,bridge_instance,workspace_root) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (task_id, self.service._channels.epoch, cp['revision'], 'queued', safe_text(title, 80),
+             now, now, now + 7 * 86400, 'local:claude-agent', cp['workspace_root']))
+        self.ledger.conn.execute(
+            'INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,state,created_at) '
+            "VALUES(?,?,?,'alice',?,'queued',?)", (message_id, task_id, attempt_id, brief, now))
+        self.ledger.conn.execute(
+            'INSERT INTO worker_attempts(attempt_id,task_id,message_id,state,created_at,updated_at,'
+            'request_id,originating_request_id,tool_call_id) VALUES(?,?,?,?,?,?,?,?,?)',
+            (attempt_id, task_id, message_id, 'queued', now, now, request_id,
+             originating_request_id, tool_call_id))
         self.ledger.event(task_id, 'task_accepted', attempt_id=attempt_id, message_id=message_id,
-                          payload={'text': '已登记本地任务（claude-agent）；权限质询将在执行中逐条出现。'})
-        threading.Thread(target=self._run_claude,
-                         args=(task_id, brief, cp, attempt_id, message_id, tool_call_id),
-                         daemon=True).start()
+                          payload={'text': '已登记 Claude 本地任务，等待执行。'})
+        self.ledger.event(task_id, 'alice_message_queued', actor='alice', attempt_id=attempt_id,
+                          message_id=message_id, payload={'text': brief})
         return {'task_id': task_id, 'message_id': message_id, 'attempt_id': attempt_id,
                 'state': 'queued', 'worker': 'claude-agent',
                 'message': '已排队；执行中如需权限会向 GUI 质询。'}
 
     def _run_claude(self, task_id, brief, cp, attempt_id, message_id, tool_call_id):
-        """claude 本地执行（锁外）：transport 全程，事件落 worker_events。"""
-        from addons.claude_agent.local_transport import ClaudeLocalTransport
+        from addons.claude_agent.local_transport import ClaudeLocalTransport, normalize_result
         from addons.claude_agent.permission_gate import claude_gate_dir
-        now = time.time()
-        sandbox = Path(cp['workspace_root']).resolve() / f"claude_task_{task_id[:8]}"
-        gate_dir = claude_gate_dir(cp)
-        with self.service._lock, self.ledger.conn:
-            # attempt/message 行已在 _dispatch_claude_locked 事务内登记——这里只推进状态。
-            self.ledger.conn.execute(
-                'UPDATE worker_attempts SET state=?,updated_at=? WHERE attempt_id=?',
-                ('starting', now, attempt_id))
-            self.ledger.conn.execute("UPDATE worker_tasks SET state='starting' WHERE task_id=?", (task_id,))
-            self.ledger.event(task_id, 'run_started', attempt_id=attempt_id, message_id=message_id,
-                              payload={'text': 'claude-agent 本地执行开始。'})
+        transport = None
+        events = queue.Queue(maxsize=128)
+        epoch, ledger = self.service._channels.epoch, self.ledger
 
         def on_event(kind, payload):
-            if kind == 'result':
-                return  # 终态统一在下方落账
-            text = payload.get('result') if kind == 'assistant' else None
-            self.ledger.event(task_id, f'claude_{kind}', attempt_id=attempt_id,
-                              payload={'text': safe_text(text or json.dumps(
-                                  payload, ensure_ascii=False)[:400], 2000)})
+            # Never persist private thinking, terminal objects, auth or config.
+            if kind == 'system' and payload.get('subtype') == 'init':
+                event = ('claude_ready', 'CLI 已初始化。')
+            elif kind == 'assistant':
+                message = payload.get('message')
+                content = message.get('content') if isinstance(message, dict) else None
+                text = '\n'.join(block['text'] for block in content or []
+                    if isinstance(block, dict) and block.get('type') == 'text' and isinstance(block.get('text'), str))
+                if not text:
+                    return
+                event = ('claude_progress', safe_text(text, 2000))
+            else:
+                return
+            try:
+                events.put_nowait(event)
+            except queue.Full:
+                pass  # bounded progress only; final result has a separate slot
 
-        budget = float(cp.get('budget_usd_per_task') or 0.50)
-        transport = ClaudeLocalTransport(
-            brief=brief, sandbox=sandbox, gate_mcp_config=_claude_mcp_config(sandbox, gate_dir, cp),
-            max_turns=int(cp.get('max_turns') or 12), on_event=on_event,
-            hard_deadline=min(float(cp.get('max_seconds') or 900), 1800.0))
-        if not hasattr(self, 'claude_transports'):
-            self.claude_transports = {}
-        self.claude_transports[task_id] = transport
-        transport.start()
-        while transport.terminal() is None:
-            if self.stop.is_set():
-                transport.cancel('service_shutdown')
-                break
-            # 取消标记响应：GUI/模型请求取消 → 真正回收本地进程 → stopping 由终态收敛。
-            task_row = self.ledger.conn.execute(
-                'SELECT cancel_requested FROM worker_tasks WHERE task_id=?', (task_id,)).fetchone()
-            if task_row is not None and task_row['cancel_requested']:
-                transport.cancel('user_requested')
-                break
-            time.sleep(0.4)
-        term = transport.terminal() or {}
-        if getattr(self, 'claude_transports', {}).get(task_id) is transport:
-            self.claude_transports.pop(task_id, None)
-        if term.get('frame') == 'result':
-            payload = term['payload']
-            usage = payload.get('usage', {}) or {}
-            cost = round(float(payload.get('total_cost_usd') or 0), 4)
-            with self.service._lock, self.ledger.conn:
-                # 正典 event() 的 payload 白名单只有 text/summary/tool_name——
-                # 计费字段编码进 summary（结构化 JSON 串），供日预算查询与 GUI 展示。
-                reply = safe_text(str(payload.get('result')), 4000)
-                reply_mid = uuid.uuid4().hex
-                self.ledger.conn.execute(
-                    'INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,version,state,created_at) '
-                    "VALUES(?,?,?,'agent',?,1,'completed',?)",
-                    (reply_mid, task_id, attempt_id, reply, time.time()))
-                self.ledger.event(task_id, 'claude_completed', attempt_id=attempt_id, message_id=reply_mid,
-                                  payload={'text': reply,
-                                           'summary': json.dumps(
-                                               {'cost_usd': cost,
-                                                'output_tokens': usage.get('output_tokens'),
-                                                'num_turns': payload.get('num_turns')},
-                                               ensure_ascii=False)})
-                state = 'succeeded' if payload.get('status') == 'succeeded' else 'failed'
-                self._finish_locked(task_id, attempt_id, state, idle=True,
-                                    text=f'claude-agent 完成（${cost}）。' if state == 'succeeded'
-                                    else 'claude-agent 报告失败。')
-            # 预算帽硬断：单任务超帽即记超额事件（下次派工被当日帽拦）
-            if cost > budget:
-                self.ledger.event(task_id, 'claude_budget_overrun', attempt_id=attempt_id,
-                                  payload={'text': f'单任务费用 ${cost} 超过单任务帽 ${budget}。'})
-        else:
-            state = term.get('state', 'unknown') if term.get('frame') == 'local' else 'unknown'
-            with self.service._lock, self.ledger.conn:
-                self.ledger.event(task_id, 'claude_failed', attempt_id=attempt_id,
-                                  payload={'text': f"本地执行终止：{term.get('code')} {term.get('message', '')}"})
-                self._finish_locked(task_id, attempt_id,
-                                    'failed' if state == 'failed' else 'unknown',
-                                    idle=True, text='claude-agent 执行终止（原因见事件）。')
+        term, confirmed = {}, False
+        try:
+            sandbox = Path(cp['workspace_root']).resolve() / f'claude_task_{task_id[:8]}'
+            gate_dir = claude_gate_dir(cp) / task_id / attempt_id
+            with self.service._lock, ledger.conn:
+                task = ledger.task(task_id, epoch)
+                if task['cancel_requested'] or self.stop.is_set():
+                    self._finish_locked(task_id, attempt_id, 'cancelled', idle=True, text='本地任务在启动前已取消。')
+                    ledger.conn.execute('UPDATE worker_tasks SET termination_confirmed=1 WHERE task_id=?', (task_id,))
+                    return
+                ledger.conn.execute("UPDATE worker_attempts SET state='starting',updated_at=? WHERE attempt_id=?", (time.time(), attempt_id))
+                ledger.conn.execute("UPDATE worker_tasks SET state='starting' WHERE task_id=?", (task_id,))
+                ledger.event(task_id, 'run_started', attempt_id=attempt_id, message_id=message_id,
+                             payload={'text': '正在启动 Claude 本地任务。'})
+            config = _claude_mcp_config(sandbox, gate_dir, cp,
+                task_id=task_id, attempt_id=attempt_id, epoch=epoch)
+            transport = ClaudeLocalTransport(brief=brief, sandbox=sandbox, gate_mcp_config=config,
+                max_turns=int(cp['max_turns']), on_event=on_event, hard_deadline=900)
+            with self.service._lock:
+                self.claude_transports[task_id] = transport
+            transport.start()
+            with self.service._lock, ledger.conn:
+                ledger.conn.execute("UPDATE worker_messages SET state='completed' WHERE message_id=?", (message_id,))
+                ledger.conn.execute('UPDATE worker_attempts SET sent=1 WHERE attempt_id=?', (attempt_id,))
+                ledger.event(task_id, 'alice_message_sent', attempt_id=attempt_id, message_id=message_id,
+                             payload={'text': '任务书已发送至本地 CLI。'})
+            while transport.terminal() is None:
+                pending = any(gate_dir.glob('*.pending.json'))
+                with self.service._lock, ledger.conn:
+                    task = ledger.task(task_id, epoch)
+                    cancel = (self.stop.is_set() or self.closing or self.paused or task['cancel_requested']
+                              or not ledger.visible(task) or not self._claude_policy_admitted())
+                    while not events.empty():
+                        kind, text = events.get_nowait()
+                        ledger.event(task_id, kind, attempt_id=attempt_id, payload={'text': text})
+                    state = 'waiting_permission' if pending else 'running'
+                    if not cancel and task['state'] != state:
+                        ledger.conn.execute('UPDATE worker_tasks SET state=?,updated_at=? WHERE task_id=?', (state, time.time(), task_id))
+                        ledger.conn.execute('UPDATE worker_attempts SET state=?,updated_at=? WHERE attempt_id=?', (state, time.time(), attempt_id))
+                        ledger.event(task_id, 'permission_waiting' if pending else 'run_active', attempt_id=attempt_id,
+                                     payload={'text': '等待用户答复权限质询。' if pending else 'CLI 正在执行。'})
+                if cancel:
+                    transport.cancel('host_cancel')  # all process waits outside Store lock
+                    break
+                time.sleep(0.2)
+            term = transport.terminal() or {}
+        except Exception as exc:
+            term = {'frame': 'local', 'state': 'unknown' if transport else 'failed',
+                    'code': 'local_execution_error', 'message': type(exc).__name__}
+        finally:
+            if transport is not None:
+                try:
+                    confirmed = transport.reap()
+                except Exception:
+                    confirmed = False
+            else:
+                confirmed = True
+            try:
+                def persist_terminal():
+                    with self.service._lock, ledger.conn:
+                        if self.ledger is not ledger or self.service._channels.epoch != epoch:
+                            return
+                        task = ledger.task(task_id, epoch)
+                        if task['state'] == 'cancelled':
+                            return
+                        result = normalize_result(term.get('payload', {})) if term.get('frame') == 'result' else None
+                        state = result['state'] if result else term.get('state', 'unknown')
+                        if state not in {'succeeded', 'failed', 'cancelled', 'interrupted', 'unknown'}:
+                            state = 'unknown'
+                        if task['cancel_requested']:
+                            state = 'cancelled' if confirmed else 'unknown'
+                        if not confirmed:
+                            state = 'unknown'
+                        if result:
+                            cost = result['cost_usd']
+                            ledger.conn.execute('UPDATE worker_attempts SET usage_json=? WHERE attempt_id=?',
+                                (json.dumps({'known': bool(result['usage']), **result['usage']}), attempt_id))
+                            if result['text'] and not task['cancel_requested'] and ledger.visible(task):
+                                reply_mid = uuid.uuid4().hex
+                                reply = safe_text(result['text'], 24000)
+                                ledger.conn.execute("INSERT INTO worker_messages(message_id,task_id,attempt_id,actor,body,version,state,created_at,truncated) VALUES(?,?,?,'agent',?,1,'completed',?,?)",
+                                    (reply_mid, task_id, attempt_id, reply, time.time(), int(len(result['text']) > len(reply))))
+                                ledger.event(task_id, 'agent_message_completed', actor='agent', attempt_id=attempt_id,
+                                             message_id=reply_mid, payload={'text': reply})
+                            ledger.event(task_id, 'claude_completed', attempt_id=attempt_id,
+                                payload={'summary': json.dumps({'cost_usd': cost, 'subtype': result['subtype'],
+                                    'output_tokens': result['usage'].get('output_tokens')})})
+                            if cost is not None and cost > cp['budget_usd_per_task']:
+                                ledger.event(task_id, 'claude_budget_overrun', attempt_id=attempt_id,
+                                             payload={'text': '报告费用超过单任务估算额度；消费不构成账单硬上限。'})
+                        else:
+                            ledger.event(task_id, 'claude_failed', attempt_id=attempt_id,
+                                         payload={'text': safe_text(str(term.get('code', 'unknown')), 100)})
+                        self._finish_locked(task_id, attempt_id, state, idle=confirmed,
+                                            text='本地执行已结束，结果待复核。' if confirmed else '无法确认本地执行已停止；执行与费用可能未知。')
+                        ledger.conn.execute('UPDATE worker_tasks SET termination_confirmed=? WHERE task_id=?', (int(confirmed), task_id))
+                        ledger.conn.execute("UPDATE worker_messages SET state=? WHERE message_id=? AND state='queued'", (state, message_id))
+                persist_terminal()
+            finally:
+                with self.service._lock:
+                    self.claude_transports.pop(task_id, None)
+                    self.claude_threads.pop(task_id, None)
+                    self.wake.set()
+
+    def _start_local_job_locked(self):
+        if self.closing or self.paused or self.stop.is_set() or self.claude_threads:
+            return
+        busy = self.ledger.conn.execute("SELECT 1 FROM worker_tasks WHERE epoch=? AND agent_idle=0 "
+            "AND state IN ('starting','running','waiting_permission','collecting','stopping','unknown') LIMIT 1",
+            (self.service._channels.epoch,)).fetchone()
+        if busy:
+            return
+        row = self.ledger.conn.execute("SELECT a.* FROM worker_attempts a JOIN worker_tasks t USING(task_id) "
+            "WHERE a.state='queued' AND t.state='queued' AND t.bridge_instance='local:claude-agent' "
+            "AND t.epoch=? ORDER BY a.created_at LIMIT 1", (self.service._channels.epoch,)).fetchone()
+        if row is None:
+            return
+        cp = self._worker_policy_locked('claude-agent')
+        task = self.ledger.task(row['task_id'], self.service._channels.epoch)
+        if not self.ledger.visible(task) or not self._claude_policy_admitted() or task['cancel_requested']:
+            with self.ledger.conn:
+                self._finish_locked(task['task_id'], row['attempt_id'], 'cancelled', idle=True, text='排队任务在启动前已取消。')
+                self.ledger.conn.execute('UPDATE worker_tasks SET termination_confirmed=1 WHERE task_id=?', (task['task_id'],))
+            return
+        brief = self.ledger.conn.execute('SELECT body FROM worker_messages WHERE message_id=?', (row['message_id'],)).fetchone()[0]
+        thread = threading.Thread(target=self._run_claude,
+            args=(row['task_id'], brief, cp, row['attempt_id'], row['message_id'], row['tool_call_id']),
+            name='alice-claude', daemon=True)
+        self.claude_threads[row['task_id']] = thread
+        try:
+            thread.start()
+        except RuntimeError:
+            self.claude_threads.pop(row['task_id'], None)
+            with self.ledger.conn:
+                self._finish_locked(row['task_id'], row['attempt_id'], 'failed', idle=True,
+                                    text='本地执行线程无法启动，未发送任务。')
 
     def _next_job_locked(self):
-        if self.closing or self.paused or self.bridge is None:
+        if self.closing or self.paused or self.bridge is None or self.claude_threads:
             return None
         epoch = self.service._channels.epoch
+        if self.ledger.conn.execute("SELECT 1 FROM worker_tasks WHERE epoch=? AND bridge_instance='local:claude-agent' AND state='unknown' AND agent_idle=0 LIMIT 1", (epoch,)).fetchone():
+            return None
         # An uncertain run keeps the slot occupied until remote idle is observed.
         uncertain = self.ledger.conn.execute("SELECT task_id FROM worker_tasks WHERE epoch=? AND state='unknown' "
                                              'AND agent_idle=0 AND bridge_instance=? LIMIT 1',
@@ -730,13 +836,14 @@ class WorkerRuntime(WorkerReportsMixin):
             return None
         row = self.ledger.conn.execute("SELECT a.* FROM worker_attempts a JOIN worker_tasks t USING(task_id) "
                                         "WHERE a.state='queued' AND t.epoch=? AND t.deleted=0 AND t.archived=0 "
-                                        "AND t.management_pending IS NULL ORDER BY a.created_at,a.rowid LIMIT 1", (epoch,)).fetchone()
+                                        "AND t.management_pending IS NULL AND t.bridge_instance=? ORDER BY a.created_at,a.rowid LIMIT 1", (epoch, self.bridge.instance_id)).fetchone()
         return ('run', dict(row)) if row else None
 
     def _supervise(self):
         while not self.stop.is_set():
             self.publish_worker_report()
             with self.service._lock:
+                self._start_local_job_locked()
                 job = self._next_job_locked()
             if job:
                 try:
@@ -932,6 +1039,7 @@ class WorkerRuntime(WorkerReportsMixin):
             self.stop.set()
             self.wake.set()
             thread, bridge, epoch = self.thread, self.bridge, self.service._channels.epoch
+            local_threads = list(self.claude_threads.values())
         # The report owns the GUI slot, not DSH execution. Marking stop discards
         # its eventual result; never delay DSH cancellation by joining model I/O.
         # Service close/reset drain the GUI slot before closing Store/client.
@@ -939,6 +1047,10 @@ class WorkerRuntime(WorkerReportsMixin):
             thread.join(timeout=25)
             if thread.is_alive():
                 raise ChannelError(409, 'worker_draining', '协作请求仍在退出，请稍后重试')
+        for local in local_threads:
+            local.join(timeout=25)
+            if local.is_alive():
+                raise ChannelError(409, 'worker_draining', '本地协作仍在回收，请稍后重试')
         with self.service._lock:
             with self.ledger.conn:
                 # The execution thread can enqueue its final report while it

@@ -454,6 +454,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("chat-search.css", "text/css; charset=utf-8")
             elif path == "/worker-tasks.js":
                 self._file("worker-tasks.js", "application/javascript; charset=utf-8")
+            elif path == "/claude-gate.js":
+                self._file("claude-gate.js", "application/javascript; charset=utf-8")
             elif path == "/worker-tasks.css":
                 self._file("worker-tasks.css", "text/css; charset=utf-8")
             elif path == "/assets/dsh-avatar-a-v1.png":

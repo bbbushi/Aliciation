@@ -116,6 +116,12 @@
       const d = await post("/api/discovery/memory", { memory_id: memoryId, dataset_id: epoch }, "discovery");
       if (generation !== detailVersion || !modal.open) return;
       body.replaceChildren(node("h3", d.memory.title), node("p", d.memory.content, "source-memory-content"));
+      if (d.memory.value_tier && d.memory.value_tier !== 'unknown') {
+        const tier = {high:'高',normal:'中',low:'低'}[d.memory.value_tier] || '未分级';
+        body.append(node('p', `保留优先级：${tier} · ${d.memory.value_note || '暂无价值理由'}`));
+      }
+      for (const change of d.revisions || []) body.append(node('p', `观点修订：${change.old_id} → ${change.new_id} · ${change.reason}`));
+      for (const change of d.condensations || []) body.append(node('p', `已浓缩：${change.reason}`));
       body.append(node("p", d.sources.length ? "带来源见闻 · 普通遗忘规则 · 不等于事实已核实" : "用户表达或对话记忆"));
       for (const source of d.sources) {
         const section = document.createElement("section");

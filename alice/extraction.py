@@ -10,7 +10,7 @@ from .config import Config
 from .llm import chat, parse_json
 from .store import Store
 from .steps import drive
-from . import grounding
+from . import grounding, metrics
 from .context import messages_tokens
 
 EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型AI）与用户的对话，以及当前已有的近期记忆标题列表。
@@ -81,12 +81,14 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
     request = [{"role": "user", "content": prompt}]
     if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
         return 0
+    _et0 = time.time()
     resp = yield lambda: chat(
         client, cfg,
         request,
         model=cfg.llm.cheap_model,
         json_mode=True, retry=False,
     )
+    metrics.record_llm_call(store, 'extraction', _et0, resp, model=cfg.llm.cheap_model)
     raw = resp.choices[0].message.content or ''
     def invalid_output(reason):
         current = store.ordinary_turns([r for r in store.turns_since(cursor) if r['id'] <= pending[-1]['id']])
@@ -144,8 +146,10 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
                     + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
                 raise ValueError('review_budget_exceeded')
             audit['calls'] += 1
+            _et0 = time.time()
             response = yield lambda: chat(client, cfg, review_messages,
                                   model=cfg.llm.cheap_model, json_mode=True, retry=False)
+            metrics.record_llm_call(store, 'memory_review', _et0, response, model=cfg.llm.cheap_model)
             account(response)
             audit['decisions'] = grounding.decisions(response.choices[0].message.content or '', len(candidates))
         except Exception as exc:

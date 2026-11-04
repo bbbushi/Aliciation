@@ -3,11 +3,11 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const panel = $("worker-tasks"), app = $("app");
-  const activeStates = new Set(["queued", "starting", "preparing", "running", "working", "collecting", "stopping"]);
+  const activeStates = new Set(["queued", "starting", "preparing", "running", "working", "waiting_permission", "collecting", "stopping"]);
   const endedStates = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
   const managementNames = { archive: "归档", restore: "恢复", delete: "删除" };
   const states = { unverified: "接口未核实", unavailable: "未接入", unauthorized: "未授权", disabled: "未授权",
-    ready: "可用", connected: "已连接", disconnected: "未连接", connecting: "正在连接", paused: "已暂停", draining: "正在断开", uncertain: "连接待确认", enabled: "已授权", blocked_permission_profile: "连接与权限待核实", queued: "排队", starting: "准备", preparing: "准备", running: "工作中", working: "工作中", collecting: "收取产物", waiting: "等待补充", waiting_input: "等待补充",
+    ready: "可用", connected: "已连接", disconnected: "未连接", connecting: "正在连接", paused: "已暂停", draining: "正在断开", uncertain: "连接待确认", enabled: "已授权", blocked_permission_profile: "连接与权限待核实", queued: "排队", starting: "准备", preparing: "准备", running: "工作中", working: "工作中", collecting: "收取产物", waiting: "等待补充", waiting_input: "等待补充", waiting_permission: "等待权限答复",
     stopping: "正在停止", completed: "已结束", succeeded: "已结束", failed: "失败", interrupted: "中断", unknown: "状态未知", cancelled: "已停止", stopped: "已停止", revoked: "正文已撤销" };
   const eventNames = { task_accepted: "宿主已接收任务", run_started: "开始执行", alice_message_queued: "任务消息已登记，等待发送",
     alice_message_sent: "Alice → DSH", agent_message_delta: "DSH → Alice · 公开回复", agent_message_completed: "DSH → Alice · 公开回复",
@@ -817,7 +817,8 @@
     const content = taskContentState(task), pending = !!task.management_pending;
     $("workers-cancel").disabled = actionBusy || pending || !(activeStates.has(task.state) || ["unknown", "waiting"].includes(task.state)) || task.state === "stopping" || !!task.cancel_requested && task.state !== "unknown";
     $("workers-cancel").textContent = task.state === "unknown" && task.cancel_requested ? "重试停止" : "请求停止";
-    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || !content.available || registry?.policy?.enabled !== true || registry?.connection?.connected !== true;
+    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || !content.available || (task.name !== "claude-agent" && (registry?.policy?.enabled !== true || registry?.connection?.connected !== true));
+    $("workers-supplement").textContent = task.name === 'claude-agent' ? '让 Alice 查看' : '让 Alice 补充';
     $("workers-review").disabled = actionBusy || pending || !content.available || !["completed", "succeeded"].includes(task.state);
     $("workers-revoke").disabled = actionBusy || pending || !content.available;
   }
@@ -1220,13 +1221,14 @@
       } else entry.content += content;
     } else entry.content = content;
     entry.truncated = event.truncated === true;
+    const workerLabel = selectedTask?.name === 'claude-agent' ? 'Claude' : 'DSH';
     entry.head.textContent = isConversation
-      ? event.type === "alice_message_queued" ? "Alice → DSH" : event.type === "agent_question" ? "DSH → Alice · 等待补充" : "DSH → Alice"
+      ? event.type === "alice_message_queued" ? `Alice → ${workerLabel}` : event.type === "agent_question" ? `${workerLabel} → Alice · 等待补充` : `${workerLabel} → Alice`
       : eventNames[event.type] || "公开工作事件";
     const truncation = entry.truncated ? " · 片段已截断" : "";
     entry.meta.textContent = isConversation
       ? `${time(event.observed_at)}${event.type === "alice_message_queued" ? " · 已登记" : ""}${truncation}`
-      : `#${event.sequence} · ${time(event.observed_at)} · ${actor === "dsh" ? "DSH 报告，未经宿主事实复核" : "宿主记录"}${truncation}`;
+      : `#${event.sequence} · ${time(event.observed_at)} · ${actor === "dsh" ? workerLabel + " 报告，未经宿主事实复核" : "宿主记录"}${truncation}`;
     entry.root.dataset.attention = String(["tool_failed", "run_failed", "connection_lost"].includes(event.type));
     if (event.type === "alice_message_sent") {
       // This is a host receipt, not a second message or a replacement for the brief.

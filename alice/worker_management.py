@@ -62,7 +62,7 @@ class WorkerManagementMixin:
         if task['state'] not in MANAGEABLE or not task['agent_idle']:
             raise ChannelError(409, 'task_busy', '请先停止任务并确认 DSH 会话已空闲；未知状态不能归档或删除')
         if self.ledger.conn.execute("SELECT 1 FROM worker_attempts WHERE task_id=? AND state IN "
-                "('queued','starting','running','collecting','stopping') LIMIT 1", (task['task_id'],)).fetchone():
+                "('queued','starting','running','waiting_permission','collecting','stopping') LIMIT 1", (task['task_id'],)).fetchone():
             raise ChannelError(409, 'task_busy', '此任务仍有未结束的执行记录')
 
     def _management_result_locked(self, task_id, epoch, *, completed, synced=False, error=None):

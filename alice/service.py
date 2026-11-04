@@ -511,7 +511,7 @@ class ChatService:
                 # 旧会话——准备失败不清空旧数据。Alice 格式直接安装无需准备段。
                 plan = None
                 if reset and "## 底色" not in md_text:
-                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False)
+                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False, store=self.store)
                 if reset:
                     archived = self._archive_locked()
                 if plan is not None:

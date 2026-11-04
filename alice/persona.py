@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from . import config as paths
+from . import config as paths, metrics
 from .config import Config
 from .llm import chat, parse_json
 from .store import Store
@@ -244,7 +244,7 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
         raise ValueError("外部角色卡导入需要模型服务（离线安装仅支持 Alice 格式文档）")
     if not is_alice_format:
         # 捐赠管线：完整准备成功前不写任何活跃状态；失败抛错保留旧人格。
-        plan = prepare_import(client, cfg, md_text, source, is_alice_format=False)
+        plan = prepare_import(client, cfg, md_text, source, is_alice_format=False, store=store)
         commit_import_plan(store, cfg, plan)
         _ensure_meta_prior(store)
         _append_changelog(f"外部角色卡由{source}经导入管线安装")
@@ -340,11 +340,13 @@ def _import_text(value, maximum):
     return value.strip()
 
 
-def _extract_import(client, cfg: Config, doc: str) -> dict:
+def _extract_import(client, cfg: Config, doc: str, store: Store) -> dict:
     """五路提取 + 结构校验（P0 §5：提取阶段不写任何状态）。"""
     from .llm import chat_text  # noqa: F401  （保持与旧实现同款惰性导入面）
+    _pt0 = time.time()
     resp = chat(client, cfg, [{"role": "user", "content": EXTRACT_PROMPT.format(doc=doc)}],
                 model=cfg.llm.cheap_model, json_mode=True)
+    metrics.record_llm_call(store, 'import_extract', _pt0, resp, model=cfg.llm.cheap_model)
     data = parse_json(resp.choices[0].message.content or "")
     out = {
         "style_traits": _import_lines(data.get("style_traits") or [])[:10],
@@ -431,7 +433,7 @@ def _verify_expression(client, cfg: Config, entries: list[dict], audit_dir: Path
     return rejected
 
 
-def _adapt_expression(client, cfg: Config, extraction: dict, audit_dir: Path) -> list[dict]:
+def _adapt_expression(client, cfg: Config, extraction: dict, audit_dir: Path, store: Store) -> list[dict]:
     """Review ALL expression material, not just keyword-matched samples.
 
     Only the preparation object/audit change here. Semantic judgments still need
@@ -465,8 +467,10 @@ def _adapt_expression(client, cfg: Config, extraction: dict, audit_dir: Path) ->
         "输出JSON：{\"items\":[{\"id\":\"\",\"decision\":\"adapt\","
         "\"text\":\"完整的新条目或样本回应\",\"reason\":\"适配或丢弃理由\"}]}\n"
         + json.dumps(entries, ensure_ascii=False))
+    _pt0 = time.time()
     resp = chat(client, cfg, [{"role": "user", "content": prompt}],
                 model=cfg.llm.cheap_model, json_mode=True)
+    metrics.record_llm_call(store, "expression_adapt", _pt0, resp, model=cfg.llm.cheap_model)
     data = parse_json(resp.choices[0].message.content or "")
     (audit_dir / "expression_review.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -526,7 +530,7 @@ def _adapt_expression(client, cfg: Config, extraction: dict, audit_dir: Path) ->
     return kept
 
 
-def _review_adoption(client, cfg: Config, extraction: dict, audit_dir: Path) -> list[dict]:
+def _review_adoption(client, cfg: Config, extraction: dict, audit_dir: Path, store: Store) -> list[dict]:
     """收养审查（P0 §5.1）：传入底色+存在事实+带 ID 候选；decisions 逐条可解释。"""
     stances = extraction["candidate_stances"]
     if not stances:
@@ -539,7 +543,9 @@ def _review_adoption(client, cfg: Config, extraction: dict, audit_dir: Path) -> 
         name=cfg.persona.name, basecolor=basecolor,
         stances="\n".join(f"- [{s['id']}] {s['claim']}（来自：{s['from_donor'] or '文档'}）"
                            for s in stances))
+    _pt0 = time.time()
     resp = chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True)
+    metrics.record_llm_call(store, "import_review", _pt0, resp, model=cfg.llm.cheap_model)
     data = parse_json(resp.choices[0].message.content or "")
     valid_ids = {s["id"] for s in stances}
     decisions = []
@@ -696,7 +702,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
     audit_dir.mkdir(parents=True, exist_ok=True)
     (audit_dir / "source.md").write_text(doc, encoding="utf-8")
 
-    plan = prepare_import(client, cfg, doc, source, is_alice_format)
+    plan = prepare_import(client, cfg, doc, source, is_alice_format, store=store)
     commit_import_plan(store, cfg, plan)
     decisions = plan["decisions"]
     adopted_n = len(plan["adopted"])
@@ -706,7 +712,7 @@ def _digest_persona(store: Store, client, cfg: Config, doc: str, source: str,
             f"样本 {len(plan['samples'])} 条、收养 {adopted_n} 条、拒绝 {rejected_n} 条（审查记录在导入档案）")
 
 
-def prepare_import(client, cfg: Config, doc: str, source: str, is_alice_format: bool) -> dict:
+def prepare_import(client, cfg: Config, doc: str, source: str, is_alice_format: bool, store: Store) -> dict:
     """导入准备（不写活跃人格/不插先验）：提取→样本适配→审查→候选组装。
     供 reset 流程在归档前调用——准备成功才允许归档（P0 §5.3）。"""
     _recover_incomplete_import()
@@ -714,11 +720,11 @@ def prepare_import(client, cfg: Config, doc: str, source: str, is_alice_format: 
     audit_dir = PERSONA_IMPORT_DIR / op_id
     audit_dir.mkdir(parents=True, exist_ok=True)
     (audit_dir / "source.md").write_text(doc, encoding="utf-8")
-    extraction = _extract_import(client, cfg, doc)
+    extraction = _extract_import(client, cfg, doc, store)
     (audit_dir / "extract.json").write_text(
         json.dumps(extraction, ensure_ascii=False, indent=1), encoding="utf-8")
-    samples = _adapt_expression(client, cfg, extraction, audit_dir)
-    decisions = _review_adoption(client, cfg, extraction, audit_dir)
+    samples = _adapt_expression(client, cfg, extraction, audit_dir, store)
+    decisions = _review_adoption(client, cfg, extraction, audit_dir, store)
     current_md = persona_md()
     candidate_md, adopted = _assemble_candidate(
         cfg, extraction, decisions, samples, source, is_alice_format, current_md)
