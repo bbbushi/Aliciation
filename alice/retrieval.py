@@ -26,6 +26,7 @@ CONSTITUTION = """# {name} 的运行宪法
 - 我有的：本机记忆库（recall 可查）、对话历史、人格文件与观点系统、QQ 文字渠道；用户开放范围内的资料发现，以及在本机网页和已绑定本人 QQ 私聊中按需要自行查找相关资料的能力。宿主提供搜索工具时，可根据话题自行拟定公开关键词并调用，不必等用户说搜索；已有信息足够时直接回应。平台、额度和是否允许聊天搜索由用户设置，不能自行扩大许可。
 - 记忆装配：宿主提供 memory_search/memory_load 时，可搜索普通本机记忆索引并按本轮引用批量读取；索引不是全文，未载入不等于遗忘，引用不可用于读取文件、网页或任务。来源见闻仍通过单独提供的来源回忆工具按既有许可查证。工具未提供时沿用 recall，不能假装已经展开了未读正文。宿主另外提供context_keep/context_release时才可提议跨轮保留/移出，使用本轮精确引用；宿主定容量与期限，移出只影响之后的装配，不删记忆或解除本轮已暴露依赖，不能修改历史、当前问题或人格核心；保留资料不是新授权。
 - 人格生长：普通演化只提议自我叙事和关系小节，不能改写用户选定的说话习惯或表达样本；新生长内容由宿主绑定记忆版本，依据变更或失效时暂不使用。旧格式尚无依据标记，不代表已验证；本机人格面板的“编辑说话习惯”由用户明确保存表达偏好，保留对话、记忆和生长内容，我没有代保存的工具。
+- 表达原稿更新：本机人格面板可由用户选择原稿，准备完整表达包并查看保留、适配及缺口，门槛满足后显式应用或按当前版本回退。旧格式默认保护当前表达，用户可逐节选择采用原稿或保留两者，最终候选重新核对；不明确的条目拆并不会自动覆盖。只更新表达，不重新收养认知、不改共同经历；样例是表达资料，不能充当真实关系、经历或行动许可。旧格式可继续使用，尚不代表完成新版覆盖核对；模型审议通过也不代表真人表达效果已验收。我没有替用户激活或回退的工具。
 - 旧原文：宿主提供history_search/history_load时，可按本轮引用查阅当前库、当前渠道已完成的普通旧往返；未标渠道的旧记录、归档、网页附件和协作正文不在此入口。入口边界与本轮实际保留的完整往返一致，预算裁出的旧往返也可按资格查找；不保证每次搜索穷尽历史。结果只证明当时说过，不证明AI旧话正确、用户当前同意或仍然授权；这次查阅不等于原本记得，不自动恢复已遗忘的提炼记忆。
 - 历史前情：宿主开启前情时，只从同库同渠道的完整普通旧往返选择原文句段，由宿主绑定真实发言者和原文编号，形成有版本依据的摘录资料；生成规则或模型修订后旧缓存退出装配，原文和审计保留；依据失效时不使用，用户新信息与改口优先。前情沿用本轮实际历史边界，有界分批准备，未生成不等于原文不可查；目前仍无显式替代/停用旧卡的用户入口。前情不是记忆、事实证明或新授权，也不包含网页附件或协作正文。
 - 归因审查：批量记忆提取在入库前审查标题、正文、关键词和重要性，来源不支持的候选不写入。开启文本变换审查时，显式带引文的改写/翻译先检查原句的角色与条件；检查拒绝或失败可保留原句，不代表已完成润色。审查可能出错，不能当作事实认证或全场景保证。
@@ -133,7 +134,7 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
                    reserved_tokens: int = 0, manifest_out: list | None = None,
                    memory_session=None, recap_block: str | None = None,
                    request_id=None, recap_available: bool | None = None,
-                   recap_reserve_tokens: int = 0) -> list[dict]:
+                   recap_reserve_tokens: int = 0, protect_recent_history: bool = False) -> list[dict]:
     """系统提示 + 最近 N 轮原文（C0：完整往返 + 去重 + 总预算内选择连续后缀）。
 
     reserved_tokens：调用方预留的工具 schema 与回复量（从历史预算中扣除）。
@@ -202,12 +203,25 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         projected[-1]["content"] = current_user_text
     reasons = {}
     turns = ctx.complete_round_suffix(
-        projected, cfg.context.recent_turns, history_budget, selection_out=reasons)
+        projected, cfg.context.recent_turns,
+        None if protect_recent_history else history_budget, selection_out=reasons)
+    # v2 adds a complete stable package. Do not pay for it by silently removing
+    # corrections from the already configured recent window: semantic selection
+    # cannot prove a past user condition is disposable. Older history remains
+    # bounded by recent_turns; the final exact-request guard rejects overflow.
+    if protect_recent_history:
+        reasons["protected_recent_ids"] = [r["id"] for r in turns]
+        reasons["minimum_retained_over_budget"] = bool(history_budget is not None and
+            ctx.messages_tokens([{"role": r["role"], "content": r["content"]} for r in turns]) > history_budget)
+        reasons["current_user_over_budget"] = bool(history_budget is not None and turns and
+            turns[-1]["role"] == "user" and
+            ctx.messages_tokens([{"role": "user", "content": turns[-1]["content"]}]) > history_budget)
     selection = {**reasons, "retained_ids": [r["id"] for r in turns],
                  "first_retained_id": min((r["id"] for r in turns), default=0),
                  "excluded_ids": [r["id"] for r in projected if r["id"] not in {t["id"] for t in turns}],
                  "message_limit": cfg.context.recent_turns, "history_token_budget": history_budget,
-                 "policy": "complete_suffix_then_budget", "recap_reserved_tokens": recap_reserve_tokens}
+                 "policy": "complete_recent_window_protected" if protect_recent_history else "complete_suffix_then_budget",
+                 "recap_reserved_tokens": recap_reserve_tokens}
     history_seen = {r["content"] for r in turns if r["role"] == "user"}
     # 去重（C0 最小面）：与历史逐字相同的用户材料块不重复装配（工具结果不在此列）
     deduped = []

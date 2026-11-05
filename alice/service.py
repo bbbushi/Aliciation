@@ -91,6 +91,8 @@ class ChatService:
                 self.store.meta_set("session_epoch", uuid.uuid4().hex)
             persona.recover_imports(self.store)
             persona.recover_growth(self.store)  # No model call or old-file replay during recovery.
+            from .expression_update import recover as recover_expression
+            recover_expression(self.store)
             self._observer_scope = uuid.uuid4().hex  # Ephemeral identity; never written to Alice's data.
             saved_thinking = self.store.meta_get("thinking")
             if saved_thinking in ("on", "off"):  # GUI 里改过的思考深度优先于 config 文件
@@ -185,16 +187,36 @@ class ChatService:
             if path.exists():
                 lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()]
                 changelog = [ln for ln in lines if ln][-6:]
+            expression_view = None
+            if md and raw_sections is not None:
+                from . import expression
+                try:
+                    package = expression.decode_sections(raw_sections)
+                    if package:
+                        display_md = persona_growth.replace_bodies(display_md, expression.editor_sections(package),
+                                                                  allowed=persona_growth.EXPRESSION)
+                    expression_view = {"revision": persona_growth.digest(md),
+                        "session_epoch": self.store.meta_get("session_epoch"),
+                        "format": "expression-v2" if package else "v1",
+                        "coverage_status": ("用户修订后源文关联待核对" if package and package.get("reviews", {}).get("fidelity") == "invalidated_by_user" else
+                                            "已完成结构核对；模型审议不代表真人效果通过") if package else "未完成 v2 覆盖核对",
+                        "pending_associations": [str(item.get("id") or item.get("section") or item.get("scenario") or "关联")
+                            + "：" + str(item.get("reason") or "原关联已失效，请核对")
+                            for item in package.get("pending_associations", [])] if package else [],
+                        "revision_modes": {title: record.get("mode") for title, record in
+                            package.get("user_revisions", {}).get("sections", {}).items()} if package else {},
+                        "sections": expression.editor_sections(package) if package else
+                            {title: raw_sections.get(title, "") for title in persona_growth.EXPRESSION}}
+                except ValueError:
+                    expression_view = {"revision": persona_growth.digest(md),
+                        "session_epoch": self.store.meta_get("session_epoch"),
+                        "format": "invalid", "coverage_status": "表达元数据损坏或未知；请恢复有效版本", "sections": None}
             return {
                 "md": md,
                 "display_md": display_md,
                 "growth_note": growth_note,
                 "growth_sections": growth_states,
-                "expression": {"revision": persona_growth.digest(md),
-                               "session_epoch": self.store.meta_get("session_epoch"),
-                               "sections": {title: raw_sections.get(title, "")
-                                            for title in persona_growth.EXPRESSION}}
-                              if md and raw_sections is not None else None,
+                "expression": expression_view,
                 "changelog": changelog,
                 "turns": self._turn_count(),
                 **self._persona_stats(),
@@ -548,8 +570,45 @@ class ChatService:
                 raise ChannelError(409, "session_changed", "会话已更换，请重新打开当前人格后再编辑")
             if digest(persona.persona_md() or "") != payload["revision"]:
                 raise ChannelError(409, "persona_changed", "人格已变化，请重新打开编辑后再保存")
-            changed = persona.revise_expression(self.store, payload["revision"], payload["sections"])
-            return {"changed": changed, "state": self.state()}
+            previous = self.persona_view()["expression"]["sections"]
+            changed = persona.revise_expression(self.store, payload["revision"], payload["sections"], cfg=self.cfg)
+            from .expression import decode_sections
+            from .persona_growth import bodies
+            package = decode_sections(bodies(persona.persona_md() or ""))
+            pending = package.get("pending_associations", []) if package else []
+            return {"changed": changed, "state": self.state(),
+                    "changed_sections": [k for k, v in payload["sections"].items() if v.strip() != previous.get(k, "")],
+                    "pending_associations": [str(item.get("id") or item.get("section") or item.get("scenario") or "关联")
+                        + "：" + str(item.get("reason") or "原关联已失效，请核对") for item in pending]}
+
+    def persona_expression_update(self, payload) -> dict:
+        """GUI-owned expression preparation/apply; never a model or QQ tool."""
+        from . import expression_update as update
+        if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+            raise ValueError("表达更新参数无效")
+        action = payload["action"]
+        permitted = {
+            "list": {"action"}, "detail": {"action", "token"},
+            "prepare": {"action", "revision", "session_epoch", "source_text", "source_name", "source_op_id", "source_hash", "legacy_choices"},
+            "apply": {"action", "token", "revision", "session_epoch"},
+            "cancel": {"action", "token", "revision", "session_epoch"},
+            "rollback": {"action", "token", "revision", "session_epoch"}}
+        if action not in permitted or set(payload) - permitted[action]:
+            raise ValueError("表达更新动作或字段无效")
+        if action in {"list", "detail"}:
+            with self._lock:
+                if action == "list":
+                    return update.list_sources(self.store)
+                return update.detail(self.store, payload.get("token"))
+        with self._channels.control(), self._workers.control_lock, self._lock:
+            persona_reset.require_clear()
+            if action == "prepare":
+                return update.prepare(self.store, self.client, self.cfg, payload)
+            if action == "apply":
+                return update.apply(self.store, self.cfg, payload)
+            if action == "cancel":
+                return update.cancel(self.store, payload)
+            return update.rollback(self.store, payload.get("token"), payload.get("revision"), payload.get("session_epoch"), cfg=self.cfg)
 
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""

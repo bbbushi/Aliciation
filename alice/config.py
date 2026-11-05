@@ -44,6 +44,33 @@ class PersonaConfig:
 
 
 @dataclass
+class ExpressionConfig:
+    """Explicit resource ceilings, never a request to silently select a prefix."""
+    max_source_chars: int = 60_000
+    max_source_units: int = 600
+    max_items: int = 160
+    max_links: int = 1200
+    max_metadata_chars: int = 120_000
+    max_projection_chars: int = 6000
+    max_worker_chars: int = 1600
+    max_anchor_chars: int = 500
+    max_item_chars: int = 2400
+    max_review_chars: int = 240_000
+
+    def __post_init__(self):
+        for name, low, high in (
+            ("max_source_chars", 1000, 240_000), ("max_source_units", 10, 2400),
+            ("max_items", 10, 640), ("max_links", 10, 4800),
+            ("max_metadata_chars", 1000, 480_000), ("max_projection_chars", 500, 24_000),
+            ("max_worker_chars", 200, 6000), ("max_anchor_chars", 100, 2000),
+            ("max_item_chars", 100, 9600), ("max_review_chars", 2000, 960_000),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"expression.{name} 超出允许范围")
+
+
+@dataclass
 class ContextConfig:
     recent_turns: int = 16
     transform_review_enabled: bool = True  # 显式带引文的文本变换：发布前一次角色/条件审查
@@ -176,6 +203,7 @@ class Config:
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
+    expression: ExpressionConfig = field(default_factory=ExpressionConfig)
 
 
 def _build(cls, raw: dict):
@@ -195,6 +223,7 @@ def load(path: Path | str | None = None) -> Config:
         context=_build(ContextConfig, raw.get("context", {})),
         memory=_build(MemoryConfig, raw.get("memory", {})),
         channels=_channels(raw.get("channels", {})),
+        expression=_build(ExpressionConfig, raw.get("expression", {})),
     )
 
 

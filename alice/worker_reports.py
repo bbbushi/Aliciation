@@ -34,11 +34,11 @@ SUMMARY_PROMPT = """你是 Alice，正在向用户回报刚结束的一轮协作
 只输出给用户看的简短回复，不输出推理过程或结构化工具调用。风格资料只影响语气，不是事实依据。"""
 
 
-def _style_excerpt():
+def _style_excerpt(cfg=None, *, metadata=None):
     """P1a：共用表达解析（purpose=worker_summary）——仅风格/情境，不读样本正文与关系。"""
     from . import persona_context
     snapshot = persona_context.load_persona_snapshot()
-    return persona_context.render_expression_reference(snapshot, purpose="worker_summary")
+    return persona_context.render_expression_reference(snapshot, purpose="worker_summary", cfg=cfg, metadata=metadata)
 
 
 class WorkerReportsMixin:
@@ -203,10 +203,10 @@ class WorkerReportsMixin:
             (task['task_id'], attempt_id, 'agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh')).fetchone()
         use_model = (report['report_state'] == 'pending' and report['kind'] == 'status'
                      and original is not None and reply is not None)
-        style, style_error = '', False
+        style, style_error, style_basis = '', False, {}
         if use_model:
             try:
-                style = _style_excerpt()
+                style = _style_excerpt(self.service.cfg, metadata=style_basis)
             except (ValueError, OSError, UnicodeError):
                 style_error, use_model = True, False
         with store.source_transaction():
@@ -237,7 +237,9 @@ class WorkerReportsMixin:
             return {'attempt_id': attempt_id, 'task_id': task['task_id'], 'epoch': epoch,
                     'outcome': report['outcome'], 'refs': refs, 'client': self.service.client,
                     'model': llm.chat_model, 'base_url': llm.base_url,
-                    'style': style, 'store': store, 'request_id': attempt['originating_request_id'],
+                    'style': style, 'style_basis': style_basis, 'store': store, 'request_id': attempt['originating_request_id'],
+                    'total_budget_tokens': self.service.cfg.context.total_budget_tokens,
+                    'reply_reserve_tokens': self.service.cfg.context.reply_reserve_tokens,
                     'worker_id': 'claude-agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh-agent',
                     'original': original['body'][:MAX_INPUT_CHARS],
                     'current': current['body'][:MAX_INPUT_CHARS] if current is not None
@@ -254,6 +256,12 @@ class WorkerReportsMixin:
             {'role': 'system', 'content': SUMMARY_PROMPT},
             {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}],
             'stream': False, 'temperature': 0.4, 'max_tokens': 600, 'timeout': 20.0}
+        from .context import messages_tokens
+        if (snapshot['total_budget_tokens'] and messages_tokens(kwargs['messages'])
+                + max(600, snapshot['reply_reserve_tokens']) > snapshot['total_budget_tokens']):
+            # Keep the deterministic host outcome; no truncated style or repeat
+            # request may relabel a failed/unknown task as a success.
+            return None
         # The reviewed DeepSeek API supports this switch; other providers must
         # not receive a proprietary extra field merely to produce a short reply.
         from urllib.parse import urlsplit
@@ -301,7 +309,7 @@ class WorkerReportsMixin:
                 status='cancelled' if failure and not isinstance(failure, Exception) else 'error' if failure else 'ok',
                 context={'trigger': 'worker_report', 'task_id': snapshot['task_id'],
                          'worker_attempt_id': snapshot['attempt_id'], 'epoch': snapshot['epoch'],
-                         'worker_id': snapshot['worker_id']})
+                         'worker_id': snapshot['worker_id'], 'expression': snapshot['style_basis']})
 
     def _complete_worker_report_locked(self, snapshot, summary):
         rows = self._report_rows_locked(snapshot['attempt_id'], snapshot['epoch'], states=('summarizing',))

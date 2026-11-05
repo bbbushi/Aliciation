@@ -412,9 +412,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     # P1b 近位表达提醒（默认关）：锚在每次模型请求前重建替换，保持一份不堆积
     anchor_msg = None
     expression_meta, anchor_meta = {}, {}
-    rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta)
+    expression_purpose = "chat" if source_scope == "gui" else "qq"
+    rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
+                                                    purpose=expression_purpose, cfg=cfg)
     if cfg.persona.expression_anchor and persona_snapshot is not None:
-        _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta)
+        _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta,
+                                                       purpose=expression_purpose, cfg=cfg)
         if _anchor_text:
             anchor_msg = {"role": "system", "content": _anchor_text}
     reserved = _ctx.messages_tokens(extra_messages + ([anchor_msg] if anchor_msg else []), tools)
@@ -428,10 +431,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         source_packets=packets, current_user_text=user_text,
         source_scope=source_scope, stance_ids=stance_ids, reserved_tokens=reserved,
         manifest_out=manifests, memory_session=memory_session,
-        request_id=request_id, recap_reserve_tokens=recap_reserve)
+        request_id=request_id, recap_reserve_tokens=recap_reserve,
+        protect_recent_history=bool(persona_snapshot and persona_snapshot.get("expression_package")))
     persona_basis = {"request_id": request_id, "user_turn_id": user_id,
                      "expression": expression_meta, "anchor_enabled": cfg.persona.expression_anchor,
-                     "anchor": anchor_meta, "anchor_present": anchor_msg is not None}
+                     "anchor": anchor_meta, "anchor_present": anchor_msg is not None,
+                     "model_rounds_started": 0, "delivery_status": "assembled_not_sent"}
     try:
         metrics.record(store, "persona_basis", 1.0, json.dumps(persona_basis, ensure_ascii=False))
     except Exception:
@@ -442,7 +447,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
-    if cfg.context.recap_enabled:
+    initial_over_budget = bool(cfg.context.total_budget_tokens and
+        _ctx.messages_tokens(messages + extra_messages + ([anchor_msg] if anchor_msg else []), tools)
+        + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens)
+    if cfg.context.recap_enabled and not initial_over_budget:
         from .context_recap import RecapContext
         recap_session = RecapContext(store, cfg, source_scope, boundary=boundary)
         span_rows = recap_session.pending()
@@ -553,6 +561,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         ):
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
+        # Request assembly is not a sent receipt. Each actual call records the
+        # same frozen expression IDs; retries are accounted by llm observations.
+        persona_basis["model_rounds_started"] += 1
+        persona_basis["delivery_status"] = "model_attempt"
         if on_delta is None:
             resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
                                       retry=memory_session is None and not growth_refs and not recap_exposed,

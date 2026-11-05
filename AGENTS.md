@@ -25,8 +25,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-04 Codex按用户“最新修复审核后推送个人分支”指示完成P2复审，审核通过、无新增高置信阻挡问题；交付目标origin/trial/windows-v0.2-20261028，父提交b1ffbd74be2e6407f975edfe59296b50bb44e6ca，fetch后本远端0/0无分叉。提交包含llm.py/loop.py修复及对应文档证据；提交号与推送完成状态以git log和远端核对为准，不建PR、不合并/直推main。
-- 复审报告docs/设计文档/整体设计迭代概览/Alice架构完善-P2修复推送前复审-20261104.md；独立复跑25项全过并补前情生成/审查3场景4轨迹全过，合计28/28。原P2两例分别精确30/12与20/8且incomplete=true、无双计；前情子usage与总量/落库同步，后续成功不清未知。原95项93/2及修复轮25项历史均保留。
-- 新证据P2用量聚合-推送复审证据-20261104/；70文件当前源码、source与三套实际workspace全SHA一致，快照b7255c901ccf4202035095cc0228d5affc0de5035c6fc156440375359f35e18a；原修复93份归档哈希一致。改动2Python AST/内存编译及diff检查通过，guard为空；未重跑无关Windows/崩溃套件。模型/人格装载/等待为替身，前情回答审查分支与字典alias仅静态核对，不夸大动态覆盖。
-- 本轮仅审查、临时隔离诊断、报告/当前与Git交付，未另外改业务代码，未读写真实user/、启停Alice、调用真实模型/Claude/DSH/QQ或迁移安装。真实部署共存/模型回执/工人许可/GUI/长期体验仍待人工，W5未改通过；W6—W9/前情退休为设计，D1—D5/蓝图待裁决、P1b默认关。原私有资料/头像素材不纳入提交，备份/回退分支/stash/其他worktree保留，仍HTTPS、trial经PR合main。
-- 并行头像：V14 C2仍为当前首选（face-variants-v14/c2-clear-taper-v14.png，preferred.json已记录）；新附件0cf0c346与C2字节一致，用户要求在其基础上再收下巴。pixel_avatar_design以内置image_gen单次编辑C2＋原画，生成轻收底部圆宽的V15：docs/assets/avatar-concepts/orange-flower-20261104/chin-trial-v15/c2-chin-taper-v15.png及prompts.txt，1254×1254透明RGBA，已看图/核alpha/无损保存。底弧略集中、变化轻，脸长/表情/头发/抱书总体保持，细纹有生成漂移；V15待用户确认，未覆盖首选。后续始终带原画作结构/气质参照，保留已认可头发/眼眉/嘴倾角，小图v5冻结，V13双基线与V14四候选保留。未改运行时头像/源码/UI/user/、运行应用测试或提交推送。
+- 2026-11-05 Codex按用户要求提交本地人格高保真表达F0—F3及R1—R8/N1—N3修复、10份配套文档，共26个白名单文件至trial/windows-v0.2-20261028并向main提PR。提交前HEAD/远端trial为ef99c42，origin/main为b1dba3e且已是祖先；PR同时包含之前未合main的b1ffbd7架构批次与ef99c42用量修复，不直接合并或推main。快照.git/pr-delivery/20261105-140857保留。
+- 表达v2使用单Markdown权威、完整源账目、事实/保真双审及一次补位，GUI准备/差异/应用/取消/回退接通；v1逐节默认保护/明确采用原稿/保留两者，准备协议3与最终包双审。修订合入要求相关旧新同源条目一对一并核对内容摘要，拆并或措辞歧义拒绝；新增删至零保留撤销账目，不恢复过期审议/共享资格。只改表达三节/版本/操作记录，P1b默认关。
+- 本轮提交前全alice compileall、web/app.js语法、tracked diff空白及关键公共入口/恢复/用量调用点静态核对通过；最新复审修复报告6份源码SHA一致，两项独立交付审阅未见缺件。仅静态，未运行行为套件/业务/模型/临时DB/故障注入/真人验证；新三分支、GUI/渠道隔离、恢复、实料成本和长期效果仍待验，合并前起服与共存未在本轮执行。
+- 历史修前95场景93通过2失败与修后独立28/28为不同版本限定证据，不累计或回填本轮通过；旧审核/复审/报告/清单保持原文。W5真人待验，W6—W9/前情退休为设计、D1—D5/蓝图待裁决。本轮未改业务/读写user/启停应用/调用模型QQClaudeDSH/部署迁移；旧4份私有资料、头像候选及备份/stash/其他worktree保留，仍HTTPS、trial经PR合main。
+- 并行头像：橙发V15/V16及小图v5保留；白龙小图pixel-finish-v4/small-pixel-v4.png已获确认并冻结。大图V5压暗虹膜被用户否决；按新附件1509506c（与V3大图SHA一致）重新出V6，只以源图保留紫瞳亮度/瞳孔/高光与眉眼嘴构图，增强细像素阶梯。候选docs/assets/avatar-concepts/white-dragon-20261104/source-repixel-v6/large-face-preserved-v6.png、prompts-large.txt与原图对照compare.html已存，preferred.json记录小图通过/V5拒绝/V6待审；内置image_gen及pixel_avatar_design协作，1254透明RGBA无损复制，已目视/alpha核验，仍有少量发束与虹膜下部亮块转绘差异。未改运行时资源/源码/UI/user/、跑应用测试或提交推送。

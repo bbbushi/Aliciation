@@ -1018,6 +1018,7 @@ async function openPersonaView() {
   const meta = p.installed ? `${personaMeta(p)}${p.turns ? ` · 聊过 ${p.turns} 轮` : ""}` : "还没有人格";
   const body = p.installed
     ? (p.growth_note ? `<p class="hint">${esc(p.growth_note)}</p>` : "") +
+      (p.expression?.coverage_status ? `<p class="hint">${esc(p.expression.coverage_status)}</p>` : "") +
       `<div class="md">${renderMd(p.display_md ?? p.md)}</div>` +
       (p.changelog && p.changelog.length
         ? `<div class="changelog"><div class="panel-title small">最近变更</div><ul>${p.changelog
@@ -1026,7 +1027,8 @@ async function openPersonaView() {
         : "")
     : `<p class="hint">还没有安装人格。点下面的按钮导入一份，或以气质标签生成。</p>`;
   openModal("当前人格", meta, body, [
-    ...(p.expression ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
+    ...(p.expression?.sections && p.expression.format !== "invalid" ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
+    ...(p.expression ? [{ label: "从原稿更新表达", onClick: () => openExpressionUpdate(p.expression) }] : []),
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
     {
@@ -1052,25 +1054,51 @@ async function openPersonaView() {
 }
 
 function openExpressionEditor(expression) {
+  if (!expression?.sections || expression.format === "invalid") {
+    toast("当前表达格式无法编辑，请先核对更新记录和当前人格版本。", 5000); return;
+  }
   const fields = Object.entries(expression.sections);
+  const structured = expression.format === "expression-v2";
+  const revisionModeNote = title => ({
+    explicit_section: "此节已采用整节自由文本保留范围；本次继续编辑会沿用该整节范围，未勾选不会自动撤销原选择。",
+    protected_legacy: "此节沿用旧格式整节保护；无法可靠区分原稿与后改的内容不会被默认覆盖。",
+    legacy_unknown: "此节的旧修订记录无法区分逐项范围；从原稿更新前需先明确处理，不能推定你已删除新规则。",
+  }[expression.revision_modes?.[title]] || "");
+  const inputValue = (index) => {
+    const raw = $(`#expression-${index}`).value;
+    return structured && $(`#expression-free-${index}`)?.checked && !raw.startsWith("【整节自由文本】")
+      ? `【整节自由文本】\n${raw}` : raw;
+  };
   let saving = false;
-  const body = `<p class="hint">这是你明确选定的表达偏好。保留列表和样本格式，只编辑正文，每节最多 6000 字。</p>` +
+  const body = `<p class="hint">这是你明确选定的表达偏好。直接编辑三节正文，来源和关联由系统记录；保存前会核对容量与结构。</p>` +
+    (structured ? `<p class="hint">按现有条目字段编辑，可保留未改条目。若要用自由文字替换整节，请勾选该节的“整节自由文本”：整节原映射与相关共享资格将失效；下次原稿更新会明确处理这个整节选择。</p>` : "") +
+    `<p id="expression-change-scope" class="hint" role="status">尚未修改。</p>` +
+    (expression.pending_associations?.length ? `<p class="hint">待处理关联：${esc(expression.pending_associations.join("、"))}</p>` : "") +
     fields.map(([title, text], index) =>
-      `<label class="expression-field">${esc(title)}<textarea id="expression-${index}" rows="7" spellcheck="false">${esc(text)}</textarea></label>`
+      `<label class="expression-field">${esc(title)}<textarea id="expression-${index}" rows="7" spellcheck="false">${esc(text)}</textarea></label>` +
+      (revisionModeNote(title) ? `<p class="hint">${esc(revisionModeNote(title))}</p>` : "") +
+      (structured ? `<label class="hint expression-free-choice"><input type="checkbox" id="expression-free-${index}"> 整节自由文本（替换本节，重新核对关联与共享范围）</label>` : "")
     ).join("");
   openModal("编辑说话习惯", "保存后只修改这三节；对话、记忆与生长内容保留，旧版自动快照。", body, [
     { label: "取消", onClick: () => { if (!saving) openPersonaView(); } },
     { label: "保存表达偏好", cls: "btn primary", onClick: async () => {
       if (saving) return;
       const sections = Object.fromEntries(fields.map(([title], index) =>
-        [title, $(`#expression-${index}`).value]));
+        [title, inputValue(index)]));
       saving = true;
       try {
         const result = await postJSON("/api/persona/expression", {
           revision: expression.revision, session_epoch: expression.session_epoch, sections });
         state = result.state;
-        toast(result.changed ? "表达偏好已保存，旧版已快照" : "表达偏好没有变化");
-        await openPersonaView();
+        if (result.changed && (result.pending_associations?.length || result.changed_sections?.length)) {
+          openModal("表达偏好已保存", "修改已记为用户配置。后续从原稿更新表达时保留这些选择。",
+            `<p>变更范围：${esc((result.changed_sections || []).join("、") || "表达三节")}</p>` +
+            `<p>待处理关联：${esc((result.pending_associations || []).join("、") || "无")}</p>`,
+            [{label: "查看当前人格", onClick: openPersonaView}]);
+        } else {
+          toast(result.changed ? "表达偏好已保存，旧版已快照" : "表达偏好没有变化");
+          await openPersonaView();
+        }
       } catch (error) {
         toast(`保存未能确认：${error.message}。请保留文本，核对当前人格后再操作。`);
       } finally {
@@ -1078,6 +1106,277 @@ function openExpressionEditor(expression) {
       }
     } },
   ]);
+  fields.forEach((_, index) => {
+    const updateScope = () => {
+      const changed = fields.filter(([, original], i) => inputValue(i) !== original).map(([title]) => title);
+      $("#expression-change-scope").textContent = changed.length
+        ? `本次变更：${changed.join("、")}。修改部分记为用户修订，旧来源映射及依赖关联将更新或标为待处理。` : "尚未修改。";
+    };
+    $(`#expression-${index}`).addEventListener("input", updateScope);
+    $(`#expression-free-${index}`)?.addEventListener("change", updateScope);
+  });
+}
+
+/* Prepared expression candidates are private local records. No automatic activation or retry. */
+const expressionUpdateAPI = (data) => postJSON("/api/persona/expression-update", data);
+const expressionStateLabel = (status) => ({candidate_inactive: "候选未激活", uncovered: "表达覆盖不满足",
+  prepare_failed: "准备失败", applied: "已应用", rolled_back: "已回退", cancelled: "已取消",
+  recovery_conflict: "恢复冲突", preparing: "正在准备", unreadable: "记录暂时无法读取",
+  state_unconfirmed: "操作状态尚未完整核对"}[status] || status || "状态待核对");
+const expressionViewVisible = (view) => view.isConnected && !$("#modal").classList.contains("hidden");
+const expressionText = (value) => typeof value === "string" ? value : JSON.stringify(value ?? "", null, 2);
+const expressionDisposition = (status) => ({retained: "原意保留", adapted: "局部适配后保留", merged: "合并保留",
+  background: "背景资料归档", excluded: "排除", unresolved: "未决", user_revised: "用户修订"}[status] || status || "待核对");
+const expressionLegacyChoice = (choice) => ({preserve: "保留当前本节", replace: "采用原稿本节新表达",
+  merge: "保留两者：原稿新表达＋当前本节"}[choice] || "范围待核对");
+
+function expressionReviews(reviews) {
+  const label = value => ({passed: "已完成核对", failed: "核对不满足", rejected: "核对不满足",
+    not_reviewed: "尚未核对", user_config: "用户明确配置", invalidated_by_user: "用户修订后原核对已失效"}[value] || "结果见核对详情");
+  const rowsLabel = (rows, valid) => rows.length ? (rows.every(row => row.verdict === valid) ? "已完成核对" : "核对不满足") : "尚无完整回执";
+  const fact = Array.isArray(reviews?.fact) ? rowsLabel(reviews.fact, "valid") : label(reviews?.fact);
+  const fidelityRows = ["fidelity_sources", "fidelity_items", "fidelity_scenarios"].flatMap(key => Array.isArray(reviews?.[key]) ? reviews[key] : []);
+  const fidelity = fidelityRows.length ? rowsLabel(fidelityRows, "passed") : label(reviews?.fidelity);
+  return `<p>成品事实：${esc(fact)}；表达保真与覆盖：${esc(fidelity)}。</p>` +
+    `<details><summary>核对详情</summary><pre>${esc(expressionText(reviews))}</pre></details>`;
+}
+
+function expressionDetails(result) {
+  const gaps = Array.isArray(result.gaps) ? result.gaps : [];
+  const diff = Array.isArray(result.diff) ? result.diff : [];
+  const currentDiff = Array.isArray(result.current_diff) ? result.current_diff : [];
+  return `<p class="expression-status" role="status">${esc(expressionStateLabel(result.status))}</p>` +
+    `<p class="hint">${esc(result.baseline_policy || result.user_revision_note || "此记录未保存当前表达的保留策略，请核对版本与差异。")}</p>` +
+    (result.legacy_choices && Object.keys(result.legacy_choices).length ?
+      `<details class="expression-review" open><summary>本次准备已确定的旧格式处理范围</summary><ul>` +
+      Object.entries(result.legacy_choices).map(([title, choice]) => `<li>${esc(title)}：${esc(expressionLegacyChoice(choice))}</li>`).join("") +
+      `</ul><p class="hint">这些选择与本条候选的准备版本绑定。调整范围需要另行准备并重新核对，不会改动本条候选。</p></details>` : "") +
+    (result.rollback_token ? `<p class="hint">此次表达更新已通过独立回退操作恢复。原更新记录和回退记录分别保留，可在下方核对关联。</p>` : "") +
+    `<p class="hint">表达长度：${result.projection_chars == null ? "未知" : esc(result.projection_chars)} 字符。审议结果仅供核对，不代表真人效果通过。</p>` +
+    (gaps.length ? `<h3>缺口与阻止应用的原因</h3><ul>${gaps.map(g => `<li>${esc(expressionText(g))}</li>`).join("")}</ul>` : "") +
+    `<details class="expression-review" open><summary>准备时的表达 → 候选表达（${currentDiff.length} 节）</summary>` +
+    (currentDiff.length ? currentDiff.map(d => `<details class="expression-item"><summary>${esc(d.section || "表达小节")} · ${d.before === d.after ? "正文未变" : "含变更"}</summary>` +
+      `<p class="hint">${esc(expressionText(d.policy || result.baseline_policy || "保留范围待核对"))}</p>` +
+      `<h4>准备时的表达</h4><pre>${esc(expressionText(d.before))}</pre><h4>候选表达</h4><pre>${esc(expressionText(d.after))}</pre></details>`).join("") :
+      `<p class="hint">此记录没有可用的当前→候选对照；不能据此认定既有修订已保留。未生成候选时请先查看缺口；历史记录请另核对当时版本。</p>`) + `</details>` +
+    `<details class="expression-review"><summary>事实核对与表达保真核对</summary>${expressionReviews(result.reviews)}</details>` +
+    `<details class="expression-review"><summary>原文 → 适配 → 排除或缺口（${diff.length} 项）</summary>` +
+    (diff.length ? diff.map(d => `<details class="expression-item"><summary>${esc(d.source_id || "源单元")} · ${esc(expressionDisposition(d.disposition))}</summary>` +
+      `<h4>原文</h4><pre>${esc(expressionText(d.original))}</pre><h4>适配后</h4><pre>${esc(expressionText(d.adapted))}</pre>` +
+      `<p>${esc(expressionText(d.reason))}</p></details>`).join("") : `<p class="hint">本记录没有可展示的逐项差异。</p>`) + `</details>` +
+    `<details class="expression-review"><summary>版本信息</summary><p>原稿版本：${esc(result.source_hash || "未知")}</p>` +
+    `<p>人格版本：${esc(result.revision || "未知")}</p><p>本条记录：${esc(result.token || "未知")}</p>` +
+    (result.rollback_token ? `<p>回退操作：${esc(result.rollback_token)}（回退本条更新）</p>` : "") +
+    (result.rollback_of ? `<p>原更新操作：${esc(result.rollback_of)}（本条是它的回退操作）</p>` : "") + `</details>`;
+}
+
+async function openExpressionUpdate(expression, prefill = {}) {
+  openModal("从原稿更新表达", "先准备候选；通过门槛后可应用。只更新说话习惯，保留会话、记忆、认知与关系。",
+    `<div id="expression-update-view"><p class="hint">正在读取可用原稿与更新记录…</p></div>`, [{label: "返回人格", onClick: openPersonaView}]);
+  const view = $("#expression-update-view");
+  let listing;
+  try { listing = await expressionUpdateAPI({action: "list"}); }
+  catch (e) { if (expressionViewVisible(view)) view.textContent = `读取更新记录失败：${e.message}`; return; }
+  if (!expressionViewVisible(view)) return;
+  const sources = Array.isArray(listing.sources) ? listing.sources : [];
+  const listedPrefill = sources.find(s => s.op_id === prefill.source_op_id);
+  if (listedPrefill && listedPrefill.source_hash !== prefill.source_hash) {
+    prefill = {...prefill, legacy_choices: undefined,
+      notice: "所选原稿与旧候选记录的版本不同，未沿用旧范围选择。请根据当前原稿重新确认；旧格式默认保护全部三节。"};
+  }
+  if (prefill.source_op_id && !sources.some(s => s.op_id === prefill.source_op_id)) {
+    sources.unshift({op_id: prefill.source_op_id, source_name: "上一条候选所用原稿", source_hash: prefill.source_hash});
+  }
+  const operations = Array.isArray(listing.operations) ? listing.operations : [];
+  const legacyFields = expression.format === "v1" ? Object.entries(expression.sections || {}) : [];
+  view.innerHTML = `<p class="hint">选择原始文档，或粘贴完整原文。准备会调用已配置模型，原稿与适配记录保存在本机。原稿中的角色指令只作为资料。</p>` +
+    (prefill.notice ? `<p class="hint">${esc(prefill.notice)}</p>` : "") +
+    `<label class="expression-field">材料来源<select id="expression-source"><option value="">上传文件或粘贴原文</option>` +
+    sources.map(s => `<option value="${esc(s.op_id)}">${esc(s.source_name || s.op_id)} · ${esc((s.source_hash || "").slice(0, 12))}</option>`).join("") + `</select></label>` +
+    `<div id="expression-source-input"><label class="expression-field">原稿文件<input id="expression-source-file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain"></label>` +
+    `<label class="expression-field">原稿名称<input id="expression-source-name" type="text" maxlength="120" value="用户选择的原稿"></label>` +
+    `<label class="expression-field">完整原文<textarea id="expression-source-text" rows="10" spellcheck="false"></textarea></label></div>` +
+    (legacyFields.length ? `<div class="expression-review"><h3>旧格式表达的处理范围</h3>` +
+      `<p class="hint">每节默认保留当前全文。有必需原稿内容无法合入时，候选会保留缺口。可明确选择采用原稿，或保留两者；准备后请核对当前→候选及原稿→适配。</p>` +
+      `<p class="hint">采用原稿会替换当前本节。保留两者会完整保留原稿的新条目，再把当前本节追加为仅用于本机聊天的私有配置；不会自动去重，冲突仍可能阻止应用。</p>` +
+      legacyFields.map(([title, text], index) => `<details class="expression-item" open><summary>${esc(title)}</summary>` +
+        `<h4>当前表达</h4><pre>${esc(text)}</pre><label class="expression-field">本次处理<select id="expression-legacy-${index}">` +
+        ["preserve", "replace", "merge"].map(choice => `<option value="${choice}">${esc(expressionLegacyChoice(choice))}</option>`).join("") +
+        `</select></label></details>`).join("") +
+      `<p id="expression-legacy-scope" class="hint" role="status"></p></div>` :
+      `<p class="hint">当前结构化表达中的用户修订会按已记录的范围合入；准备后请核对当前→候选及原稿→适配。</p>`) +
+    `<p class="hint">缺少原稿时可继续使用原表达；这里不会从摘要反推原文。关闭窗口不会激活候选，也不会取消正在进行的准备；可从更新记录找回结果并取消候选。</p>` +
+    `<p id="expression-update-status" class="hint" role="status"></p><button id="expression-prepare" class="btn primary" type="button">准备表达候选</button>` +
+    `<details class="expression-review"><summary>已有候选与恢复记录（${operations.length} 项）</summary><div id="expression-operation-list"></div></details>`;
+  if (prefill.source_op_id) {
+    $("#expression-source").value = prefill.source_op_id;
+    $("#expression-source-input").classList.toggle("hidden", !!$("#expression-source").value);
+  }
+  const legacyChoices = () => Object.fromEntries(legacyFields.map(([title], index) =>
+    [title, $(`#expression-legacy-${index}`).value]));
+  let legacyScopeNote = "";
+  const updateLegacyScope = () => {
+    if (!legacyFields.length) return;
+    $("#expression-legacy-scope").textContent = legacyScopeNote + Object.entries(legacyChoices()).map(([title, choice]) =>
+      `${title}：${expressionLegacyChoice(choice)}`).join("；") +
+      "。选择只用于下次准备，已有候选保持原范围；新候选重新核对后仍需明确点击应用。";
+  };
+  const resetLegacyChoices = () => {
+    if (!legacyFields.length) return;
+    legacyFields.forEach((_, index) => { $(`#expression-legacy-${index}`).value = "preserve"; });
+    legacyScopeNote = "原稿来源或正文已变化，处理范围已重置为全部保留；请重新确认各节选择。";
+    updateLegacyScope();
+  };
+  if (legacyFields.length) {
+    legacyFields.forEach(([title], index) => {
+      const select = $(`#expression-legacy-${index}`);
+      const chosen = prefill.legacy_choices?.[title];
+      select.value = ["preserve", "replace", "merge"].includes(chosen) ? chosen : "preserve";
+      select.onchange = () => { legacyScopeNote = ""; updateLegacyScope(); };
+    });
+    updateLegacyScope();
+  }
+  $("#expression-source").onchange = () => {
+    $("#expression-source-input").classList.toggle("hidden", !!$("#expression-source").value);
+    resetLegacyChoices();
+  };
+  $("#expression-source-text").oninput = resetLegacyChoices;
+  let reading = false;
+  $("#expression-source-file").onchange = async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    reading = true; $("#expression-prepare").disabled = true;
+    try {
+      if (file.size > 1048576) throw new Error("文件超过 1 MiB，请明确缩小原稿范围后再准备");
+      const content = await file.text();
+      if (!expressionViewVisible(view)) return;
+      $("#expression-source-text").value = content; $("#expression-source-name").value = file.name.slice(0, 120);
+      resetLegacyChoices();
+      $("#expression-update-status").textContent = `已读取 ${content.length} 字符；服务会进一步核对原文上限。`;
+    } catch (e) { if (expressionViewVisible(view)) $("#expression-update-status").textContent = e.message; }
+    finally { reading = false; if (expressionViewVisible(view)) $("#expression-prepare").disabled = false; }
+  };
+  const operationList = $("#expression-operation-list");
+  operations.forEach(op => {
+    const row = document.createElement("div"); row.className = "expression-operation";
+    const label = document.createElement("span"); label.textContent = `${expressionStateLabel(op.status)} · ${op.source_name || op.token || "更新记录"}`;
+    const inspect = document.createElement("button"); inspect.type = "button"; inspect.className = "btn ghost"; inspect.textContent = "查看记录";
+    inspect.onclick = async () => {
+      inspect.disabled = true;
+      try { const detail = await expressionUpdateAPI({action: "detail", token: op.token}); if (expressionViewVisible(view)) showExpressionCandidate(detail); }
+      catch (e) { if (expressionViewVisible(view)) $("#expression-update-status").textContent = `读取记录失败：${e.message}`; }
+      finally { inspect.disabled = false; }
+    };
+    row.append(label, inspect); operationList.appendChild(row);
+  });
+  let preparing = false;
+  $("#expression-prepare").onclick = async () => {
+    if (preparing || reading) return;
+    const sourceId = $("#expression-source").value;
+    const payload = {action: "prepare", revision: expression.revision, session_epoch: expression.session_epoch};
+    if (legacyFields.length) payload.legacy_choices = legacyChoices();
+    if (sourceId) {
+      const selectedSource = sources.find(source => source.op_id === sourceId);
+      if (!selectedSource?.source_hash) {
+        $("#expression-update-status").textContent = "所选原稿缺少版本信息，请刷新后重新选择。"; return;
+      }
+      payload.source_op_id = sourceId;
+      payload.source_hash = selectedSource.source_hash;
+    }
+    else {
+      payload.source_text = $("#expression-source-text").value;
+      payload.source_name = $("#expression-source-name").value;
+      if (!payload.source_text.trim()) { $("#expression-update-status").textContent = "请先选择或粘贴原稿。"; return; }
+    }
+    preparing = true;
+    view.querySelectorAll("input,textarea,select,button").forEach(el => el.disabled = true);
+    $("#expression-update-status").textContent = "正在登记原文、适配表达并分别核对事实与保真。完成前当前人格保持原样。";
+    try {
+      const result = await expressionUpdateAPI(payload);
+      if (expressionViewVisible(view)) showExpressionCandidate(result);
+      else toast("表达准备已结束，可从人格 → 从原稿更新表达 → 更新记录查看。", 6000);
+    } catch (e) {
+      if (expressionViewVisible(view)) $("#expression-update-status").textContent = `准备结果未能确认：${e.message}。请返回后查看更新记录再决定下一步。`;
+    } finally {
+      preparing = false;
+      if (expressionViewVisible(view)) view.querySelectorAll("input,textarea,select,button").forEach(el => el.disabled = false);
+    }
+  };
+}
+
+function showExpressionCandidate(result) {
+  let pending = false;
+  const adjustLegacyScope = async () => {
+    if (pending) return;
+    pending = true;
+    const view = $("#expression-candidate-view");
+    $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = true);
+    try {
+      const current = await api("/api/persona");
+      if (!expressionViewVisible(view)) return;
+      if (current.expression?.format !== "v1") throw new Error("当前已不是可用的旧格式表达，请返回当前人格重新准备");
+      const sameVersion = current.expression.revision === result.revision && current.expression.session_epoch === result.session_epoch;
+      await openExpressionUpdate(current.expression, {source_op_id: result.token, source_hash: result.source_hash,
+        legacy_choices: sameVersion ? result.legacy_choices : undefined,
+        notice: sameVersion ? "正在另行准备同份原稿。请调整范围后点击准备；原候选及其范围保持不变。" :
+          "当前人格或会话已变化，未沿用旧候选的范围选择。请根据当前正文重新确认；旧格式默认保护全部三节。"});
+    } catch (e) {
+      if (expressionViewVisible(view)) $("#expression-candidate-error").textContent = `暂时无法调整范围：${e.message}`;
+    } finally {
+      pending = false;
+      if (expressionViewVisible(view)) $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = false);
+    }
+  };
+  const inspectRelated = async (token) => {
+    if (pending) return;
+    pending = true;
+    const view = $("#expression-candidate-view");
+    $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = true);
+    try {
+      const record = await expressionUpdateAPI({action: "detail", token});
+      if (expressionViewVisible(view)) showExpressionCandidate(record);
+    } catch (e) {
+      if (expressionViewVisible(view)) $("#expression-candidate-error").textContent = `关联记录暂时无法读取：${e.message}`;
+    } finally {
+      pending = false;
+      if (expressionViewVisible(view)) $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = false);
+    }
+  };
+  const run = async (action) => {
+    if (pending) return;
+    pending = true;
+    const view = $("#expression-candidate-view");
+    $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = true);
+    try {
+      let revision = result.revision, epoch = result.session_epoch;
+      if (action === "rollback") {
+        const current = await api("/api/persona");
+        revision = current.expression?.revision; epoch = current.expression?.session_epoch;
+        if (!revision || !epoch) throw new Error("无法核对当前人格，请返回查看状态");
+      }
+      const response = await expressionUpdateAPI({action, token: result.token, revision, session_epoch: epoch});
+      if (!expressionViewVisible(view)) { toast("表达操作已结束，请从更新记录核对结果。", 5000); return; }
+      // A rollback is a second transaction; this view remains the original update.
+      showExpressionCandidate({...result, ...response, token: result.token,
+        ...(action === "rollback" ? {rollback_token: response.rollback_token} : {})});
+    } catch (e) {
+      if (expressionViewVisible(view)) $("#expression-candidate-error").textContent = `操作未能确认：${e.message}。请先查看更新记录，避免重复准备。`;
+    } finally {
+      pending = false;
+      if (expressionViewVisible(view)) $("#modal-foot").querySelectorAll("button").forEach(el => el.disabled = false);
+    }
+  };
+  const inactive = ["candidate_inactive", "uncovered", "prepare_failed"].includes(result.status);
+  openModal("表达更新记录", "准备、应用与回退分别记录；通过模型核对仍需真人观察表达效果。",
+    `<div id="expression-candidate-view">${expressionDetails(result)}<p id="expression-candidate-error" class="hint" role="status"></p></div>`, [
+      ...(result.ready === true && result.status === "candidate_inactive" ? [{label: "应用此表达候选", cls: "btn primary", onClick: () => run("apply")}] : []),
+      ...(inactive && result.token ? [{label: "取消此候选", onClick: () => run("cancel")}] : []),
+      ...(inactive && result.token && result.legacy_choices && Object.keys(result.legacy_choices).length ?
+        [{label: "调整范围并重新准备", onClick: adjustLegacyScope}] : []),
+      ...(result.status === "applied" ? [{label: "回退此次表达更新", onClick: () => run("rollback")}] : []),
+      ...(result.rollback_token ? [{label: "查看回退记录", onClick: () => inspectRelated(result.rollback_token)}] : []),
+      ...(result.rollback_of ? [{label: "查看原更新记录", onClick: () => inspectRelated(result.rollback_of)}] : []),
+      {label: "查看当前人格", onClick: openPersonaView}, {label: "关闭", onClick: closeModal},
+    ]);
 }
 
 function openPersonaImport(prefill = "") {

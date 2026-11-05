@@ -27,7 +27,8 @@ CHANNEL_PREFIX = "/api/channels/v1"
 GUI_READ_PATHS = {"/api/state", "/api/history", "/api/persona", "/api/settings",
                   "/api/metrics", "/api/chat/activity"}
 GUI_WRITE_PATHS = {"/api/persona", "/api/seed", "/api/reset", "/api/settings",
-                   "/api/metrics/toggle", "/api/persona/expression"}
+                   "/api/metrics/toggle", "/api/persona/expression",
+                   "/api/persona/expression-update"}
 
 
 def _strict_object(pairs):
@@ -656,6 +657,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 return
             if path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
+            elif path == "/api/persona/expression-update":
+                try:
+                    self._json(svc.persona_expression_update(self._bounded_body(1048576)))
+                except ChannelError:
+                    raise
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+                except Exception:
+                    self._json({"error": "表达更新结果未能确认，请查看更新记录；不要连续重新准备。"}, 500)
             elif path == "/api/persona/expression":
                 try:
                     self._json(svc.revise_persona_expression(self._body()))

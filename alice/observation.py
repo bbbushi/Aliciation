@@ -98,7 +98,9 @@ def persona_operations(store, *, limit="20"):
         pass
     except (OSError, ValueError, TypeError):
         reset = {"phase": "journal_unreadable"}
-    return {**projection, "reset": reset, "notice": "只读操作元数据，不触发恢复；启动已被恢复阻止时此接口不可用。"}
+    from .expression_update import public_status as expression_status
+    return {**projection, "expression_updates": expression_status(store, limit=count),
+            "reset": reset, "notice": "只读操作元数据，不触发恢复；启动已被恢复阻止时此接口不可用。"}
 
 
 PAGE_SIZE = 25

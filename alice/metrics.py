@@ -102,9 +102,19 @@ def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
     """Thread-safe receipt queue, no SQL and no side effect on the calling transaction.
 
     started is monotonic. Body, endpoint and provider exception text are never stored.
-    The owner flushes at a safe boundary; readonly observers can also see pending rows.
+    Context is frozen when queued, so later model rounds cannot rewrite an
+    earlier attempt. The owner flushes at a safe boundary; readonly observers
+    can also see pending rows.
     """
     try:
+        duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        try:
+            frozen_context = json.loads(json.dumps(context, ensure_ascii=False, allow_nan=False))
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            # Keep the transport receipt even if context cannot be serialized.
+            # Never retain the mutable input or let observation failure retry
+            # the model. No exception text/body is copied into this marker.
+            frozen_context = {"snapshot_status": "context_unavailable"}
         usage = {}
         u = getattr(resp, "usage", None)
         for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
@@ -112,7 +122,7 @@ def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
             if type(v) is int and v >= 0:
                 usage[dst] = v
         actual_model = getattr(resp, "model", None)
-        event = {"purpose": purpose, "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+        event = {"purpose": purpose, "duration_ms": duration_ms,
                  "usage": usage or "unknown", "usage_state": ("partial_receipt" if usage and len(usage) < 2 else
                      usage_state or ("reported" if usage else "unknown")),
                  "status": status or ("error" if error else "ok"),
@@ -120,7 +130,7 @@ def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
                  "model": actual_model or model or "unknown",
                  "model_source": "receipt" if actual_model else "requested",
                  "request_id": request_id, "call_id": call_id, "attempt": attempt,
-                 "ts": time.time(), "stage": "transport_attempt", "context": context}
+                 "ts": time.time(), "stage": "transport_attempt", "context": frozen_context}
         with store._llm_event_lock:
             if len(store._llm_events) == store._llm_events.maxlen:
                 store._llm_events_dropped += 1
