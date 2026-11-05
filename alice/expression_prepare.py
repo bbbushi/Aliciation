@@ -27,6 +27,9 @@ orientation/constraints/voice/tensions/reactions/examples 均为数组。
 required(bool),priority(0..100),origin(source|adapted),source_ids(全部出处ID),links(关联条目ID),
 audience(general|private),purposes(['chat']或通用条目['chat','qq']，仅明确纯表达的voice/constraints可再含'worker_summary'),
 pure_expression(bool),anchor_role(none|voice|stop|example)。禁止把私人关系、原文故事或真实聊天投给worker。
+links表示投影时必须同时保留的依赖，不是普通主题关联；引用方的purposes必须是每个被引用方purposes的子集。
+例如依赖仅含chat的条目时，引用方也只能含chat；依赖样本的规则不能含worker_summary。
+检查传递依赖和循环引用。冲突时只收窄引用方用途，不得扩张被引用方用途、删除必要links或删改正文来通过。
 类型专用字段：
 orientation: text默认取向,layers表层/认真层次,precedence优先关系；
 constraints: text完整规则,exceptions例外(没有可空串)；voice: text措辞/句法/节奏；
@@ -148,7 +151,8 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
     if set(build) & host_fields:
         raise ValueError("结构构建回执不能声明宿主修订、源定位或审议状态")
     build.update(format=ex.FORMAT, limits=cap)
-    ex.validate_package(build, registry=registry, limits=cap)
+    build, structure_purpose_changes = ex.restrict_prepared_purposes(build, registry=registry, limits=cap)
+    _write(root, "structure_purposes.json", {"policy": "restrict_to_dependencies_v1", "changes": structure_purpose_changes})
     adapted = _call(client, cfg, _BOUNDARY + _SCHEMA +
         "\n仅对冲突事实和权限片段做局部适配，保留完整取向、负约束、张力、回应分支与语感。"
         "不能用温和助手套话替换整段；保留所有已有条目ID、类型与source_ids；禁止新增、删除或换ID。"
@@ -162,7 +166,7 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
     if set(package) & host_fields:
         raise ValueError("局部适配不能伪造宿主修订、源定位或审议状态")
     package.update(format=ex.FORMAT, limits=cap)
-    ex.validate_package(package, registry=registry, limits=cap)
+    normalized, adapt_purpose_changes = ex.restrict_prepared_purposes(package, registry=registry, limits=cap)
     for group in ex.GROUPS:
         previous = {x["id"]: x for x in build[group]}
         if {x["id"] for x in package[group]} != set(previous):
@@ -193,6 +197,10 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
                              if key in {"scope", *(f for fields in ex._FIELDS.values() for f in fields)} and isinstance(value, str))
         if change["fragment"] not in text_fields(old_by_id[change["id"]]) or change["replacement"] not in text_fields(new_by_id[change["id"]]):
             raise ValueError("适配差异片段与实际成品不一致")
+    # Verify the model's raw changes before adopting host-only purpose changes.
+    # The latter have their own audit and must not invent textual fragments.
+    package = normalized
+    _write(root, "adapt_purposes.json", {"policy": "restrict_to_dependencies_v1", "changes": adapt_purpose_changes})
     ex.bind_source_units(package, registry)
     resolution = None
     if user_sections and user_sections.get("legacy_choices") is not None:
@@ -262,6 +270,7 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
         ex.validate_package(package, registry=registry, activation=True)
     result = {"package": package, "registry": registry, "reviews": reviews,
               "gaps": package["gaps"], "ready": ready, "replacement_count": package["replacement_count"],
-              "changes": changes, "replacements": replacements}
+              "changes": changes, "replacements": replacements,
+              "purpose_changes": {"structure": structure_purpose_changes, "adapt": adapt_purpose_changes}}
     _write(root, "expression_prepared.json", result)
     return result
