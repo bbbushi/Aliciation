@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from typing import Any
 
 from .config import Config, validate_llm
@@ -62,8 +64,10 @@ def chat(
     tools: list[dict] | None = None,
     json_mode: bool = False,
     retry: bool = True,
+    observation: dict | None = None,
+    on_attempt_usage=None,
 ):
-    """非流式调用，默认最多三次尝试；已计账的单步可关闭重试。"""
+    """非流式调用；每次实际尝试回报用量，默认最多三次尝试。"""
     kwargs: dict[str, Any] = {
         "model": model or cfg.llm.chat_model,
         "messages": messages,
@@ -76,20 +80,44 @@ def chat(
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
+    call_id = uuid.uuid4().hex
     last_err: Exception | None = None
     for attempt in range(3 if retry else 1):
+        started = time.monotonic()
+        response, failure = None, None
         try:
-            return client.chat.completions.create(**kwargs)
-        except Exception as e:  # 网络/限流等瞬时错误
+            response = client.chat.completions.create(**kwargs)
+            return response
+        except BaseException as exc:
+            failure = exc
+            if not isinstance(exc, Exception):
+                raise
+            e = exc  # 网络/限流等瞬时错误
             last_err = e
-            if retry and attempt < 2:
-                import time
-                time.sleep(2 * (attempt + 1))  # 2s、4s 退避
+        finally:
+            if on_attempt_usage is not None:
+                try:
+                    on_attempt_usage(response, incomplete=failure is not None)
+                except Exception:
+                    # Accounting must not replace the response/cancellation or
+                    # trigger another provider request. It performs no SQL.
+                    pass
+            if observation:
+                from . import metrics
+                metrics.record_llm_call(observation.get("store"), observation.get("purpose", "unspecified"),
+                    started, response, error=safe_provider_error(failure) if failure else None,
+                    model=kwargs["model"], request_id=observation.get("request_id"), call_id=call_id,
+                    attempt=attempt + 1, fallback=observation.get("fallback", False),
+                    context=observation.get("context"),
+                    status=("cancelled" if failure and not isinstance(failure, Exception) else
+                            "error" if failure else "ok"))
+        if retry and attempt < 2:
+            time.sleep(2 * (attempt + 1))  # Backoff is separate from provider latency.
     raise RuntimeError(f"LLM 调用失败：{safe_provider_error(last_err)}") from None
 
 
-def chat_text(client, cfg: Config, messages: list[dict], *, model: str | None = None) -> str:
-    resp = chat(client, cfg, messages, model=model)
+def chat_text(client, cfg: Config, messages: list[dict], *, model: str | None = None, observation=None) -> str:
+    resp = chat(client, cfg, messages, model=model, observation=observation)
     return (resp.choices[0].message.content or "").strip()
 
 

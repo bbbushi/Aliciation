@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as appconfig
-from . import consolidation, loop, observation, persona, skills, thought
+from . import consolidation, loop, observation, persona, persona_reset, skills, thought
 from .config import Config, load
 from .channels import ChannelCoordinator, ChannelError
 from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels
@@ -80,12 +80,19 @@ class ChatService:
         # 三参数注入模式不碰本机配置；只有 GUI/自主加载模式绑定写回路径（user/config.toml）。
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
+        reset_record = persona_reset.before_open() if db_path is None else None
         self.store = Store(db_path or appconfig.DB_PATH)
         self._client_owned = client is None
         try:
             self.client = client if client is not None else make_client(self.cfg)
             self._lock = threading.RLock()  # 单一永久会话语义：所有读写串行
+            persona_reset.after_open(self.store, self.cfg, reset_record)
+            if not self.store.meta_get("session_epoch"):
+                self.store.meta_set("session_epoch", uuid.uuid4().hex)
+            persona.recover_imports(self.store)
             persona.recover_growth(self.store)  # No model call or old-file replay during recovery.
+            from .expression_update import recover as recover_expression
+            recover_expression(self.store)
             self._observer_scope = uuid.uuid4().hex  # Ephemeral identity; never written to Alice's data.
             saved_thinking = self.store.meta_get("thinking")
             if saved_thinking in ("on", "off"):  # GUI 里改过的思考深度优先于 config 文件
@@ -180,16 +187,36 @@ class ChatService:
             if path.exists():
                 lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()]
                 changelog = [ln for ln in lines if ln][-6:]
+            expression_view = None
+            if md and raw_sections is not None:
+                from . import expression
+                try:
+                    package = expression.decode_sections(raw_sections)
+                    if package:
+                        display_md = persona_growth.replace_bodies(display_md, expression.editor_sections(package),
+                                                                  allowed=persona_growth.EXPRESSION)
+                    expression_view = {"revision": persona_growth.digest(md),
+                        "session_epoch": self.store.meta_get("session_epoch"),
+                        "format": "expression-v2" if package else "v1",
+                        "coverage_status": ("用户修订后源文关联待核对" if package and package.get("reviews", {}).get("fidelity") == "invalidated_by_user" else
+                                            "已完成结构核对；模型审议不代表真人效果通过") if package else "未完成 v2 覆盖核对",
+                        "pending_associations": [str(item.get("id") or item.get("section") or item.get("scenario") or "关联")
+                            + "：" + str(item.get("reason") or "原关联已失效，请核对")
+                            for item in package.get("pending_associations", [])] if package else [],
+                        "revision_modes": {title: record.get("mode") for title, record in
+                            package.get("user_revisions", {}).get("sections", {}).items()} if package else {},
+                        "sections": expression.editor_sections(package) if package else
+                            {title: raw_sections.get(title, "") for title in persona_growth.EXPRESSION}}
+                except ValueError:
+                    expression_view = {"revision": persona_growth.digest(md),
+                        "session_epoch": self.store.meta_get("session_epoch"),
+                        "format": "invalid", "coverage_status": "表达元数据损坏或未知；请恢复有效版本", "sections": None}
             return {
                 "md": md,
                 "display_md": display_md,
                 "growth_note": growth_note,
                 "growth_sections": growth_states,
-                "expression": {"revision": persona_growth.digest(md),
-                               "session_epoch": self.store.meta_get("session_epoch"),
-                               "sections": {title: raw_sections.get(title, "")
-                                            for title in persona_growth.EXPRESSION}}
-                              if md and raw_sections is not None else None,
+                "expression": expression_view,
                 "changelog": changelog,
                 "turns": self._turn_count(),
                 **self._persona_stats(),
@@ -383,6 +410,13 @@ class ChatService:
     def observer_detail(self, *, scope=None, **kwargs) -> dict:
         return self._observer_read(observation.detail, scope=scope, **kwargs)
 
+    def observer_llm_calls(self, *, scope=None, limit="100", request_id=None) -> dict:
+        return self._observer_read(observation.llm_calls, scope=scope,
+                                   limit=limit, request_id=request_id)
+
+    def observer_persona_operations(self, *, scope=None, limit="20") -> dict:
+        return self._observer_read(observation.persona_operations, scope=scope, limit=limit)
+
     def observer_context_basis(self, *, scope=None, limit="10") -> dict:
         return self._observer_read(observation.context_basis, scope=scope, limit=limit)
 
@@ -406,33 +440,13 @@ class ChatService:
         """GUI-only archive/delete preferences, separate from execution grants."""
         return self._workers.management_settings(payload)
 
+    def claude_policy(self, payload=None) -> dict:
+        """Public independent local-worker policy, no addon database access."""
+        return self._workers.claude_policy(payload)
+
     def worker_permissions(self, action: str = "list", payload=None) -> dict:
-        """claude-agent 质询文件袋（分支限定 ytq）：list 挂起质询 / answer 三层答案。"""
-        from addons.claude_agent.permission_gate import claude_policy_row, claude_gate_dir, list_pending, answer
-        with self._lock:
-            row = claude_policy_row(self._workers.ledger.store)
-            gate_dir = claude_gate_dir(row)
-            if gate_dir is None or not row['enabled'] or not row['native_sandbox_ack']:
-                return {'pending': []}
-            def current(req):
-                task_id = req.get('task_id')
-                if task_id not in self._workers.claude_transports:
-                    return False
-                task = self._workers.ledger.conn.execute('SELECT * FROM worker_tasks WHERE task_id=?', (task_id,)).fetchone()
-                attempt = self._workers.ledger.conn.execute('SELECT task_id,state FROM worker_attempts WHERE attempt_id=?', (req.get('attempt_id'),)).fetchone()
-                return (task is not None and attempt is not None and attempt['task_id'] == task_id
-                    and attempt['state'] in {'starting', 'running', 'waiting_permission'}
-                    and task['bridge_instance'] == 'local:claude-agent' and not task['cancel_requested']
-                    and req.get('epoch') == self._channels.epoch == task['epoch']
-                    and req.get('policy_revision') == row['revision'] == task['policy_revision']
-                    and self._workers.ledger.visible(task))
-            if action == 'list':
-                return {'pending': [req for req in list_pending(gate_dir) if current(req) and not req.get('stale')]}
-            if action == 'answer':
-                if not isinstance(payload, dict) or not current(payload):
-                    raise ValueError('质询已失效或任务正在停止')
-                return answer(gate_dir, payload)
-            raise ValueError('action 无效')
+        """Host-owned permission protocol; GUI authority remains unchanged."""
+        return self._workers.permissions(action, payload)
 
     def worker_inputs(self, payload=None) -> dict:
         """No user file may be imported until the DSH permission profile exists."""
@@ -486,16 +500,23 @@ class ChatService:
     def seed(self, tags: list[str], reset: bool = False) -> dict:
         """reset=True 表示「初始化」：先归档旧会话（对话/记忆/人格），再装新人格。"""
         with self._channels.control(), self._workers.control_lock:
+            with self._lock:
+                persona_reset.require_clear()
             if reset:
                 self._workers.drain()
                 self._workers.join_worker_reports()
             with self._lock:
                 if reset:
                     # 先让模型把底色写出来，成功了才清旧会话：失败时她的对话和记忆都还在
-                    md = persona.generate_seed_md(self.client, self.cfg, tags)
-                    self._archive_locked()
-                    persona.install_persona(
-                        self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
+                    before_persona = persona.persona_md()
+                    before_epoch = self.store.meta_get("session_epoch")
+                    md = persona.generate_seed_md(self.client, self.cfg, tags, store=self.store)
+                    if persona.persona_md() != before_persona or self.store.meta_get("session_epoch") != before_epoch:
+                        raise ValueError("人格或会话在准备期间已变化；未归档旧版")
+                    plan = persona.prepare_direct_install(self.store, self.cfg, md, source=f"标签：{'、'.join(tags)}")
+                    archived = self._archive_locked(plan=plan)
+                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived, archived=True)
+                    persona_reset.complete()
                 else:
                     persona.seed_from_tags(self.store, self.client, self.cfg, tags)
                 self._channels.set_ready(persona.persona_md() is not None)
@@ -503,6 +524,8 @@ class ChatService:
 
     def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False) -> dict:
         with self._channels.control(), self._workers.control_lock:
+            with self._lock:
+                persona_reset.require_clear()
             if reset:
                 self._workers.drain()
                 self._workers.join_worker_reports()
@@ -513,9 +536,12 @@ class ChatService:
                 if reset and "## 底色" not in md_text:
                     plan = persona.prepare_import(self.client, self.cfg, md_text, source, False, store=self.store)
                 if reset:
-                    archived = self._archive_locked()
+                    if plan is None:
+                        plan = persona.prepare_direct_install(self.store, self.cfg, md_text, source)
+                    archived = self._archive_locked(plan=plan)
                 if plan is not None:
-                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived)
+                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived, archived=True)
+                    persona_reset.complete()
                 else:
                     persona.install_persona(self.store, self.cfg, md_text, source=source,
                                             client=self.client)
@@ -525,6 +551,8 @@ class ChatService:
     def reset_session(self) -> dict:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
         with self._channels.control(), self._workers.control_lock:
+            with self._lock:
+                persona_reset.require_clear()
             self._workers.drain()
             self._workers.join_worker_reports()
             with self._lock:
@@ -537,15 +565,56 @@ class ChatService:
             raise ValueError("表达修订参数无效")
         from .persona_growth import digest
         with self._channels.control(), self._workers.control_lock, self._lock:
+            persona_reset.require_clear()
             if self.store.meta_get("session_epoch") != payload["session_epoch"]:
                 raise ChannelError(409, "session_changed", "会话已更换，请重新打开当前人格后再编辑")
             if digest(persona.persona_md() or "") != payload["revision"]:
                 raise ChannelError(409, "persona_changed", "人格已变化，请重新打开编辑后再保存")
-            changed = persona.revise_expression(self.store, payload["revision"], payload["sections"])
-            return {"changed": changed, "state": self.state()}
+            previous = self.persona_view()["expression"]["sections"]
+            changed = persona.revise_expression(self.store, payload["revision"], payload["sections"], cfg=self.cfg)
+            from .expression import decode_sections
+            from .persona_growth import bodies
+            package = decode_sections(bodies(persona.persona_md() or ""))
+            pending = package.get("pending_associations", []) if package else []
+            return {"changed": changed, "state": self.state(),
+                    "changed_sections": [k for k, v in payload["sections"].items() if v.strip() != previous.get(k, "")],
+                    "pending_associations": [str(item.get("id") or item.get("section") or item.get("scenario") or "关联")
+                        + "：" + str(item.get("reason") or "原关联已失效，请核对") for item in pending]}
 
-    def _archive_locked(self) -> Path | None:
+    def persona_expression_update(self, payload) -> dict:
+        """GUI-owned expression preparation/apply; never a model or QQ tool."""
+        from . import expression_update as update
+        if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+            raise ValueError("表达更新参数无效")
+        action = payload["action"]
+        permitted = {
+            "list": {"action"}, "detail": {"action", "token"},
+            "prepare": {"action", "revision", "session_epoch", "source_text", "source_name", "source_op_id", "source_hash", "legacy_choices"},
+            "apply": {"action", "token", "revision", "session_epoch"},
+            "cancel": {"action", "token", "revision", "session_epoch"},
+            "rollback": {"action", "token", "revision", "session_epoch"}}
+        if action not in permitted or set(payload) - permitted[action]:
+            raise ValueError("表达更新动作或字段无效")
+        if action in {"list", "detail"}:
+            with self._lock:
+                if action == "list":
+                    return update.list_sources(self.store)
+                return update.detail(self.store, payload.get("token"))
+        with self._channels.control(), self._workers.control_lock, self._lock:
+            persona_reset.require_clear()
+            if action == "prepare":
+                return update.prepare(self.store, self.client, self.cfg, payload)
+            if action == "apply":
+                return update.apply(self.store, self.cfg, payload)
+            if action == "cancel":
+                return update.cancel(self.store, payload)
+            return update.rollback(self.store, payload.get("token"), payload.get("revision"), payload.get("session_epoch"), cfg=self.cfg)
+
+    def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
+        if plan is not None and (plan["epoch"] != self.store.meta_get("session_epoch")
+                                 or plan["current_md"] != persona.persona_md()):
+            raise ValueError("人格或会话在准备后已变化；未归档旧版")
         self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
         self._channels.set_ready(False)
         self._evaluations.before_reset()
@@ -559,7 +628,9 @@ class ChatService:
         while dest.exists():  # 同一秒内多次初始化也不能盖掉上一份归档
             dest = ARCHIVE_ROOT / f"{stamp}-{n}"
             n += 1
+        old_epoch = self.store.meta_get("session_epoch")
         self.store.close()
+        reset_record = persona_reset.begin(dest, old_epoch, plan)
         dest.mkdir(parents=True)
         moved = False
         for name in ("alice.db", "alice.db-wal", "alice.db-shm"):
@@ -570,25 +641,22 @@ class ChatService:
         if appconfig.PERSONA_DIR.exists():
             shutil.move(str(appconfig.PERSONA_DIR), str(dest / "persona"))
             moved = True
-        if not moved:
-            dest.rmdir()
-            self.store = Store(appconfig.DB_PATH)
-            self._evaluations.bind_store()
-            self._channels.bind_store()
-            self._discovery.bind_store()
-            self._workers.bind_store()
-            return None
         (dest / "note.txt").write_text(
             f"初始化归档：{datetime.now():%Y-%m-%d %H:%M}\n"
             f"丢弃了 {turns} 轮对话、"
             f"{mem['active'] + mem['warehouse'] + mem['longterm']} 条记忆、{mem['skills']} 个技能。\n",
             encoding="utf-8",
         )
+        reset_record["phase"] = "archived"
+        persona_reset.write(reset_record)
         self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
+        self.store.meta_set("session_epoch", reset_record["new_epoch"])
         self._evaluations.bind_store()
         self._channels.bind_store()
         self._discovery.bind_store()
         self._workers.bind_store()
+        if plan is None:
+            persona_reset.complete()
         return dest
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
@@ -646,6 +714,9 @@ class ChatService:
             # Both GUI and QQ workers own searches; release their in-memory
             # results even when generation or maintenance fails.
             self._discovery.finish_chat(request["request_id"])
+            with self._lock:
+                from .metrics import flush_calls
+                flush_calls(self.store)
 
     def _send_steps(self, request, on_delta, on_tool, on_reasoning, *, evaluation_id,
                     owner_token, on_search_progress):
@@ -687,7 +758,7 @@ class ChatService:
             except Exception:
                 self._discovery.chat_accounting_failed()
                 source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
-            events = yield from self._watchers_steps()
+            events = yield from self._watchers_steps(request_id=request_id)
             if source_warning:
                 events.append(source_warning)
             if maintenance_warnings:
@@ -945,11 +1016,12 @@ class ChatService:
         from .steps import drive
         return drive(self._watchers_steps(), self._lock)
 
-    def _watchers_steps(self):
+    def _watchers_steps(self, *, request_id=None):
+        request_id = request_id or "maintenance_" + uuid.uuid4().hex
         events: list[str] = []
         for watcher in (persona.evolve_if_due_steps, thought.deliberate_if_due_steps, skills.distill_if_due_steps):
             try:
-                msg = yield from watcher(self.store, self.client, self.cfg)
+                msg = yield from watcher(self.store, self.client, self.cfg, request_id=request_id)
             except Exception as e:  # Never return provider exception bodies or credentials.
                 msg = f"{watcher.__name__} 暂失败：{type(e).__name__}"
             if msg:

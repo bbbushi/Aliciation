@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 from .config import Config
 from .llm import chat, parse_json
@@ -28,11 +29,11 @@ DISTILL_PROMPT = """你是技能提炼器。从下面的记忆中提炼可复用
 输出 JSON：{{"skills": [{{"title": "...", "content": "...", "source_titles": ["..."]}}]}}"""
 
 
-def distill(store: Store, client, cfg: Config) -> str:
-    return drive(distill_steps(store, client, cfg))
+def distill(store: Store, client, cfg: Config, *, request_id=None) -> str:
+    return drive(distill_steps(store, client, cfg, request_id=request_id))
 
 
-def distill_steps(store: Store, client, cfg: Config):
+def distill_steps(store: Store, client, cfg: Config, *, request_id=None):
     horizon = time.time() - 30 * 86400
     rows = [m for m in store.alive_memories() if m["created_at"] >= horizon][:80]
     if not rows:
@@ -48,6 +49,8 @@ def distill_steps(store: Store, client, cfg: Config):
         [{"role": "user", "content": prompt}],
         model=cfg.llm.cheap_model,
         json_mode=True,
+        observation={"store": store, "purpose": "skill_distill",
+                     "request_id": request_id or "distill_" + uuid.uuid4().hex},
     )
     try:
         data = parse_json(resp.choices[0].message.content or "")
@@ -82,13 +85,13 @@ def distill_steps(store: Store, client, cfg: Config):
     return f"提炼完成：新增 {added} 条技能，当前共 {store.count_skills()} 条。"
 
 
-def distill_if_due(store: Store, client, cfg: Config) -> str | None:
-    return drive(distill_if_due_steps(store, client, cfg))
+def distill_if_due(store: Store, client, cfg: Config, *, request_id=None) -> str | None:
+    return drive(distill_if_due_steps(store, client, cfg, request_id=request_id))
 
 
-def distill_if_due_steps(store: Store, client, cfg: Config):
+def distill_if_due_steps(store: Store, client, cfg: Config, *, request_id=None):
     """数据触发：自上次提炼起新记忆累计到阈值即提炼。"""
     anchor = store.meta_get_time("last_distill_at")
     if store.count_memories_since(anchor) >= cfg.memory.distill_every_memories:
-        return (yield from distill_steps(store, client, cfg))
+        return (yield from distill_steps(store, client, cfg, request_id=request_id))
     return None

@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "path": "check_support.py",
+      "origin": "D:\\alice\\docs\\\u8bbe\u8ba1\u6587\u6863\\\u6574\u4f53\u8bbe\u8ba1\u8fed\u4ee3\u6982\u89c8\\\u9694\u79bb\u68c0\u6d4b\u8bc1\u636e-20261104\\check_support.py",
+      "sha256": "fdf96bac6bb915942726d0ccc9fcf8099cd9b6e9e87e542abab8f063a4c8aa7b"
+    },
+    {
+      "path": "observability/check_observability.py",
+      "origin": "D:\\alice\\docs\\\u8bbe\u8ba1\u6587\u6863\\\u6574\u4f53\u8bbe\u8ba1\u8fed\u4ee3\u6982\u89c8\\\u9694\u79bb\u68c0\u6d4b\u8bc1\u636e-20261104\\observability\\check_observability.py",
+      "sha256": "95519e1fa1b136aecb3424ba006075a30373f516d403ed0ed3ecb723988f7fd4"
+    },
+    {
+      "path": "usage_aggregation/check_usage_aggregation.py",
+      "origin": "D:\\alice\\docs\\\u8bbe\u8ba1\u6587\u6863\\\u6574\u4f53\u8bbe\u8ba1\u8fed\u4ee3\u6982\u89c8\\P2\u7528\u91cf\u805a\u5408\u4fee\u590d\u8bc1\u636e-20261104\\check_usage_aggregation.py",
+      "sha256": "f2d9d90c19c97bc7cb49ce0a663af8f93799b3c78b75852e803fd6e2adbb7061"
+    }
+  ],
+  "runtime_guard_sha256": "7711a54699f5fd259000f193bb7dfe8c970be40363359c266c4e8c543f102903",
+  "guard_adjustments": [
+    "bind actual live repository",
+    "rename/link/symlink source must also be writable inside probe"
+  ]
+}

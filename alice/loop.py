@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import time
+import uuid
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -149,7 +150,7 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
 
 
 def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reasoning=None,
-                  usage_out: dict | None = None, tools=None):
+                  usage_out: dict | None = None, tools=None, observation=None):
     """流式调用一轮；返回与非流式同构的 message，内容/思考增量分别经回调实时推出。"""
     kwargs: dict = {
         "model": cfg.llm.chat_model,
@@ -168,34 +169,63 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     calls: dict[int, dict] = {}
-    for chunk in client.chat.completions.create(**kwargs):
-        u = getattr(chunk, "usage", None)
-        if u is not None and usage_out is not None:
-            usage_out["prompt"] = usage_out.get("prompt", 0) + (u.prompt_tokens or 0)
-            usage_out["completion"] = usage_out.get("completion", 0) + (u.completion_tokens or 0)
-        if not getattr(chunk, "choices", None):
-            continue
-        delta = chunk.choices[0].delta
-        if delta is None:
-            continue
-        piece = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-        if piece:
-            reasoning_parts.append(piece)
-            if on_reasoning:
-                on_reasoning(piece)
-        piece = getattr(delta, "content", None)
-        if piece:
-            content_parts.append(piece)
-            on_delta(piece)
-        for tc in getattr(delta, "tool_calls", None) or []:
-            slot = calls.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
-            if tc.id:
-                slot["id"] = tc.id
-            if tc.function:
-                if tc.function.name:
-                    slot["name"] = tc.function.name
-                if tc.function.arguments:
-                    slot["arguments"] += tc.function.arguments
+    started = time.monotonic()
+    failure, receipt_usage, actual_model = None, None, None
+    call_id = uuid.uuid4().hex
+    stream = None
+    last_chunk_had_usage = False
+    try:
+        stream = client.chat.completions.create(**kwargs)
+        for chunk in stream:
+            actual_model = getattr(chunk, "model", None) or actual_model
+            u = getattr(chunk, "usage", None)
+            last_chunk_had_usage = u is not None
+            if u is not None:
+                receipt_usage = u
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            piece = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            if piece:
+                reasoning_parts.append(piece)
+                if on_reasoning:
+                    on_reasoning(piece)
+            piece = getattr(delta, "content", None)
+            if piece:
+                content_parts.append(piece)
+                on_delta(piece)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                slot = calls.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
+                if tc.id:
+                    slot["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        slot["name"] = tc.function.name
+                    if tc.function.arguments:
+                        slot["arguments"] += tc.function.arguments
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        receipt = SimpleNamespace(usage=receipt_usage, model=actual_model)
+        incomplete = failure is not None or not last_chunk_had_usage
+        _record_usage(usage_out, receipt, incomplete=incomplete)
+        if observation:
+            from .llm import safe_provider_error
+            metrics.record_llm_call(observation["store"], observation["purpose"], started, receipt,
+                error=safe_provider_error(failure) if failure else None,
+                model=cfg.llm.chat_model, request_id=observation.get("request_id"), call_id=call_id,
+                context=observation.get("context"),
+                status="cancelled" if failure and not isinstance(failure, Exception) else "error" if failure else "ok",
+                usage_state=("partial_receipt" if receipt_usage and incomplete
+                             else "reported" if receipt_usage else "unknown"))
+        if stream is not None and callable(getattr(stream, "close", None)):
+            try:
+                stream.close()
+            except Exception:
+                pass
     return SimpleNamespace(
         content="".join(content_parts),
         reasoning="".join(reasoning_parts),
@@ -209,13 +239,20 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     )
 
 
-def _record_usage(usage_out: dict | None, resp) -> None:
+def _record_usage(usage_out: dict | None, resp, *, incomplete: bool = False) -> None:
+    """Accumulate one actual attempt once; uncertainty survives later receipts."""
     if usage_out is None:
         return
     u = getattr(resp, "usage", None)
-    if u is not None:
-        usage_out["prompt"] = usage_out.get("prompt", 0) + (u.prompt_tokens or 0)
-        usage_out["completion"] = usage_out.get("completion", 0) + (u.completion_tokens or 0)
+    known = True
+    for source, target in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+        value = getattr(u, source, None)
+        if type(value) is int and value >= 0:
+            usage_out[target] = usage_out.get(target, 0) + value
+        else:
+            known = False
+    if incomplete or not known:
+        usage_out["incomplete"] = True
 
 
 def _record_source_usage(out: dict | None, context: dict, **fields) -> None:
@@ -241,7 +278,31 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
               source_allow_external_recall=False, search_session=None, worker_session=None, tool_round_limit=4, working_set=None):
     ts = ts if ts is not None else time.time()
     started_at = time.monotonic()
+    request_id = request_id or uuid.uuid4().hex
+    def request_blocks():
+        blocks = [{"kind": b.kind, "name": b.name, "estimated_tokens": b.tokens}
+                  for manifest in manifests for b in manifest.blocks]
+        if active_tools:
+            blocks.append({"kind": "stable", "name": "tool_schemas",
+                           "estimated_tokens": sum(_ctx.estimate_tokens(json.dumps(t, ensure_ascii=False))
+                                                   for t in active_tools)})
+        return blocks
+    def observe(purpose, **extra):
+        basis = None
+        if purpose in {"main", "main_stream", "main_fallback"}:
+            basis = {"persona": persona_basis, "history_selection": boundary,
+                     "estimated_tokens": _ctx.messages_tokens(messages, active_tools),
+                     "blocks": request_blocks(),
+                     "tool_schema_count": len(active_tools),
+                     "tool_names": [t["function"]["name"] for t in active_tools]}
+        return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
+    def attempt_usage(detail=None):
+        def record(response, *, incomplete=False):
+            _record_usage(usage_out, response, incomplete=incomplete)
+            if detail is not None and detail is not usage_out:
+                _record_usage(detail, response, incomplete=incomplete)
+        return record
     if source_usage_out is not None:
         # Reused output dictionaries must not report a previous successful turn
         # when source validation or persistence fails before this one starts.
@@ -311,18 +372,6 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     def growth_valid():
         return (persona_growth.refs_valid(store, growth_refs)
                 and (recap_session is None or recap_session.valid()))
-    if persona_snapshot is not None:
-        try:
-            metrics.record(store, "persona_basis", 1.0,
-                           detail=json.dumps({"request_id": request_id, "user_turn_id": user_id,
-                                              "fingerprint": persona_snapshot["fingerprint"],
-                                              "expression_policy_version": persona_context.EXPRESSION_POLICY_VERSION,
-                                              "growth_sections": growth_basis["sections"],
-                                              "samples": persona_snapshot["sample_ids"],
-                                              "chars": len(persona_snapshot["raw"])},
-                                             ensure_ascii=False))
-        except Exception:
-            pass  # 元数据失败不阻塞对话
     from .learning import learning_tools
     memory_session = (MemoryContext(store, cfg, source_scope, user_text)
                       if cfg.context.assembly_mode == "indexed" else None)
@@ -331,7 +380,6 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     memory_tools = MEMORY_TOOLS + [SOURCE_RECALL_TOOL] + TOOLS[1:] if memory_session else TOOLS
     if memory_session is not None and cfg.context.history_enabled:
         from .context_history import HistoryContext, TOOLS as HISTORY_TOOLS
-        memory_session.history = HistoryContext(memory_session)
         memory_tools += HISTORY_TOOLS
     if (memory_session is not None and working_set is not None
             and cfg.context.working_set_enabled):
@@ -363,17 +411,48 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     from . import context as _ctx
     # P1b 近位表达提醒（默认关）：锚在每次模型请求前重建替换，保持一份不堆积
     anchor_msg = None
+    expression_meta, anchor_meta = {}, {}
+    expression_purpose = "chat" if source_scope == "gui" else "qq"
+    rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
+                                                    purpose=expression_purpose, cfg=cfg)
     if cfg.persona.expression_anchor and persona_snapshot is not None:
-        _anchor_text = persona_context.render_anchor(persona_snapshot)
+        _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta,
+                                                       purpose=expression_purpose, cfg=cfg)
         if _anchor_text:
             anchor_msg = {"role": "system", "content": _anchor_text}
-    reserved = _ctx.messages_tokens(extra_messages, tools)
+    reserved = _ctx.messages_tokens(extra_messages + ([anchor_msg] if anchor_msg else []), tools)
+    # Select once with a bounded reservation for recap and its trusted envelope.
+    # Generation consumes this immutable boundary; it never causes re-selection
+    # or a second catalogue/workspace initialization or a second paid generation.
+    recap_reserve = cfg.context.recap_inject_chars + 2048 if cfg.context.recap_enabled else 0
+    manifests = []
+    messages = retrieval.build_messages(
+        store, cfg, rendered_persona, now=now,
+        source_packets=packets, current_user_text=user_text,
+        source_scope=source_scope, stance_ids=stance_ids, reserved_tokens=reserved,
+        manifest_out=manifests, memory_session=memory_session,
+        request_id=request_id, recap_reserve_tokens=recap_reserve,
+        protect_recent_history=bool(persona_snapshot and persona_snapshot.get("expression_package")))
+    persona_basis = {"request_id": request_id, "user_turn_id": user_id,
+                     "expression": expression_meta, "anchor_enabled": cfg.persona.expression_anchor,
+                     "anchor": anchor_meta, "anchor_present": anchor_msg is not None,
+                     "model_rounds_started": 0, "delivery_status": "assembled_not_sent"}
+    try:
+        metrics.record(store, "persona_basis", 1.0, json.dumps(persona_basis, ensure_ascii=False))
+    except Exception:
+        pass
+    boundary = manifests[0].history
+    if memory_session is not None and cfg.context.history_enabled:
+        memory_session.history = HistoryContext(memory_session, boundary=boundary)
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
-    if cfg.context.recap_enabled:
+    initial_over_budget = bool(cfg.context.total_budget_tokens and
+        _ctx.messages_tokens(messages + extra_messages + ([anchor_msg] if anchor_msg else []), tools)
+        + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens)
+    if cfg.context.recap_enabled and not initial_over_budget:
         from .context_recap import RecapContext
-        recap_session = RecapContext(store, cfg, source_scope)
+        recap_session = RecapContext(store, cfg, source_scope, boundary=boundary)
         span_rows = recap_session.pending()
         if span_rows is not None:
             prompt = recap_session.prompt(span_rows)
@@ -385,12 +464,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 recap_raw = ''
                 try:
                     recap_calls += 1
-                    _rt0 = time.time()
                     resp = yield lambda: chat(client, cfg, recap_messages,
-                                              model=cfg.llm.cheap_model, json_mode=True, retry=False)
-                    metrics.record_llm_call(store, 'recap_generate', _rt0, resp, model=cfg.llm.cheap_model)
-                    _record_usage(recap_usage, resp)
-                    _record_usage(usage_out, resp)
+                                              model=cfg.llm.cheap_model, json_mode=True, retry=False,
+                                              observation=observe("recap_generate"),
+                                              on_attempt_usage=attempt_usage(recap_usage))
                     recap_raw = resp.choices[0].message.content or ''
                     recap_md = recap_session.parse(recap_raw, span_rows)
                     if recap_md:
@@ -401,12 +478,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             recap_session.generation = 'review_budget_exceeded'
                         else:
                             recap_calls += 1
-                            _rt0 = time.time()
                             reviewed = yield lambda: chat(client, cfg, review_messages,
-                                model=cfg.llm.cheap_model, json_mode=True, retry=False)
-                            metrics.record_llm_call(store, 'recap_review', _rt0, reviewed, model=cfg.llm.cheap_model)
-                            _record_usage(recap_usage, reviewed)
-                            _record_usage(usage_out, reviewed)
+                                model=cfg.llm.cheap_model, json_mode=True, retry=False,
+                                observation=observe("recap_review"),
+                                on_attempt_usage=attempt_usage(recap_usage))
                             verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                             recap_session.review = verdict
                             if verdict['valid']:
@@ -431,18 +506,23 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     recap_reply_selected = bool(recap_exposed and grounding.recap_question(user_text) and not transform_inputs)
     recap_reply_audit['selected'] = recap_reply_selected
     reply_review_selected = bool(transform_inputs) or recap_reply_selected
-    manifests = []
-    messages = retrieval.build_messages(
-        store, cfg, persona_context.render_full(persona_snapshot), now=now,
-        source_packets=packets, current_user_text=user_text,
-        source_scope=source_scope, stance_ids=stance_ids, reserved_tokens=reserved,
-        manifest_out=manifests, memory_session=memory_session, recap_block=recap_block,
-        request_id=request_id, recap_available=recap_exposed)
+    if recap_block:
+        envelope = {"role": "system", "content":
+            "宿主本次请求的前情装配状态（不是历史用户发言）：" + json.dumps(
+                {"request_id": request_id, "available": recap_exposed}, ensure_ascii=False)}
+        material = {"role": "user", "content": recap_block}
+        if _ctx.messages_tokens([envelope, material]) > recap_reserve:
+            raise ValueError("前情材料超过已预留预算；未执行主模型调用")
+        # The current user remains last, with the complete selected history intact.
+        messages[-1:-1] = [envelope, material]
+        manifests[0].add("stable", "current_request_recap_status", envelope["content"])
+        manifests[0].add("background", "current_request_recap", recap_block)
     messages.extend(extra_messages)
     for manifest in manifests:
         for extra in extra_messages:
             manifest.add("stable", "request_capability", extra["content"])
-        manifest.add("stable", "tool_schemas", json.dumps(tools, ensure_ascii=False))
+        if anchor_msg:
+            manifest.add("stable", "expression_anchor", anchor_msg["content"])
     reply = ""
     round_number = 0
     while True:
@@ -481,13 +561,15 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         ):
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
+        # Request assembly is not a sent receipt. Each actual call records the
+        # same frozen expression IDs; retries are accounted by llm observations.
+        persona_basis["model_rounds_started"] += 1
+        persona_basis["delivery_status"] = "model_attempt"
         if on_delta is None:
-            _mt0 = time.time()
             resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
-                                      retry=memory_session is None and not growth_refs and not recap_exposed)
-            metrics.record_llm_call(store, "main", _mt0, resp, model=cfg.llm.chat_model)
+                                      retry=memory_session is None and not growth_refs and not recap_exposed,
+                                      observation=observe("main"), on_attempt_usage=attempt_usage())
             msg = resp.choices[0].message
-            _record_usage(usage_out, resp)
         else:
             # Task-bound text waits for the post-I/O licence check; a policy
             # revocation during model generation must not publish late deltas.
@@ -496,10 +578,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = None if buffered is not None else on_reasoning
             try:
-                _mt0 = time.time()
                 msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback,
-                                                  usage_out, active_tools)
-                metrics.record_llm_call(store, 'main_stream', _mt0, None, model=cfg.llm.chat_model)
+                                                  usage_out, active_tools, observation=observe("main_stream"))
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
@@ -520,9 +600,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                     break
                 resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
-                                          retry=memory_session is None and not growth_refs and not recap_exposed)
+                                          retry=memory_session is None and not growth_refs and not recap_exposed,
+                                          observation=observe("main_fallback", fallback=True),
+                                          on_attempt_usage=attempt_usage())
                 msg = resp.choices[0].message
-                _record_usage(usage_out, resp)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
                 if (r and on_reasoning and not reply_review_selected and not source_context["worker_refs"] and not growth_refs and not recap_exposed
                         and not (memory_session and memory_session.exposed)):
@@ -562,13 +643,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
                         raise ValueError('review_budget_exceeded')
                     review_audit['calls'] += 1
-                    _xt0 = time.time()
                     reviewed = yield lambda: chat(client, cfg, review_messages,
-                        model=cfg.llm.cheap_model, json_mode=True, retry=False)
-                    metrics.record_llm_call(store, 'rewrite_review' if transform_inputs else 'recap_reply_review',
-                                            _xt0, reviewed, model=cfg.llm.cheap_model)
-                    _record_usage(usage_out, reviewed)
-                    _record_usage(review_audit['usage'], reviewed)
+                        model=cfg.llm.cheap_model, json_mode=True, retry=False,
+                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review"),
+                        on_attempt_usage=attempt_usage(review_audit['usage']))
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                     review_audit['status'] = 'accepted' if verdict['valid'] else 'original_preserved'
                     review_audit['reason'] = verdict['reason']
@@ -666,9 +744,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                   worker_refs=source_context["worker_refs"])
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     basis = {"request_id": request_id, "user_turn_id": user_id, "assistant_turn_id": assistant_id,
-             "mode": cfg.context.assembly_mode,
-             "blocks": [{"kind": b.kind, "name": b.name, "estimated_tokens": b.tokens}
-                        for manifest in manifests for b in manifest.blocks],
+             "mode": cfg.context.assembly_mode, "history_selection": boundary,
+             "persona": persona_basis,
+             "blocks": request_blocks(), "tool_schema_count": len(active_tools),
+             "tool_names": [t["function"]["name"] for t in active_tools],
              "final_estimated_tokens": _ctx.messages_tokens(messages, active_tools),
              "reply_reserve_tokens": cfg.context.reply_reserve_tokens,
              "usage": dict(usage_out), "elapsed_seconds": round(time.monotonic() - started_at, 3)}
@@ -692,7 +771,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     if on_persist is not None:
         on_persist(assistant_id)
     try:
-        yield from extraction.extract_pending_steps(store, client, cfg)
+        yield from extraction.extract_pending_steps(store, client, cfg, request_id=request_id)
     except Exception as e:  # 提取失败不影响当轮对话
         print(f"（记忆提取暂失败：{type(e).__name__}）")
         if on_maintenance_warning is not None:
@@ -730,11 +809,12 @@ def run_chat(store: Store, client, cfg: Config) -> None:
                 for layer in ("active", "warehouse", "longterm"):
                     print(f"{layer}: {store.count_in_layer(layer)} 条")
                 continue
-            reply = chat_turn(store, client, cfg, text)
+            turn_request_id = uuid.uuid4().hex
+            reply = chat_turn(store, client, cfg, text, request_id=turn_request_id)
             print(f"\n{cfg.persona.name}> {reply}")
             for watcher in (persona.evolve_if_due, skills.distill_if_due):
                 try:
-                    msg = watcher(store, client, cfg)
+                    msg = watcher(store, client, cfg, request_id=turn_request_id)
                     if msg:
                         print(f"（{msg}）")
                 except Exception as e:  # 后台任务失败不影响对话

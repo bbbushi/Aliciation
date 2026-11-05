@@ -1,0 +1,28 @@
+{
+  "aggregate": {
+    "incomplete": true
+  },
+  "events": [
+    {
+      "purpose": "main_stream",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "无法连接接口地址，请检查网络与地址",
+      "fallback": false,
+      "model": "fixture-stream-model",
+      "model_source": "receipt",
+      "request_id": "request_fixture",
+      "call_id": "5563bb59d4dd4cae8fb98bcb25928050",
+      "attempt": 1,
+      "ts": 1793794709.4275267,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "pending"
+    }
+  ],
+  "closed": true
+}

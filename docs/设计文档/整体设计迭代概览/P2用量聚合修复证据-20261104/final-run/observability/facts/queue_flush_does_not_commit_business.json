@@ -1,0 +1,6 @@
+{
+  "outer_business_rolled_back": true,
+  "event_survived_in_queue": true,
+  "event_later_flushed": true,
+  "real_sqlite_independent_reader": true
+}

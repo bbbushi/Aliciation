@@ -1,0 +1,22 @@
+{
+  "source_snapshot_sha256": "b7255c901ccf4202035095cc0228d5affc0de5035c6fc156440375359f35e18a",
+  "checks": [
+    {
+      "root_kind": "production",
+      "checked": 70,
+      "mismatches": []
+    },
+    {
+      "root_kind": "snapshot",
+      "checked": 70,
+      "mismatches": []
+    },
+    {
+      "root_kind": "usage_aggregation",
+      "checked": 70,
+      "mismatches": []
+    }
+  ],
+  "passed": true,
+  "application_code_executed": false
+}

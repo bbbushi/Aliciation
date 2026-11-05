@@ -1,0 +1,198 @@
+{
+  "reply": "Synthetic final reply.",
+  "aggregate": {
+    "prompt": 30,
+    "completion": 12,
+    "incomplete": true
+  },
+  "events": [
+    {
+      "purpose": "main_stream",
+      "duration_ms": 0,
+      "usage": {
+        "prompt": 10,
+        "completion": 4
+      },
+      "usage_state": "partial_receipt",
+      "status": "error",
+      "error_type": "无法连接接口地址，请检查网络与地址",
+      "fallback": false,
+      "model": "fixture-stream-model",
+      "model_source": "receipt",
+      "request_id": "request_fbea1f3fb0734b92811b3619f9710b96",
+      "call_id": "5041e103f0c7444b9829479bf74b23e4",
+      "attempt": 1,
+      "ts": 1793794712.1203287,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "request_fbea1f3fb0734b92811b3619f9710b96",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5481,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "committed"
+    },
+    {
+      "purpose": "main_fallback",
+      "duration_ms": 0,
+      "usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "usage_state": "reported",
+      "status": "ok",
+      "error_type": null,
+      "fallback": true,
+      "model": "fixture-receipt-model",
+      "model_source": "receipt",
+      "request_id": "request_fbea1f3fb0734b92811b3619f9710b96",
+      "call_id": "5679cbca84ee47268e77131fce053847",
+      "attempt": 1,
+      "ts": 1793794712.1217384,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "request_fbea1f3fb0734b92811b3619f9710b96",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5481,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "committed"
+    }
+  ],
+  "context_basis_usage": {
+    "prompt": 30,
+    "completion": 12,
+    "incomplete": true
+  },
+  "provider_calls": 2,
+  "backoff_replaced_seconds": [],
+  "turns": [
+    {
+      "role": "user",
+      "content": "请回应这条隔离诊断消息。"
+    },
+    {
+      "role": "assistant",
+      "content": "Synthetic final reply."
+    }
+  ],
+  "streamed_deltas": [
+    "partial text"
+  ],
+  "stubs": [
+    "synthetic parsed persona snapshot loader",
+    "fake provider",
+    "backoff sleep only"
+  ],
+  "real_path": "loop.chat_turn -> steps.drive -> assembly -> provider methods -> SQLite turns/context_basis/receipts"
+}

@@ -1,0 +1,231 @@
+{
+  "aggregate": {
+    "prompt": 20,
+    "completion": 8,
+    "incomplete": true
+  },
+  "context_basis_usage": {
+    "prompt": 20,
+    "completion": 8,
+    "incomplete": true
+  },
+  "basis": {
+    "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+    "user_turn_id": 1,
+    "assistant_turn_id": 2,
+    "mode": "legacy",
+    "history_selection": {
+      "exclusions": [],
+      "minimum_retained_over_budget": false,
+      "current_user_over_budget": false,
+      "retained_ids": [
+        1
+      ],
+      "first_retained_id": 1,
+      "excluded_ids": [],
+      "message_limit": 16,
+      "history_token_budget": 90323,
+      "policy": "complete_suffix_then_budget",
+      "recap_reserved_tokens": 0
+    },
+    "persona": {
+      "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+      "user_turn_id": 1,
+      "expression": {
+        "fingerprint": "d4502103463dbff2",
+        "policy_version": 4,
+        "sample_ids": [],
+        "chars": 79,
+        "estimated_tokens": 73,
+        "degradation": [],
+        "selected_style_indices": [
+          0
+        ],
+        "omitted_sample_ids": [],
+        "purpose": "chat",
+        "full_chars": 104,
+        "full_estimated_tokens": 84
+      },
+      "anchor_enabled": false,
+      "anchor": {},
+      "anchor_present": false
+    },
+    "blocks": [
+      {
+        "kind": "stable",
+        "name": "constitution+persona+memory-area",
+        "estimated_tokens": 5015
+      },
+      {
+        "kind": "history",
+        "name": "user",
+        "estimated_tokens": 31
+      },
+      {
+        "kind": "stable",
+        "name": "request_capability",
+        "estimated_tokens": 120
+      },
+      {
+        "kind": "stable",
+        "name": "tool_schemas",
+        "estimated_tokens": 405
+      }
+    ],
+    "tool_schema_count": 2,
+    "tool_names": [
+      "recall",
+      "remember"
+    ],
+    "final_estimated_tokens": 5617,
+    "reply_reserve_tokens": 4000,
+    "usage": {
+      "prompt": 20,
+      "completion": 8,
+      "incomplete": true
+    },
+    "elapsed_seconds": 0.094,
+    "persona_growth": {
+      "sections": {
+        "生长 · 自我叙事": "absent",
+        "生长 · 与用户的关系": "absent"
+      },
+      "evidence_ids": [],
+      "valid_at_finish": true
+    },
+    "transform_review": {
+      "selected": true,
+      "calls": 1,
+      "status": "original_preserved",
+      "usage": {
+        "incomplete": true
+      },
+      "draft_sha256": "01219b3f2601565fae15399563368d8ffee5a637e9be91fdbe6a1e82f8589989",
+      "policy_sha256": "eeedeea44f88036a358514f3514cc95e0a3c81e2fb72583917fe2350ccbb401a",
+      "error": "RuntimeError"
+    },
+    "recap_reply_review": {
+      "selected": false,
+      "calls": 0,
+      "status": "not_selected",
+      "usage": {}
+    }
+  },
+  "calls": 2,
+  "events": [
+    {
+      "purpose": "rewrite_review",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "请求受限或账户额度不足",
+      "fallback": false,
+      "model": "synthetic-review-model",
+      "model_source": "requested",
+      "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+      "call_id": "22200699aaf1422aa22ecffc25fe7227",
+      "attempt": 1,
+      "ts": 1793794810.8404746,
+      "stage": "transport_attempt",
+      "context": null,
+      "storage": "committed"
+    },
+    {
+      "purpose": "main",
+      "duration_ms": 0,
+      "usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "usage_state": "reported",
+      "status": "ok",
+      "error_type": null,
+      "fallback": false,
+      "model": "synthetic-receipt-model",
+      "model_source": "receipt",
+      "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+      "call_id": "73094a63e3cc47cf9b240a3910905625",
+      "attempt": 1,
+      "ts": 1793794810.8404746,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90323,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5617,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 31
+          },
+          {
+            "kind": "stable",
+            "name": "request_capability",
+            "estimated_tokens": 120
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "committed"
+    }
+  ],
+  "reply": "此为隔离诊断材料，不是现实承诺。",
+  "exception": null,
+  "turn_count": 2,
+  "backoff_replaced_seconds": [],
+  "stubs": [
+    "synthetic persona loader",
+    "fake provider",
+    "backoff sleep"
+  ],
+  "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+}

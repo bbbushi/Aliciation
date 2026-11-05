@@ -1,0 +1,41 @@
+{
+  "stage": "after_db_commit",
+  "in_transaction": false,
+  "state": {
+    "file_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+    "memories": [
+      {
+        "id": 1,
+        "title": "先验一"
+      },
+      {
+        "id": 2,
+        "title": "先验二"
+      }
+    ],
+    "marker": "{\"kind\": \"persona_import_v2\", \"op_id\": \"imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"epoch\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"phase\": \"prepared\", \"before_sha256\": \"a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df\", \"after_sha256\": \"329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8\", \"before_exists\": true, \"before_meta\": {\"persona_version\": null, \"persona_seeded_at\": null, \"last_evolve_at\": null}, \"after_meta\": {\"persona_version\": 1, \"persona_seeded_at\": 1793791697.322736, \"last_evolve_at\": 1793791697.322736}, \"inserted\": [{\"id\": 1, \"sha256\": \"631cc527d37d59c0e60c9bf6af25cc222efb2d916f8966f5d5e7ddeeb835e0e2\"}, {\"id\": 2, \"sha256\": \"4c8c8e76c1c5e16bddeaecec98f79b1501785174c546f86ee133a5e6860f1e07\"}]}",
+    "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "journal": {
+      "kind": "persona_import_v2",
+      "op_id": "imp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "prepared",
+      "before_sha256": "a716001547ae93cae9cd8b45d3ba3128db4f5659d5db7b86b7dba6def7a644df",
+      "after_sha256": "329d5183772665c3d6a0ea12be4530559736e378fbd2259f4960309c72a002f8",
+      "before_exists": true,
+      "before_meta": {
+        "persona_version": null,
+        "persona_seeded_at": null,
+        "last_evolve_at": null
+      },
+      "after_meta": {
+        "persona_version": 1,
+        "persona_seeded_at": 1793791697.322736,
+        "last_evolve_at": 1793791697.322736
+      },
+      "inserted": []
+    },
+    "reset": null
+  },
+  "blocked_attempts": []
+}

@@ -749,7 +749,7 @@
       const pending = managementNames[task.management_pending];
       const content = taskContentState(task);
       button.children[1].textContent = `${state(task.state)}${content.label ? ` · ${content.label}` : ""}${pending ? ` · ${pending}待确认` : ""}${hasUnread ? " · 未读" : ""}`;
-      button.children[2].textContent = `最近活动 ${time(task.updated_at)}`;
+      button.children[2].textContent = `${task.name === "claude-agent" ? "Claude CLI" : task.name === "dsh-agent" ? "DSH" : "协作者"} · 最近活动 ${time(task.updated_at)}`;
       if ($("workers-list").children[position] !== button) {
         const focused = document.activeElement === button;
         $("workers-list").insertBefore(button, $("workers-list").children[position] || null);
@@ -808,6 +808,29 @@
     return !!task && endedStates.has(task.state) && task.agent_idle === true && Number.isSafeInteger(task.version);
   }
   function updateTaskControls() {
+    if (!$('workers-recover')) {
+      const button = document.createElement('button'); button.id = 'workers-recover';
+      button.textContent = '人工核实后恢复';
+      $('workers-cancel').after(button);
+      button.onclick = () => {
+        if (!confirm('请先人工核实本任务及其子进程已经停止。此操作不按旧 PID 杀进程，不重派或退还次数。确认已停止？')) return;
+        let cost = null;
+        if (!selectedTask?.usage?.cost_known) {
+          const value = prompt('可选：输入人工核对的美元费用；留空保留未知，未知尾账会阻止新任务。');
+          if (value === null) return;
+          if (value.trim()) { cost = Number(value); if (!Number.isFinite(cost) || cost < 0) return; }
+        }
+        let launchedAt = null;
+        if (selectedTask?.usage?.unknown_launch_attempts) {
+          const value = prompt('旧记录缺少启动时间。请输入人工核对的实际启动时间（如2026-11-04T14:30），留空保留未知。');
+          if (value === null) return;
+          if (value.trim()) { launchedAt = Date.parse(value) / 1000; if (!Number.isFinite(launchedAt) || launchedAt > Date.now() / 1000) return; }
+        }
+        mutate('recover_local', { confirmed_stopped: true, cost_usd: cost, launched_at: launchedAt });
+      };
+    }
+    show('workers-recover', selectedTask?.recovery_available === true);
+    $('workers-recover').disabled = actionBusy || !selectedTask?.recovery_available;
     const task = selectedTask;
     show("workers-cancel", !!task && (activeStates.has(task.state) || ["unknown", "waiting"].includes(task.state)));
     if (!task) {
@@ -834,9 +857,9 @@
     $("workers-management-retry").disabled = !allowed || !managementNames[pending];
     text("workers-management-hint", !settingsKnown ? "当前服务尚未提供任务管理设置，请更新并重载后再试。"
       : pending ? `${managementNames[pending] || "管理操作"}结果待确认。仅可按原来的${task.management_sync_dsh ? "同步 DSH" : "只处理 Alice"}选择明确重试，不会自动重发。`
-      : !manageable(task) ? "仅已结束且 DSH 会话已空闲的任务可以归档、恢复或删除。正文已撤销也可清理。"
+      : !manageable(task) ? "仅已结束且执行槽已空闲的任务可以归档、恢复或删除；unknown仍不能整理。正文已撤销也可清理。"
       : task.archived ? "已归档，正文保留；恢复只回列表与历史，不会重新激活已关闭的 DSH 会话，也不会还原已撤销正文。"
-      : task.session_closed ? "DSH 专属会话已关闭，当前任务不能继续派工；记录仍可查看、归档或删除。"
+      : task.session_closed ? "原协作会话已关闭，当前任务不能继续派工；记录仍可查看、归档或删除。"
       : "归档会保留正文并暂停此任务的后续派工；删除无法恢复。同步范围在“设置 → DSH”中选择。");
     if (!management) return;
     const sameTask = task?.task_id === management.taskId && task?.version === management.version;
@@ -1224,7 +1247,7 @@
     const workerLabel = selectedTask?.name === 'claude-agent' ? 'Claude' : 'DSH';
     entry.head.textContent = isConversation
       ? event.type === "alice_message_queued" ? `Alice → ${workerLabel}` : event.type === "agent_question" ? `${workerLabel} → Alice · 等待补充` : `${workerLabel} → Alice`
-      : eventNames[event.type] || "公开工作事件";
+      : (eventNames[event.type] || "公开工作事件").replaceAll("DSH", workerLabel);
     const truncation = entry.truncated ? " · 片段已截断" : "";
     entry.meta.textContent = isConversation
       ? `${time(event.observed_at)}${event.type === "alice_message_queued" ? " · 已登记" : ""}${truncation}`
@@ -1266,17 +1289,33 @@
       $("workers-task-title").title = task.title || "协作任务";
       text("workers-task-state", `${managementNames[task.management_pending] ? `${managementNames[task.management_pending]}待确认` : state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · 会话已关闭" : ""}`);
       $("workers-task-state").title = $("workers-task-state").textContent;
-      text("workers-task-meta", `${state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · DSH 会话已关闭" : ""} · 最后更新 ${time(task.updated_at)} · ${task.task_id}`);
-      const cap = registry?.collaborators?.find((row) => row.name === "dsh-agent")?.capabilities;
-      text("workers-tool-note", data.tool_details_available === true || cap?.tool_details === true || cap?.tool_events === true ? "工具事件来自 DSH 的公开报告。" : "此接口未提供工具详情。");
-      const reported = task.usage;
-      const cost = Number.isSafeInteger(reported?.reported_input_tokens) && Number.isSafeInteger(reported?.reported_output_tokens)
-        ? `DSH 根任务累计自报输入 ${reported.reported_input_tokens}、输出 ${reported.reported_output_tokens} token；完整用量及费用仍未知。`
-        : "用量/费用未知，不记为零。";
+      text("workers-task-meta", `${task.name === "claude-agent" ? "Claude CLI" : task.name === "dsh-agent" ? "DSH" : "协作者"} · ${state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · 协作会话已关闭" : ""} · 最后更新 ${time(task.updated_at)} · ${task.task_id}`);
+      const worker = task.name === "claude-agent" ? "Claude CLI" : task.name === "dsh-agent" ? "DSH" : "协作者";
+      const cap = registry?.collaborators?.find((row) => row.name === task.name)?.capabilities;
+      const hasTools = data.tool_details_available === true || cap?.tool_details === true || cap?.tool_events === true;
+      text("workers-tool-note", hasTools ? `工具事件来自 ${worker} 的公开报告，未经宿主内容核实。` : `${worker} 当前接口未提供工具详情。`);
+      const reported = task.usage || data.usage || {};
+      const sourceLabels = { dsh_reported: "DSH 自报", claude_reported: "Claude CLI 自报",
+        human_reported: "人工核对补录", includes_human_reported: "协作者自报与人工核对补录" };
+      const source = sourceLabels[reported.source] || "计量来源未知";
+      const tokenParts = [];
+      if (Number.isSafeInteger(reported.reported_input_tokens)) tokenParts.push(`输入 ${reported.reported_input_tokens}`);
+      if (Number.isSafeInteger(reported.reported_output_tokens)) tokenParts.push(`输出 ${reported.reported_output_tokens}`);
+      const tokenText = tokenParts.length ? `${worker} 已报告${tokenParts.join('、')} token${reported.known === true ? '' : '（部分用量，未报告部分仍未知）'}。` : `${worker} token 用量未知，不记为零。`;
+      const amount = reported.reported_cost_usd;
+      const validAmount = typeof amount === 'number' && Number.isFinite(amount) && amount >= 0;
+      const costText = validAmount ? `${source}费用${reported.cost_known === true ? '合计' : '已知部分合计'} $${amount.toFixed(4)}${reported.cost_known === true ? '。' : `；另有 ${Number.isSafeInteger(reported.unknown_attempts) ? reported.unknown_attempts : '未确定数量的'} 次尝试费用未知。`}`
+        : `${source}费用未知，不记为零。`;
+      const billingText = reported.billing === 'settled_backend' ? '供应商结算口径未在当前接口实现。' : '此金额是报告值，不是供应商结算或费用硬帽。';
+      const launchText = reported.unknown_launch_attempts ? ` ${reported.unknown_launch_attempts} 次尝试缺少启动时间，日费用归属仍待核对。` : '';
       const review = task.review === "accepted" || task.review === "passed" ? "已记录人工核对通过。" : "尚未人工核对；运行结束不等于产物通过验收。";
-      const stopNote = task.cancel_requested && !task.termination_confirmed
-        ? (task.agent_idle ? " DSH 会话已空闲；外部进程树终止未确认。" : " 停止尚未确认。") : "";
-      text("workers-review-state", `${review} ${cost}${stopNote}`);
+      let stopNote = '';
+      if (task.recovery_basis === 'human_attested') stopNote = ' 人工已确认停止并解除执行槽占用；宿主未取得整树停止证据，原执行结果仍按任务状态显示。';
+      else if (task.recovery_basis === 'owned_tree_empty') stopNote = ' 宿主已确认自有执行树为空，并解除执行槽占用。';
+      else if (task.termination_confirmed) stopNote = ' 宿主已确认执行停止（或在发送前取消）。';
+      else if (task.agent_idle && task.name === 'dsh-agent') stopNote = ' DSH 会话已空闲；外部进程树终止未确认。';
+      else if (task.cancel_requested || task.state === 'unknown') stopNote = ' 停止尚未确认，执行或费用仍可能未知。';
+      text("workers-review-state", `${review} ${tokenText} ${costText} ${billingText}${launchText}${stopNote}`);
     }
     const deleting = task.management_pending === "delete";
     if (!content.available || deleting) hideTaskBody(!content.available ? content.message : "删除结果待确认，正文暂不在本页展示。请按原选择明确重试。");
@@ -1568,7 +1607,7 @@
   $("workers-supplement").onclick = () => {
     if (!selection || $("workers-supplement").disabled) return;
     const accepted = window.AliceComposer?.setWorkerReference({
-      task_id: selection, title: selectedTask?.title || "DSH 协作会话", session_epoch: epoch,
+      task_id: selection, title: selectedTask?.title || "协作会话", session_epoch: epoch,
     });
     if (!accepted) {
       status("暂时无法更换任务引用，请先处理主聊天中的发送状态。", true); return;

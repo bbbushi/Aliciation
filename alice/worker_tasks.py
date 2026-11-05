@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 import uuid
@@ -14,6 +15,14 @@ import uuid
 from .channels import ChannelError
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS claude_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 1,
+ enabled INTEGER NOT NULL DEFAULT 0, native_sandbox_ack INTEGER NOT NULL DEFAULT 0,
+ workspace_root TEXT NOT NULL DEFAULT '', max_turns INTEGER NOT NULL DEFAULT 12,
+ budget_usd_per_task REAL NOT NULL DEFAULT 0.50,
+ budget_usd_per_day REAL NOT NULL DEFAULT 2.00, updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO claude_policy(id) VALUES(1);
 CREATE TABLE IF NOT EXISTS worker_policy (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL,
  enabled INTEGER NOT NULL DEFAULT 0, max_runs INTEGER NOT NULL DEFAULT 0
@@ -127,9 +136,10 @@ class WorkerLedger:
                              'management_sync_dsh': 'INTEGER NOT NULL DEFAULT 0',
                              'workspace_root': "TEXT NOT NULL DEFAULT ''",
                              'session_created_at': 'INTEGER',
-                             'session_closed': 'INTEGER NOT NULL DEFAULT 0'},
+                             'session_closed': 'INTEGER NOT NULL DEFAULT 0',
+                             'recovery_basis': "TEXT NOT NULL DEFAULT ''"},
             'worker_attempts': {'request_id': 'TEXT', 'originating_request_id': 'TEXT',
-                               'tool_call_id': 'TEXT', 'deadline': 'REAL'},
+                               'tool_call_id': 'TEXT', 'deadline': 'REAL', 'launched_at': 'REAL'},
             'worker_messages': {'truncated': 'INTEGER NOT NULL DEFAULT 0'},
             'worker_events': {'truncated': 'INTEGER NOT NULL DEFAULT 0'},
             'worker_reports': {'kind': "TEXT NOT NULL DEFAULT 'legacy_transcript'"},
@@ -148,9 +158,16 @@ class WorkerLedger:
     def policy(self):
         return dict(self.conn.execute('SELECT * FROM worker_policy WHERE id=1').fetchone())
 
-    def runs_used(self):
-        return self.conn.execute('SELECT COUNT(*) FROM worker_attempts a JOIN worker_tasks t USING(task_id) '
-                                 'WHERE t.policy_revision=?', (self.policy()['revision'],)).fetchone()[0]
+    def runs_used(self, worker_id='dsh-agent', policy_revision=None):
+        if worker_id not in {'dsh-agent', 'claude-agent'}:
+            raise ValueError('unknown worker')
+        if policy_revision is None:
+            table = 'worker_policy' if worker_id == 'dsh-agent' else 'claude_policy'
+            policy_revision = self.conn.execute('SELECT revision FROM ' + table + ' WHERE id=1').fetchone()[0]
+        return self.conn.execute(
+            'SELECT COUNT(*) FROM worker_attempts a JOIN worker_tasks t USING(task_id) '
+            "WHERE t.policy_revision=? AND (CASE WHEN t.bridge_instance='local:claude-agent' "
+            "THEN 'claude-agent' ELSE 'dsh-agent' END)=?", (policy_revision, worker_id)).fetchone()[0]
 
     def task(self, task_id, epoch):
         row = self.conn.execute("SELECT * FROM worker_tasks WHERE task_id=? AND epoch=? AND scope='gui'",
@@ -205,6 +222,8 @@ class WorkerLedger:
                 'content_available': reason is None, 'content_unavailable_reason': reason,
                 # Existing clients use this legacy field as an availability
                 # flag. New clients display the explicit reason above.
+                'recovery_basis': task['recovery_basis'],
+                'recovery_available': task['bridge_instance'] == 'local:claude-agent' and task['state'] in TERMINAL,
                 'content_revoked': reason is not None, 'usage': self.usage(task['task_id'])}
 
     def record_usage(self, attempt_id, report):
@@ -214,16 +233,43 @@ class WorkerLedger:
                 number = report.get(key)
                 if type(number) is int and 0 <= number <= 10**12:
                     value[key] = number
+        value['known'] = all(key in value for key in ('input_tokens', 'output_tokens'))
         self.conn.execute('UPDATE worker_attempts SET usage_json=? WHERE attempt_id=?',
                           (json.dumps(value), attempt_id))
 
     def usage(self, task_id):
-        value = {'known': False, 'cost_known': False, 'source': 'dsh_reported', 'coverage': 'owned_agent_only'}
-        for row in self.conn.execute('SELECT usage_json FROM worker_attempts WHERE task_id=?', (task_id,)):
+        task = self.conn.execute('SELECT bridge_instance FROM worker_tasks WHERE task_id=?', (task_id,)).fetchone()
+        worker = 'claude' if task and task['bridge_instance'] == 'local:claude-agent' else 'dsh'
+        value = {'known': False, 'cost_known': False, 'source': worker + '_reported',
+                 'coverage': 'owned_agent_only', 'billing': 'reported_only',
+                 'unknown_attempts': 0, 'unknown_launch_attempts': 0, 'reported_cost_usd': None, 'attempts': []}
+        costs = []
+        count = 0
+        tokens_complete = True
+        for row in self.conn.execute('SELECT usage_json,attempt_id,state,sent,launched_at FROM worker_attempts WHERE task_id=?', (task_id,)):
+            count += 1
             report = json.loads(row[0])
+            if row['sent'] and row['launched_at'] is None and worker == 'claude':
+                value['unknown_launch_attempts'] += 1
+            value['attempts'].append({'attempt_id': row['attempt_id'], 'state': row['state'],
+                'sent': bool(row['sent']), 'launched_at': row['launched_at'],
+                'source': report.get('source', worker + '_reported'), 'cost_known': report.get('cost_known', False),
+                'cost_usd': report.get('cost_usd')})
+            if report.get('source') == 'human_reported':
+                value['source'] = 'includes_human_reported'
+            tokens_complete = tokens_complete and all(type(report.get(k)) is int and report[k] >= 0
+                                                      for k in ('input_tokens', 'output_tokens'))
+            cost = report.get('cost_usd')
+            if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0:
+                costs.append(cost)
+            else:
+                value['unknown_attempts'] += 1
             for key in ('input_tokens', 'output_tokens'):
                 if type(report.get(key)) is int and report[key] >= 0:
                     value['reported_' + key] = value.get('reported_' + key, 0) + report[key]
+        value['known'] = count > 0 and tokens_complete
+        value['cost_known'] = count > 0 and value['unknown_attempts'] == 0
+        value['reported_cost_usd'] = sum(costs) if costs else None
         return value
 
     def event(self, task_id, kind, *, actor='host', payload=None, attempt_id=None, message_id=None, truncated=False):
@@ -273,12 +319,17 @@ class WorkerLedger:
         self.conn.execute('INSERT INTO worker_requests(epoch,request_id,digest,result) VALUES(?,?,?,?)',
                           (epoch, request_id, digest(payload), json.dumps(result, ensure_ascii=False)))
 
-    def interrupt(self, *, report=None):
+    def interrupt(self, *, report=None, worker_id=None):
         """Startup/reset never replays a send or kills a historical PID."""
         with self.conn:
             rows = self.conn.execute("SELECT task_id FROM worker_tasks WHERE state IN "
                                      "('queued','starting','running','waiting_permission','collecting','stopping')").fetchall()
             for row in rows:
+                if worker_id is not None:
+                    task = self.conn.execute('SELECT bridge_instance FROM worker_tasks WHERE task_id=?', (row['task_id'],)).fetchone()
+                    actual = 'claude-agent' if task['bridge_instance'] == 'local:claude-agent' else 'dsh-agent'
+                    if actual != worker_id:
+                        continue
                 attempts = (self.conn.execute(
                     "SELECT attempt_id FROM worker_attempts WHERE task_id=? AND state IN "
                     "('queued','starting','running','waiting_permission','collecting','stopping')", (row['task_id'],)).fetchall()

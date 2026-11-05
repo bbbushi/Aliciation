@@ -1,162 +1,310 @@
-"""表达参考解析（人格连续性设计 v1 · P1a）。
-
-只读解析人格快照并渲染表达参考：不调用模型、不查询任务正文、不写记忆。
-- load_persona_snapshot()：一次读取 persona.md，含正文指纹与分节；
-- render_expression_reference(snapshot, purpose)：按用途渲染——
-    "chat"           主聊天：气质/情境（≤1200 字）+ 样本（≤1200 字，逐条完整保留）；
-    "worker_summary" 协作总结：仅气质/情境与样本节头注（不读关系、来历细节）；
-  预算是初始工程上限（设计 §6.1），不是效果保证；超限按条目完整保留到放不下为止，
-  不截半句；放不下时在末尾注明降级（"（其余 N 条样本因预算未展示）"）。
-指纹用于"本轮人格依据"元数据（设计 §8.2）：同一请求的多个子调用版本一致由
-调用方（loop 每轮装配一次）保证。
-"""
+"""Whole-entry persona expression rendering with metadata and strict budgets."""
 from __future__ import annotations
 
 import hashlib
 import re
-
 from . import config as paths
+from .context import estimate_tokens
 
 STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
-EXPRESSION_POLICY_VERSION = 2
+ANCHOR_BUDGET_CHARS = 500
+EXPRESSION_POLICY_VERSION = 5
 _SAMPLE_LINE = re.compile(r"^- 【(?P<kind>[^·】]+)·(?P<sid>[A-Za-z0-9_-]+)】(?P<body>.*)$")
 
 
+def _uses_v2_syntax(raw: str) -> bool:
+    # Quoted typed examples in a legacy sample/fence do not select v2 grammar.
+    # A real typed package with its marker removed is still rejected later by
+    # decode_sections; permissive legacy heading recognition cannot activate it.
+    return "<!-- alice-expression-" in raw
+
+
+def section_spans(raw: str) -> list[dict]:
+    """Shared boundaries: preserve unambiguous v1 indentation, keep v2 strict."""
+    spans, seen, offset = [], set(), 0
+    strict_v2 = _uses_v2_syntax(raw)
+    current, active_sample = None, False
+    fence = None
+    for original in raw.splitlines(keepends=True):
+        line = original.rstrip("\r\n")
+        fenced = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if fenced and fenced.group(1)[0] == fence[0] and len(fenced.group(1)) >= fence[1] and not fenced.group(2).strip():
+                fence = None
+            offset += len(original)
+            continue
+        if fenced:
+            fence = (fenced.group(1)[0], len(fenced.group(1)))
+            offset += len(original)
+            continue
+        match = re.match(r"^[ \t]*## (.+?)[ \t]*$", line)
+        if match and line[:1].isspace():
+            persona_title = match.group(1).startswith(("底色 ·", "生长 ·"))
+            if strict_v2:
+                if persona_title:
+                    raise ValueError("v2 人格小节标题必须顶格；资料标题放在围栏内")
+                match = None
+            elif current == "底色 · 表达样本" and active_sample:
+                # Legacy sample continuations may contain a quoted heading;
+                # reserved persona titles here remain ambiguous, never a route
+                # to escape the sample and rewrite a protected section.
+                if persona_title:
+                    raise ValueError("样本续行与缩进人格标题存在歧义；请将新小节标题顶格")
+                match = None
+        if match:
+            title = match.group(1).strip()
+            if title in seen:
+                raise ValueError("人格含重复小节，不能确定表达材料")
+            if spans:
+                spans[-1]["end"] = offset
+            spans.append({"title": title, "start": offset, "body_start": offset + len(original), "end": len(raw)})
+            seen.add(title)
+            current, active_sample = title, False
+        elif current == "底色 · 表达样本" and _SAMPLE_LINE.match(line):
+            active_sample = True
+        offset += len(original)
+    if fence:
+        raise ValueError("人格含未闭合代码围栏，无法确定小节边界")
+    return spans
+
+
+def normalize_section_headings(raw: str) -> str:
+    """Explicit candidate-only v1→v2 layout conversion; no body edits or I/O.
+
+    Only headings accepted by the shared v1 grammar lose leading spaces/tabs.
+    Sample continuations, fenced material, title spelling and every body byte
+    remain unchanged. Ambiguous legacy inputs fail before any normalization.
+    """
+    spans = section_spans(raw)
+    if _uses_v2_syntax(raw):
+        return raw
+    for span in reversed(spans):
+        start, end = span["start"], span["body_start"]
+        raw = raw[:start] + raw[start:end].lstrip(" \t") + raw[end:]
+    return raw
+
+
+def parse_snapshot(raw: str) -> dict:
+    sections = {span["title"]: raw[span["body_start"]:span["end"]].strip()
+                for span in section_spans(raw)}
+    if not sections.get("底色 · 气质与风格", "").strip():
+        raise ValueError("人格必须包含可解析且非空的「底色 · 气质与风格」小节")
+    from . import expression
+    if expression.MARKER in raw and not any(expression.MARKER in body for body in sections.values()):
+        raise ValueError("表达版本标记移出了人格小节，不能作为 v1 运行")
+    package = expression.decode_sections(sections)
+    if package is not None:
+        return {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
+                "sections": sections, "sample_ids": [item["id"] for item in package["examples"]],
+                "samples": [], "expression_package": package, "format_version": "expression-v2"}
+    samples, active = [], None
+    for line in sections.get("底色 · 表达样本", "").splitlines():
+        match = _SAMPLE_LINE.match(line)
+        if match:
+            active = {"kind": match.group("kind"), "id": match.group("sid"), "body": match.group("body")}
+            samples.append(active)
+        elif active is not None:
+            # Indented renderer output and legacy unindented multiline material
+            # both remain in the same entry until the next explicit sample ID.
+            active["body"] += "\n" + (line[2:] if line.startswith("  ") else line)
+        elif line.strip() and not line.strip().startswith(("（虚构", "（表达样本", "（样本")):
+            raise ValueError("表达样本须使用 - 【来源类型·样本ID】正文；续行属于同一完整条目")
+    ids = [item["id"] for item in samples]
+    if len(ids) != len(set(ids)):
+        raise ValueError("表达样本ID重复")
+    for item in samples:
+        item["body"] = item["body"].strip()
+        if not item["body"]:
+            raise ValueError("表达样本正文不能为空")
+    snapshot = {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
+                "sections": sections, "sample_ids": ids, "samples": samples,
+                "expression_package": None, "format_version": "expression-v1"}
+    if not _style_items({"sections": {"底色 · 气质与风格": sections["底色 · 气质与风格"]}}):
+        raise ValueError("气质与风格只有说明或占位，缺少实际表达条目")
+    return snapshot
+
+
+def validate_section_body(title: str, body: str) -> None:
+    """An edit can contain prose, but cannot create another persona section."""
+    spans = section_spans(f"## {title}\n\n{body}\n")
+    if len(spans) != 1 or spans[0]["title"] != title:
+        raise ValueError("小节正文不能新增或越界改写其他人格小节")
+
+
 def load_persona_snapshot() -> dict | None:
-    """读取人格文件并做只读解析。文件缺失返回 None；异常向上（调用方降级为无人格）。"""
     if not paths.PERSONA_FILE.exists():
         return None
-    raw = paths.PERSONA_FILE.read_text(encoding="utf-8")
-    sections: dict[str, str] = {}
-    current, buf = None, []
-    for line in raw.splitlines():
-        m = re.match(r"^## (.+)$", line.strip())
-        if m:
-            if current is not None:
-                sections[current] = "\n".join(buf).strip()
-            current, buf = m.group(1).strip(), []
-        elif current is not None:
-            buf.append(line)
-    if current is not None:
-        sections[current] = "\n".join(buf).strip()
-    samples = []
-    body = sections.get("底色 · 表达样本", "")
-    if body:
-        for ln in body.splitlines():
-            m = _SAMPLE_LINE.match(ln.strip())
-            if m:
-                samples.append({"kind": m.group("kind"), "id": m.group("sid"),
-                                "body": m.group("body").strip()})
-    return {
-        "raw": raw,
-        "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
-        "sections": sections,
-        "sample_ids": [s["id"] for s in samples],
-        "samples": samples,
-    }
-
-
-def _bounded(items: list[str], budget: int, label: str) -> str:
-    """按条目完整保留到预算耗尽；不截半句，降级如实注明。"""
-    kept, used = [], 0
-    for it in items:
-        cost = len(it) + 1
-        if used + cost > budget and kept:
-            break
-        kept.append(it)
-        used += cost
-    text = "\n".join(kept)
-    rest = len(items) - len(kept)
-    if rest > 0:
-        text += f"\n（其余 {rest} 条{label}因预算未展示）"
-    return text
+    return parse_snapshot(paths.PERSONA_FILE.read_text(encoding="utf-8"))
 
 
 def _style_items(snapshot: dict) -> list[str]:
     out = []
     for key in ("底色 · 气质与风格", "底色 · 情境反应"):
-        body = snapshot["sections"].get(key, "")
-        out.extend(ln.strip() for ln in body.splitlines()
-                   if ln.strip() and not ln.strip().startswith("（"))
+        entries, buf = [], []
+        for line in snapshot["sections"].get(key, "").splitlines():
+            if line.startswith("- ") and buf:
+                entries.append("\n".join(buf).strip())
+                buf = []
+            if not buf and (not line.strip() or line.startswith(("（用户选定：", "（文档未提取"))):
+                continue
+            buf.append(line)
+        if buf:
+            entries.append("\n".join(buf).strip())
+        out.extend(item for item in entries if item)
     return out
 
 
-def render_expression_reference(snapshot: dict | None, purpose: str = "chat") -> str:
-    """渲染表达参考。purpose 只决定可读字段（设计 §6），不定义两种人格。"""
-    if not snapshot:
-        return ""
-    style_text = _bounded(_style_items(snapshot), STYLE_BUDGET_CHARS, "条风格/情境")
-    parts = []
-    if style_text:
-        parts.append("【说话方式与情境（用户选定的长期表达偏好；普通演化不改写）】\n"
-                     "用这些习惯组织你自己的回应；按当前任务调整正式程度，任务结束后继续日常表达。"
-                     "不用刻意堆口癖或复述这些规则。\n" + style_text)
-    if purpose == "chat":
-        if snapshot["samples"]:
-            sample_lines = [f"【{s['kind']}·{s['id']}】{s['body']}" for s in snapshot["samples"]]
-            parts.append("【表达样本（虚构的表达参考——示范说话方式，不是发生过的对话，"
-                         "只参考措辞与节奏；事件、喜好、用户状态和关系前提不能移植到本轮）】\n"
-                         + _bounded(sample_lines, SAMPLES_BUDGET_CHARS, "条样本"))
-    elif purpose == "worker_summary":
-        if snapshot["samples"]:
-            parts.append("（另有表达样本若干，仅供聊天表达参考；总结任务不读取样本正文）")
-    return "\n\n".join(parts)
-
-
-def render_full(snapshot: dict | None) -> str:
-    """主聊天的人格正文渲染（P1a）：结构化重排 + 预算约束 + 样本注记。
-
-    与旧版直接注入全文的差异：样本节获得预算与"虚构参考"标注（若 P0 导入已写入
-    标注则不重复）；其余小节按原文保留（来历/思想/关系不走本渲染的表达预算）。
-    """
-    if not snapshot:
-        return ""
-    reference = render_expression_reference(snapshot, purpose="chat")
-    sections = dict(snapshot["sections"])
-    if reference:
-        sections["底色 · 气质与风格"] = reference  # 参考已含风格+情境+样本三块内容
-        sections.pop("底色 · 情境反应", None)
-        sections.pop("底色 · 表达样本", None)
-    title = "Alice"
-    head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
-    if head:
-        title = head.group(1).strip()
-    order = ["底色 · 气质与风格", "底色 · 情境反应", "底色 · 表达样本",
-             "生长 · 我的来历", "生长 · 自我叙事", "生长 · 我现在的想法", "生长 · 与用户的关系"]
-    out = [f"# {title}"]
-    for key in order:
-        if key in sections and sections[key]:
-            out.append(f"## {key}\n\n{sections[key]}")
-    for key, body in sections.items():  # 未知新小节按原顺序追加（前向兼容）
-        if key not in order and body:
-            out.append(f"## {key}\n\n{body}")
-    return "\n\n".join(out) + "\n"
-
-ANCHOR_BUDGET_CHARS = 500
-
-
-def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参考，不是记忆") -> str:
-    """P1b 近位表达提醒（设计 §6.2）：精简气质 + 关键边界 + 一条完整样本，≤500 字。
-    每次模型请求前重建、同一时刻只保留一份；不授权、不改诚实边界。"""
-    if not snapshot:
-        return ""
-    style_items = _style_items(snapshot)
-    style = _bounded(style_items[:2], 220, "条") if style_items else ""
-    sample_line = ""
-    for s in snapshot["samples"]:
-        line = f"【{s['kind']}·{s['id']}】{s['body']}"
-        if len(line) <= 220:
-            sample_line = line
+def _select(items: list[str], budget: int, header: str, label: str,
+            *, required: bool = False) -> tuple[str, list[int], list[int]]:
+    kept, selected = [], []
+    for index, item in enumerate(items):
+        remaining = len(items) - len(kept) - 1
+        notice = f"（其余 {remaining} 条{label}因预算未展示）" if remaining else ""
+        candidate = "\n".join([header, *kept, item, *([notice] if notice else [])])
+        if len(candidate) > budget:
             break
-    if not sample_line and snapshot["samples"]:
-        sample_line = f"【{snapshot['samples'][0]['kind']}】（样本过长未展示）"
-    parts = ["【表达提醒（长期习惯，非本轮新要求；样本为虚构参考，不是记忆）】"]
-    if style:
-        parts.append(style)
-    if sample_line:
-        parts.append(sample_line)
+        kept.append(item)
+        selected.append(index)
+    excluded = list(range(len(selected), len(items)))
+    if required and items and not kept:
+        raise ValueError("人格必需风格条目超过完整表达预算；请显式缩短条目后保存")
+    notice = f"（其余 {len(excluded)} 条{label}因预算未展示）" if excluded else ""
+    text = "\n".join([header, *kept, *([notice] if notice else [])]) if items else ""
+    if len(text) > budget:
+        raise ValueError("表达边界与降级说明超过预算")
+    return text, selected, excluded
+
+
+def _metadata(snapshot, text, ids, reasons, **extra):
+    return {"fingerprint": snapshot["fingerprint"] if snapshot else None,
+            "policy_version": EXPRESSION_POLICY_VERSION, "sample_ids": ids,
+            "chars": len(text), "estimated_tokens": estimate_tokens(text),
+            "format_version": snapshot.get("format_version", "expression-v1") if snapshot else None,
+            "coverage_status": "v2_package" if snapshot and snapshot.get("expression_package") else "v1_not_reviewed",
+            "degradation": reasons, **extra}
+
+
+def _expression_budget(snapshot, cfg, key):
+    """The package freezes its admission ceiling; current config may tighten it."""
+    package = snapshot.get("expression_package") or {}
+    frozen = package.get("limits", {})
+    defaults = {"max_projection_chars": 6000, "max_worker_chars": 1600, "max_anchor_chars": 500}
+    admitted = frozen.get(key, defaults[key])
+    configured = getattr(getattr(cfg, "expression", None), key, admitted)
+    return min(admitted, configured)
+
+
+def render_expression_reference(snapshot: dict | None, purpose: str = "chat", *,
+                                metadata: dict | None = None, cfg=None) -> str:
+    if purpose not in {"chat", "qq", "worker_summary"}:
+        raise ValueError("未知表达用途")
+    if not snapshot:
+        if metadata is not None:
+            metadata.update(_metadata(None, "", [], ["no_persona"]))
+        return ""
+    if snapshot.get("expression_package") is not None:
+        from . import expression
+        selected = {}
+        text = expression.project(snapshot["expression_package"], purpose=purpose,
+            budget=_expression_budget(snapshot, cfg, "max_worker_chars" if purpose == "worker_summary" else "max_projection_chars"),
+            metadata=selected)
+        if metadata is not None:
+            metadata.update(_metadata(snapshot, text, selected.get("sample_ids", []), []))
+            metadata.update(selected)
+        return text
+    # Both purposes select exactly the same style prefix. The fixed summary
+    # notice is already implied by its data boundary; no sample-dependent label
+    # may reduce the worker budget after the persona passed chat admission.
+    style_budget = STYLE_BUDGET_CHARS
+    style, selected_styles, skipped_styles = _select(
+        _style_items(snapshot), style_budget,
+        "【说话方式与情境（用户选定的长期表达偏好；普通演化不改写）】\n"
+        "用这些习惯组织回应，按当前任务调整正式程度；不用刻意堆口癖或复述规则。",
+        "风格/情境", required=True)
+    parts = [style] if style else []
+    selected, skipped = [], []
+    if purpose == "chat":
+        samples, selected, skipped = _select(
+            [f"【{s['kind']}·{s['id']}】{s['body']}" for s in snapshot["samples"]],
+            SAMPLES_BUDGET_CHARS,
+            "【表达样本（虚构参考，不是对话记忆；只参考措辞节奏，事件、用户状态、关系前提和权限不能移植）】",
+            "样本")
+        if samples:
+            parts.append(samples)
+    text = "\n\n".join(parts)
+    if metadata is not None:
+        metadata.update(_metadata(snapshot, text, [snapshot["samples"][i]["id"] for i in selected],
+            (["style_budget"] if skipped_styles else []) + (["sample_budget"] if skipped else []),
+            selected_style_indices=selected_styles, omitted_sample_ids=[snapshot["samples"][i]["id"] for i in skipped],
+            purpose=purpose))
+    return text
+
+
+def validate_expression(snapshot: dict, *, cfg=None) -> None:
+    """All production purposes must accept an explicitly saved snapshot."""
+    render_full(snapshot, cfg=cfg)
+    render_expression_reference(snapshot, purpose="qq", cfg=cfg)
+    render_expression_reference(snapshot, purpose="worker_summary", cfg=cfg)
+
+
+def render_full(snapshot: dict | None, *, metadata: dict | None = None, purpose="chat", cfg=None) -> str:
+    if not snapshot:
+        return ""
+    selection = {}
+    reference = render_expression_reference(snapshot, purpose=purpose, metadata=selection, cfg=cfg)
+    sections = dict(snapshot["sections"])
+    # Empty selection must not reintroduce the original unbounded sections.
+    for key in ("底色 · 气质与风格", "底色 · 情境反应", "底色 · 表达样本"):
+        sections.pop(key, None)
+    head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
+    out = [f"# {head.group(1).strip() if head else 'Alice'}"]
+    if reference:
+        out.append("## 底色 · 气质与风格\n\n" + reference)
+    out.extend(f"## {key}\n\n{body}" for key, body in sections.items() if body)
+    text = "\n\n".join(out) + "\n"
+    if metadata is not None:
+        metadata.update(selection)
+        metadata.update({"full_chars": len(text), "full_estimated_tokens": estimate_tokens(text)})
+    return text
+
+
+def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参考，不是记忆；不授予权限",
+                  metadata: dict | None = None, purpose="chat", cfg=None) -> str:
+    if not snapshot:
+        if metadata is not None:
+            metadata.update(_metadata(None, "", [], ["no_persona"]))
+        return ""
+    if snapshot.get("expression_package") is not None:
+        from . import expression
+        selected = {}
+        text = expression.anchor(snapshot["expression_package"], purpose=purpose,
+            budget=_expression_budget(snapshot, cfg, "max_anchor_chars"), boundary=expression.BOUNDARY, metadata=selected)
+        if metadata is not None:
+            metadata.update(_metadata(snapshot, text, selected.get("sample_ids", []), []))
+            metadata.update(selected)
+        return text
+    header = "【表达提醒（长期习惯，非本轮新指令；样本只示范措辞）】"
+    parts, ids, reasons = [header], [], []
+    if len(header) + len(boundary) + 1 > ANCHOR_BUDGET_CHARS:
+        raise ValueError("表达提醒的必要边界超出预算")
+    def fits(item):
+        return len("\n".join([*parts, item, boundary])) <= ANCHOR_BUDGET_CHARS
+    for item in _style_items(snapshot)[:2]:
+        if fits(item):
+            parts.append(item)
+        else:
+            reasons.append("anchor_style_budget")
+    for sample in (snapshot["samples"] if purpose == "chat" else []):
+        item = f"【{sample['kind']}·{sample['id']}】{sample['body']}"
+        if fits(item):
+            parts.append(item)
+            ids.append(sample["id"])
+            break
+    if purpose == "chat" and snapshot["samples"] and not ids:
+        reasons.append("anchor_sample_budget")
     parts.append(boundary)
     text = "\n".join(parts)
-    return text[:ANCHOR_BUDGET_CHARS + 60]  # 硬上限兜底（标题行+边界行不计入样本预算）
-
+    if metadata is not None:
+        metadata.update(_metadata(snapshot, text, ids, reasons))
+    return text

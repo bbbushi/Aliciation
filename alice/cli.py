@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 from . import config as appconfig
-from . import consolidation, persona, retrieval, skills
+from . import consolidation, persona, persona_reset, retrieval, skills
 from .config import Config, load
 from .llm import make_client
 from .store import Store
@@ -112,8 +113,14 @@ def main() -> None:
         return
 
     cfg = load(config_path)
+    reset_record = persona_reset.before_open()
     store = Store(appconfig.DB_PATH)
     try:
+        persona_reset.after_open(store, cfg, reset_record)
+        if not store.meta_get("session_epoch"):
+            store.meta_set("session_epoch", uuid.uuid4().hex)
+        persona.recover_imports(store)
+        persona.recover_growth(store)
         if args.cmd == "memory":
             cmd_memory(store, args.layer)
         elif args.cmd == "recall":

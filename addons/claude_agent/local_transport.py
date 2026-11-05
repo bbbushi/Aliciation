@@ -44,9 +44,13 @@ def normalize_result(payload):
     if not isinstance(text, str):
         errors = payload.get('errors')
         text = '\n'.join(value for value in errors[:8] if isinstance(value, str)) if isinstance(errors, list) else ''
+    raw_usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+    usage = {key: raw_usage[key] for key in ('input_tokens', 'output_tokens',
+             'cache_read_input_tokens', 'cache_creation_input_tokens')
+             if type(raw_usage.get(key)) is int and 0 <= raw_usage[key] <= 10**12}
     return {'state': state, 'text': text[:24000], 'cost_usd': cost,
             'subtype': subtype if isinstance(subtype, str) else 'unrecognized_result',
-            'usage': payload.get('usage') if isinstance(payload.get('usage'), dict) else {}}
+            'usage': usage}
 
 
 class LocalTransportError(Exception):
@@ -78,7 +82,7 @@ class ClaudeLocalTransport:
 
     def __init__(self, *, brief: str, sandbox: Path, gate_mcp_config: Path,
                  max_turns: int, on_event, ready_timeout: float = 60.0,
-                 hard_deadline: float = DEFAULT_TIMEOUT):
+                 hard_deadline: float = DEFAULT_TIMEOUT, host_supervised: bool = False):
         self._argv = [
             "claude", "-p", "--output-format", "stream-json",
             "--input-format", "stream-json", "--verbose",
@@ -86,6 +90,7 @@ class ClaudeLocalTransport:
             "--mcp-config", str(gate_mcp_config),
             "--add-dir", str(sandbox), "--max-turns", str(max_turns),
         ]
+        self._host_supervised = host_supervised
         self._brief = brief
         self._sandbox = sandbox
         self._on_event = on_event
@@ -104,6 +109,18 @@ class ClaudeLocalTransport:
     # ---- 生命周期 ----
 
     def start(self) -> None:
+        if os.name == 'nt':
+            if not self._host_supervised:
+                raise LocalTransportError('host_job_required', 'Windows CLI 只能通过宿主Job监督入口启动')
+            import ctypes
+            from ctypes import wintypes
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+            kernel.IsProcessInJob.restype = wintypes.BOOL
+            in_job = wintypes.BOOL()
+            if not kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(in_job)) or not in_job.value:
+                raise LocalTransportError('host_job_required', '未检测到Windows宿主Job，拒绝裸启动CLI')
         self._sandbox.mkdir(parents=True, exist_ok=True)
         self._proc = subprocess.Popen(
             self._argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -214,7 +231,7 @@ class ClaudeLocalTransport:
             return False
         proc.poll()  # reap the owned leader before checking for descendants
         if os.name != 'posix':
-            return proc.poll() is None
+            return True  # root exit cannot prove descendants stopped; production host owns the Job
         try:
             os.killpg(proc.pid, 0)
             return True
@@ -240,8 +257,9 @@ class ClaudeLocalTransport:
                         if self._group_alive():
                             os.killpg(proc.pid, signal.SIGKILL)
                     else:
-                        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
-                                       capture_output=True, check=False, timeout=GRACE_SECONDS)
+                        # The production host owns a Windows Job; do not taskkill a possibly reused PID.
+                        self.termination_confirmed = False
+                        return False
                 proc.wait(timeout=GRACE_SECONDS)
             except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
                 pass

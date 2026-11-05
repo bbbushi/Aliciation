@@ -64,40 +64,79 @@ def set_enabled(store: Store, module: str, on: bool) -> bool:
     return True
 
 
+def flush_calls(store):
+    """Called only under the owner's Store lock; never commit a business transaction."""
+    if store.conn.in_transaction:
+        return
+    with store._llm_event_lock:
+        pending = list(store._llm_events)
+        if not pending:
+            return
+        try:
+            with store.conn:
+                store.conn.executemany(
+                    "INSERT INTO turn_metrics(module,value,detail,ts) VALUES(?,?,?,?)",
+                    [("llm_call:" + e["purpose"], e["duration_ms"],
+                      json.dumps(e, ensure_ascii=False), e["ts"]) for e in pending])
+        except Exception:
+            return  # Keep pending observations; never retry the model.
+        for _ in pending:
+            store._llm_events.popleft()
+
+
 def record(store: Store, module: str, value: float, detail: str = "") -> None:
+    flush_calls(store)
+    owned = not store.conn.in_transaction
     store.conn.execute(
         "INSERT INTO turn_metrics (module, value, detail, ts) VALUES (?, ?, ?, ?)",
         (module, value, detail, time.time()),
     )
-    store.conn.commit()
+    if owned:
+        store.conn.commit()
 
 
 def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
                     error: str | None = None, fallback: bool = False,
-                    model: str | None = None) -> None:
-    """Step1 分调用观测（剩余工作评估 §2.3）：每次模型调用的用途/耗时/usage/结果。
-    供应商未返回的数据记未知（不记零）；观测失败不阻塞原调用。value=毫秒。"""
+                    model: str | None = None, request_id=None, call_id=None,
+                    attempt=1, status=None, usage_state=None, context=None) -> None:
+    """Thread-safe receipt queue, no SQL and no side effect on the calling transaction.
+
+    started is monotonic. Body, endpoint and provider exception text are never stored.
+    Context is frozen when queued, so later model rounds cannot rewrite an
+    earlier attempt. The owner flushes at a safe boundary; readonly observers
+    can also see pending rows.
+    """
     try:
-        now = time.time()
+        duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        try:
+            frozen_context = json.loads(json.dumps(context, ensure_ascii=False, allow_nan=False))
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            # Keep the transport receipt even if context cannot be serialized.
+            # Never retain the mutable input or let observation failure retry
+            # the model. No exception text/body is copied into this marker.
+            frozen_context = {"snapshot_status": "context_unavailable"}
         usage = {}
-        if resp is not None:
-            u = getattr(resp, "usage", None)
-            if u is not None:
-                for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
-                    v = getattr(u, src, None)
-                    if type(v) is int and v >= 0:
-                        usage[dst] = v
-        detail = json.dumps({
-            "purpose": purpose, "duration_ms": int((now - started) * 1000),
-            "usage": usage or "unknown", "status": "error" if error else "ok",
-            "error_type": error, "fallback": bool(fallback),
-            "model": model or "unknown"}, ensure_ascii=False)[:400]
-        store.conn.execute(
-            "INSERT INTO turn_metrics (module, value, detail, ts) VALUES (?, ?, ?, ?)",
-            (f"llm_call:{purpose}", int((now - started) * 1000), detail, now))
-        store.conn.commit()
+        u = getattr(resp, "usage", None)
+        for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+            v = getattr(u, src, None)
+            if type(v) is int and v >= 0:
+                usage[dst] = v
+        actual_model = getattr(resp, "model", None)
+        event = {"purpose": purpose, "duration_ms": duration_ms,
+                 "usage": usage or "unknown", "usage_state": ("partial_receipt" if usage and len(usage) < 2 else
+                     usage_state or ("reported" if usage else "unknown")),
+                 "status": status or ("error" if error else "ok"),
+                 "error_type": error, "fallback": bool(fallback),
+                 "model": actual_model or model or "unknown",
+                 "model_source": "receipt" if actual_model else "requested",
+                 "request_id": request_id, "call_id": call_id, "attempt": attempt,
+                 "ts": time.time(), "stage": "transport_attempt", "context": frozen_context}
+        with store._llm_event_lock:
+            if len(store._llm_events) == store._llm_events.maxlen:
+                store._llm_events_dropped += 1
+            store._llm_events.append(event)
     except Exception:
-        pass  # 观测失败不影响调用本身
+        pass
 
 
 def judge_turn(store: Store, client, cfg: Config, user: str, reply: str,

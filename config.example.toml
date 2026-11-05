@@ -7,6 +7,7 @@ api_key = ""                   # 直接填在这里（user/ 不入 git，不会�
 # 也可以改走环境变量：删掉上一行，export ALICE_API_KEY=...（api_key_env 可改变量名）
 
 [persona]
+# 近位锚整条选材并计入总预算；效果须独立人工对照，默认保持关闭。
 expression_anchor = false  # P1b 近位表达提醒（默认关；人工对照开关）
 name = "Alice"       # AI 的名字
 # 数据触发：每累计 N 条新记忆演化一次人格。安静则不变（没有时间兜底）
@@ -29,6 +30,7 @@ working_set_calls = 4          # keep/release合计，仍受本轮总工具上�
 history_enabled = false       # C3独立开关，需indexed；只读当前库同渠道的已完成普通往返
 history_max_chars = 8000      # 目录及完整原文回执累计预算；不截断后伪称完整
 history_calls = 2             # search/load合计，仍受本轮总工具上限约束
+# 前情与实际完整往返装配共用边界，提前预留注入上限；按既有最小跨度分批生成。
 recap_enabled = false         # C3普通旧往返前情；默认关闭，独立于indexed
 recap_min_rows = 4
 recap_span_max_rows = 60

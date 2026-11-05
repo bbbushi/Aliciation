@@ -1,0 +1,257 @@
+{
+  "aggregate": {
+    "incomplete": true
+  },
+  "context_basis_usage": null,
+  "basis": null,
+  "calls": 3,
+  "events": [
+    {
+      "purpose": "main",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "请求受限或账户额度不足",
+      "fallback": false,
+      "model": "synthetic-main-model",
+      "model_source": "requested",
+      "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+      "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+      "attempt": 1,
+      "ts": 1793794809.2284052,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5481,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "pending"
+    },
+    {
+      "purpose": "main",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "请求受限或账户额度不足",
+      "fallback": false,
+      "model": "synthetic-main-model",
+      "model_source": "requested",
+      "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+      "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+      "attempt": 2,
+      "ts": 1793794809.2284052,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5481,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "pending"
+    },
+    {
+      "purpose": "main",
+      "duration_ms": 0,
+      "usage": "unknown",
+      "usage_state": "unknown",
+      "status": "error",
+      "error_type": "请求受限或账户额度不足",
+      "fallback": false,
+      "model": "synthetic-main-model",
+      "model_source": "requested",
+      "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+      "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+      "attempt": 3,
+      "ts": 1793794809.2284052,
+      "stage": "transport_attempt",
+      "context": {
+        "persona": {
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "estimated_tokens": 5481,
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ]
+      },
+      "storage": "pending"
+    }
+  ],
+  "reply": null,
+  "exception": "RuntimeError",
+  "turn_count": 1,
+  "backoff_replaced_seconds": [
+    2,
+    4
+  ],
+  "stubs": [
+    "synthetic persona loader",
+    "fake provider",
+    "backoff sleep"
+  ],
+  "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+}

@@ -1,0 +1,5616 @@
+{
+  "suite": "usage_aggregation",
+  "cases": [
+    {
+      "name": "clean_nonstream",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "context_basis_usage": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "basis": {
+          "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "elapsed_seconds": 0.063,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+            "call_id": "0962cb3df75e47b884614387a4a5a83a",
+            "attempt": 1,
+            "ts": 1793794802.8279667,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.625
+    },
+    {
+      "name": "clean_stream_latest_receipt_only",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "context_basis_usage": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "basis": {
+          "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "elapsed_seconds": 0.047,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-stream-model",
+            "model_source": "receipt",
+            "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+            "call_id": "cdc70845c6f049f8b442350fddbb1a20",
+            "attempt": 1,
+            "ts": 1793794803.441817,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.609
+    },
+    {
+      "name": "partial_stream_exact_sum",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 30,
+            "completion": 12,
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.047,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 2,
+        "events": [
+          {
+            "purpose": "main_fallback",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": true,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+            "call_id": "99211359db694e998d1221c545001753",
+            "attempt": 1,
+            "ts": 1793794804.0737438,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 10,
+              "completion": 4
+            },
+            "usage_state": "partial_receipt",
+            "status": "error",
+            "error_type": "无法连接接口地址，请检查网络与地址",
+            "fallback": false,
+            "model": "synthetic-stream-model",
+            "model_source": "receipt",
+            "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+            "call_id": "c0054425d9c94896b21c40127e6927b1",
+            "attempt": 1,
+            "ts": 1793794804.0727441,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.641
+    },
+    {
+      "name": "retry_unknown_exact_sum",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "incomplete": true,
+          "prompt": 20,
+          "completion": 8
+        },
+        "context_basis_usage": {
+          "incomplete": true,
+          "prompt": 20,
+          "completion": 8
+        },
+        "basis": {
+          "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "incomplete": true,
+            "prompt": 20,
+            "completion": 8
+          },
+          "elapsed_seconds": 0.062,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 3,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+            "call_id": "e665f03013f04c04b2f419598126810a",
+            "attempt": 3,
+            "ts": 1793794804.7070553,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "连接超时，请检查网络后重试",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+            "call_id": "e665f03013f04c04b2f419598126810a",
+            "attempt": 2,
+            "ts": 1793794804.7070553,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+            "call_id": "e665f03013f04c04b2f419598126810a",
+            "attempt": 1,
+            "ts": 1793794804.7065477,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [
+          2,
+          4
+        ],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.672
+    },
+    {
+      "name": "partial_stream_then_retry_fallback",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 30,
+            "completion": 12,
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.062,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 3,
+        "events": [
+          {
+            "purpose": "main_fallback",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": true,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+            "call_id": "908a21cb75e947e1a4f266755abd305f",
+            "attempt": 2,
+            "ts": 1793794805.6066756,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main_fallback",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": true,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+            "call_id": "908a21cb75e947e1a4f266755abd305f",
+            "attempt": 1,
+            "ts": 1793794805.6066756,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          },
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 10,
+              "completion": 4
+            },
+            "usage_state": "partial_receipt",
+            "status": "error",
+            "error_type": "无法连接接口地址，请检查网络与地址",
+            "fallback": false,
+            "model": "synthetic-stream-model",
+            "model_source": "receipt",
+            "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+            "call_id": "e95404106bde4b28b2960d47e7ee6cc7",
+            "attempt": 1,
+            "ts": 1793794805.605168,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [
+          2
+        ],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.875
+    },
+    {
+      "name": "partial_nonstream",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 9,
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "prompt": 9,
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 9,
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.094,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 9
+            },
+            "usage_state": "partial_receipt",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+            "call_id": "4d102b7e0163462c9d7bac6e963c425e",
+            "attempt": 1,
+            "ts": 1793794806.4679945,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.875
+    },
+    {
+      "name": "unknown_nonstream",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.078,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+            "call_id": "0d3dbf6add704084a0b02a11bd2536ac",
+            "attempt": 1,
+            "ts": 1793794807.3641396,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.891
+    },
+    {
+      "name": "successful_stream_missing_final_usage",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 10,
+          "completion": 4,
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "prompt": 10,
+          "completion": 4,
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90451,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 10,
+            "completion": 4,
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.062,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main_stream",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 10,
+              "completion": 4
+            },
+            "usage_state": "partial_receipt",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-stream-model",
+            "model_source": "receipt",
+            "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+            "call_id": "37940fdf6a49442f9a238d208cda308e",
+            "attempt": 1,
+            "ts": 1793794808.3367326,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "Synthetic final reply.",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.984
+    },
+    {
+      "name": "whole_failure_keeps_unknown",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "incomplete": true
+        },
+        "context_basis_usage": null,
+        "basis": null,
+        "calls": 3,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+            "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+            "attempt": 1,
+            "ts": 1793794809.2284052,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+            "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+            "attempt": 2,
+            "ts": 1793794809.2284052,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "pending"
+          },
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+            "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+            "attempt": 3,
+            "ts": 1793794809.2284052,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "pending"
+          }
+        ],
+        "reply": null,
+        "exception": "RuntimeError",
+        "turn_count": 1,
+        "backoff_replaced_seconds": [
+          2,
+          4
+        ],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.844
+    },
+    {
+      "name": "cancellation_keeps_unknown",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "incomplete": true
+        },
+        "context_basis_usage": null,
+        "basis": null,
+        "calls": 1,
+        "events": [
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "cancelled",
+            "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "p2_77479f26a9824283bf153d849ec3c91e",
+            "call_id": "a5a01e6607a344968ecfea1b583ae046",
+            "attempt": 1,
+            "ts": 1793794810.0629091,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_77479f26a9824283bf153d849ec3c91e",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90451,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5481,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 24
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "pending"
+          }
+        ],
+        "reply": null,
+        "exception": "KeyboardInterrupt",
+        "turn_count": 1,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.828
+    },
+    {
+      "name": "review_retry_false_failure",
+      "status": "passed",
+      "detail": {
+        "aggregate": {
+          "prompt": 20,
+          "completion": 8,
+          "incomplete": true
+        },
+        "context_basis_usage": {
+          "prompt": 20,
+          "completion": 8,
+          "incomplete": true
+        },
+        "basis": {
+          "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": false,
+            "current_user_over_budget": false,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 90323,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 31
+            },
+            {
+              "kind": "stable",
+              "name": "request_capability",
+              "estimated_tokens": 120
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5617,
+          "reply_reserve_tokens": 4000,
+          "usage": {
+            "prompt": 20,
+            "completion": 8,
+            "incomplete": true
+          },
+          "elapsed_seconds": 0.094,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": true,
+            "calls": 1,
+            "status": "original_preserved",
+            "usage": {
+              "incomplete": true
+            },
+            "draft_sha256": "01219b3f2601565fae15399563368d8ffee5a637e9be91fdbe6a1e82f8589989",
+            "policy_sha256": "eeedeea44f88036a358514f3514cc95e0a3c81e2fb72583917fe2350ccbb401a",
+            "error": "RuntimeError"
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 2,
+        "events": [
+          {
+            "purpose": "rewrite_review",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-review-model",
+            "model_source": "requested",
+            "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+            "call_id": "22200699aaf1422aa22ecffc25fe7227",
+            "attempt": 1,
+            "ts": 1793794810.8404746,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "committed"
+          },
+          {
+            "purpose": "main",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+            "call_id": "73094a63e3cc47cf9b240a3910905625",
+            "attempt": 1,
+            "ts": 1793794810.8404746,
+            "stage": "transport_attempt",
+            "context": {
+              "persona": {
+                "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+                "user_turn_id": 1,
+                "expression": {
+                  "fingerprint": "d4502103463dbff2",
+                  "policy_version": 4,
+                  "sample_ids": [],
+                  "chars": 79,
+                  "estimated_tokens": 73,
+                  "degradation": [],
+                  "selected_style_indices": [
+                    0
+                  ],
+                  "omitted_sample_ids": [],
+                  "purpose": "chat",
+                  "full_chars": 104,
+                  "full_estimated_tokens": 84
+                },
+                "anchor_enabled": false,
+                "anchor": {},
+                "anchor_present": false
+              },
+              "history_selection": {
+                "exclusions": [],
+                "minimum_retained_over_budget": false,
+                "current_user_over_budget": false,
+                "retained_ids": [
+                  1
+                ],
+                "first_retained_id": 1,
+                "excluded_ids": [],
+                "message_limit": 16,
+                "history_token_budget": 90323,
+                "policy": "complete_suffix_then_budget",
+                "recap_reserved_tokens": 0
+              },
+              "estimated_tokens": 5617,
+              "blocks": [
+                {
+                  "kind": "stable",
+                  "name": "constitution+persona+memory-area",
+                  "estimated_tokens": 5015
+                },
+                {
+                  "kind": "history",
+                  "name": "user",
+                  "estimated_tokens": 31
+                },
+                {
+                  "kind": "stable",
+                  "name": "request_capability",
+                  "estimated_tokens": 120
+                },
+                {
+                  "kind": "stable",
+                  "name": "tool_schemas",
+                  "estimated_tokens": 405
+                }
+              ],
+              "tool_schema_count": 2,
+              "tool_names": [
+                "recall",
+                "remember"
+              ]
+            },
+            "storage": "committed"
+          }
+        ],
+        "reply": "此为隔离诊断材料，不是现实承诺。",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.812
+    },
+    {
+      "name": "budget_rejection_no_attempt",
+      "status": "passed",
+      "detail": {
+        "aggregate": {},
+        "context_basis_usage": {},
+        "basis": {
+          "request_id": "p2_07d38b572fc04842b17e03ff00ca44ef",
+          "user_turn_id": 1,
+          "assistant_turn_id": 2,
+          "mode": "legacy",
+          "history_selection": {
+            "exclusions": [],
+            "minimum_retained_over_budget": true,
+            "current_user_over_budget": true,
+            "retained_ids": [
+              1
+            ],
+            "first_retained_id": 1,
+            "excluded_ids": [],
+            "message_limit": 16,
+            "history_token_budget": 0,
+            "policy": "complete_suffix_then_budget",
+            "recap_reserved_tokens": 0
+          },
+          "persona": {
+            "request_id": "p2_07d38b572fc04842b17e03ff00ca44ef",
+            "user_turn_id": 1,
+            "expression": {
+              "fingerprint": "d4502103463dbff2",
+              "policy_version": 4,
+              "sample_ids": [],
+              "chars": 79,
+              "estimated_tokens": 73,
+              "degradation": [],
+              "selected_style_indices": [
+                0
+              ],
+              "omitted_sample_ids": [],
+              "purpose": "chat",
+              "full_chars": 104,
+              "full_estimated_tokens": 84
+            },
+            "anchor_enabled": false,
+            "anchor": {},
+            "anchor_present": false
+          },
+          "blocks": [
+            {
+              "kind": "stable",
+              "name": "constitution+persona+memory-area",
+              "estimated_tokens": 5015
+            },
+            {
+              "kind": "history",
+              "name": "user",
+              "estimated_tokens": 24
+            },
+            {
+              "kind": "stable",
+              "name": "tool_schemas",
+              "estimated_tokens": 405
+            }
+          ],
+          "tool_schema_count": 2,
+          "tool_names": [
+            "recall",
+            "remember"
+          ],
+          "final_estimated_tokens": 5481,
+          "reply_reserve_tokens": 4000,
+          "usage": {},
+          "elapsed_seconds": 0.063,
+          "persona_growth": {
+            "sections": {
+              "生长 · 自我叙事": "absent",
+              "生长 · 与用户的关系": "absent"
+            },
+            "evidence_ids": [],
+            "valid_at_finish": true
+          },
+          "transform_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          },
+          "recap_reply_review": {
+            "selected": false,
+            "calls": 0,
+            "status": "not_selected",
+            "usage": {}
+          }
+        },
+        "calls": 0,
+        "events": [],
+        "reply": "本轮材料已超出上下文预算，请缩小问题或材料范围；未读取的内容不作猜测补全。",
+        "exception": null,
+        "turn_count": 2,
+        "backoff_replaced_seconds": [],
+        "stubs": [
+          "synthetic persona loader",
+          "fake provider",
+          "backoff sleep"
+        ],
+        "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+      },
+      "seconds": 0.844
+    },
+    {
+      "name": "callback_failure_does_not_retry_or_mask",
+      "status": "passed",
+      "detail": {
+        "calls": 3,
+        "callback_calls": [
+          {
+            "has_response": false,
+            "incomplete": true
+          },
+          {
+            "has_response": true,
+            "incomplete": false
+          },
+          {
+            "has_response": false,
+            "incomplete": true
+          }
+        ],
+        "events": [
+          {
+            "purpose": "callback_failure",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "error",
+            "error_type": "请求受限或账户额度不足",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "callback_failure",
+            "call_id": "8d4cd8bc9d184875a88c226fac9af298",
+            "attempt": 1,
+            "ts": 1793794812.438417,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "pending"
+          },
+          {
+            "purpose": "callback_failure",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "callback_failure",
+            "call_id": "8d4cd8bc9d184875a88c226fac9af298",
+            "attempt": 2,
+            "ts": 1793794812.438417,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "pending"
+          },
+          {
+            "purpose": "callback_cancel",
+            "duration_ms": 0,
+            "usage": "unknown",
+            "usage_state": "unknown",
+            "status": "cancelled",
+            "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+            "fallback": false,
+            "model": "synthetic-main-model",
+            "model_source": "requested",
+            "request_id": "callback_cancel",
+            "call_id": "d7528a34d510412bbb5b7933e2e092f7",
+            "attempt": 1,
+            "ts": 1793794812.438417,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "pending"
+          }
+        ]
+      },
+      "seconds": 0.719
+    },
+    {
+      "name": "callback_and_sqlite_observation_failure",
+      "status": "passed",
+      "detail": {
+        "provider_calls": 1,
+        "callback_calls": [
+          false
+        ],
+        "failed_flushes": 2,
+        "events": [
+          {
+            "purpose": "sqlite_failure",
+            "duration_ms": 0,
+            "usage": {
+              "prompt": 20,
+              "completion": 8
+            },
+            "usage_state": "reported",
+            "status": "ok",
+            "error_type": null,
+            "fallback": false,
+            "model": "synthetic-receipt-model",
+            "model_source": "receipt",
+            "request_id": "sqlite_failure",
+            "call_id": "3991090117bf4a0c9686bdc3f6ee4c6a",
+            "attempt": 1,
+            "ts": 1793794813.1900306,
+            "stage": "transport_attempt",
+            "context": null,
+            "storage": "committed"
+          }
+        ],
+        "injection": "SQLite receipt INSERT trigger, not replacement of metrics API"
+      },
+      "seconds": 0.765
+    }
+  ],
+  "passed": 14,
+  "failed": 0,
+  "workspace": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-p2-usage-9vj_yisa\\usage_aggregation\\workspace_1793794801772733500",
+  "fixtures": "C:\\Users\\ylinz\\AppData\\Local\\Temp\\alice-p2-usage-9vj_yisa\\usage_aggregation\\fixtures_1793794802235019600",
+  "facts": {
+    "clean_nonstream": {
+      "aggregate": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "context_basis_usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "basis": {
+        "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "elapsed_seconds": 0.063,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+          "call_id": "0962cb3df75e47b884614387a4a5a83a",
+          "attempt": 1,
+          "ts": 1793794802.8279667,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_8f733ee1c67c421ab0a49196832ebbca",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "clean_stream_latest_receipt_only": {
+      "aggregate": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "context_basis_usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "basis": {
+        "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 20,
+          "completion": 8
+        },
+        "elapsed_seconds": 0.047,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-stream-model",
+          "model_source": "receipt",
+          "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+          "call_id": "cdc70845c6f049f8b442350fddbb1a20",
+          "attempt": 1,
+          "ts": 1793794803.441817,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_8f169bffb7c145399166942917ec85b0",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "partial_stream_exact_sum": {
+      "aggregate": {
+        "prompt": 30,
+        "completion": 12,
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "prompt": 30,
+        "completion": 12,
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.047,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 2,
+      "events": [
+        {
+          "purpose": "main_fallback",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": true,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+          "call_id": "99211359db694e998d1221c545001753",
+          "attempt": 1,
+          "ts": 1793794804.0737438,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 10,
+            "completion": 4
+          },
+          "usage_state": "partial_receipt",
+          "status": "error",
+          "error_type": "无法连接接口地址，请检查网络与地址",
+          "fallback": false,
+          "model": "synthetic-stream-model",
+          "model_source": "receipt",
+          "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+          "call_id": "c0054425d9c94896b21c40127e6927b1",
+          "attempt": 1,
+          "ts": 1793794804.0727441,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_e752b1d52fee437b86284a88bbe90568",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "retry_unknown_exact_sum": {
+      "aggregate": {
+        "incomplete": true,
+        "prompt": 20,
+        "completion": 8
+      },
+      "context_basis_usage": {
+        "incomplete": true,
+        "prompt": 20,
+        "completion": 8
+      },
+      "basis": {
+        "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "incomplete": true,
+          "prompt": 20,
+          "completion": 8
+        },
+        "elapsed_seconds": 0.062,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 3,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+          "call_id": "e665f03013f04c04b2f419598126810a",
+          "attempt": 3,
+          "ts": 1793794804.7070553,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "连接超时，请检查网络后重试",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+          "call_id": "e665f03013f04c04b2f419598126810a",
+          "attempt": 2,
+          "ts": 1793794804.7070553,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+          "call_id": "e665f03013f04c04b2f419598126810a",
+          "attempt": 1,
+          "ts": 1793794804.7065477,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_c8ce0f9545d54923b58f458d5ead43c4",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [
+        2,
+        4
+      ],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "partial_stream_then_retry_fallback": {
+      "aggregate": {
+        "prompt": 30,
+        "completion": 12,
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "prompt": 30,
+        "completion": 12,
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 30,
+          "completion": 12,
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.062,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 3,
+      "events": [
+        {
+          "purpose": "main_fallback",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": true,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+          "call_id": "908a21cb75e947e1a4f266755abd305f",
+          "attempt": 2,
+          "ts": 1793794805.6066756,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main_fallback",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": true,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+          "call_id": "908a21cb75e947e1a4f266755abd305f",
+          "attempt": 1,
+          "ts": 1793794805.6066756,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        },
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 10,
+            "completion": 4
+          },
+          "usage_state": "partial_receipt",
+          "status": "error",
+          "error_type": "无法连接接口地址，请检查网络与地址",
+          "fallback": false,
+          "model": "synthetic-stream-model",
+          "model_source": "receipt",
+          "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+          "call_id": "e95404106bde4b28b2960d47e7ee6cc7",
+          "attempt": 1,
+          "ts": 1793794805.605168,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_45beefae3c9747e4b205ff80b0f3a893",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [
+        2
+      ],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "partial_nonstream": {
+      "aggregate": {
+        "prompt": 9,
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "prompt": 9,
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 9,
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.094,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 9
+          },
+          "usage_state": "partial_receipt",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+          "call_id": "4d102b7e0163462c9d7bac6e963c425e",
+          "attempt": 1,
+          "ts": 1793794806.4679945,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_526274d9663c47dda1d2402c50a8e2e7",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "unknown_nonstream": {
+      "aggregate": {
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.078,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+          "call_id": "0d3dbf6add704084a0b02a11bd2536ac",
+          "attempt": 1,
+          "ts": 1793794807.3641396,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_6fcb3b91772b4d0aa866c97c3085f4f3",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "successful_stream_missing_final_usage": {
+      "aggregate": {
+        "prompt": 10,
+        "completion": 4,
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "prompt": 10,
+        "completion": 4,
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90451,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 10,
+          "completion": 4,
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.062,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main_stream",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 10,
+            "completion": 4
+          },
+          "usage_state": "partial_receipt",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-stream-model",
+          "model_source": "receipt",
+          "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+          "call_id": "37940fdf6a49442f9a238d208cda308e",
+          "attempt": 1,
+          "ts": 1793794808.3367326,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_c0dbda16ea334cb488c9e266049e7525",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "Synthetic final reply.",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "whole_failure_keeps_unknown": {
+      "aggregate": {
+        "incomplete": true
+      },
+      "context_basis_usage": null,
+      "basis": null,
+      "calls": 3,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+          "attempt": 1,
+          "ts": 1793794809.2284052,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+          "attempt": 2,
+          "ts": 1793794809.2284052,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "pending"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+          "call_id": "29e4575dd1334ccd825bfb1f6a1d80cc",
+          "attempt": 3,
+          "ts": 1793794809.2284052,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_aa12cf44cec1440fb4129681c4084b20",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "pending"
+        }
+      ],
+      "reply": null,
+      "exception": "RuntimeError",
+      "turn_count": 1,
+      "backoff_replaced_seconds": [
+        2,
+        4
+      ],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "cancellation_keeps_unknown": {
+      "aggregate": {
+        "incomplete": true
+      },
+      "context_basis_usage": null,
+      "basis": null,
+      "calls": 1,
+      "events": [
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "cancelled",
+          "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "p2_77479f26a9824283bf153d849ec3c91e",
+          "call_id": "a5a01e6607a344968ecfea1b583ae046",
+          "attempt": 1,
+          "ts": 1793794810.0629091,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_77479f26a9824283bf153d849ec3c91e",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90451,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5481,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 24
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "pending"
+        }
+      ],
+      "reply": null,
+      "exception": "KeyboardInterrupt",
+      "turn_count": 1,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "review_retry_false_failure": {
+      "aggregate": {
+        "prompt": 20,
+        "completion": 8,
+        "incomplete": true
+      },
+      "context_basis_usage": {
+        "prompt": 20,
+        "completion": 8,
+        "incomplete": true
+      },
+      "basis": {
+        "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": false,
+          "current_user_over_budget": false,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 90323,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 31
+          },
+          {
+            "kind": "stable",
+            "name": "request_capability",
+            "estimated_tokens": 120
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5617,
+        "reply_reserve_tokens": 4000,
+        "usage": {
+          "prompt": 20,
+          "completion": 8,
+          "incomplete": true
+        },
+        "elapsed_seconds": 0.094,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": true,
+          "calls": 1,
+          "status": "original_preserved",
+          "usage": {
+            "incomplete": true
+          },
+          "draft_sha256": "01219b3f2601565fae15399563368d8ffee5a637e9be91fdbe6a1e82f8589989",
+          "policy_sha256": "eeedeea44f88036a358514f3514cc95e0a3c81e2fb72583917fe2350ccbb401a",
+          "error": "RuntimeError"
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 2,
+      "events": [
+        {
+          "purpose": "rewrite_review",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-review-model",
+          "model_source": "requested",
+          "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+          "call_id": "22200699aaf1422aa22ecffc25fe7227",
+          "attempt": 1,
+          "ts": 1793794810.8404746,
+          "stage": "transport_attempt",
+          "context": null,
+          "storage": "committed"
+        },
+        {
+          "purpose": "main",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+          "call_id": "73094a63e3cc47cf9b240a3910905625",
+          "attempt": 1,
+          "ts": 1793794810.8404746,
+          "stage": "transport_attempt",
+          "context": {
+            "persona": {
+              "request_id": "p2_80764278dacb4b8e8aeebbee1805d3b5",
+              "user_turn_id": 1,
+              "expression": {
+                "fingerprint": "d4502103463dbff2",
+                "policy_version": 4,
+                "sample_ids": [],
+                "chars": 79,
+                "estimated_tokens": 73,
+                "degradation": [],
+                "selected_style_indices": [
+                  0
+                ],
+                "omitted_sample_ids": [],
+                "purpose": "chat",
+                "full_chars": 104,
+                "full_estimated_tokens": 84
+              },
+              "anchor_enabled": false,
+              "anchor": {},
+              "anchor_present": false
+            },
+            "history_selection": {
+              "exclusions": [],
+              "minimum_retained_over_budget": false,
+              "current_user_over_budget": false,
+              "retained_ids": [
+                1
+              ],
+              "first_retained_id": 1,
+              "excluded_ids": [],
+              "message_limit": 16,
+              "history_token_budget": 90323,
+              "policy": "complete_suffix_then_budget",
+              "recap_reserved_tokens": 0
+            },
+            "estimated_tokens": 5617,
+            "blocks": [
+              {
+                "kind": "stable",
+                "name": "constitution+persona+memory-area",
+                "estimated_tokens": 5015
+              },
+              {
+                "kind": "history",
+                "name": "user",
+                "estimated_tokens": 31
+              },
+              {
+                "kind": "stable",
+                "name": "request_capability",
+                "estimated_tokens": 120
+              },
+              {
+                "kind": "stable",
+                "name": "tool_schemas",
+                "estimated_tokens": 405
+              }
+            ],
+            "tool_schema_count": 2,
+            "tool_names": [
+              "recall",
+              "remember"
+            ]
+          },
+          "storage": "committed"
+        }
+      ],
+      "reply": "此为隔离诊断材料，不是现实承诺。",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "budget_rejection_no_attempt": {
+      "aggregate": {},
+      "context_basis_usage": {},
+      "basis": {
+        "request_id": "p2_07d38b572fc04842b17e03ff00ca44ef",
+        "user_turn_id": 1,
+        "assistant_turn_id": 2,
+        "mode": "legacy",
+        "history_selection": {
+          "exclusions": [],
+          "minimum_retained_over_budget": true,
+          "current_user_over_budget": true,
+          "retained_ids": [
+            1
+          ],
+          "first_retained_id": 1,
+          "excluded_ids": [],
+          "message_limit": 16,
+          "history_token_budget": 0,
+          "policy": "complete_suffix_then_budget",
+          "recap_reserved_tokens": 0
+        },
+        "persona": {
+          "request_id": "p2_07d38b572fc04842b17e03ff00ca44ef",
+          "user_turn_id": 1,
+          "expression": {
+            "fingerprint": "d4502103463dbff2",
+            "policy_version": 4,
+            "sample_ids": [],
+            "chars": 79,
+            "estimated_tokens": 73,
+            "degradation": [],
+            "selected_style_indices": [
+              0
+            ],
+            "omitted_sample_ids": [],
+            "purpose": "chat",
+            "full_chars": 104,
+            "full_estimated_tokens": 84
+          },
+          "anchor_enabled": false,
+          "anchor": {},
+          "anchor_present": false
+        },
+        "blocks": [
+          {
+            "kind": "stable",
+            "name": "constitution+persona+memory-area",
+            "estimated_tokens": 5015
+          },
+          {
+            "kind": "history",
+            "name": "user",
+            "estimated_tokens": 24
+          },
+          {
+            "kind": "stable",
+            "name": "tool_schemas",
+            "estimated_tokens": 405
+          }
+        ],
+        "tool_schema_count": 2,
+        "tool_names": [
+          "recall",
+          "remember"
+        ],
+        "final_estimated_tokens": 5481,
+        "reply_reserve_tokens": 4000,
+        "usage": {},
+        "elapsed_seconds": 0.063,
+        "persona_growth": {
+          "sections": {
+            "生长 · 自我叙事": "absent",
+            "生长 · 与用户的关系": "absent"
+          },
+          "evidence_ids": [],
+          "valid_at_finish": true
+        },
+        "transform_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        },
+        "recap_reply_review": {
+          "selected": false,
+          "calls": 0,
+          "status": "not_selected",
+          "usage": {}
+        }
+      },
+      "calls": 0,
+      "events": [],
+      "reply": "本轮材料已超出上下文预算，请缩小问题或材料范围；未读取的内容不作猜测补全。",
+      "exception": null,
+      "turn_count": 2,
+      "backoff_replaced_seconds": [],
+      "stubs": [
+        "synthetic persona loader",
+        "fake provider",
+        "backoff sleep"
+      ],
+      "real_path": "copied loop.chat_turn -> steps.drive -> assembly -> provider interface -> SQLite turns/context_basis/observations"
+    },
+    "callback_failure_does_not_retry_or_mask": {
+      "calls": 3,
+      "callback_calls": [
+        {
+          "has_response": false,
+          "incomplete": true
+        },
+        {
+          "has_response": true,
+          "incomplete": false
+        },
+        {
+          "has_response": false,
+          "incomplete": true
+        }
+      ],
+      "events": [
+        {
+          "purpose": "callback_failure",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "error",
+          "error_type": "请求受限或账户额度不足",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "callback_failure",
+          "call_id": "8d4cd8bc9d184875a88c226fac9af298",
+          "attempt": 1,
+          "ts": 1793794812.438417,
+          "stage": "transport_attempt",
+          "context": null,
+          "storage": "pending"
+        },
+        {
+          "purpose": "callback_failure",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "callback_failure",
+          "call_id": "8d4cd8bc9d184875a88c226fac9af298",
+          "attempt": 2,
+          "ts": 1793794812.438417,
+          "stage": "transport_attempt",
+          "context": null,
+          "storage": "pending"
+        },
+        {
+          "purpose": "callback_cancel",
+          "duration_ms": 0,
+          "usage": "unknown",
+          "usage_state": "unknown",
+          "status": "cancelled",
+          "error_type": "模型请求失败，请检查接口地址、模型和账户状态",
+          "fallback": false,
+          "model": "synthetic-main-model",
+          "model_source": "requested",
+          "request_id": "callback_cancel",
+          "call_id": "d7528a34d510412bbb5b7933e2e092f7",
+          "attempt": 1,
+          "ts": 1793794812.438417,
+          "stage": "transport_attempt",
+          "context": null,
+          "storage": "pending"
+        }
+      ]
+    },
+    "callback_and_sqlite_observation_failure": {
+      "provider_calls": 1,
+      "callback_calls": [
+        false
+      ],
+      "failed_flushes": 2,
+      "events": [
+        {
+          "purpose": "sqlite_failure",
+          "duration_ms": 0,
+          "usage": {
+            "prompt": 20,
+            "completion": 8
+          },
+          "usage_state": "reported",
+          "status": "ok",
+          "error_type": null,
+          "fallback": false,
+          "model": "synthetic-receipt-model",
+          "model_source": "receipt",
+          "request_id": "sqlite_failure",
+          "call_id": "3991090117bf4a0c9686bdc3f6ee4c6a",
+          "attempt": 1,
+          "ts": 1793794813.1900306,
+          "stage": "transport_attempt",
+          "context": null,
+          "storage": "committed"
+        }
+      ],
+      "injection": "SQLite receipt INSERT trigger, not replacement of metrics API"
+    }
+  },
+  "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+  "guard_attempts": [],
+  "real_provider_calls": 0,
+  "real_subprocesses": 0,
+  "real_service_starts": 0,
+  "limitations": [
+    "Copied source only; synthetic responses/errors and persona loader",
+    "No real provider billing, Windows CLI, GUI, service, or user data"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "sqlite_fault": "trigger RAISE(FAIL) on receipt INSERT",
+  "failed_flushes": 3,
+  "provider_calls": 1,
+  "pending_before_recovery": [
+    {
+      "purpose": "fixture",
+      "duration_ms": 0,
+      "usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "usage_state": "reported",
+      "status": "ok",
+      "error_type": null,
+      "fallback": false,
+      "model": "fixture-receipt-model",
+      "model_source": "receipt",
+      "request_id": "write_failure_request",
+      "call_id": "26dd6b3a50434720ae8fb5d8a7f3444b",
+      "attempt": 1,
+      "ts": 1793794710.9699583,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "pending"
+    }
+  ],
+  "after_recovery": [
+    {
+      "purpose": "fixture",
+      "duration_ms": 0,
+      "usage": {
+        "prompt": 20,
+        "completion": 8
+      },
+      "usage_state": "reported",
+      "status": "ok",
+      "error_type": null,
+      "fallback": false,
+      "model": "fixture-receipt-model",
+      "model_source": "receipt",
+      "request_id": "write_failure_request",
+      "call_id": "26dd6b3a50434720ae8fb5d8a7f3444b",
+      "attempt": 1,
+      "ts": 1793794710.9699583,
+      "stage": "transport_attempt",
+      "context": {
+        "fixture": "synthetic"
+      },
+      "storage": "committed"
+    }
+  ]
+}
