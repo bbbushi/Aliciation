@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import re
+from collections import deque
 from dataclasses import asdict, is_dataclass
 
 FORMAT = "expression-v2"
@@ -154,6 +155,10 @@ def _ids(value, field, available=None):
         raise ValueError("表达引用不存在：" + field)
 
 
+class PurposeReferenceError(ValueError):
+    """Well-formed entries cannot retain their dependencies in every purpose."""
+
+
 def validate_package(package: dict, *, registry=None, limits=None, activation=False) -> list[str]:
     """Structural checks are not semantic certification. Return visible gaps."""
     if not isinstance(package, dict) or package.get("format") != FORMAT:
@@ -225,8 +230,6 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
                 raise ValueError("表达锚角色与条目类型不一致")
             if group == "examples" and not item["links"] and item["origin"] != "user_config":
                 raise ValueError("样本缺少适用规则关联")
-            if any(not set(purposes) <= set(by_id[ref]["purposes"]) for ref in item["links"]):
-                raise ValueError("表达跨用途引用不可完整投影：" + item["id"])
             link_count += len(item["links"]) + len(item["source_ids"])
     destinations = package.get("destinations")
     if not isinstance(destinations, list) or any(not isinstance(d, dict) for d in destinations):
@@ -286,6 +289,15 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
     _validate_revisions(package.get("user_revisions"), cap)
     if any(record["item_id"] in known for record in (package.get("user_revisions") or {}).get("cancelled_additions", [])):
         raise ValueError("已撤销新增条目仍出现在表达成品中")
+    # Check dependencies only after every referenced entry and the full ledger
+    # have been validated. Preparation may repair this one class of conflict;
+    # malformed fields, provenance, or coverage must never enter that path.
+    for item in all_entries:
+        for ref in item["links"]:
+            missing = [purpose for purpose in item["purposes"] if purpose not in by_id[ref]["purposes"]]
+            if missing:
+                raise PurposeReferenceError("表达跨用途引用不可完整投影：" + item["id"] + " → " + ref
+                                            + "（被引用条目不支持：" + ", ".join(missing) + "）")
     if activation:
         if gaps:
             raise ValueError("表达未覆盖，候选未激活：" + "；".join(dict.fromkeys(gaps)))
@@ -295,6 +307,46 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
         if package.get("review_digest") != review_digest(package):
             raise ValueError("表达内容与审议版本不一致")
     return list(dict.fromkeys(gaps))
+
+
+def restrict_prepared_purposes(package: dict, *, registry=None, limits=None) -> tuple[dict, list[dict]]:
+    """Narrow only a newly generated draft; never repair runtime/user packages.
+
+    Keep raw receipts untouched. All other checks remain strict, and the caller
+    must merge user revisions and independently review the resulting candidate.
+    """
+    try:
+        validate_package(package, registry=registry, limits=limits)
+    except PurposeReferenceError:
+        pass
+    else:
+        return copy.deepcopy(package), []
+    result = copy.deepcopy(package)
+    by_id = {item["id"]: item for item in entries(result)}
+    before = {key: list(item["purposes"]) for key, item in by_id.items()}
+    dependents = {key: [] for key in by_id}
+    for item in by_id.values():
+        for ref in item["links"]:
+            dependents[ref].append(item["id"])
+    # Propagate removals to a fixed point, including cycles and indirect links.
+    # Each item can lose at most qq and worker_summary; chat is mandatory in
+    # every validated entry, so no content is lost from the GUI projection.
+    pending = deque(by_id)
+    while pending:
+        ref = pending.popleft()
+        for key in dependents[ref]:
+            item = by_id[key]
+            narrowed = [purpose for purpose in item["purposes"] if purpose in by_id[ref]["purposes"]]
+            if narrowed != item["purposes"]:
+                item["purposes"] = narrowed
+                pending.append(key)
+    changes = [{"id": key, "before": before[key], "after": list(item["purposes"]),
+                "dependencies": [{"id": ref, "purposes": list(by_id[ref]["purposes"])}
+                                 for ref in item["links"]
+                                 if not set(before[key]) <= set(by_id[ref]["purposes"])]}
+               for key, item in by_id.items() if before[key] != item["purposes"]]
+    validate_package(result, registry=registry, limits=limits)
+    return result, changes
 
 
 def review_digest(package: dict) -> str:
