@@ -73,7 +73,7 @@ class WorkerReportsMixin:
                     return
                 thread = threading.Thread(target=self._run_worker_report,
                     args=(pending['attempt_id'], pending['epoch'], self.generation),
-                    name='alice-dsh-report', daemon=True)
+                    name='alice-worker-report', daemon=True)
                 # Reserve the in-memory identity before starting: is_alive() is
                 # false between Thread construction and start, so is not a gate.
                 self.report_thread = thread
@@ -251,7 +251,7 @@ class WorkerReportsMixin:
 
     @staticmethod
     def _summarize_worker_report(snapshot):
-        data = {key: snapshot[key] for key in ('outcome', 'style', 'original', 'current', 'reply', 'truncated')}
+        data = {key: snapshot[key] for key in ('worker_id', 'outcome', 'style', 'original', 'current', 'reply', 'truncated')}
         kwargs = {'model': snapshot['model'], 'messages': [
             {'role': 'system', 'content': SUMMARY_PROMPT},
             {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}],

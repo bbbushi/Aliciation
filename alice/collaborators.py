@@ -1,4 +1,4 @@
-"""GUI-only DSH authorization and records, with an independent execution slot."""
+"""GUI-only collaborators, each with its own authorization, queue and execution slot."""
 from __future__ import annotations
 
 import json
@@ -27,6 +27,12 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         # The grant and its budget are durable. Connection credentials/handles
         # stay in memory: startup never pairs, sends, or replays historical work.
         self.paused = False
+        self.dsh_paused = False
+        # Rebinding follows a completed drain (or initial construction). Clear
+        # the old epoch's stop signal without starting either worker; shutdown
+        # still wins if it arrived while reset was completing.
+        if not self.closing:
+            self.stop.clear()
 
     def _epoch(self, payload):
         if not isinstance(payload, dict):
@@ -35,8 +41,10 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         return self.service._channels.epoch
 
     def registration(self):
-        connected = self.bridge is not None and self.connection_state == 'connected' and not self.paused and not self.closing
+        connected = (self.bridge is not None and self.connection_state == 'connected'
+                     and not self.dsh_paused and not self.paused and not self.closing)
         enabled = bool(self.ledger.policy()['enabled'])
+        activity = self._worker_activity_locked('dsh-agent')
         result = {
             'name': 'dsh-agent', 'display_name': 'DSH', 'state': 'ready' if connected else self.connection_state,
             'enabled': enabled, 'available': connected,
@@ -53,7 +61,14 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             'capabilities': self.bridge.hello.get('capabilities', {}) if self.bridge else {},
             'verification': 'authenticated_plugin' if connected else 'installation_metadata',
             'runtime_checked': connected,
+            'policy_revision': self.ledger.policy()['revision'],
+            'runs_used': self.ledger.runs_used('dsh-agent'),
+            'queued': self._worker_queue_locked('dsh-agent'), 'running': len(activity),
+            'concurrency': 1, 'queue_limit': 4,
         }
+        if self.dsh_paused:
+            result['state'] = 'draining'
+            result['reason'] = 'DSH 正在断开，已暂停新派工；若上次等待超时，请稍后重试断开。'
         if self.installation != 'reviewed_installation':
             result['state'] = 'unverified'
             result['reason'] = ('DSH 安装版本与已审阅版本不同，需要重新核验接口和权限。'
@@ -64,7 +79,32 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             result.pop('manual_setup', None)
         return result
 
-    def status_locked(self):
+    def claude_registration(self):
+        """CLI authorization/execution state, not a fabricated persistent connection."""
+        policy = self._worker_policy_locked('claude-agent')
+        activity = self._worker_activity_locked('claude-agent')
+        enabled = bool(policy['enabled'])
+        ready = self._claude_policy_admitted()
+        if self.closing or self.paused or self.stop.is_set():
+            state, reason = 'draining', '正在停止协作执行。'
+        elif 'unknown' in activity:
+            state, reason = 'recovery_required', 'Claude 停止状态尚未核实，请先人工核实并恢复任务状态。'
+        elif 'waiting_permission' in activity:
+            state, reason = 'waiting_permission', 'Claude 正在等待你确认本次操作权限。'
+        elif activity or self.claude_threads:
+            state, reason = 'running', 'Claude 正在执行；新任务进入自己的待办队列。'
+        elif ready:
+            state, reason = 'ready', '授权已就绪；派工时启动 Claude CLI。'
+        else:
+            state, reason = 'disabled', '请在设置 → Claude 确认目录与派工授权。'
+        return {'name': 'claude-agent', 'display_name': 'Claude', 'state': state,
+                'enabled': enabled, 'available': bool(ready and state not in {'draining', 'recovery_required'}),
+                'reason': reason, 'policy_revision': policy['revision'],
+                'runs_used': self.ledger.runs_used('claude-agent', policy['revision']),
+                'queued': self._worker_queue_locked('claude-agent'), 'running': len(activity),
+                'concurrency': 1, 'queue_limit': 4}
+
+    def status_locked(self, *, include_claude=True):
         policy = self.ledger.policy()
         used = self.ledger.runs_used()
         return {'session_epoch': self.service._channels.epoch, 'revision': policy['revision'],
@@ -72,18 +112,34 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                            'enabled': bool(policy['enabled']), 'native_permissions_ack': bool(policy['native_permissions_ack']),
                            'runs_used': used, 'remaining_runs': max(0, policy['max_runs'] - used)},
                 'connection': {'connected': self.bridge is not None and self.connection_state == 'connected'
-                                            and not self.paused and not self.closing,
+                                            and not self.dsh_paused and not self.paused and not self.closing,
                                'has_connection': self.bridge is not None,
                                'state': self.connection_state},
                 'task_management': self.management_settings_locked(),
                 'credential': dict(self.credential_status),
-                'collaborators': [self.registration()]}
+                'collaborators': [self.registration()] + ([self.claude_registration()] if include_claude else [])}
+
+    def worker_status_locked(self, worker):
+        if worker == 'claude-agent':
+            result = self.claude_policy()
+            return {**result, 'worker': self.claude_registration()}
+        if worker != 'dsh-agent':
+            raise ChannelError(400, 'invalid_worker', '协作者身份无效')
+        result = self.status_locked(include_claude=False)
+        registration = result.pop('collaborators')[0]
+        return {**result, 'worker_id': worker, 'worker': registration}
+
+    def _status_response_locked(self, worker=None):
+        return self.worker_status_locked(worker) if worker else self.status_locked()
+
+    def _task_scope_locked(self, task, worker=None):
+        if worker is not None and self._task_worker(task) != worker:
+            raise ChannelError(409, 'worker_mismatch', '任务不属于当前工具入口')
+        return task
 
     def collaborators(self, payload=None):
         if payload is None:
-            credential_status = self.credentials.metadata()
             with self.service._lock:
-                self.credential_status = credential_status
                 return self.status_locked()
         if not isinstance(payload, dict):
             raise ChannelError(400, 'invalid_request', '协作请求必须是对象')
@@ -129,26 +185,41 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         return {'task_id': task_id, 'cancel_requested': bool(task['cancel_requested']) or task['state'] in ACTIVE | {'unknown'},
                 'termination_confirmed': bool(task['termination_confirmed'])}
 
-    def tasks(self, action='list', payload=None):
-        payload = payload or {}
+    def tasks(self, action='list', payload=None, *, worker=None):
+        payload = {} if payload is None else payload
+        if not isinstance(payload, dict):
+            raise ChannelError(400, 'invalid_request', '协作请求必须是对象')
         if action == 'recover_local':
-            return self.recover_local(payload)
+            return self.recover_local(payload, worker=worker)
         if action in {'archive', 'restore', 'delete'}:
-            return self.manage_task(action, payload)
+            return self.manage_task(action, payload, worker=worker)
         with self.service._lock:
             epoch = self.service._channels.epoch if action == 'list' else self._epoch(payload)
             if action == 'list':
-                if set(payload) - {'limit', 'before', 'archived'}:
+                if set(payload) - {'limit', 'before', 'archived', 'worker_id'}:
                     raise ChannelError(400, 'invalid_request', '列表参数无效')
+                selected_worker = payload.get('worker_id')
+                if worker is not None and selected_worker is not None and selected_worker != worker:
+                    raise ChannelError(409, 'worker_mismatch', '列表工具与当前入口不一致')
+                worker = worker or selected_worker
+                if worker is not None and (not isinstance(worker, str) or worker not in {'dsh-agent', 'claude-agent'}):
+                    raise ChannelError(400, 'invalid_worker', '协作者身份无效')
                 limit = bounded_int(payload.get('limit'), 40, 1, 100)
                 before = bounded_int(payload.get('before'), 0, 0, 1000000)
                 archived = bounded_int(payload.get('archived'), 0, 0, 1)
+                worker_filter = (" AND CASE WHEN bridge_instance='local:claude-agent' "
+                                 "THEN 'claude-agent' ELSE 'dsh-agent' END=?") if worker else ''
+                filters = (worker,) if worker else ()
                 rows = self.ledger.conn.execute(
-                    "SELECT * FROM worker_tasks WHERE epoch=? AND scope='gui' AND deleted=0 AND archived=? ORDER BY "
-                    "CASE WHEN state IN ('queued','starting','running','collecting','stopping','waiting') THEN 0 ELSE 1 END,"
-                    "updated_at DESC,task_id DESC LIMIT ? OFFSET ?", (epoch, archived, limit + 1, before)).fetchall()
-                cursor = self.ledger.conn.execute('SELECT COALESCE(MAX(cursor),0) FROM worker_events WHERE epoch=?', (epoch,)).fetchone()[0]
+                    "SELECT * FROM worker_tasks WHERE epoch=? AND scope='gui' AND deleted=0 AND archived=?"
+                    + worker_filter + " ORDER BY "
+                    "CASE WHEN state IN ('queued','starting','running','waiting_permission','collecting','stopping','waiting') THEN 0 ELSE 1 END,"
+                    "updated_at DESC,task_id DESC LIMIT ? OFFSET ?", (epoch, archived, *filters, limit + 1, before)).fetchall()
+                cursor = self.ledger.conn.execute(
+                    "SELECT COALESCE(MAX(e.cursor),0) FROM worker_events e JOIN worker_tasks t USING(task_id) "
+                    "WHERE e.epoch=?" + worker_filter, (epoch, *filters)).fetchone()[0]
                 return {'session_epoch': epoch, 'cursor': cursor,
+                        'worker_id': worker,
                         'tasks': [self.ledger.summary(dict(r)) for r in rows[:limit]],
                         'next_before': before + limit if len(rows) > limit else None}
             allowed = {'detail': set(), 'events': {'after_cursor', 'limit'},
@@ -156,7 +227,7 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                        'revoke': {'request_id', 'revision'}}
             if action not in allowed or set(payload) - ({'session_epoch', 'task_id'} | allowed[action]):
                 raise ChannelError(400, 'invalid_request', '协作操作参数无效')
-            task = self.ledger.task(payload.get('task_id'), epoch)
+            task = self._task_scope_locked(self.ledger.task(payload.get('task_id'), epoch), worker)
             if task['deleted']:
                 raise ChannelError(404, 'not_found', '此协作任务已删除')
             if action == 'detail':
@@ -219,7 +290,7 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
                 self.ledger.receipt(epoch, payload['request_id'], {'action': action, **payload}, result)
             return result
 
-    def recover_local(self, payload):
+    def recover_local(self, payload, *, worker=None):
         """Explicit human recovery, never a kill by historical PID or a quota refund."""
         allowed = {'session_epoch', 'task_id', 'request_id', 'revision', 'confirmed_stopped', 'cost_usd', 'launched_at'}
         if not isinstance(payload, dict) or set(payload) - allowed or payload.get('confirmed_stopped') is not True:
@@ -231,13 +302,15 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         if launched_at is not None and (type(launched_at) not in (int, float)
                 or not math.isfinite(launched_at) or not 0 < launched_at <= time.time()):
             raise ChannelError(400, 'invalid_launch_time', '核对启动时间须为有效的过去时间戳')
-        with self.control_lock:
+        with self.claude_control_lock:
             with self.service._lock:
                 epoch = self._epoch(payload)
+                task = self._task_scope_locked(self.ledger.task(payload.get('task_id'), epoch), worker)
                 old = self.ledger.replay(epoch, payload.get('request_id'), {'action': 'recover_local', **payload})
                 if old is not None:
                     return old
-                task = self.ledger.task(payload.get('task_id'), epoch)
+                if self.closing or self.paused:
+                    raise ChannelError(409, 'worker_draining', '协作正在关闭或重置')
                 if (task['bridge_instance'] != 'local:claude-agent' or task['state'] not in
                         {'unknown', 'succeeded', 'failed', 'cancelled', 'interrupted'}
                         or task['task_id'] in self.claude_threads or task['version'] != payload.get('revision')):
@@ -248,7 +321,9 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             human_recovery = transport is not None and not confirmed and transport.can_accept_human_recovery()
             with self.service._lock, self.ledger.conn:
                 self.service._channels.check_epoch(epoch)
-                current = self.ledger.task(task['task_id'], epoch)
+                current = self._task_scope_locked(self.ledger.task(task['task_id'], epoch), worker)
+                if self.closing or self.paused:
+                    raise ChannelError(409, 'worker_draining', '协作正在关闭或重置')
                 if current['version'] != task['version']:
                     raise ChannelError(409, 'task_changed', '任务已变化，请刷新')
                 if transport is not None and not confirmed and not human_recovery:
