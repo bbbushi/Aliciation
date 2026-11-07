@@ -688,8 +688,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 on_delta(piece)
         if not msg.tool_calls:
             reply = (msg.content or "").strip()
+            # Ordinary replies also report "not_selected". The audit must exist
+            # even when no rewrite/recap review ran in this turn.
+            review_audit = transform_audit if transform_inputs else recap_reply_audit
             if reply_review_selected:
-                review_audit = transform_audit if transform_inputs else recap_reply_audit
                 fallback = '\n'.join(transform_inputs if transform_inputs else recap_session.excerpts)
                 review_audit.update(draft_sha256=hashlib.sha256(reply.encode()).hexdigest(),
                     policy_sha256=hashlib.sha256(grounding.policy('rewrite' if transform_inputs else 'recap_reply').encode()).hexdigest())
@@ -720,11 +722,17 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     review_audit.update(status='original_preserved', error=type(exc).__name__)
                     reply = fallback
             if ctx_trace is not None:
-                ctx_trace.reply_processed(kind="reply_review",
-                                          detail={"transform": bool(transform_inputs),
-                                                  "status": review_audit.get("status"),
-                                                  "reason": str(review_audit.get("reason", ""))[:200],
-                                                  "error": review_audit.get("error")})
+                try:
+                    ctx_trace.reply_processed(kind="reply_review",
+                                              detail={"selected": reply_review_selected,
+                                                      "transform": bool(transform_inputs),
+                                                      "status": review_audit.get("status"),
+                                                      "reason": str(review_audit.get("reason", ""))[:200],
+                                                      "error": review_audit.get("error")})
+                except Exception:
+                    # Observation must not discard an already received reply or
+                    # cause another model request through the failure path.
+                    print("（回复后处理观测暂失败；聊天继续。）")
             break
         if closing:
             # Even a nonconforming provider cannot dispatch another tool here.
