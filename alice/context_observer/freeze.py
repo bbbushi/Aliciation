@@ -89,42 +89,44 @@ def freeze_parameters(kwargs: dict) -> dict:
 
 
 def match_bindings(messages, blocks) -> tuple[list[dict], list[dict]]:
-    """把登记块定位到最终消息：整条一致优先，其次唯一子串区间；定位不到记缺口。
+    """把登记块定位到最终消息：整条一致优先，其次子串区间；定位不到记缺口。
 
-    块与消息均为宿主装配产物；同一块只绑定第一处。匹配在调用边界现算，
-    因此锚重建、工具轮重建消息后位置天然正确。
+    按装配顺序单调配对：块的登记顺序即装配顺序，扫描从上一块命中的消息起
+    （同消息可含多块，如复合 system），不回退到更早消息——同内容的多条历史
+    消息按顺序各归其位，不挤占第一条。子串匹配同样从游标起，且优先选择
+    不越过下一块命中位置的区间；定位不到记缺口，不伪造位置。
     """
     bindings, gaps = [], []
-    used = set()
     texts = []
     for seq, message in enumerate(messages or []):
         content = message.get("content") if isinstance(message, dict) else None
         texts.append(content if isinstance(content, str) else "")
+    cursor = 0  # 单调游标：后续块只能命中当前或更晚的消息
     for block in blocks or []:
         content = block.get("content")
         if not isinstance(content, str) or not content:
             continue
-        placed = False
-        for seq, text in enumerate(texts):
-            if not text:
-                continue
-            if text == content:
-                bindings.append(_binding(block, seq, 0, len(text)))
-                placed = True
+        placed = None
+        # 1) 整条一致（从游标起）；整条被消费后游标跳过该消息，
+        #    同内容的多条历史消息按装配顺序各归其位
+        for seq in range(cursor, len(texts)):
+            if texts[seq] == content:
+                placed = (seq, 0, len(texts[seq]))
                 break
-        if not placed:
-            for seq, text in enumerate(texts):
-                if not text or len(text) <= len(content):
-                    continue
-                start = text.find(content)
+        # 2) 子串区间（从游标起；同消息可容纳后续块，游标停在原消息）
+        if placed is None:
+            for seq in range(cursor, len(texts)):
+                start = texts[seq].find(content)
                 if start >= 0:
-                    bindings.append(_binding(block, seq, start, start + len(content)))
-                    placed = True
+                    placed = (seq, start, start + len(content))
                     break
-        if not placed:
+        if placed is None:
             gaps.append({"block": block.get("name"), "block_seq": block.get("seq"),
                          "reason": "block_not_found_in_messages"})
-        used.add(block.get("seq"))
+            continue
+        seq, start, end = placed
+        bindings.append(_binding(block, seq, start, end))
+        cursor = seq + 1 if (start, end) == (0, len(texts[seq])) else seq
     return bindings, gaps
 
 
