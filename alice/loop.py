@@ -78,6 +78,11 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
         args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         args = {}
+    if name == "persona_load":
+        registry = source_context.get("persona_registry") if source_context else None
+        if registry is None:
+            return json.dumps({"error": "persona_registry_unavailable"})
+        return registry.execute(name, args)
     if not isinstance(args, dict):
         args = {}
     memory_session = source_context.get("memory_session") if source_context else None
@@ -401,6 +406,34 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             sections, persona_growth.evidence_rows(store) if has_growth else {})
         persona_snapshot = {**persona_snapshot, "sections": sections}
     growth_refs = growth_basis["refs"]
+    # 人格注册表激活（注册表设计 §8）：GUI + registry 模式 + 快照带 assembly + 合同深校验；
+    # 任何不成立都回退既有 full 投影并记录固定原因，不偷偷重分类
+    persona_registry = None
+    persona_fallback = None
+    if (cfg.persona.expression_mode == "registry" and source_scope == "gui"
+            and persona_snapshot is not None and persona_snapshot.get("expression_package") is not None
+            and persona_snapshot.get("assembly")):
+        from . import persona_residency
+        from .context_persona import PersonaRegistryContext
+        issues = persona_residency.validate_contract(
+            persona_snapshot["assembly"], persona_snapshot["expression_package"],
+            limits={"max_core_chars": cfg.expression.max_core_chars,
+                    "max_registry_chars": cfg.expression.max_registry_chars,
+                    "max_registry_bundles": cfg.expression.max_registry_bundles,
+                    "max_scene_expanded_chars": cfg.expression.max_scene_expanded_chars})
+        if issues:
+            persona_fallback = ("invalid_contract:" +
+                                ",".join(sorted({i["code"] for i in issues})))[:160]
+        else:
+            candidate = PersonaRegistryContext(store, cfg, persona_snapshot,
+                                               persona_snapshot["assembly"],
+                                               persona_snapshot["expression_package"],
+                                               scope=source_scope)
+            if candidate.catalogue:
+                persona_registry = candidate
+            else:
+                persona_fallback = "catalogue_empty"
+        source_context["persona_registry"] = persona_registry
     recap_session, recap_exposed = None, False
     recap_usage, recap_calls = {}, 0
     transform_inputs = grounding.transform_sources(user_text) if cfg.context.transform_review_enabled else []
@@ -425,6 +458,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             memory_session.workspace = workspace
             memory_tools = memory_tools + WORKSPACE_TOOLS
             source_context["working_set"] = workspace
+    if persona_registry is not None:
+        from .context_persona import PERSONA_LOAD_TOOLS
+        memory_tools = memory_tools + PERSONA_LOAD_TOOLS
     tools = memory_tools + learning_tools(store,cfg) + ([SEARCH_TOOL] if search_session is not None else [])
     extra_messages = []
     if transform_inputs:
@@ -450,14 +486,28 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     anchor_msg = None
     expression_meta, anchor_meta = {}, {}
     expression_purpose = "chat" if source_scope == "gui" else "qq"
-    rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
-                                                    purpose=expression_purpose, cfg=cfg)
+    if persona_registry is not None:
+        rendered_persona = persona_context.render_registry_persona(
+            persona_snapshot, persona_registry.contract, persona_registry.package,
+            metadata=expression_meta, purpose=expression_purpose)
+    else:
+        rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
+                                                        purpose=expression_purpose, cfg=cfg)
+    expression_meta.setdefault("persona_projection", {
+        "mode_requested": cfg.persona.expression_mode,
+        "mode_effective": "registry" if persona_registry is not None else "full",
+        "fallback_reason": persona_fallback,
+        "projection_strategy": "core_registry" if persona_registry is not None else "complete_per_purpose",
+        **(persona_registry.metadata() if persona_registry is not None else {})})
     if cfg.persona.expression_anchor and persona_snapshot is not None:
         _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta,
                                                        purpose=expression_purpose, cfg=cfg)
         if _anchor_text:
             anchor_msg = {"role": "system", "content": _anchor_text}
     reserved = _ctx.messages_tokens(extra_messages + ([anchor_msg] if anchor_msg else []), tools)
+    if persona_registry is not None:
+        # 目录块 + 按需读取额度计入请求预算（注册表设计 §6）；字符按保守 token 估算计入
+        reserved += persona_registry.reserved_chars()
     # Select once with a bounded reservation for recap and its trusted envelope.
     # Generation consumes this immutable boundary; it never causes re-selection
     # or a second catalogue/workspace initialization or a second paid generation.
@@ -569,6 +619,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         messages[-1:-1] = [envelope, material]
         manifests[0].add("stable", "current_request_recap_status", envelope["content"])
         manifests[0].add("background", "current_request_recap", recap_block)
+    if persona_registry is not None:
+        # 注册表目录：宿主标识资料块，插在当前用户消息之前（注册表设计 §2/§4）
+        registry_block = persona_registry.catalogue_block()
+        messages[-1:-1] = [{"role": "system", "content": registry_block}]
+        for manifest in manifests:
+            manifest.add("background", "persona_registry", registry_block)
     messages.extend(extra_messages)
     for manifest in manifests:
         for extra in extra_messages:
@@ -671,6 +727,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             memory_session.sent.update(memory_session.loaded)
             if memory_session.history is not None:
                 memory_session.history.sent.update(memory_session.history.loaded)
+        if persona_registry is not None:
+            persona_registry.note_sent()
+        if persona_registry is not None and not persona_registry.valid():
+            reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
+            break
         if not growth_valid():
             reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
             break
@@ -756,6 +817,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         for tc in msg.tool_calls:
             if memory_session is not None and not memory_session.valid():
                 reply = "本轮记忆或历史资料已变更或失效，需要重新取得当前资料后再谈。"
+                break
+            if persona_registry is not None and not persona_registry.valid():
+                reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
                 break
             if not growth_valid():
                 reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"

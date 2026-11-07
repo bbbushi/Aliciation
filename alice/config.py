@@ -39,6 +39,9 @@ class PersonaConfig:
     name: str = "Alice"
     # P1b 近位表达提醒（默认关；人工对照开关，效果未验不预填）
     expression_anchor: bool = False
+    # 人格投影模式（20261107 注册表设计 §6/§8）：full=完整用途投影；registry=核心常驻+场景按需
+    # （需快照带有效 assembly 且渠道 GUI；合同无效自动 full 回退并记录原因）
+    expression_mode: str = "full"
     # 数据触发：每累计 N 条新记忆演化一次。安静则不变（无时间兜底，特性而非缺陷）
     evolve_every_memories: int = 15
 
@@ -56,6 +59,14 @@ class ExpressionConfig:
     max_anchor_chars: int = 500
     max_item_chars: int = 2400
     max_review_chars: int = 240_000
+    # 人格注册表（20261107 设计 §6）：运行投影新增上限只能收紧冻结的完整表达资源约束；
+    # 准备时冻结分类额度，运行配置扩大须重新明确准备
+    max_core_chars: int = 2200
+    max_registry_chars: int = 1600
+    max_registry_bundles: int = 12
+    max_scene_expanded_chars: int = 2400
+    max_persona_load_calls: int = 2
+    max_persona_loaded_bundles: int = 2
 
     def __post_init__(self):
         for name, low, high in (
