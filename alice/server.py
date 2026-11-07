@@ -183,7 +183,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             if not path.exists():
                 self._json({"error": "not found"}, 404)
             else:
-                self._send(200, path.read_bytes(), ctype)
+                self._send(200, path.read_bytes(), ctype)  # _send 已全局 Cache-Control: no-store
 
         def _body(self) -> dict:
             return self._bounded_body(1024 * 1024)

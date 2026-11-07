@@ -25,6 +25,9 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
+- 2026-11-07 ZCode 续八：插件页滚动/显示修复——根因是链接了聊天 style.css（body overflow:hidden 内部滚动布局锁死整页+主题变量混搭）；改为自包含（index.html 去掉 style.css 引用，inspector.css 补基础 reset 与显式纵向滚动）。浏览器实测：scrollY 600 生效、样式单源、空灰条消失。
+- 2026-11-07 ZCode 续七：inspector 按用户要求重构为 dsh-context 式单页仪表板（请求卡条/KPI 行/组成卡/趋势卡 Total-Delta/DNA 逐项/树状浏览器；正文跨轮询保持；修 append 链式 TypeError 与 hidden 覆盖）。浏览器实测截图过：KPI5/趋势柱/DNA13/树5 组全渲染，正文按钮展开宪法正文正确。D74 备份后服务 91208 未再重启（纯前端变更即时生效）。
+- 2026-11-07 ZCode 续六：回复旁入口两处修复——①done 事件补挂（request_id 完成时才确定）；②调用移入 renderTurnMetadata 的 GUI 分支（原挂函数末尾，!fromQQ 提前返回致历史回复永远无入口）。浏览器实测：全新加载 3 条回复 6 处 .ci-jump 全挂、探针/正文按钮就绪；另见前端静态响应本就 no-store，用户侧硬刷新一次即可。提交含路由补挂前的 404 修复与两次入口修复。
 - 2026-11-07 ZCode 续五：插件 GET 路由漏挂 do_GET 分发（404）已补并重启验证通过——PID 91208 加载 SDK+插件；status 显示 enabled=true/body=true（用户已自行配置 [plugins] 与 observer_body_capture），正文库 48.7KB，已有真实请求进投影（46fb54f7…，绑定/尝试/块齐全）。停服备份 /private/tmp/alice-before-obsplugin-restart-20261107-174413.db。
 - 2026-11-07 ZCode 续四：观测插件展示形态按用户参考 dsh-context 复刻（原生 JS/CSS）：分类颜色编码、组成堆叠条与图例、逐调用趋势带与差异徽标（vs 上次：±消息/±字）、DNA 模型读取顺序逐项（位置色块+正文按钮）、树状上下文浏览器与选择决策折叠；数据全来自公开投影，估算字符与供应商 usage 分列。提交 7f4650e；SDK/插件自检与 JS/compileall 全过；服务未重启加载。
 - 2026-11-07 Codex修复“这一轮没走通”：两次真实“在？”均模型成功、用户turn保存而助手turn缺失；loop.py新增观测无条件读仅在审查分支赋值的review_audit，普通回复必触发UnboundLocalError。已将审计选择移到分支前，记录selected=false/not_selected，并隔离该处观测异常；未重放旧请求。单文件compileall/diff检查过，真人新消息待验。17:20:25正常停旧89153、备份 `/private/tmp/alice-before-chat-observer-fix-20261107-172025.db` 后起新PID90350（8800/no-open），首页/插件200、日志就绪；日志同目录alice-chat-observer-fix-20261107-172025.log。读user活库/备份及正常起服，未手改配置/人格/历史。详见 `docs/设计文档/上下文组装优化/观测SDK启用后普通聊天失败-定位与修复-20261107.md`。
