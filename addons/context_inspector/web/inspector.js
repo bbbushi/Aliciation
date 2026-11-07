@@ -1,7 +1,5 @@
-/* 上下文观测插件：请求列表 → 调用过程 → 最终输入；只读，轮询仅在页面可见时进行。
-   展示形态参考 dsh-context：分类颜色编码、组成堆叠条、逐调用趋势、按模型读取
-   顺序的 DNA 色带与树状浏览器、调用间差异徽标。数据只来自公开投影；字符估算
-   占比与供应商 usage 分列展示，不混用。 */
+/* 上下文观测插件 · 仪表板（复刻 dsh-context 形态：KPI 行/组成卡/趋势卡/DNA/浏览器）。
+   只读；轮询仅页面可见时。数据全部来自公开投影；字符估算与供应商 usage 分列。 */
 "use strict";
 (() => {
   const el = (id) => document.getElementById(id);
@@ -18,21 +16,21 @@
     return n;
   };
 
-  // 分类颜色编码（对应核心 manifest 的块 kind；dsh-context 六类的 Alice 对应物）
   const KINDS = [
-    { key: "stable", label: "稳定提示（宪法·人格·表达·能力说明）", cls: "k-stable" },
-    { key: "index", label: "记忆索引（候选目录）", cls: "k-index" },
-    { key: "background", label: "背景材料（来源·前情·见闻观点）", cls: "k-background" },
+    { key: "stable", label: "稳定提示", cls: "k-stable" },
+    { key: "index", label: "记忆索引", cls: "k-index" },
+    { key: "background", label: "背景材料", cls: "k-background" },
     { key: "history", label: "历史原文", cls: "k-history" },
     { key: "tool_result", label: "工具回执", cls: "k-tool" },
-    { key: "assistant", label: "模型消息（工具调用等）", cls: "k-assistant" },
-    { key: "user_new", label: "用户消息（未归类）", cls: "k-user" },
+    { key: "assistant", label: "模型消息", cls: "k-assistant" },
+    { key: "user_new", label: "用户消息", cls: "k-user" },
   ];
   const KIND_BY_KEY = new Map(KINDS.map((k) => [k.key, k]));
   const roleKind = (role) => role === "tool" ? "tool_result" : role === "assistant" ? "assistant"
     : role === "user" ? "user_new" : "stable";
 
-  const state = { requestId: null, callId: null, capture: { metadata: false, body: false }, disabled: false };
+  const state = { requests: [], requestId: null, callId: null, mode: "total",
+    capture: { metadata: false, body: false }, disabled: false };
 
   function status(message, kind = "") {
     const n = el("ci-status");
@@ -50,7 +48,7 @@
       return node("span", `（正文：${bodyState}）`, "ci-hint");
     }
     const wrap = document.createElement("span");
-    const button = node("button", "看留存正文", "ci-btn");
+    const button = node("button", "正文", "ci-btn");
     button.type = "button";
     const pre = node("pre", null, "ci-body");
     pre.hidden = true;
@@ -73,26 +71,9 @@
     return wrap;
   }
 
-  async function loadStatus() {
-    const d = await window.ContextInspectorClient.get("status");
-    if (d.status === "disabled" || (d.plugin && d.plugin.enabled === false)) {
-      state.disabled = true;
-      status("插件未启用（[plugins] context_inspector_enabled）。聊天照常运行；本页不再轮询。", "warn");
-      el("ci-requests").replaceChildren(node("p", "插件未启用。", "ci-hint"));
-      return false;
-    }
-    if (d.status !== "ok" || !d.plugin) { status("插件状态读取未完成；稍后重试。", "warn"); return false; }
-    state.capture = d.plugin.capture || state.capture;
-    const quota = d.plugin.quota;
-    status(`采集：元数据 ${state.capture.metadata ? "开" : "关"} · 正文 ${state.capture.body ? "开" : "关"}`
-      + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
-      + ` · 协议 ${d.plugin.protocol_version}`);
-    return true;
-  }
+  // ---- 片段与统计 ----
 
-  // ---- 片段计算：块绑定 + 未绑定消息按角色归类 → 模型读取顺序的着色片段 ----
-
-  function computeSegments(request, call) {
+  function segmentsOf(request, call) {
     const blocks = request.blocks || [];
     const segments = [];
     for (const b of call.bindings || []) {
@@ -122,7 +103,7 @@
     for (const s of segments) {
       const seg = node("span", null, `ci-seg ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`);
       seg.style.width = `${Math.max(0.4, (s.chars / total) * 100)}%`;
-      seg.title = `#${s.isBlock ? "块" : "消息"} ${s.label} · ${s.kindLabel} · ${s.chars} 字`;
+      seg.title = `${s.label} · ${s.kindLabel} · ${s.chars} 字`;
       bandEl.append(seg);
     }
     return bandEl;
@@ -134,178 +115,283 @@
       if (!totals[kind.key]) continue;
       const chip = node("span", null, "ci-chip");
       chip.append(node("span", null, `ci-swatch ${kind.cls}`),
-        node("span", `${kind.label.split("（")[0]} ${kfmt(totals[kind.key])}字 · ${Math.round((totals[kind.key] / total) * 100)}%`));
+        node("span", `${kind.label} ${kfmt(totals[kind.key])}字 · ${Math.round((totals[kind.key] / total) * 100)}%`));
       wrap.append(chip);
     }
+    if (!total) wrap.append(node("span", "（无内容）", "ci-hint"));
     return wrap;
   }
 
-  function deltaBadge(previous, call) {
-    if (!previous || !previous.messages || !call.messages) return null;
-    const dCount = call.messages.count - previous.messages.count;
-    const dChars = call.messages.total_chars - previous.messages.total_chars;
-    const parts = [];
-    if (dCount) parts.push(`${dCount > 0 ? "+" : ""}${dCount} 条消息`);
-    if (dChars) parts.push(`${dChars > 0 ? "+" : "−"}${kfmt(Math.abs(dChars))} 字`);
-    if (!parts.length) return node("span", "与上次输入一致", "ci-hint");
-    return node("span", `vs 上次：${parts.join(" · ")}`, "ci-delta");
-  }
+  // ---- 视图 ----
 
-  async function renderAll() {
-    const d = await window.ContextInspectorClient.get("requests", { limit: "12" });
-    if (!d || d.status === "disabled") return;
-    const requests = d.requests || [];
-    renderRequests(requests);
-    let selected = requests.find((r) => r.request_id === state.requestId);
-    if (state.requestId && !selected) {
-      const single = await window.ContextInspectorClient.get("request", { request_id: state.requestId });
-      if (single && single.requests && single.requests.length) selected = single.requests[0];
-    }
-    renderCalls(selected);
-    const call = (selected ? selected.calls : []).find((c) => c.call_id === state.callId);
-    renderDetail(selected, call);
-  }
-
-  function renderRequests(requests) {
-    const list = el("ci-requests");
-    list.replaceChildren();
-    if (!requests.length) { list.append(node("p", "暂无请求轨迹；进行一次对话后出现。", "ci-hint")); return; }
+  function renderRequestBar(requests) {
+    const bar = el("ci-requestbar");
+    bar.replaceChildren();
     for (const request of requests) {
       const card = document.createElement("button");
       card.type = "button";
-      card.className = "ci-item" + (request.request_id === state.requestId ? " active" : "");
-      card.append(node("div", `${time(request.first_event_at)} · ${request.calls.length} 次调用 · ${request.finished ? "已结束" : "进行中"}`));
-      card.append(node("div", `请求 ${short(request.request_id)}…${request.assistant_turn_id ? ` · 回复 #${request.assistant_turn_id}` : ""}`, "ci-hint"));
-      if (request.blocks && request.blocks.length) {
-        const totals = {};
-        let total = 0;
-        for (const b of request.blocks) { totals[b.kind] = (totals[b.kind] || 0) + (b.chars || 0); total += b.chars || 0; }
-        card.append(band(Object.keys(totals).map((k) => ({ key: k, chars: totals[k], label: k, kindLabel: k })), total));
+      card.className = "ci-req" + (request.request_id === state.requestId ? " active" : "");
+      card.append(node("div", `${time(request.first_event_at)}`, "t"));
+      card.append(node("div", `${request.calls.length} 次调用${request.assistant_turn_id ? ` · 回复#${request.assistant_turn_id}` : ""} · ${request.finished ? "已结束" : "进行中"}`, "s"));
+      card.addEventListener("click", () => {
+        state.requestId = request.request_id;
+        state.callId = request.calls.length ? request.calls[request.calls.length - 1].call_id : null;
+        renderAll();
+      });
+      bar.append(card);
+    }
+  }
+
+  function renderKPIs(request, call) {
+    const kpis = el("ci-kpis");
+    kpis.replaceChildren();
+    if (!request) return;
+    const last = call ? (call.attempts[call.attempts.length - 1] || {}) : {};
+    const usage = last.usage || null;
+    const kpi = (k, v, s) => { const c = node("div", null, "ci-kpi"); c.append(node("div", k, "k"), node("div", v, "v")); if (s) c.append(node("div", s, "s")); return c; };
+    kpis.append(kpi("模型调用", `${request.calls.length} 次`, `请求 ${short(request.request_id)}…`));
+    kpis.append(kpi("当前调用输入", call ? `${kfmt((call.messages || {}).total_chars)} 字` : "—",
+      call ? `${(call.messages || {}).count} 条消息 · ${purposeLabels[call.purpose] || call.purpose} · 轮${call.tool_round ?? 0}` : undefined));
+    kpis.append(kpi("供应商 usage", usage ? `入${usage.prompt ?? "?"} / 出${usage.completion ?? "?"} tok` : "未知",
+      usage ? `${stateLabels[last.status] || last.status} · ${last.duration_ms ?? "?"}ms` : "未知不填零"));
+    kpis.append(kpi("装配块", `${(request.blocks || []).length} 块`,
+      `选择决策 ${(request.selections || []).length} 条`));
+    kpis.append(kpi("状态", request.finished ? "已结束" : "进行中",
+      request.assistant_turn_id ? `回复 #${request.assistant_turn_id}` : (request.delivery || "未落库")));
+  }
+
+  function renderComposition(request, call) {
+    const body = el("ci-composition");
+    clearBodies(body);
+    body.replaceChildren();
+    if (!call) { body.append(node("p", "先在趋势图选择一次调用。", "ci-hint")); return; }
+    const seg = segmentsOf(request, call);
+    body.append(band(seg.segments, seg.total));
+    body.append(legend(seg.totals, seg.total));
+    const last = call.attempts[call.attempts.length - 1] || {};
+    body.append(node("p", `合计 ${kfmt(seg.total)} 字 · ${seg.segments.length} 段 · 状态 ${stateLabels[last.status] || last.status || "无尝试"}`
+      + (last.usage ? ` · usage 入${last.usage.prompt ?? "?"}/出${last.usage.completion ?? "?"} tok（另列）` : ""), "ci-hint"));
+  }
+
+  function renderTrend(request) {
+    const body = el("ci-trend");
+    body.replaceChildren();
+    if (!request) { body.append(node("p", "先选择请求。", "ci-hint")); return; }
+    const calls = request.calls;
+    const stats = calls.map((c) => {
+      const seg = segmentsOf(request, c);
+      const prev = calls[calls.indexOf(c) - 1] || null;
+      let delta = null;
+      if (prev && prev.messages && c.messages) {
+        delta = { count: c.messages.count - prev.messages.count,
+                  chars: c.messages.total_chars - prev.messages.total_chars,
+                  byKind: {} };
+        const prevSeg = segmentsOf(request, prev);
+        for (const kind of KINDS) delta.byKind[kind.key] = (seg.totals[kind.key] || 0) - (prevSeg.totals[kind.key] || 0);
       }
-      card.addEventListener("click", () => { state.requestId = request.request_id; state.callId = null; renderAll(); });
-      list.append(card);
+      return { call: c, seg, delta };
+    });
+    const maxTotal = Math.max(1, ...stats.map((s) => s.seg.total));
+    const maxDelta = Math.max(1, ...stats.map((s) => s.delta ? Math.max(...Object.values(s.delta.byKind).map(Math.abs)) : 0));
+    const chart = node("div", null, "ci-chart");
+    stats.forEach(({ call, seg, delta }, index) => {
+      const wrap = node("div", null, "ci-colwrap" + (call.call_id === state.callId ? " active" : ""));
+      const col = node("div", null, "ci-col");
+      const reference = state.mode === "delta" ? (delta ? delta.byKind : null) : seg.totals;
+      const scale = state.mode === "delta" ? maxDelta : maxTotal;
+      const order = [...KINDS].reverse();
+      for (const kind of order) {
+        let value = reference ? (reference[kind.key] || 0) : 0;
+        if (state.mode === "delta") {
+          const negative = value < 0;
+          value = Math.abs(value);
+          if (!value) continue;
+          const segEl = node("span", null, `ci-seg ${negative ? "k-neg" : (KIND_BY_KEY.get(kind.key) || {}).cls || "k-other"}`);
+          segEl.style.height = `${Math.max(2, (value / scale) * 100)}%`;
+          segEl.title = `${kind.label} ${negative ? "−" : "+"}${kfmt(value)} 字 vs 上一次`;
+          col.append(segEl);
+        } else {
+          if (!value) continue;
+          const segEl = node("span", null, `ci-seg ${(KIND_BY_KEY.get(kind.key) || {}).cls || "k-other"}`);
+          segEl.style.height = `${(value / scale) * 100}%`;
+          segEl.title = `${kind.label} ${kfmt(value)} 字`;
+          col.append(segEl);
+        }
+      }
+      col.style.setProperty("--h", "100%");
+      wrap.append(col);
+      const label = node("div", null, "lbl");
+      label.append(node("div", `${purposeLabels[call.purpose] || call.purpose}`));
+      label.append(node("div", `轮${call.tool_round ?? 0} · ${kfmt(seg.total)}字`));
+      if (delta) {
+        const sign = delta.chars > 0 ? "+" : delta.chars < 0 ? "−" : "";
+        if (delta.chars || delta.count) {
+          label.append(node("span", `${sign}${kfmt(Math.abs(delta.chars))}字`, "ci-deltabadge"));
+        }
+      }
+      wrap.append(label);
+      wrap.addEventListener("click", () => {
+        state.callId = call.call_id;
+        state.requestId = request.request_id;
+        renderAll();
+      });
+      chart.append(wrap);
+    });
+    body.append(chart);
+    if (state.mode === "delta") {
+      body.append(node("p", "Delta 模式：与同请求上一次调用比较；斜线纹=该类减少。", "ci-hint"));
+    } else if (stats.length) {
+      const lastSeg = stats[stats.length - 1].seg;
+      body.append(legend(lastSeg.totals, lastSeg.total));
     }
   }
 
-  function renderCalls(request) {
-    const list = el("ci-calls");
-    list.replaceChildren();
-    if (!request) { list.append(node("p", "先选择左侧请求。", "ci-hint")); return; }
-    let previous = null;
-    for (const call of request.calls) {
-      const last = call.attempts[call.attempts.length - 1] || {};
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "ci-item" + (call.call_id === state.callId ? " active" : "");
-      card.append(node("div", `${purposeLabels[call.purpose] || call.purpose || "调用"} · 轮${call.tool_round ?? 0}`));
-      const line = node("div", null, "ci-hint");
-      line.textContent = `${stateLabels[last.status] || last.status || "无尝试"}`
-        + (last.duration_ms != null ? ` · ${last.duration_ms}ms` : "")
-        + (last.usage ? ` · usage 入${last.usage.prompt ?? "?"}/出${last.usage.completion ?? "?"} tok` : "");
-      card.append(line);
-      const seg = computeSegments(request, call);
-      card.append(band(seg.segments, seg.total));
-      card.append(node("div", `合计 ${kfmt(seg.total)} 字 · ${seg.segments.length} 段`, "ci-hint"));
-      const badge = deltaBadge(previous, call);
-      if (badge) card.append(badge);
-      card.addEventListener("click", () => { state.callId = call.call_id; renderCalls(request); renderDetail(request, call); });
-      list.append(card);
-      previous = call;
-    }
-    if (request.reply_postprocess) {
-      list.append(node("p", `回复处理：${request.reply_postprocess.kind} · ${JSON.stringify(request.reply_postprocess.detail || {})}`, "ci-hint"));
-    }
-    if (request.gaps && request.gaps.length) {
-      list.append(node("p", `观测缺口 ${request.gaps.length} 条；缺口处证据缺失，不伪造位置。`, "ci-hint"));
-    }
-  }
-
-  function renderDetail(request, call) {
-    const detail = el("ci-detail");
-    clearBodies(detail);
-    detail.replaceChildren();
-    if (!call || !request) { detail.append(node("p", "先选择中间一次调用。", "ci-hint")); return; }
-
-    const seg = computeSegments(request, call);
-    detail.append(node("h3", "组成（按模型读取顺序 · 字符估算占比）"));
-    detail.append(band(seg.segments, seg.total));
-    detail.append(legend(seg.totals, seg.total));
-    detail.append(node("p", `合计 ${kfmt(seg.total)} 字 · 使用说明与人格源材料分别计块；估算字符与供应商 usage 分列，不混用。`, "ci-hint"));
-
-    detail.append(node("h3", "DNA · 模型读取顺序逐项"));
+  function renderDNA(request, call) {
+    const body = el("ci-dna");
+    clearBodies(body);
+    body.replaceChildren();
+    if (!call) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    const seg = segmentsOf(request, call);
     const dna = node("div", null, "ci-dna");
     let position = 0;
+    const maxChars = Math.max(1, ...seg.segments.map((s) => s.chars));
     for (const s of seg.segments) {
       position += 1;
       const row = node("div", null, "ci-dna-row");
       row.append(node("span", String(position), `ci-pos ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`));
       const mid = node("div", null, "ci-dna-mid");
-      mid.append(node("p", `${s.isBlock ? "块" : "消息"} ${s.label} · ${s.kindLabel} · ${s.chars} 字 · 位于消息 #${s.message_seq}`));
+      mid.append(node("p", `${s.label} · ${s.kindLabel} · ${s.chars} 字 · 消息 #${s.message_seq}`));
+      const bar = node("div", null, `ci-dna-bar ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`);
+      bar.style.width = `${Math.max(2, (s.chars / maxChars) * 100)}%`;
+      mid.append(bar);
       mid.append(bodyButton(request.request_id, s.content_hash, s.bodyState));
       row.append(mid);
       dna.append(row);
     }
-    detail.append(dna);
+    if (!position) dna.append(node("p", "（空输入）", "ci-hint"));
+    body.append(dna);
+  }
 
-    const params = call.parameters || {};
-    const covered = Object.entries(params.covered || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" · ");
-    const adv = document.createElement("details");
-    adv.append(node("summary", "调用参数与工具定义"));
-    adv.append(node("p", `参数：${covered || "未记录"}`
-      + ((params.uncovered || []).length ? ` · 未覆盖：${params.uncovered.join("、")}` : ""), "ci-hint"));
-    if (call.tools && call.tools.length) adv.append(node("p", `工具：${call.tools.join("、")}`, "ci-hint"));
-    adv.append(node("p", `输入整体 hash：${call.messages_hash || "未记录"} · 调用 ${short(call.call_id)}…`, "ci-hint"));
-    detail.append(adv);
-
-    // 树状浏览器：装配块按类别折叠；未入选候选按类别归并展示
-    const blocks = request.blocks || [];
-    if (blocks.length) {
-      detail.append(node("h3", "上下文浏览器"));
-      const byKind = new Map();
-      for (const block of blocks) {
-        if (!byKind.has(block.kind)) byKind.set(block.kind, []);
-        byKind.get(block.kind).push(block);
-      }
-      const selectedSources = new Set((call.bindings || []).map((b) => b.block_seq));
-      for (const [kind, items] of byKind) {
-        const kindInfo = KIND_BY_KEY.get(kind) || { label: kind, cls: "k-other" };
-        const group = document.createElement("details");
-        group.append(node("summary", `${kindInfo.label} · ${items.length} 块`));
-        for (const block of items) {
-          const included = selectedSources.has(block.seq);
-          const row = node("p", `#${block.seq} ${block.name} · ${block.chars ?? "?"} 字 · ${included ? "已进入本次调用" : "未进入本次调用"}`, "ci-hint");
-          row.append(bodyButton(request.request_id, block.content_hash, block.body_state));
-          group.append(row);
-        }
-        detail.append(group);
-      }
-      const selections = request.selections || [];
-      if (selections.length) {
-        const sel = document.createElement("details");
-        sel.append(node("summary", `选择决策 ${selections.length} 条（含未入选原因）`));
-        for (const s of selections.slice(0, 60)) {
-          sel.append(node("p", `${s.source_id} · ${s.included ? "入选" : "未入选"} · ${s.reason}`, "ci-hint"));
-        }
-        detail.append(sel);
-      }
+  function renderBrowser(request, call) {
+    const body = el("ci-browser");
+    clearBodies(body);
+    body.replaceChildren();
+    if (!request) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    const tree = node("div", null, "ci-tree");
+    const selectedSources = new Set(((call && call.bindings) || []).map((b) => b.block_seq));
+    const byKind = new Map();
+    for (const block of request.blocks || []) {
+      if (!byKind.has(block.kind)) byKind.set(block.kind, []);
+      byKind.get(block.kind).push(block);
     }
+    for (const [kind, items] of byKind) {
+      const kindInfo = KIND_BY_KEY.get(kind) || { label: kind, cls: "k-other" };
+      const group = document.createElement("details");
+      if (call) group.open = items.some((b) => selectedSources.has(b.seq));
+      const inCall = items.filter((b) => selectedSources.has(b.seq)).length;
+      const summary = node("summary", null);
+      summary.append(node("span", `${kindInfo.label} `),
+        node("span", `· ${items.length} 块${call ? ` · ${inCall} 块在当前调用` : ""}`, "cnt"));
+      group.append(summary);
+      for (const block of items) {
+        const included = selectedSources.has(block.seq);
+        const row = node("p", `#${block.seq} ${block.name} · ${block.chars ?? "?"} 字 · ${call ? (included ? "已进入本次调用" : "未进入本次调用") : "待选择调用"}`, "ci-hint");
+        row.append(bodyButton(request.request_id, block.content_hash, block.body_state));
+        group.append(row);
+      }
+      tree.append(group);
+    }
+    const selections = request.selections || [];
+    if (selections.length) {
+      const sel = document.createElement("details");
+      const selSummary = node("summary", null);
+      selSummary.append(node("span", `选择决策 `), node("span", `· ${selections.length} 条`, "cnt"));
+      sel.append(selSummary);
+      for (const s of selections.slice(0, 60)) {
+        sel.append(node("p", `${s.source_id} · ${s.included ? "入选" : "未入选"} · ${s.reason}`, "ci-hint"));
+      }
+      tree.append(sel);
+    }
+    if (request.gaps && request.gaps.length) {
+      tree.append(node("p", `观测缺口 ${request.gaps.length} 条；缺口处证据缺失，不伪造位置。`, "ci-hint"));
+    }
+    body.append(tree);
+  }
+
+  function renderAll() {
+    const requests = state.requests;
+    renderRequestBar(requests);
+    const request = requests.find((r) => r.request_id === state.requestId) || null;
+    renderKPIs(request, null);
+    const call = (request ? request.calls : []).find((c) => c.call_id === state.callId) || null;
+    renderKPIs(request, call);
+    renderComposition(request, call);
+    renderTrend(request);
+    renderDNA(request, call);
+    renderBrowser(request, call);
+  }
+
+  async function loadStatus() {
+    const d = await window.ContextInspectorClient.get("status");
+    if (d.status === "disabled" || (d.plugin && d.plugin.enabled === false)) {
+      state.disabled = true;
+      status("插件未启用（[plugins] context_inspector_enabled）。聊天照常运行；本页不再轮询。", "warn");
+      el("ci-requestbar").replaceChildren(node("p", "插件未启用。", "ci-hint"));
+      return false;
+    }
+    if (d.status !== "ok" || !d.plugin) { status("插件状态读取未完成；稍后重试。", "warn"); return false; }
+    state.capture = d.plugin.capture || state.capture;
+    const quota = d.plugin.quota;
+    status(`采集：元数据 ${state.capture.metadata ? "开" : "关"} · 正文 ${state.capture.body ? "开" : "关"}`
+      + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
+      + ` · 协议 ${d.plugin.protocol_version}`);
+    return true;
+  }
+
+  let lastSignature = "";
+  async function refresh() {
+    const d = await window.ContextInspectorClient.get("requests", { limit: "12" });
+    if (!d || d.status === "disabled") return;
+    state.requests = d.requests || [];
+    if (!state.requestId && state.requests.length) {
+      state.requestId = state.requests[0].request_id;
+      const first = state.requests[0];
+      state.callId = first.calls.length ? first.calls[first.calls.length - 1].call_id : null;
+    }
+    // 数据未变化时不重渲染：避免轮询把正在阅读的正文收起
+    const signature = JSON.stringify([state.requestId, state.callId,
+      state.requests.map((r) => [r.request_id, r.event_count, r.finished, r.calls.length])]);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
+    renderAll();
   }
 
   let timer = null;
   async function tick() {
-    if (document.visibilityState !== "visible") return;  // 页面不可见不轮询
+    if (document.visibilityState !== "visible") return;
     const ok = await loadStatus();
     if (state.disabled) { clearInterval(timer); timer = null; return; }
-    if (ok) await renderAll();
+    if (ok) await refresh();
   }
+
+  function setMode(mode) {
+    state.mode = mode;
+    el("ci-mode-total").classList.toggle("active", mode === "total");
+    el("ci-mode-delta").classList.toggle("active", mode === "delta");
+    const request = state.requests.find((r) => r.request_id === state.requestId) || null;
+    renderTrend(request);
+  }
+
+  el("ci-mode-total").addEventListener("click", () => setMode("total"));
+  el("ci-mode-delta").addEventListener("click", () => setMode("delta"));
 
   async function init() {
     const params = new URLSearchParams(location.search);
     const rid = params.get("request_id");
-    if (rid && /^[0-9a-f]{16,64}$/.test(rid)) state.requestId = rid;  // 从回复入口携带
+    if (rid && /^[0-9a-f]{16,64}$/.test(rid)) state.requestId = rid;
     const ok = await loadStatus();
     if (state.disabled) return;
-    if (ok) await renderAll();
+    if (ok) await refresh();
     timer = setInterval(tick, 2500);
   }
 
