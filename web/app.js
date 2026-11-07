@@ -438,18 +438,20 @@ async function inspectorProbe() {
 
 function noteInspectorLink(node) {
   const requestId = node.dataset.requestId;
-  if (!requestId) return;  // 缺 request_id 不伪造入口，只能从插件页列表进入
+  if (!requestId) return;
   const meta = node.querySelector(".message-meta");
   if (!meta || meta.querySelector(".ci-jump")) return;
   inspectorProbe().then((ok) => {
-    if (!ok || !node.isConnected) return;
+    // 追加时刻再去重：连续两次渲染会在探针 resolve 前都通过调用时守卫
+    const target = node.querySelector(".message-meta");
+    if (!ok || !node.isConnected || !target || target.querySelector(".ci-jump")) return;
     const link = document.createElement("a");
     link.className = "link ci-jump";
     link.href = `/addons/context-inspector/?request_id=${encodeURIComponent(requestId)}`;
     link.target = "_blank";
     link.rel = "opener";
     link.textContent = "查看本轮上下文";
-    meta.append(document.createTextNode(" · "), link);
+    target.append(document.createTextNode(" · "), link);
   });
 }
 
