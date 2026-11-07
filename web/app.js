@@ -406,6 +406,8 @@ function renderTurnMetadata(node) {
     : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
   if (!fromQQ) {
     if (node.dataset.workerBound === "true") meta.textContent += unavailable ? " · 协作任务正文当前不可用" : " · 含协作任务资料";
+    // GUI 回复在此提前返回；入口必须挂在本分支内（插件仅本机 GUI 通道提供）
+    if (assistant && channel === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
     return;
   }
   if (assistant) {
@@ -419,7 +421,6 @@ function renderTurnMetadata(node) {
     const reason = node.dataset.sourceAvailable === "unknown" ? "正在核对来源资格" : "来源期限或渠道范围";
     meta.textContent += ` · ${assistant ? "原回复" : "原消息"}当前不可在此展示（${reason}）；${assistant ? "投递" : "消息"}记录保留`;
   }
-  if (assistant && channel === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
 }
 
 // 上下文观测插件入口（20261107 插件设计 §7）：从回复携带 request_id 进入；缺 ID 只能进列表。
