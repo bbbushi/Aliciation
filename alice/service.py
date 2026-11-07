@@ -425,6 +425,13 @@ class ChatService:
     def observer_context_basis(self, *, scope=None, limit="10") -> dict:
         return self._observer_read(observation.context_basis, scope=scope, limit=limit)
 
+    def observer_context_requests(self, *, scope=None, limit="20", request_id=None) -> dict:
+        return self._observer_read(observation.context_requests, scope=scope,
+                                   limit=limit, request_id=request_id)
+
+    def observer_context_body(self, *, scope=None, hash=None) -> dict:
+        return self._observer_read(observation.context_body, scope=scope, content_hash=hash)
+
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
         return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)

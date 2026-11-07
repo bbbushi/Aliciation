@@ -65,7 +65,112 @@ def llm_calls(store, *, limit="100", request_id=None):
             "notice": "无正文调用回执；usage未知不等于零，pending未承诺跨崩溃持久。"}
 
 
+def context_requests(store, *, limit="20", request_id=None):
+    """按请求聚合的上下文观测投影（SDK 补充设计 v1 §存储与查询合同）。
+
+    只读：不清队列、不 flush、不触发维护或模型调用。pending 不承诺跨崩溃持久。
+    """
+    count = _number(limit, default=20, maximum=100)
+    if request_id is not None and (not isinstance(request_id, str) or len(request_id) > 160):
+        raise ObservationError("观察参数无效")
+    events = []
+    for row in store.conn.execute(
+            "SELECT detail FROM turn_metrics WHERE module='ctx_obs' ORDER BY id DESC LIMIT 8000"):
+        if len(row["detail"]) > 131072:
+            continue
+        try:
+            event = json.loads(row["detail"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict):
+            events.append({**event, "storage": "committed"})
+    with store._ctx_obs_lock:
+        events.extend({**event, "storage": "pending"} for event in store._ctx_obs_events)
+        dropped = store._ctx_obs_dropped
+    if request_id is not None:
+        events = [event for event in events if event.get("request_id") == request_id]
+    return {"requests": _aggregate_requests(events, count), "pending_dropped": dropped,
+            "notice": "快照为应用提交给模型客户端的参数投影，不是 HTTP 原始字节或供应商内部上下文；"
+                      "无正文处如实显示未留存。"}
+
+
+def _aggregate_requests(events, count: int) -> list[dict]:
+    """把事件流聚合为请求→调用→尝试的投影；不合并同请求多次调用。"""
+    order: dict[str, dict] = {}
+    for event in sorted(events, key=lambda e: (e.get("request_seq") or 0, e.get("seq_no") or 0)):
+        rid = str(event.get("request_id") or "?")
+        bucket = order.get(rid)
+        if bucket is None:
+            bucket = {"request_id": rid, "request_seq": event.get("request_seq"),
+                      "session_epoch": event.get("session_epoch"), "scope": event.get("scope"),
+                      "storage": event.get("storage"), "first_event_at": event.get("ts"),
+                      "last_event_at": event.get("ts"), "event_count": 0, "calls": {},
+                      "call_order": [], "blocks": [], "selections": [], "gaps": [],
+                      "reply_postprocess": None, "finished": False,
+                      "delivery": None, "assistant_turn_id": None}
+            order[rid] = bucket
+        bucket["last_event_at"] = max(bucket["last_event_at"] or 0, event.get("ts") or 0)
+        bucket["event_count"] += 1
+        etype, data = event.get("type"), event.get("data") or {}
+        if etype == "block_registered":
+            bucket["blocks"].append({k: data.get(k) for k in
+                ("seq", "kind", "name", "chars", "content_hash", "estimated_tokens", "body_state")})
+        elif etype == "selection_decided":
+            bucket["selections"].append({k: data.get(k) for k in ("source_id", "included", "reason")})
+        elif etype == "call_prepared":
+            call = {"call_id": data.get("call_id"), "purpose": data.get("purpose"),
+                    "tool_round": data.get("tool_round"),
+                    "messages": {"count": (data.get("messages") or {}).get("count"),
+                                 "total_chars": (data.get("messages") or {}).get("total_chars"),
+                                 "order": [(entry if not isinstance(entry.get("content"), str)
+                                            else {k: v for k, v in entry.items() if k != "content"})
+                                           for entry in (data.get("messages") or {}).get("order", [])]},
+                    "tools": [t.get("name") for t in (data.get("tools") or {}).get("items", [])],
+                    "parameters": data.get("parameters"),
+                    "bindings": data.get("bindings"), "messages_hash": data.get("messages_hash"),
+                    "attempts": []}
+            bucket["calls"][call["call_id"]] = call
+            bucket["call_order"].append(call["call_id"])
+        elif etype in ("attempt_started", "response_started", "attempt_finished"):
+            call = bucket["calls"].get((event.get("parent") or {}).get("call_id"))
+            if call is None:
+                continue
+            if etype == "attempt_started":
+                call["attempts"].append({"attempt": data.get("attempt"), "response_started": False,
+                                         "status": "entered"})
+            elif etype == "response_started":
+                if call["attempts"]:
+                    call["attempts"][-1]["response_started"] = True
+            else:
+                if call["attempts"]:
+                    last = call["attempts"][-1]
+                    last.update({k: data.get(k) for k in
+                                 ("status", "usage", "usage_state", "duration_ms", "error_type",
+                                  "fallback", "model", "model_source")})
+        elif etype == "reply_postprocessed":
+            bucket["reply_postprocess"] = data
+        elif etype == "request_finished":
+            bucket["finished"] = True
+            bucket["delivery"] = data.get("delivery")
+            bucket["assistant_turn_id"] = data.get("assistant_turn_id")
+            bucket["sdk_dropped"] = data.get("dropped_in_sdk")
+        elif etype == "observation_gap":
+            bucket["gaps"].append(data)
+    items = []
+    for bucket in sorted(order.values(), key=lambda b: b["request_seq"] or 0, reverse=True)[:count]:
+        bucket["calls"] = [bucket["calls"][cid] for cid in bucket.pop("call_order")]
+        items.append(bucket)
+    return items
+
+
+def context_body(store, *, content_hash=None):
+    """按内容 hash 读取留存正文；无正文如实“未留存”，不用当前数据补画历史。"""
+    from .context_observation import read_body
+    return read_body(content_hash)
+
+
 def persona_operations(store, *, limit="20"):
+
     """Read bounded import journal metadata; no recovery, migration or content replay."""
     count = _number(limit, default=20, maximum=50)
     if count < 1:

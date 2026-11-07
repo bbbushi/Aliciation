@@ -174,8 +174,19 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     call_id = uuid.uuid4().hex
     stream = None
     last_chunk_had_usage = False
+    # 调用接入：最终 SDK 参数在发送前冻结；SDK 不发送请求，只随业务调用记录
+    trace_call = (observation or {}).get("trace_call")
+    if trace_call is not None:
+        try:
+            trace_call.freeze_final(kwargs)
+        except Exception:
+            trace_call = None
+    attempt = trace_call.begin_attempt() if trace_call is not None else None
+    send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
     try:
-        stream = client.chat.completions.create(**kwargs)
+        stream = client.chat.completions.create(**send_kwargs)
+        if attempt is not None:
+            attempt.response_started()
         for chunk in stream:
             actual_model = getattr(chunk, "model", None) or actual_model
             u = getattr(chunk, "usage", None)
@@ -221,6 +232,21 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
                 status="cancelled" if failure and not isinstance(failure, Exception) else "error" if failure else "ok",
                 usage_state=("partial_receipt" if receipt_usage and incomplete
                              else "reported" if receipt_usage else "unknown"))
+        if attempt is not None:
+            usage_receipt = {}
+            for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+                v = getattr(receipt_usage, src, None)
+                if type(v) is int and v >= 0:
+                    usage_receipt[dst] = v
+            attempt.finish(
+                status=("cancelled" if failure and not isinstance(failure, Exception)
+                        else "error" if failure else "ok" if last_chunk_had_usage else "stream_interrupted"),
+                usage=usage_receipt,
+                usage_state=("partial_receipt" if receipt_usage and incomplete
+                             else "reported" if receipt_usage else "unknown"),
+                error_type=type(failure).__name__ if failure is not None else None,
+                model=actual_model, model_source="receipt" if actual_model else "requested",
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)))
         if stream is not None and callable(getattr(stream, "close", None)):
             try:
                 stream.close()
@@ -279,6 +305,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     ts = ts if ts is not None else time.time()
     started_at = time.monotonic()
     request_id = request_id or uuid.uuid4().hex
+    # 上下文观测 SDK（20261107 补充设计）：请求轨迹；观察故障不影响对话
+    from . import context_observation
+    ctx_trace = context_observation.begin_request(store, cfg, request_id=request_id,
+                                                  scope=source_scope)
     def request_blocks():
         blocks = [{"kind": b.kind, "name": b.name, "estimated_tokens": b.tokens}
                   for manifest in manifests for b in manifest.blocks]
@@ -295,6 +325,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                      "blocks": request_blocks(),
                      "tool_schema_count": len(active_tools),
                      "tool_names": [t["function"]["name"] for t in active_tools]}
+            if extra.get("trace_call") is None and ctx_trace is not None:
+                # 调用接入：最终参数在 llm.chat/_stream_round 的 freeze_final 边界补齐
+                extra["trace_call"] = ctx_trace.prepare_call(
+                    purpose=purpose, tool_round=round_number, messages=messages,
+                    tools=active_tools or None,
+                    parameters={"model": cfg.llm.chat_model, "temperature": 0.8,
+                                "stream": purpose == "main_stream"})
         return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
     def attempt_usage(detail=None):
@@ -444,6 +481,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     boundary = manifests[0].history
     if memory_session is not None and cfg.context.history_enabled:
         memory_session.history = HistoryContext(memory_session, boundary=boundary)
+    if ctx_trace is not None:
+        # 组装接入·选择决策：历史窗口取舍（exclusions 逐条 + 保留汇总），不宣称扫描全库
+        ctx_trace.selections(
+            [(f"history:{e.get('id')}", False, str(e.get("reason", "unspecified")))
+             for e in (boundary.get("exclusions") or []) if isinstance(e, dict)]
+            + [(f"history:{tid}", True, "complete_window")
+               for tid in (boundary.get("retained_ids") or [])])
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
@@ -466,7 +510,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     recap_calls += 1
                     resp = yield lambda: chat(client, cfg, recap_messages,
                                               model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                              observation=observe("recap_generate"),
+                                              observation=observe("recap_generate",
+                                                                  trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                                      purpose="recap_generate", messages=recap_messages,
+                                                                      parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                                                  "stream": False})),
                                               on_attempt_usage=attempt_usage(recap_usage))
                     recap_raw = resp.choices[0].message.content or ''
                     recap_md = recap_session.parse(recap_raw, span_rows)
@@ -480,7 +528,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             recap_calls += 1
                             reviewed = yield lambda: chat(client, cfg, review_messages,
                                 model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                observation=observe("recap_review"),
+                                observation=observe("recap_review",
+                                                    trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                        purpose="recap_review", messages=review_messages,
+                                                        parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                                    "stream": False})),
                                 on_attempt_usage=attempt_usage(recap_usage))
                             verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                             recap_session.review = verdict
@@ -523,6 +575,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             manifest.add("stable", "request_capability", extra["content"])
         if anchor_msg:
             manifest.add("stable", "expression_anchor", anchor_msg["content"])
+    if ctx_trace is not None:
+        # 组装接入·块登记：清单是同一记录的投影；锚/工具轮重建消息后按内容现算位置
+        for manifest in manifests:
+            for blk in manifest.blocks:
+                ctx_trace.block(blk.kind, blk.name, blk.content, estimated_tokens=blk.tokens)
     reply = ""
     round_number = 0
     while True:
@@ -537,6 +594,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 '检索回执中的existing_observations仅表示原有留存，不能当作本轮新写入。'}]
             for manifest in manifests:
                 manifest.add("stable", "closing_rule", messages[-1]["content"])
+            if ctx_trace is not None:
+                ctx_trace.block("stable", "closing_rule", messages[-1]["content"])
         if anchor_msg is not None:
             # P1b：锚每次请求前重建替换（同一份不堆积；工具回执后同样生效）
             messages = [m for m in messages
@@ -645,7 +704,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     review_audit['calls'] += 1
                     reviewed = yield lambda: chat(client, cfg, review_messages,
                         model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review"),
+                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review",
+                                            trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                purpose="rewrite_review" if transform_inputs else "recap_reply_review",
+                                                messages=review_messages,
+                                                parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                            "stream": False})),
                         on_attempt_usage=attempt_usage(review_audit['usage']))
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                     review_audit['status'] = 'accepted' if verdict['valid'] else 'original_preserved'
@@ -655,6 +719,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 except Exception as exc:
                     review_audit.update(status='original_preserved', error=type(exc).__name__)
                     reply = fallback
+            if ctx_trace is not None:
+                ctx_trace.reply_processed(kind="reply_review",
+                                          detail={"transform": bool(transform_inputs),
+                                                  "status": review_audit.get("status"),
+                                                  "reason": str(review_audit.get("reason", ""))[:200],
+                                                  "error": review_audit.get("error")})
             break
         if closing:
             # Even a nonconforming provider cannot dispatch another tool here.
@@ -743,6 +813,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                   source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
+    if ctx_trace is not None:
+        ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
+                         rounds=persona_basis["model_rounds_started"])
     basis = {"request_id": request_id, "user_turn_id": user_id, "assistant_turn_id": assistant_id,
              "mode": cfg.context.assembly_mode, "history_selection": boundary,
              "persona": persona_basis,

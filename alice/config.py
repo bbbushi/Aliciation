@@ -95,6 +95,9 @@ class ContextConfig:
     recap_max_chars: int = 600
     recap_inject_count: int = 2
     recap_inject_chars: int = 1200
+    # 上下文观测 SDK（20261107 补充设计）：元数据默认开；正文快照默认关（本机调试用）
+    observer_enabled: bool = True
+    observer_body_capture: bool = False
     # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
     total_budget_tokens: int = 100_000
     reply_reserve_tokens: int = 4_000

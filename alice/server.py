@@ -534,7 +534,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._discovery_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
-            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations"):
+            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
@@ -574,6 +574,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/observer/context": {"scope", "limit"},
                 "/api/observer/calls": {"scope", "limit", "request_id"},
                 "/api/observer/persona-operations": {"scope", "limit"},
+                "/api/observer/requests": {"scope", "limit", "request_id"},
+                "/api/observer/body": {"scope", "hash"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -594,7 +596,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                       "/api/observer/detail": svc.observer_detail,
                       "/api/observer/context": svc.observer_context_basis,
                       "/api/observer/calls": svc.observer_llm_calls,
-                      "/api/observer/persona-operations": svc.observer_persona_operations}[path]
+                      "/api/observer/persona-operations": svc.observer_persona_operations,
+                      "/api/observer/requests": svc.observer_context_requests,
+                      "/api/observer/body": svc.observer_context_body}[path]
             self._json(reader(**params))
 
         def _evaluation_route(self, path: str) -> None:

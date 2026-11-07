@@ -32,6 +32,8 @@ class Block:
     kind: str          # stable | background | index | history | tool_result
     name: str
     tokens: int
+    chars: int | None = None      # 观测 SDK：块字符数与原文引用（同一记录的投影）
+    content: str | None = None
 
 
 @dataclass
@@ -41,7 +43,9 @@ class ContextManifest:
     history: dict = field(default_factory=dict)
 
     def add(self, kind: str, name: str, content: str) -> None:
-        self.blocks.append(Block(kind, name, estimate_tokens(content)))
+        self.blocks.append(Block(kind, name, estimate_tokens(content),
+                                 len(content) if isinstance(content, str) else None,
+                                 content if isinstance(content, str) else None))
 
     def total(self) -> int:
         return sum(b.tokens for b in self.blocks)

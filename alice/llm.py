@@ -82,12 +82,23 @@ def chat(
         kwargs["response_format"] = {"type": "json_object"}
 
     call_id = uuid.uuid4().hex
+    # 调用接入（20261107 SDK 设计）：最终 SDK 参数在发送前冻结；SDK 不发送请求
+    trace_call = (observation or {}).get("trace_call")
+    if trace_call is not None:
+        try:
+            trace_call.freeze_final(kwargs)
+        except Exception:
+            trace_call = None
     last_err: Exception | None = None
-    for attempt in range(3 if retry else 1):
+    for attempt_no in range(3 if retry else 1):
+        sdk_attempt = trace_call.begin_attempt(attempt_no + 1) if trace_call is not None else None
         started = time.monotonic()
         response, failure = None, None
         try:
-            response = client.chat.completions.create(**kwargs)
+            send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
+            response = client.chat.completions.create(**send_kwargs)
+            if sdk_attempt is not None:
+                sdk_attempt.response_started()
             return response
         except BaseException as exc:
             failure = exc
@@ -96,6 +107,21 @@ def chat(
             e = exc  # 网络/限流等瞬时错误
             last_err = e
         finally:
+            if sdk_attempt is not None:
+                usage_receipt = {}
+                u = getattr(response, "usage", None)
+                for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+                    v = getattr(u, src, None)
+                    if type(v) is int and v >= 0:
+                        usage_receipt[dst] = v
+                sdk_attempt.finish(
+                    status=("cancelled" if failure is not None and not isinstance(failure, Exception)
+                            else "error" if failure is not None else "ok"),
+                    usage=usage_receipt,
+                    error_type=type(failure).__name__ if failure is not None else None,
+                    model=getattr(response, "model", None),
+                    model_source="receipt" if getattr(response, "model", None) else "requested",
+                    duration_ms=max(0, int((time.monotonic() - started) * 1000)))
             if on_attempt_usage is not None:
                 try:
                     on_attempt_usage(response, incomplete=failure is not None)
@@ -108,12 +134,12 @@ def chat(
                 metrics.record_llm_call(observation.get("store"), observation.get("purpose", "unspecified"),
                     started, response, error=safe_provider_error(failure) if failure else None,
                     model=kwargs["model"], request_id=observation.get("request_id"), call_id=call_id,
-                    attempt=attempt + 1, fallback=observation.get("fallback", False),
+                    attempt=attempt_no + 1, fallback=observation.get("fallback", False),
                     context=observation.get("context"),
                     status=("cancelled" if failure and not isinstance(failure, Exception) else
                             "error" if failure else "ok"))
-        if retry and attempt < 2:
-            time.sleep(2 * (attempt + 1))  # Backoff is separate from provider latency.
+        if retry and attempt_no < 2:
+            time.sleep(2 * (attempt_no + 1))  # Backoff is separate from provider latency.
     raise RuntimeError(f"LLM 调用失败：{safe_provider_error(last_err)}") from None
 
 
