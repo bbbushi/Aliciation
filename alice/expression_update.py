@@ -669,3 +669,150 @@ def cancel(store, payload):
     plan.update(status="cancelled", ready=False)
     write_record(folder / "plan.json", plan)
     return {"status": "cancelled", "token": payload["token"]}
+
+
+# ---- 驻留分层准备/应用（人格注册表设计 §3.1：沿用本模块的准备/查看/应用与事务原语） ----
+
+RESIDENCY_STAGED = "residency-staged.json"
+RESIDENCY_TOKEN = re.compile(r"res_[0-9a-f]{32}\Z")
+
+
+def _expression_limits(cfg) -> dict:
+    return {"max_core_chars": cfg.expression.max_core_chars,
+            "max_registry_chars": cfg.expression.max_registry_chars,
+            "max_registry_bundles": cfg.expression.max_registry_bundles,
+            "max_scene_expanded_chars": cfg.expression.max_scene_expanded_chars}
+
+
+def _residency_staged_path() -> Path:
+    return root() / RESIDENCY_STAGED
+
+
+def _residency_preview(contract, package, limits) -> dict:
+    """§3.1 准备结果：各条目归属、核心/目录大小、场景闭包与缺口。"""
+    from . import expression
+    from . import persona_residency as residency
+    by_id = {}
+    for group in expression.GROUPS:
+        for item in package[group]:
+            by_id[item["id"]] = {"group": group, "item": item}
+    where = {entry_id: [] for entry_id in by_id}
+    for entry_id in contract["core_ids"]:
+        where[entry_id].append("core")
+    bundles = []
+    catalogue_chars = 0
+    for bundle in contract["bundles"]:
+        parts = residency.bundle_parts(contract, package, bundle)
+        closure = parts["closure"] if parts else set(bundle["entry_ids"])
+        for entry_id in closure:
+            where.setdefault(entry_id, []).append("bundle:" + bundle["id"])
+        text = residency._ordered_text(package, closure) if parts else ""
+        catalogue_chars += len(bundle["label"]) + len(bundle["when"]) + 24
+        bundles.append({"id": bundle["id"], "label": bundle["label"], "when": bundle["when"],
+                        "purposes": list(bundle["purposes"]), "chars": len(text),
+                        "closure_ids": sorted(closure)})
+    core_text = residency.core_text(contract, package)
+    return {"per_entry": [{"id": entry_id, "group": info["group"], "where": where[entry_id]}
+                          for entry_id, info in sorted(by_id.items())],
+            "core_chars": len(core_text), "catalogue_chars": catalogue_chars,
+            "bundles": bundles, "core_entry_ids": sorted(set(contract["core_ids"]))}
+
+
+def residency_status(store, cfg) -> dict:
+    """当前分层状态：模式、assembly 有无与有效性、预览、暂存候选。只读。"""
+    from .persona_context import load_persona_snapshot
+    from . import persona_residency as residency
+    result = {"mode": cfg.persona.expression_mode, "has_v2": False, "has_assembly": False,
+              "issues": [], "preview": None, "registry_ready": False, "staged": None}
+    snapshot = load_persona_snapshot()
+    if snapshot is None or snapshot.get("expression_package") is None:
+        result["reason"] = "no_v2_package"
+        return result
+    result["has_v2"] = True
+    result["expression_digest"] = residency.expression_digest(snapshot["expression_package"])
+    package = snapshot["expression_package"]
+    assembly = snapshot.get("assembly")
+    if assembly:
+        result["has_assembly"] = True
+        contract = residency.parse_contract(assembly)
+        if contract is None:
+            result["issues"] = [{"code": "invalid_shape"}]
+        else:
+            result["issues"] = residency.validate_contract(contract, package, limits=_expression_limits(cfg))
+            result["preview"] = _residency_preview(contract, package, _expression_limits(cfg))
+    result["registry_ready"] = bool(assembly) and not result["issues"]
+    staged_path = _residency_staged_path()
+    try:
+        staged = read_record(staged_path)
+        result["staged"] = {"token": staged.get("token"),
+                            "matches_current": staged.get("expression_digest") == result.get("expression_digest"),
+                            "created_at": staged.get("created_at")}
+    except (OSError, ValueError, json.JSONDecodeError):
+        result["staged"] = None
+    return result
+
+
+def residency_prepare(store, client, cfg) -> dict:
+    """模型辅助分类当前表达包 → 校验通过才暂存；原表达未改时不重新收养认知。"""
+    from .persona_context import load_persona_snapshot
+    from . import persona_residency as residency
+    snapshot = load_persona_snapshot()
+    if snapshot is None or snapshot.get("expression_package") is None:
+        raise ValueError("当前人格没有 expression-v2 表达包，无法分层")
+    package = snapshot["expression_package"]
+    contract, issues = residency.prepare_classification(package, client, cfg)
+    if contract is None:
+        return {"staged": False, "issues": issues,
+                "notice": "分类候选未通过结构校验；可重新准备，原表达保持不变。"}
+    preview = _residency_preview(contract, package, _expression_limits(cfg))
+    record = {"token": "res_" + uuid.uuid4().hex,
+              "expression_digest": contract["expression_digest"],
+              "persona_revision": digest(current_text()),
+              "classification_revision": contract["classification_revision"],
+              "assembly": contract, "created_at": time.time()}
+    write_record(root() / RESIDENCY_STAGED, record)
+    return {"staged": True, "token": record["token"], "preview": preview,
+            "notice": "已暂存候选；查看归属与大小后可应用或取消。应用会用当前人格与摘要复核。"}
+
+
+def residency_apply(store, cfg, payload) -> dict:
+    """用当前表达版本与分类版本核对后，一次保存回同一权威 Markdown。"""
+    from . import expression
+    from .persona_context import load_persona_snapshot
+    from . import persona_residency as residency
+    from .persona_growth import bodies as split_bodies, replace_bodies, EXPRESSION
+    staged_path = _residency_staged_path()
+    record = read_record(staged_path)
+    if not RESIDENCY_TOKEN.fullmatch(str(record.get("token") or "")):
+        raise ValueError("暂存候选身份无效")
+    current = current_text()
+    if record.get("persona_revision") and digest(current) != record["persona_revision"]:
+        raise ValueError("人格在准备后已变化；请重新准备驻留分层")
+    package, _ = expression.decode_sections_with_assembly(split_bodies(current))
+    if package is None:
+        raise ValueError("当前人格没有 expression-v2 表达包")
+    if residency.expression_digest(package) != record.get("expression_digest"):
+        raise ValueError("表达包在准备后已变化；请重新准备驻留分层")
+    contract = residency.parse_contract(record.get("assembly"))
+    if contract is None:
+        raise ValueError("暂存分类结构无效；请重新准备")
+    issues = residency.validate_contract(contract, package, limits=_expression_limits(cfg))
+    if issues:
+        raise ValueError("驻留分类与当前表达不匹配：" + "；".join(i["code"] for i in issues))
+    candidate = replace_bodies(current, expression.encode_sections(package, assembly=contract),
+                               allowed=EXPRESSION)
+    validate_budget(candidate, cfg)
+    token = commit(store, current, candidate, mode="residency_layering",
+                   metadata={"expression_digest": record["expression_digest"],
+                             "classification_revision": contract["classification_revision"]})
+    staged_path.unlink(missing_ok=True)
+    return {"applied": True, "token": token,
+            "preview": _residency_preview(contract, package, _expression_limits(cfg)),
+            "notice": "分层已保存进人格；registry 模式下次请求生效（expression_mode=registry 时）。"}
+
+
+def residency_cancel() -> dict:
+    staged_path = _residency_staged_path()
+    existed = staged_path.exists()
+    staged_path.unlink(missing_ok=True)
+    return {"cancelled": bool(existed)}

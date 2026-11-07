@@ -706,6 +706,27 @@ class ChatService:
                 return update.cancel(self.store, payload)
             return update.rollback(self.store, payload.get("token"), payload.get("revision"), payload.get("session_epoch"), cfg=self.cfg)
 
+    def persona_residency(self, payload) -> dict:
+        """驻留分层准备/查看/应用（注册表设计 §3.1）；GUI 专用，绝不经模型或 QQ 触发。"""
+        from . import expression_update as update
+        if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+            raise ValueError("驻留分层参数无效")
+        action = payload["action"]
+        permitted = {"status": {"action"}, "prepare": {"action"},
+                     "apply": {"action"}, "cancel": {"action"}}
+        if action not in permitted or set(payload) - permitted[action]:
+            raise ValueError("驻留分层动作或字段无效")
+        if action == "status":
+            with self._lock:
+                return update.residency_status(self.store, self.cfg)
+        with self._channels.control(), self._workers.control_lock, self._lock:
+            persona_reset.require_clear()
+            if action == "prepare":
+                return update.residency_prepare(self.store, self.client, self.cfg)
+            if action == "apply":
+                return update.residency_apply(self.store, self.cfg, payload)
+            return update.residency_cancel()
+
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
         if plan is not None and (plan["epoch"] != self.store.meta_get("session_epoch")

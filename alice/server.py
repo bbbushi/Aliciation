@@ -29,7 +29,7 @@ GUI_READ_PATHS = {"/api/state", "/api/history", "/api/persona", "/api/settings",
                   "/api/metrics", "/api/chat/activity"}
 GUI_WRITE_PATHS = {"/api/persona", "/api/seed", "/api/reset", "/api/settings",
                    "/api/metrics/toggle", "/api/persona/expression",
-                   "/api/persona/expression-update"}
+                   "/api/persona/expression-update", "/api/persona/residency"}
 
 
 def _strict_object(pairs):
@@ -801,6 +801,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 return
             if path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
+            elif path == "/api/persona/residency":
+                try:
+                    self._json(svc.persona_residency(self._body()))
+                except ChannelError:
+                    raise
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+                except Exception:
+                    self._json({"error": "驻留分层操作未能确认；原人格保持不变，请查看状态后重试"}, 500)
             elif path == "/api/persona/expression-update":
                 try:
                     self._json(svc.persona_expression_update(self._bounded_body(1048576)))
