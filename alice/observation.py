@@ -163,9 +163,16 @@ def _aggregate_requests(events, count: int) -> list[dict]:
     return items
 
 
-def context_body(store, *, content_hash=None):
-    """按内容 hash 读取留存正文；无正文如实“未留存”，不用当前数据补画历史。"""
-    from .context_observation import read_body
+def context_body(store, *, content_hash=None, request_id=None):
+    """按 hash 读正文；核心校验（插件设计 §6）：须绑定请求归属，裸 hash 不开放。"""
+    from .context_observation import read_body, request_hashes
+    if request_id is None:
+        return {"stored": False, "reason": "binding_required"}
+    hashes = request_hashes(store, request_id)
+    if hashes is None:
+        return {"stored": False, "reason": "request_unknown"}
+    if content_hash not in hashes:
+        return {"stored": False, "reason": "hash_not_in_request"}
     return read_body(content_hash)
 
 

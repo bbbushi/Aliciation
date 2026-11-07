@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上下文观测 · 调用轨迹</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="inspector.css">
+</head>
+<body>
+<header class="ci-head">
+  <h1>上下文观测 · 调用轨迹</h1>
+  <p id="ci-status" class="ci-status" role="status">正在读取插件状态…</p>
+</header>
+<main class="ci-grid">
+  <section class="ci-col">
+    <h2>请求列表</h2>
+    <p class="ci-hint">从回复进入或在此选择；不按时间猜测请求归属。</p>
+    <div id="ci-requests" class="ci-list"></div>
+  </section>
+  <section class="ci-col">
+    <h2>调用过程</h2>
+    <p class="ci-hint">主调用与辅助调用分列；每次尝试的状态单独记录。</p>
+    <div id="ci-calls" class="ci-list"><p class="ci-hint">先选择左侧请求。</p></div>
+  </section>
+  <section class="ci-col">
+    <h2>当前调用的最终输入</h2>
+    <p class="ci-hint">应用提交给模型客户端的参数投影，不是供应商内部上下文。</p>
+    <div id="ci-detail" class="ci-list"><p class="ci-hint">先选择中间一次调用。</p></div>
+  </section>
+</main>
+<script src="observer-client.js"></script>
+<script src="inspector.js"></script>
+</body>
+</html>

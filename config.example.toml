@@ -73,3 +73,7 @@ provider = "qq-official"
 app_id = ""
 sender_id = ""
 chat_type = "c2c"
+
+# 上下文观测插件（固定同源独立页；采集开关独立在 [context] observer_*）
+[plugins]
+context_inspector_enabled = false  # 显式启用后提供 /addons/context-inspector/ 页面与聊天回复旁入口

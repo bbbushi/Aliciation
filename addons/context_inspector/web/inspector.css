@@ -1,0 +1,32 @@
+/* 上下文观测插件样式：三列定位流程，只读展示。 */
+.ci-head { padding: 12px 16px 4px; }
+.ci-head h1 { margin: 0 0 4px; font-size: 18px; }
+.ci-status { margin: 0; font-size: 12px; color: #567; }
+.ci-status.warn { color: #B0432F; }
+
+.ci-grid { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) minmax(320px, 2fr);
+  gap: 12px; padding: 8px 16px 24px; align-items: start; }
+.ci-col h2 { font-size: 14px; margin: 8px 0 4px; }
+.ci-col .ci-hint { font-size: 12px; color: #789; margin: 2px 0 8px; }
+.ci-list { display: flex; flex-direction: column; gap: 8px; }
+
+.ci-item { text-align: left; border: 1px solid #ccd; border-radius: 8px; padding: 8px 10px;
+  background: #fff; cursor: pointer; font: inherit; }
+.ci-item:hover { border-color: #89a; }
+.ci-item.active { border-color: #4C72B0; box-shadow: 0 0 0 1px #4C72B0 inset; }
+.ci-item .ci-hint { font-size: 12px; color: #789; }
+.ci-item div { margin: 0 0 2px; }
+
+.ci-msg { border: 1px solid #e3e6ec; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+.ci-msg p { margin: 2px 0; font-size: 12.5px; }
+.ci-msg .ci-hint { color: #789; font-size: 12px; }
+.ci-h3, .ci-col h3 { font-size: 13px; margin: 10px 0 4px; }
+
+.ci-btn { font: inherit; font-size: 12px; border: 1px solid #ccd; border-radius: 6px;
+  background: #f6f7fa; padding: 1px 8px; cursor: pointer; }
+.ci-btn:hover { border-color: #89a; }
+.ci-body { display: block; white-space: pre-wrap; word-break: break-word; font-size: 12px;
+  background: #f6f7fa; border: 1px solid #e3e6ec; border-radius: 6px; padding: 8px; margin-top: 6px;
+  max-height: 320px; overflow: auto; }
+
+@media (max-width: 980px) { .ci-grid { grid-template-columns: 1fr; } }

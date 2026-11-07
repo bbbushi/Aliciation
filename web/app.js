@@ -419,6 +419,37 @@ function renderTurnMetadata(node) {
     const reason = node.dataset.sourceAvailable === "unknown" ? "正在核对来源资格" : "来源期限或渠道范围";
     meta.textContent += ` · ${assistant ? "原回复" : "原消息"}当前不可在此展示（${reason}）；${assistant ? "投递" : "消息"}记录保留`;
   }
+  if (assistant && channel === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
+}
+
+// 上下文观测插件入口（20261107 插件设计 §7）：从回复携带 request_id 进入；缺 ID 只能进列表。
+let inspectorEnabled = null;
+async function inspectorProbe() {
+  if (inspectorEnabled !== null) return inspectorEnabled;
+  try {
+    const r = await fetch("/api/plugins/context-inspector/status",
+      { headers: { "X-Alice-Intent": "observer" }, cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    inspectorEnabled = d.status === "ok" && d.plugin && d.plugin.enabled === true;
+  } catch { inspectorEnabled = false; }
+  return inspectorEnabled;
+}
+
+function noteInspectorLink(node) {
+  const requestId = node.dataset.requestId;
+  if (!requestId) return;  // 缺 request_id 不伪造入口，只能从插件页列表进入
+  const meta = node.querySelector(".message-meta");
+  if (!meta || meta.querySelector(".ci-jump")) return;
+  inspectorProbe().then((ok) => {
+    if (!ok || !node.isConnected) return;
+    const link = document.createElement("a");
+    link.className = "link ci-jump";
+    link.href = `/addons/context-inspector/?request_id=${encodeURIComponent(requestId)}`;
+    link.target = "_blank";
+    link.rel = "opener";
+    link.textContent = "查看本轮上下文";
+    meta.append(document.createTextNode(" · "), link);
+  });
 }
 
 function redactSourceNode(node, pending = false) {

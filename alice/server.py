@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import threading
@@ -534,6 +535,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._discovery_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
+            elif path == "/addons/context-inspector" or path.startswith("/addons/context-inspector/"):
+                self._addon_static(path)
             elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
@@ -575,7 +578,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/observer/calls": {"scope", "limit", "request_id"},
                 "/api/observer/persona-operations": {"scope", "limit"},
                 "/api/observer/requests": {"scope", "limit", "request_id"},
-                "/api/observer/body": {"scope", "hash"},
+                "/api/observer/body": {"scope", "hash", "request_id"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -599,6 +602,89 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                       "/api/observer/persona-operations": svc.observer_persona_operations,
                       "/api/observer/requests": svc.observer_context_requests,
                       "/api/observer/body": svc.observer_context_body}[path]
+            self._json(reader(**params))
+
+        # ---- 上下文观测插件（20261107 插件设计 §4/§6）：固定静态托管 + 薄查询命名空间 ----
+
+        ADDON_STATIC_TYPES = {"html": "text/html; charset=utf-8",
+                              "js": "application/javascript; charset=utf-8",
+                              "css": "text/css; charset=utf-8",
+                              "json": "application/json; charset=utf-8"}
+
+        def _addon_static(self, path: str) -> None:
+            """只读托管清单内固定资源；缺文件、禁用或版本不符时给明确状态，聊天照常。"""
+            root = Path(__file__).resolve().parent.parent / "addons" / "context_inspector"
+            try:
+                manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                self._json({"status": "error", "error": "插件资源不可用"}, 404)
+                return
+            if (not svc.cfg.plugins.context_inspector_enabled
+                    or manifest.get("id") != "context-inspector"
+                    or manifest.get("protocol_version") != "ctx-obs/1"):
+                self._json({"status": "disabled", "error": "插件未启用或协议版本不符"}, 404)
+                return
+            rel = path[len("/addons/context-inspector"):].lstrip("/") or (manifest.get("entry") or "index.html")
+            if rel not in (manifest.get("files") or []):
+                self._json({"status": "error", "error": "插件资源不存在"}, 404)
+                return
+            webroot = (root / "web").resolve()
+            target = (webroot / rel).resolve()
+            if (not str(target).startswith(str(webroot) + os.sep) or target.is_symlink()
+                    or not target.is_file()):
+                self._json({"status": "error", "error": "插件资源不存在"}, 404)
+                return
+            ctype = self.ADDON_STATIC_TYPES.get(target.suffix.lstrip("."))
+            if ctype is None or target.stat().st_size > 4 * 1024 * 1024:
+                self._json({"status": "error", "error": "插件资源类型或大小不受支持"}, 404)
+                return
+            try:
+                payload = target.read_bytes()
+            except OSError:
+                self._json({"status": "error", "error": "插件资源不可用"}, 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            try:
+                self.wfile.write(payload)
+            except OSError:
+                pass
+
+        def _plugin_get(self, path: str) -> None:
+            """插件专用查询：同源观察意图校验 + 启用检查；委托同一核心观察服务。"""
+            if not self._trusted_intent("observer"):
+                self._json({"status": "error", "error": "只能从本机 GUI 读取观察数据"}, 403)
+                return
+            allowed = {
+                "/api/plugins/context-inspector/status": {"scope"},
+                "/api/plugins/context-inspector/requests": {"scope", "limit"},
+                "/api/plugins/context-inspector/request": {"scope", "request_id"},
+                "/api/plugins/context-inspector/body": {"scope", "request_id", "hash"},
+            }[path]
+            try:
+                query = urlparse(self.path).query
+                if len(query) > 4096:
+                    raise ValueError
+                parsed = parse_qs(query, keep_blank_values=True, max_num_fields=8)
+                if set(parsed) - allowed or any(len(values) != 1 for values in parsed.values()):
+                    raise ValueError
+                params = {key: values[0] for key, values in parsed.items()}
+                scope = params.get("scope")
+                if scope is not None and (len(scope) != 32 or any(ch not in "0123456789abcdef" for ch in scope)):
+                    raise ValueError
+            except ValueError:
+                self._json({"status": "error", "error": "观察请求参数无效"}, 400)
+                return
+            if not svc.cfg.plugins.context_inspector_enabled:
+                self._json({"status": "disabled", "scope": scope})
+                return
+            reader = {"/api/plugins/context-inspector/status": svc.plugin_inspector_status,
+                      "/api/plugins/context-inspector/requests": svc.plugin_inspector_requests,
+                      "/api/plugins/context-inspector/request": svc.plugin_inspector_request,
+                      "/api/plugins/context-inspector/body": svc.plugin_inspector_body}[path]
             self._json(reader(**params))
 
         def _evaluation_route(self, path: str) -> None:

@@ -429,8 +429,39 @@ class ChatService:
         return self._observer_read(observation.context_requests, scope=scope,
                                    limit=limit, request_id=request_id)
 
-    def observer_context_body(self, *, scope=None, hash=None) -> dict:
-        return self._observer_read(observation.context_body, scope=scope, content_hash=hash)
+    def observer_context_body(self, *, scope=None, hash=None, request_id=None) -> dict:
+        return self._observer_read(observation.context_body, scope=scope,
+                                   content_hash=hash, request_id=request_id)
+
+    # ---- 上下文观测插件（20261107 插件设计 §6）：薄命名空间，委托同一核心投影 ----
+
+    def plugin_inspector_status(self, *, scope=None) -> dict:
+        from . import context_observation
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+            return self._observer_read(
+                lambda store, **kw: {"plugin": context_observation.plugin_status(self.cfg)}, scope=scope)
+
+    def plugin_inspector_requests(self, *, scope=None, limit="20") -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_requests, scope=scope, limit=limit)
+
+    def plugin_inspector_request(self, *, scope=None, request_id=None) -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_requests, scope=scope,
+                                   request_id=request_id)
+
+    def plugin_inspector_body(self, *, scope=None, request_id=None, hash=None) -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_body, scope=scope,
+                                   content_hash=hash, request_id=request_id)
 
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""

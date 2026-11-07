@@ -232,7 +232,7 @@
       const table = node("div");
       for (const block of request.blocks) {
         const row = node("p", `#${block.seq} [${block.kind}] ${block.name} · ${block.chars ?? "?"} 字`, "obs-hint");
-        row.append(bodyButton(block.content_hash, block.body_state));
+        row.append(bodyButton(block.content_hash, block.body_state, request.request_id));
         table.append(row);
       }
       if (request.selections && request.selections.length) {
@@ -265,7 +265,7 @@
     for (const entry of messages) {
       const row = node("p", `${entry.seq} ${entry.role} · ${entry.chars ?? "?"} 字`
         + (entry.tool_call_id ? ` · tool:${String(entry.tool_call_id).slice(0, 10)}…` : ""), "obs-hint");
-      row.append(bodyButton(entry.content_hash, entry.body));
+      row.append(bodyButton(entry.content_hash, entry.body, request.request_id));
       table.append(row);
     }
     if (call.bindings && call.bindings.length) {
@@ -279,7 +279,7 @@
     card.append(wrap);
   }
 
-  function bodyButton(contentHash, bodyState) {
+  function bodyButton(contentHash, bodyState, requestId) {
     if (!contentHash || bodyState === "none") return node("span", "（未留存正文）", "obs-hint");
     if (bodyState && bodyState !== "stored" && bodyState !== "head" && bodyState !== "on_disk") {
       return node("span", `（正文：${bodyState}）`, "obs-hint");
@@ -292,7 +292,7 @@
     button.addEventListener("click", async () => {
       if (!pre.hidden) { pre.hidden = true; return; }
       button.disabled = true;
-      const d = await request("body", { hash: contentHash }, generation, () => true).catch(() => null);
+      const d = await request("body", { hash: contentHash, request_id: requestId || "" }, generation, () => true).catch(() => null);
       button.disabled = false;
       pre.textContent = !d ? "读取失败；稍后重试。"
         : d.stored ? (d.text || "（空）") + (d.truncated ? "\n…（已截断）" : "")

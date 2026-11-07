@@ -197,6 +197,64 @@ def read_body(content_hash: str, *, limit: int = 64000) -> dict:
             "truncated": len(text) > limit, "chars": len(text)}
 
 
+def request_hashes(store, request_id) -> set[str] | None:
+    """某请求事件里登记过的正文 hash（committed+pending）；请求未知返回 None。
+
+    插件设计 §6：正文读取须验证请求/调用/块的实际归属，不能仅凭内容
+    hash 开放全部快照；hash 只用于内容比较。
+    """
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 160:
+        return None
+    hashes: set[str] = set()
+    found = False
+
+    def _collect(event) -> None:
+        nonlocal found
+        if not isinstance(event, dict) or event.get("request_id") != request_id:
+            return
+        found = True
+        data = event.get("data") or {}
+        if isinstance(data.get("content_hash"), str):
+            hashes.add(data["content_hash"])
+        for entry in (data.get("messages") or {}).get("order", []):
+            if isinstance(entry, dict) and isinstance(entry.get("content_hash"), str):
+                hashes.add(entry["content_hash"])
+
+    try:
+        for row in store.conn.execute(
+                "SELECT detail FROM turn_metrics WHERE module='ctx_obs' ORDER BY id DESC LIMIT 8000"):
+            if len(row["detail"]) > 131072:
+                continue
+            try:
+                _collect(json.loads(row["detail"]))
+            except (ValueError, TypeError):
+                continue
+        with store._ctx_obs_lock:
+            for event in store._ctx_obs_events:
+                _collect(event)
+    except Exception:
+        return None
+    return hashes if found else None
+
+
+def body_quota() -> dict:
+    """正文额度状态（插件 status 用）；只读盘点，不触发清理。"""
+    return {"body_dir_bytes": _dir_size(_body_dir()),
+            "limit_bytes": BODY_DIR_LIMIT_BYTES,
+            "retention_days": BODY_RETENTION_SECONDS // 86400,
+            "policy": "10个用户请求 · 7天 · 50MiB，以先到者为界；达到上限不截断后冒充完整"}
+
+
+def plugin_status(cfg) -> dict:
+    """功能发现（插件设计 §6）：插件/采集状态、协议版本与正文额度。"""
+    from .context_observer import SCHEMA_VERSION
+    return {"enabled": bool(getattr(cfg.plugins, "context_inspector_enabled", False)),
+            "protocol_version": SCHEMA_VERSION, "interface_version": 1,
+            "capture": {"metadata": bool(getattr(cfg.context, "observer_enabled", True)),
+                        "body": bool(getattr(cfg.context, "observer_body_capture", False))},
+            "quota": body_quota() if getattr(cfg.context, "observer_body_capture", False) else None}
+
+
 # ---- 落盘边界：与 metrics.flush_calls 同一安全边界调用 ----
 
 def flush(store) -> None:

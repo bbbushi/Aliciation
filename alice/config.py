@@ -200,6 +200,13 @@ def _channels(raw: dict) -> ChannelsConfig:
 
 
 @dataclass
+class PluginsConfig:
+    # 上下文观测插件（20261107 插件设计 §5）：固定页面开关，默认关；
+    # 采集开关独立在 context.observer_*，插件开关不擅自改采集值
+    context_inspector_enabled: bool = False
+
+
+@dataclass
 class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
@@ -207,6 +214,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
 
 def _build(cls, raw: dict):
@@ -227,6 +235,7 @@ def load(path: Path | str | None = None) -> Config:
         memory=_build(MemoryConfig, raw.get("memory", {})),
         channels=_channels(raw.get("channels", {})),
         expression=_build(ExpressionConfig, raw.get("expression", {})),
+        plugins=_build(PluginsConfig, raw.get("plugins", {})),
     )
 
 
