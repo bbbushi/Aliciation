@@ -25,6 +25,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
+- 2026-11-07 ZCode 续四：观测插件展示形态按用户参考 dsh-context 复刻（原生 JS/CSS）：分类颜色编码、组成堆叠条与图例、逐调用趋势带与差异徽标（vs 上次：±消息/±字）、DNA 模型读取顺序逐项（位置色块+正文按钮）、树状上下文浏览器与选择决策折叠；数据全来自公开投影，估算字符与供应商 usage 分列。提交 7f4650e；SDK/插件自检与 JS/compileall 全过；服务未重启加载。
 - 2026-11-07 Codex修复“这一轮没走通”：两次真实“在？”均模型成功、用户turn保存而助手turn缺失；loop.py新增观测无条件读仅在审查分支赋值的review_audit，普通回复必触发UnboundLocalError。已将审计选择移到分支前，记录selected=false/not_selected，并隔离该处观测异常；未重放旧请求。单文件compileall/diff检查过，真人新消息待验。17:20:25正常停旧89153、备份 `/private/tmp/alice-before-chat-observer-fix-20261107-172025.db` 后起新PID90350（8800/no-open），首页/插件200、日志就绪；日志同目录alice-chat-observer-fix-20261107-172025.log。读user活库/备份及正常起服，未手改配置/人格/历史。详见 `docs/设计文档/上下文组装优化/观测SDK启用后普通聊天失败-定位与修复-20261107.md`。
 - Codex人格运行层仍为未提交alice/persona_context.py：457字符使用说明及可选215字符使用提醒，完整表达/用途/合同保留，usage版本/hash进既有metadata，anchor仍关；此前15:42启动已载入这部分。实施与人工剧本见 `docs/设计文档/上下文组装优化/人格表达运行时强化-实施交接与人工验收-20261107.md`；备份 `/private/tmp/alice-before-persona-runtime-restart-20261107-154258.db`。
 - ZCode SDK9728a00及插件P0–P2提交60f79c9已在ytq，新增采集/边界冻结/队列正文/请求查询/同源插件及request_id+hash归属校验；P3差异/备注/导出、P4迁移/辅助细绑定待续。上一棒报告SDK27/插件12自检及静态检查过，非本轮真人验收。启用时发现额度缺口：body_quota标10请求，但policy_for/AliceSink/SDK未见请求额度扣减或自动停；不能承诺十轮停，交施工侧补齐，容量/期限实现仍待真人核对。
