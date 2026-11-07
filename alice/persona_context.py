@@ -1,6 +1,7 @@
 """Whole-entry persona expression rendering with metadata and strict budgets."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 from . import config as paths
@@ -85,6 +86,44 @@ def normalize_section_headings(raw: str) -> str:
     return raw
 
 
+def expression_coverage_view(package: dict | None) -> dict:
+    """Private GUI projection of the host's stored report, never a recomputation."""
+    contract = package.get("coverage_contract") if isinstance(package, dict) else None
+    if not isinstance(contract, dict) or contract.get("policy") != "source_coverage_v1":
+        return {}
+    report = package.get("coverage_report")
+    warnings = package.get("warnings")
+    return {"coverage_policy": "source_coverage_v1",
+            "coverage_report": copy.deepcopy(report) if isinstance(report, dict) else None,
+            "review_notices": [value for value in package.get("review_notices", []) if isinstance(value, str)],
+            "warnings": [value for value in warnings if isinstance(value, str)] if isinstance(warnings, list) else []}
+
+
+def expression_coverage_metadata(package: dict | None) -> dict:
+    """Body-free coverage counts for observations; no raw warnings or source text."""
+    contract = package.get("coverage_contract") if isinstance(package, dict) else None
+    if not isinstance(contract, dict) or contract.get("policy") != "source_coverage_v1":
+        return {}
+    report = package.get("coverage_report")
+    report = report if isinstance(report, dict) else {}
+    summary = {}
+    for key in ("sources", "rules", "examples"):
+        values = report.get(key)
+        values = values if isinstance(values, dict) else {}
+        summary[key] = {name: values.get(name) if type(values.get(name)) is int and values[name] >= 0 else None
+                        for name in ("covered", "total")}
+        percent = values.get("percent")
+        summary[key]["percent"] = percent if type(percent) in (int, float) and 0 <= percent <= 100 else None
+    def count(value):
+        return len(value) if isinstance(value, list) else 0
+    return {"coverage_policy": "source_coverage_v1", "coverage_summary": summary,
+            "coverage_reviewed": report.get("reviewed") if type(report.get("reviewed")) is bool else None,
+            "warning_count": count(package.get("warnings")),
+            "review_notice_count": count(package.get("review_notices")),
+            "uncertain_source_count": count(report.get("uncertain_sources")),
+            "uncertain_scenario_count": count(report.get("uncertain_scenarios"))}
+
+
 def parse_snapshot(raw: str) -> dict:
     sections = {span["title"]: raw[span["body_start"]:span["end"]].strip()
                 for span in section_spans(raw)}
@@ -97,7 +136,8 @@ def parse_snapshot(raw: str) -> dict:
     if package is not None:
         return {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
                 "sections": sections, "sample_ids": [item["id"] for item in package["examples"]],
-                "samples": [], "expression_package": package, "format_version": "expression-v2"}
+                "samples": [], "expression_package": package, "format_version": "expression-v2",
+                **expression_coverage_view(package)}
     samples, active = [], None
     for line in sections.get("底色 · 表达样本", "").splitlines():
         match = _SAMPLE_LINE.match(line)
@@ -182,7 +222,8 @@ def _metadata(snapshot, text, ids, reasons, **extra):
             "chars": len(text), "estimated_tokens": estimate_tokens(text),
             "format_version": snapshot.get("format_version", "expression-v1") if snapshot else None,
             "coverage_status": "v2_package" if snapshot and snapshot.get("expression_package") else "v1_not_reviewed",
-            "degradation": reasons, **extra}
+            "degradation": reasons,
+            **expression_coverage_metadata(snapshot.get("expression_package") if snapshot else None), **extra}
 
 
 def _expression_budget(snapshot, cfg, key):

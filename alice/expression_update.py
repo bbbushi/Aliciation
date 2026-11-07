@@ -20,7 +20,7 @@ KIND = "expression_update_v2"
 TOKEN = re.compile(r"exp_[0-9a-f]{32}\Z")
 TERMINAL = {"completed", "aborted", "cancelled", "rolled_back"}
 MAX_AUDIT_BYTES = 16 * 1024 * 1024
-PREPARATION_POLICY = 3  # Bind migration choices and reject earlier matching semantics.
+PREPARATION_POLICY = 12  # Shared bounded expressive interpretation and evidence-bound factual regression.
 MARKER_FIELDS = ("kind", "token", "epoch", "before_sha256", "after_sha256", "before_version", "after_version")
 
 
@@ -378,6 +378,60 @@ def legacy_user_baseline(store, before, choices=None):
             "legacy_mode": "conservative_preserve", "legacy_choices": choices}
 
 
+def _preflight_user_expression(old, cfg):
+    """Reject immutable user text that cannot fit before paying for generation.
+
+    This only checks material the real merge must preserve. It does not build a
+    candidate, certify coverage, or estimate the final projection's capacity.
+    """
+    from . import expression as expr
+    cap = expr.limits_for(cfg)
+
+    def check(group, item, label):
+        try:
+            for key in (*expr._FIELDS[group], "scope"):
+                expr._string(item.get(key), key, cap["max_item_chars"],
+                             empty=key in {"exceptions", "user_input"})
+            fields = {key: item[key] for key in expr._FIELDS[group]}
+            if len(json.dumps(fields, ensure_ascii=False)) > cap["max_item_chars"]:
+                raise ValueError("完整表达单元超限：" + item["id"])
+        except ValueError as exc:
+            raise ValueError("保留的用户表达不能按当前容量合入（" + label + "）：" + str(exc)
+                             + "；尚未调用模型，请先调整该表达或资源上限") from exc
+
+    legacy = old.get("legacy_overrides")
+    if legacy is not None:
+        choices = old.get("legacy_choices", {})
+        for title, body in legacy.items():
+            body = expr._string(body, title, cap["max_projection_chars"], empty=True)
+            choice = choices.get(title, "preserve")
+            if not body or choice == "replace":
+                continue
+            group, item = expr._free_text_item(title, body)
+            if choice == "merge":
+                item["scope"] = "用户明确合并保留的旧格式表达（以正文条件为准）"
+            elif old.get("legacy_mode") == "conservative_preserve":
+                item["scope"] = "旧格式当前表达的保守保护；并非用户声明删除新源条目"
+            check(group, item, title)
+        return
+    if old.get("user_overrides") and not old.get("user_revisions"):
+        raise ValueError("旧修订只保存了整节正文，无法证明逐项修改或删除；请明确选择整节保留模式后再更新原稿")
+    state = old.get("user_revisions")
+    if not state or (not state["edits"] and not state["sections"]):
+        return
+    expr._validate_revisions(state, cap)
+    if any(record["mode"] == "legacy_unknown" for record in state["sections"].values()):
+        raise ValueError("旧整节修订粒度未知；请明确选择整节保留模式，不能冒充逐项合并")
+    protected_groups = {group for title in state["sections"]
+                        for group in expr.SECTION_GROUPS[expr.TITLES.index(title)]}
+    for edit in state["edits"]:
+        if edit["item"] and edit["group"] not in protected_groups:
+            check(edit["group"], edit["item"], edit["item"]["id"])
+    for title, record in state["sections"].items():
+        for pair in record["items"]:
+            check(pair["group"], pair["item"], title)
+
+
 def validate_budget(candidate, cfg):
     """Admission lower bound; real rounds additionally account for history/tools."""
     from .persona_context import parse_snapshot, validate_expression, render_full
@@ -397,12 +451,14 @@ def validate_budget(candidate, cfg):
 def package_metadata(package, registry=None):
     """Body-free observability; raw scopes/reasons stay in the private GUI audit."""
     from .expression import GROUPS, SCENARIOS
+    from .persona_context import expression_coverage_metadata
     return {"format": package["format"], "source_hash": package["source_hash"],
             "projection_strategy": "complete_per_purpose", "source_count": len(package["source_ids"]),
             "type_counts": {g: len(package[g]) for g in GROUPS},
             "replacement_count": package.get("replacement_count", 0),
             "review_status": package.get("reviews", {}),
             "gap_count": len(package.get("gaps", [])),
+            **expression_coverage_metadata(package),
             "source_units": [{k: u[k] for k in ("source_id", "line_start", "line_end", "kind")}
                              for u in (registry or {}).get("units", [])],
             "destinations": [{k: d[k] for k in ("source_id", "status", "targets", "required")}
@@ -410,7 +466,8 @@ def package_metadata(package, registry=None):
             "scopes": [{"id": e["id"], "scope_sha256": digest(e["scope"]), "scope_chars": len(e["scope"]),
                         "required": e["required"], "purposes": e["purposes"]} for g in GROUPS for e in package[g]],
             "coverage": [{"scenario": c["scenario"] if c["scenario"] in SCENARIOS else "custom_" + digest(c["scenario"])[:16],
-                          "status": c["status"], "example_ids": c["example_ids"]} for c in package["coverage"]]}
+                          "status": c["status"], "example_ids": c["example_ids"],
+                          **({"rule_ids": c["rule_ids"]} if "rule_ids" in c else {})} for c in package["coverage"]]}
 
 
 def prepare(store, client, cfg, payload):
@@ -434,9 +491,12 @@ def prepare(store, client, cfg, payload):
     old = old or legacy_user_baseline(store, before, payload.get("legacy_choices"))
     legacy_choices = old.get("legacy_choices")
     baseline_policy = ("旧格式默认保护当前三节全文（包括空节）；逐节采用本次明确选择。选择绑定当前人格及原稿，"
-                       "最终候选重新双审；保留两者不自动消除矛盾，未解决缺口仍阻止应用。"
+                       "保留两者不自动消除矛盾，事实、失真或硬约束未满足仍阻止应用。"
                        if old.get("legacy_mode") == "conservative_preserve" else
                        "按已记录的条目修改、明确删除和新增合入；整节自由文本范围单独保留，身份不明确时停止激活。")
+    baseline_policy += ("合入用户保留内容后完整进行事实与保真初审；如有修复，按原问题验收及实际改动影响回归，"
+                        "未受影响且初审通过的结论沿用，未解决的事实或失真否决仍阻止应用；"
+                        "原稿支持范围内的普通遗漏保留提示，可安装部分表达，不为原稿未提供的内容制造缺口。")
     token = "exp_" + uuid.uuid4().hex
     folder = location(token)
     folder.mkdir(parents=True, exist_ok=False)
@@ -450,12 +510,18 @@ def prepare(store, client, cfg, payload):
     atomic_text(folder / "previous.md", before)
     write_record(folder / "plan.json", plan)
     try:
+        _preflight_user_expression(old, cfg)
         # Existing explicit revisions are part of the review input and must
         # survive the exact frozen candidate, not be reinserted after review.
         result = prepare_expression(client, cfg, doc, store=store, op_id=token,
                                     audit_dir=folder, user_sections=old)
+        plan["review_policy"] = result.get("review_policy", "initial_plus_delta_v1")
         write_record(folder / "result.json", result)
         package = result.get("package")
+        if package:
+            from .persona_context import expression_coverage_view
+            # Bind displayed coverage to the same package embedded in candidate.md.
+            plan.update(expression_coverage_view(package))
         candidate = replace_bodies(normalize_section_headings(before), expr.encode_sections(package), allowed=EXPRESSION) if package else None
         if package:
             plan["current_diff"] = [{"section": title, "before": plan["baseline_sections"][title],
@@ -478,7 +544,8 @@ def prepare(store, client, cfg, payload):
                      "projection_chars": projection_chars,
                      "user_revision_note": baseline_policy})
         if package:
-            plan["metadata"] = package_metadata(package, result.get("registry"))
+            plan["metadata"] = {**package_metadata(package, result.get("registry")),
+                                "review_policy": plan["review_policy"]}
         if candidate:
             atomic_text(folder / "candidate.md", candidate)
         atomic_text(folder / "previous.md", before)
@@ -505,7 +572,7 @@ def view_plan(folder, plan, *, store=None):
     if (plan.get("status") == "candidate_inactive"
             and plan.get("preparation_policy") != PREPARATION_POLICY and not (folder / "op.json").exists()):
         plan = {**plan, "status": "prepare_failed", "ready": False,
-                "gaps": ["此候选缺少新版迁移保护与修订范围记录，请重新准备；当前人格未改变。"]}
+                "gaps": ["此候选使用旧迁移保护或核对策略，请重新准备；当前人格未改变。"]}
     if plan.get("status") == "preparing":
         plan = {**plan, "status": "prepare_failed", "ready": False,
                 "gaps": ["上次准备未产生完整候选；当前人格未改变，可查看已有审计后重新准备。"]}
@@ -540,7 +607,8 @@ def view_plan(folder, plan, *, store=None):
              "reason": dispositions.get(item.get("source_id"), {}).get("reason", "")}
             for item in units]
     return {**{k: plan.get(k, result.get(k)) for k in ("token", "status", "ready", "revision", "source_hash",
-                "gaps", "reviews", "projection_chars", "user_revision_note", "baseline_policy", "current_diff",
+                "gaps", "reviews", "review_policy", "coverage_policy", "coverage_report", "warnings", "review_notices",
+                "projection_chars", "user_revision_note", "baseline_policy", "current_diff",
                 "rollback_token", "rollback_of", "legacy_choices")},
             "session_epoch": plan["epoch"], "diff": diff}
 
@@ -571,7 +639,7 @@ def apply(store, cfg, payload):
         raise ValueError("候选操作已结束或人格后来发生变化，不能重放；请查看更新记录")
     _binding(store, payload.get("revision"), payload.get("session_epoch"))
     if plan.get("preparation_policy") != PREPARATION_POLICY:
-        raise ValueError("此候选使用旧迁移保护规则，请重新准备；当前人格未改变")
+        raise ValueError("此候选使用旧迁移保护或核对策略，请重新准备；当前人格未改变")
     if (plan.get("status") != "candidate_inactive" or not plan.get("ready")
             or plan["revision"] != payload["revision"]
             or plan["before_version"] != store.meta_get("persona_version")

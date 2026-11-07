@@ -195,9 +195,11 @@ class ChatService:
                     if package:
                         display_md = persona_growth.replace_bodies(display_md, expression.editor_sections(package),
                                                                   allowed=persona_growth.EXPRESSION)
+                    from .persona_context import expression_coverage_view
                     expression_view = {"revision": persona_growth.digest(md),
                         "session_epoch": self.store.meta_get("session_epoch"),
                         "format": "expression-v2" if package else "v1",
+                        **expression_coverage_view(package),
                         "coverage_status": ("用户修订后源文关联待核对" if package and package.get("reviews", {}).get("fidelity") == "invalidated_by_user" else
                                             "已完成结构核对；模型审议不代表真人效果通过") if package else "未完成 v2 覆盖核对",
                         "pending_associations": [str(item.get("id") or item.get("section") or item.get("scenario") or "关联")
@@ -266,11 +268,14 @@ class ChatService:
     def _history_source_fields_locked(self, turn_id) -> dict:
         discussion = self.store.discussion_status(turn_id, scope="gui")
         report = self.store.conn.execute(
-            "SELECT task_id,attempt_id,outcome,kind FROM worker_reports "
-            "WHERE turn_id=? AND epoch=? AND report_state='delivered'",
+            "SELECT r.task_id,r.attempt_id,r.outcome,r.kind,t.bridge_instance FROM worker_reports r "
+            "LEFT JOIN worker_tasks t ON t.task_id=r.task_id AND t.epoch=r.epoch "
+            "WHERE r.turn_id=? AND r.epoch=? AND r.report_state='delivered'",
             (turn_id, self._channels.epoch)).fetchone()
         report_fields = {"worker_report": {"task_id": report["task_id"], "attempt_id": report["attempt_id"],
-                                            "state": report["outcome"], "kind": report["kind"]}} if report else {}
+                                            "state": report["outcome"], "kind": report["kind"],
+                                            "collaborator": "claude-agent" if report["bridge_instance"] == "local:claude-agent"
+                                            else "dsh-agent"}} if report else {}
         report_fields['worker_target'] = self._history_worker_target_locked(turn_id)
         worker = self.store.worker_turn_status(turn_id, scope="gui")
         if worker is not None:
@@ -430,10 +435,26 @@ class ChatService:
 
     def collaborators(self, payload=None) -> dict:
         """Local GUI registration/policy; never grants channel credentials access."""
+        if payload is None:
+            from .worker_api import read
+            return read(self, self._workers.collaborators)
         return self._workers.collaborators(payload)
+
+    def worker_catalog(self) -> dict:
+        """Static tool entries: does not read Store or attempt connections."""
+        from .worker_api import catalog
+        return catalog()
+
+    def worker_api(self, worker, action, payload=None, *, read_only=False) -> dict:
+        """Worker-scoped public controls and bounded read operations."""
+        from .worker_api import access
+        return access(self, worker, action, payload, read_only=read_only)
 
     def worker_tasks(self, action: str = "list", payload=None) -> dict:
         """Persistent, GUI-scoped worker records; reads never execute an agent."""
+        if action in ('list', 'detail', 'events'):
+            from .worker_api import read
+            return read(self, self._workers.tasks, action, payload)
         return self._workers.tasks(action, payload)
 
     def worker_task_settings(self, payload) -> dict:
@@ -442,10 +463,16 @@ class ChatService:
 
     def claude_policy(self, payload=None) -> dict:
         """Public independent local-worker policy, no addon database access."""
+        if payload is None:
+            from .worker_api import read
+            return read(self, self._workers.claude_policy)
         return self._workers.claude_policy(payload)
 
     def worker_permissions(self, action: str = "list", payload=None) -> dict:
         """Host-owned permission protocol; GUI authority remains unchanged."""
+        if action == 'list':
+            from .worker_api import read
+            return read(self, self._workers.permissions, action, payload)
         return self._workers.permissions(action, payload)
 
     def worker_inputs(self, payload=None) -> dict:
@@ -522,31 +549,62 @@ class ChatService:
                 self._channels.set_ready(persona.persona_md() is not None)
         return self.state()
 
-    def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False) -> dict:
+    def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False,
+                        *, resume_op_id: str | None = None) -> dict:
+        def installation_result():
+            # Both first completion and read-only replay expose the same
+            # installed coverage, captured while the operation lock is held.
+            result = self.state()
+            try:
+                from .persona_context import parse_snapshot, expression_coverage_view
+                installed = parse_snapshot(persona.persona_md() or "")
+                coverage_view = expression_coverage_view(installed.get("expression_package"))
+                if coverage_view:
+                    result["expression_coverage"] = coverage_view
+            except Exception:
+                # Display metadata must not turn a committed installation into
+                # an apparent failure or trigger another paid import.
+                pass
+            return result
+
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                if resume_op_id is not None:
+                    from .persona_transaction import validate_op_id
+                    validate_op_id(resume_op_id)
+                    if "## 底色" in md_text:
+                        raise ValueError("直装人格没有可续跑的模型准备阶段")
+                    persona.recover_imports(self.store)
+                    if persona.resumed_import_committed(self.store, md_text, source, reset, resume_op_id):
+                        # Completed duplicate requests are read-only: in
+                        # particular reset must not archive a second time.
+                        self._channels.set_ready(persona.persona_md() is not None)
+                        return installation_result()
             if reset:
                 self._workers.drain()
                 self._workers.join_worker_reports()
             with self._lock:
-                # P0 §5.3：reset 时先完成导入准备（外部卡跑完整管线），成功后才归档
-                # 旧会话——准备失败不清空旧数据。Alice 格式直接安装无需准备段。
+                # Both install modes share the same checkpointed external-card
+                # preparation. Reset archives only after every stage succeeds.
                 plan = None
-                if reset and "## 底色" not in md_text:
-                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False, store=self.store)
+                archived = None
+                if "## 底色" not in md_text:
+                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False,
+                                                  store=self.store, resume_op_id=resume_op_id, reset=reset)
                 if reset:
                     if plan is None:
                         plan = persona.prepare_direct_install(self.store, self.cfg, md_text, source)
                     archived = self._archive_locked(plan=plan)
                 if plan is not None:
-                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived, archived=True)
-                    persona_reset.complete()
+                    persona.commit_import_plan(self.store, self.cfg, plan, archived_from=archived, archived=reset)
+                    if reset:
+                        persona_reset.complete()
                 else:
                     persona.install_persona(self.store, self.cfg, md_text, source=source,
                                             client=self.client)
                 self._channels.set_ready(persona.persona_md() is not None)
-        return self.state()
+                return installation_result()
 
     def reset_session(self) -> dict:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
@@ -613,7 +671,8 @@ class ChatService:
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
         if plan is not None and (plan["epoch"] != self.store.meta_get("session_epoch")
-                                 or plan["current_md"] != persona.persona_md()):
+                                 or plan["current_md"] != persona.persona_md()
+                                 or "before_version" in plan and plan["before_version"] != self.store.meta_get("persona_version")):
             raise ValueError("人格或会话在准备后已变化；未归档旧版")
         self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
         self._channels.set_ready(False)

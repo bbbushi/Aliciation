@@ -50,13 +50,13 @@ def _text(value):
 
 
 def normalize_worker_target(value):
-    """A GUI routing identity, never a task body, permission or DSH session ID."""
+    """A GUI routing identity, never a task body, permission or provider session ID."""
     if value is None:
         return None
-    if (not isinstance(value, dict) or set(value) != {'collaborator', 'task_id'}
-            or value.get('collaborator') != 'dsh-agent'):
+    if (not isinstance(value, dict) or set(value) not in ({'task_id'}, {'collaborator', 'task_id'})
+            or value.get('collaborator', 'dsh-agent') not in ('dsh-agent', 'claude-agent')):
         raise _bad('协作引用目标无效')
-    return {'collaborator': 'dsh-agent', 'task_id': _id(value.get('task_id'))}
+    return {'collaborator': value.get('collaborator', 'dsh-agent'), 'task_id': _id(value.get('task_id'))}
 
 
 SCHEMA = """

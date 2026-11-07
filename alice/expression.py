@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import re
+from collections import deque
 from dataclasses import asdict, is_dataclass
 
 FORMAT = "expression-v2"
@@ -154,16 +155,49 @@ def _ids(value, field, available=None):
         raise ValueError("表达引用不存在：" + field)
 
 
+class PurposeReferenceError(ValueError):
+    """Well-formed entries cannot retain their dependencies in every purpose."""
+
+
+class CoverageScenarioError(ValueError):
+    """Coverage references require exact scenario keys, never guessed aliases."""
+
+    def __init__(self, issues: list[dict]):
+        self.issues = copy.deepcopy(issues)
+        details = [
+            f"样本 {issue['example_id']}：coverage.scenario={issue['coverage_scenario']!r}，"
+            f"期望 examples.scenario={issue['expected']!r}，实际={issue['example_scenario']!r}"
+            for issue in self.issues
+        ]
+        super().__init__("覆盖样本与登记场景不一致（分类名须完全相等）：" + "；".join(details))
+
+
+def _validate_coverage_scenarios(coverage, by_id, *, covered_only=False):
+    """Collect every mismatch after callers validate row types and references."""
+    issues = []
+    for row in coverage:
+        if covered_only and row["status"] != "covered":
+            continue
+        for identity in row["example_ids"]:
+            actual = by_id[identity]["scenario"]
+            if actual != row["scenario"]:
+                issues.append({"coverage_scenario": row["scenario"], "example_id": identity,
+                               "example_scenario": actual, "expected": row["scenario"]})
+    if issues:
+        raise CoverageScenarioError(issues)
+
+
 def validate_package(package: dict, *, registry=None, limits=None, activation=False) -> list[str]:
     """Structural checks are not semantic certification. Return visible gaps."""
     if not isinstance(package, dict) or package.get("format") != FORMAT:
         raise ValueError("未知或损坏的表达格式，不能作为 v1 运行")
     allowed = {"format", "source_hash", "source_ids", "limits", "destinations", "coverage", "required_scenarios",
                "gaps", "reviews", "review_digest", "replacement_count", "user_overrides", "user_revisions",
-               "source_units", "pending_associations", *GROUPS}
+               "source_units", "pending_associations", "coverage_contract", "coverage_report", "warnings", "review_notices", *GROUPS}
     if set(package) - allowed:
         raise ValueError("expression-v2 包含未知字段")
     cap = limits_for(limits or package.get("limits"))
+    partial_coverage = "coverage_contract" in package
     if len(json.dumps(package, ensure_ascii=False)) > cap["max_metadata_chars"]:
         raise ValueError("表达元数据超过资源上限")
     if not isinstance(package.get("source_hash"), str) or not _HASH.fullmatch(package["source_hash"]):
@@ -181,7 +215,7 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
     all_entries = entries(package)
     if not all_entries or len(all_entries) > cap["max_items"]:
         raise ValueError("表达条目为空或超过资源上限")
-    if not any(package[group] for group in GROUPS[:4]):
+    if not partial_coverage and not any(package[group] for group in GROUPS[:4]):
         raise ValueError("表达包缺少完整取向、边界或语感")
     all_ids = [x.get("id") for x in all_entries]
     _ids(all_ids, "entry_ids")
@@ -207,7 +241,9 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
             if item.get("audience") not in ("general", "private"):
                 raise ValueError("表达受众缺失")
             purposes = item.get("purposes")
-            if not isinstance(purposes, list) or not purposes or len(set(purposes)) != len(purposes) or set(purposes) - {"chat", "qq", "worker_summary"}:
+            if (not isinstance(purposes, list) or not purposes
+                    or any(not isinstance(value, str) for value in purposes)
+                    or len(set(purposes)) != len(purposes) or set(purposes) - {"chat", "qq", "worker_summary"}):
                 raise ValueError("表达用途无效")
             if "chat" not in purposes or (item["audience"] != "general" and set(purposes) != {"chat"}):
                 raise ValueError("私有表达不得共享至 QQ 或 worker")
@@ -223,10 +259,9 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
             role = item.get("anchor_role", "none")
             if role != "none" and group not in allowed_roles[role]:
                 raise ValueError("表达锚角色与条目类型不一致")
-            if group == "examples" and not item["links"] and item["origin"] != "user_config":
+            if (not partial_coverage and group == "examples" and not item["links"]
+                    and item["origin"] != "user_config"):
                 raise ValueError("样本缺少适用规则关联")
-            if any(not set(purposes) <= set(by_id[ref]["purposes"]) for ref in item["links"]):
-                raise ValueError("表达跨用途引用不可完整投影：" + item["id"])
             link_count += len(item["links"]) + len(item["source_ids"])
     destinations = package.get("destinations")
     if not isinstance(destinations, list) or any(not isinstance(d, dict) for d in destinations):
@@ -242,11 +277,11 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
         if type(d.get("required")) is not bool:
             raise ValueError("源单元必要性缺失")
         if d["status"] in ("retained", "adapted", "merged") and not d["targets"]:
-            raise ValueError("保留源单元缺少目标")
+            raise ValueError("保留源单元缺少目标：" + d["source_id"] + "（没有条目的 source_ids 引用该来源；去向理由不代替实际引用）")
         for target in d["targets"]:
             if d["source_id"] not in by_id[target]["source_ids"] and d["status"] != "user_revised":
                 raise ValueError("源单元双向映射不一致")
-        if d["status"] == "unresolved" or (d["required"] and d["status"] in ("background", "excluded")):
+        if not partial_coverage and (d["status"] == "unresolved" or (d["required"] and d["status"] in ("background", "excluded"))):
             gaps.append("源单元未覆盖：" + d["source_id"])
         link_count += len(d["targets"])
     destination_by_id = {d["source_id"]: d for d in destinations}
@@ -263,9 +298,13 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
         raise ValueError("场景覆盖记录重复或无效")
     example_ids = {e["id"] for e in package["examples"]}
     required_scenarios = package.get("required_scenarios")
-    if not isinstance(required_scenarios, list) or any(not isinstance(s, str) for s in required_scenarios) or len(set(required_scenarios)) != len(required_scenarios):
+    if (not isinstance(required_scenarios, list)
+            or any(not isinstance(s, str) or not s.strip() or len(s) > cap["max_item_chars"] for s in required_scenarios)
+            or len(set(required_scenarios)) != len(required_scenarios)):
         raise ValueError("必需场景声明缺失")
     if not set(required_scenarios) <= set(scenarios):
+        if partial_coverage:
+            raise ValueError("已声明场景缺少覆盖登记；应在结构规范化时登记待确认状态")
         gaps.append("必需场景未登记")
     if not set(SCENARIOS) <= set(scenarios):
         raise ValueError("五类基础场景须逐项登记覆盖或不适用依据")
@@ -274,27 +313,95 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
         _ids(c.get("example_ids"), "coverage.example_ids", example_ids)
         if c.get("status") not in ("covered", "missing", "unresolved", "not_applicable"):
             raise ValueError("场景覆盖状态无效")
-        if c["status"] == "covered" and (not c["example_ids"] or any(by_id[x]["scenario"] != c["scenario"] for x in c["example_ids"])):
+    _validate_coverage_scenarios(coverage, by_id, covered_only=not partial_coverage)
+    for c in coverage:
+        if c["status"] == "covered" and not c["example_ids"] and not (partial_coverage and c.get("rule_ids")):
             raise ValueError("已覆盖场景缺少匹配样本")
-        if c["status"] == "not_applicable" and (c.get("basis") not in ("source_absent", "user_scope") or c["scenario"] in required_scenarios):
+        if c["status"] == "not_applicable" and (c.get("basis") not in ("source_absent", "user_scope") or (not partial_coverage and c["scenario"] in required_scenarios)):
             raise ValueError("不得用不适用隐藏必需或审查删空场景")
-        if c["status"] in ("missing", "unresolved") and c["scenario"] in required_scenarios:
+        if not partial_coverage and c["status"] in ("missing", "unresolved") and c["scenario"] in required_scenarios:
             gaps.append("必需场景缺口：" + c["scenario"])
+    if partial_coverage:
+        from .expression_coverage import validate as validate_coverage
+        validate_coverage(package)
+    elif "coverage_report" in package or "warnings" in package:
+        raise ValueError("覆盖提示缺少同版原稿覆盖合同")
+    if "review_notices" in package:
+        notices = package["review_notices"]
+        if (not isinstance(notices, list) or len(notices) > cap["max_items"] * 16
+                or len(json.dumps(notices, ensure_ascii=False)) > cap["max_review_chars"]):
+            raise ValueError("表达审阅提示无效或超限")
+        for notice in notices:
+            _string(notice, "表达审阅提示", cap["max_review_chars"])
     if registry is not None:
         gaps.extend("源结构待明确：" + u["source_id"] for u in registry["units"] if u["unresolved_structure"])
     gaps.extend(package.get("gaps", []))
     _validate_revisions(package.get("user_revisions"), cap)
     if any(record["item_id"] in known for record in (package.get("user_revisions") or {}).get("cancelled_additions", [])):
         raise ValueError("已撤销新增条目仍出现在表达成品中")
+    # Check dependencies only after every referenced entry and the full ledger
+    # have been validated. Preparation may repair this one class of conflict;
+    # malformed fields, provenance, or coverage must never enter that path.
+    for item in all_entries:
+        for ref in item["links"]:
+            missing = [purpose for purpose in item["purposes"] if purpose not in by_id[ref]["purposes"]]
+            if missing:
+                raise PurposeReferenceError("表达跨用途引用不可完整投影：" + item["id"] + " → " + ref
+                                            + "（被引用条目不支持：" + ", ".join(missing) + "）")
     if activation:
         if gaps:
             raise ValueError("表达未覆盖，候选未激活：" + "；".join(dict.fromkeys(gaps)))
         reviews = package.get("reviews", {})
-        if reviews.get("fact") != "passed" or reviews.get("fidelity") != "passed":
+        fidelity_states = {"passed", "partial"} if partial_coverage else {"passed"}
+        if reviews.get("fact") != "passed" or reviews.get("fidelity") not in fidelity_states:
             raise ValueError("独立成品事实/表达保真审议未完成")
+        if partial_coverage and (not isinstance(package.get("coverage_report"), dict)
+                                 or package["coverage_report"].get("reviewed") is not True
+                                 or package.get("warnings") != package["coverage_report"].get("warnings")):
+            raise ValueError("覆盖结果缺少同版已审查报告与提示")
         if package.get("review_digest") != review_digest(package):
             raise ValueError("表达内容与审议版本不一致")
     return list(dict.fromkeys(gaps))
+
+
+def restrict_prepared_purposes(package: dict, *, registry=None, limits=None) -> tuple[dict, list[dict]]:
+    """Narrow only a newly generated draft; never repair runtime/user packages.
+
+    Keep raw receipts untouched. All other checks remain strict, and the caller
+    must merge user revisions and independently review the resulting candidate.
+    """
+    try:
+        validate_package(package, registry=registry, limits=limits)
+    except PurposeReferenceError:
+        pass
+    else:
+        return copy.deepcopy(package), []
+    result = copy.deepcopy(package)
+    by_id = {item["id"]: item for item in entries(result)}
+    before = {key: list(item["purposes"]) for key, item in by_id.items()}
+    dependents = {key: [] for key in by_id}
+    for item in by_id.values():
+        for ref in item["links"]:
+            dependents[ref].append(item["id"])
+    # Propagate removals to a fixed point, including cycles and indirect links.
+    # Each item can lose at most qq and worker_summary; chat is mandatory in
+    # every validated entry, so no content is lost from the GUI projection.
+    pending = deque(by_id)
+    while pending:
+        ref = pending.popleft()
+        for key in dependents[ref]:
+            item = by_id[key]
+            narrowed = [purpose for purpose in item["purposes"] if purpose in by_id[ref]["purposes"]]
+            if narrowed != item["purposes"]:
+                item["purposes"] = narrowed
+                pending.append(key)
+    changes = [{"id": key, "before": before[key], "after": list(item["purposes"]),
+                "dependencies": [{"id": ref, "purposes": list(by_id[ref]["purposes"])}
+                                 for ref in item["links"]
+                                 if not set(before[key]) <= set(by_id[ref]["purposes"])]}
+               for key, item in by_id.items() if before[key] != item["purposes"]]
+    validate_package(result, registry=registry, limits=limits)
+    return result, changes
 
 
 def review_digest(package: dict) -> str:
@@ -393,13 +500,49 @@ def project(package: dict, purpose="chat", *, budget=None, metadata=None, cfg=No
     if budget is not None:
         limit = min(limit, budget)
     chosen = [(g, e) for g in GROUPS for e in package[g] if purpose in e["purposes"]]
-    text = BOUNDARY + "\n\n" + "\n\n".join(entry_text(e, g) for g, e in chosen) if chosen else ""
+    # Runtime keeps every value and original ID, but prints each dependency as
+    # a local number instead of repeating long machine IDs throughout the text.
+    # Editor/encoded bodies and anchors retain their original representation.
+    numbers = {item["id"]: str(index + 1) for index, item in enumerate(entries(package))}
+    titles = dict(zip(GROUPS, ("取向", "边界", "语感", "张力", "反应", "样本")))
+    groups = []
+    for group in GROUPS:
+        rendered = []
+        for kind, item in chosen:
+            if kind != group:
+                continue
+            parts = [f"{numbers[item['id']]}. {item['id']}", "范围：" + item["scope"].replace("\n", "\n  │ ")]
+            for key in _FIELDS[group]:
+                label = "·" if key == "text" else _LABELS[key] + "："
+                parts.append(label + item[key].replace("\n", "\n  │ "))
+            if item["links"]:
+                parts.append("依赖：" + ", ".join(numbers[ref] for ref in item["links"]))
+            if group == "examples":
+                parts.append("来源类型：" + item["origin"])
+            rendered.append("\n".join(parts))
+        if rendered:
+            groups.append("【" + titles[group] + "】\n" + "\n\n".join(rendered))
+    compact = BOUNDARY + "\n\n" + "\n\n".join(groups) if chosen else ""
+    legacy = BOUNDARY + "\n\n" + "\n\n".join(entry_text(item, group) for group, item in chosen) if chosen else ""
+    # Short IDs and sparse purposes can make global numbers longer. Chinese
+    # headings can also cost more tokens despite fewer characters. Compare the
+    # unrounded context.estimate_tokens weight, both plain and JSON-escaped, so
+    # combining this block with other context cannot introduce a rounding bump.
+    def weight(value):
+        cjk = sum(1 for ch in value if "\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u303f")
+        return len(value) + 3 * cjk
+    compact_fits_better = (len(compact) < len(legacy) and weight(compact) <= weight(legacy)
+                          and weight(json.dumps(compact, ensure_ascii=False))
+                          <= weight(json.dumps(legacy, ensure_ascii=False)))
+    layout = "compact" if compact_fits_better else "legacy"
+    text = compact if layout == "compact" else legacy
     if len(text) > limit:
         raise ValueError("完整表达包超过 " + purpose + " 预算；未前缀裁剪")
     if metadata is not None:
         from .context import estimate_tokens
         metadata.update({"format": FORMAT, "source_hash": package["source_hash"],
-                         "policy_version": 5, "projection_strategy": "complete_per_purpose",
+                         "policy_version": 6, "projection_strategy": "complete_per_purpose",
+                         "projection_layout": layout,
                          "purpose": purpose, "entry_ids": [e["id"] for _, e in chosen],
                          "sample_ids": [e["id"] for g, e in chosen if g == "examples"],
                          "chars": len(text), "estimated_tokens": estimate_tokens(text),
@@ -703,22 +846,32 @@ def _invalidate(result, changed, removed, pending, *, protected=False):
             else:
                 d.update(status="user_revised", reason="实际用户修订或其依赖已失效；未覆盖无关新源条目", targets=kept, required=False)
     example_ids = {e["id"] for e in result["examples"]}
+    rule_ids = {e["id"] for group in GROUPS if group != "examples" for e in result[group]}
     affected_scenarios = set()
     for c in result["coverage"]:
-        if set(c["example_ids"]) & invalidated:
+        if set(c["example_ids"]) & invalidated or set(c.get("rule_ids", [])) & invalidated:
             c["example_ids"] = [x for x in c["example_ids"] if x in example_ids and x not in invalidated]
-            if not c["example_ids"]:
+            if "coverage_contract" in result:
+                c["rule_ids"] = [x for x in c.get("rule_ids", []) if x in rule_ids and x not in invalidated]
+            if not c["example_ids"] and not c.get("rule_ids"):
                 c.update(status="unresolved", reason="修订后场景/样本关联失效，待确认")
                 affected_scenarios.add(c["scenario"])
                 pending.append({"scenario": c["scenario"], "reason": "样本关联已失效"})
-    if not protected:
+    if not protected and "coverage_contract" not in result:
         result["required_scenarios"] = [x for x in result["required_scenarios"] if x not in affected_scenarios]
 
 
 def _finish_revision(result, state, pending):
     result.pop("user_overrides", None)
+    result.pop("review_notices", None)  # These opinions were bound to the old reviewed text.
     result.update(user_revisions=state, pending_associations=pending,
                   reviews={"fact": "user_config", "fidelity": "invalidated_by_user"}, gaps=[])
+    if "coverage_contract" in result:
+        from .expression_coverage import summary as coverage_summary
+        result.pop("coverage_report", None)
+        result.pop("warnings", None)
+        report = coverage_summary(result)
+        result.update(coverage_report=report, warnings=report["warnings"])
     result["review_digest"] = review_digest(result)
     validate_package(result)
     project(result)

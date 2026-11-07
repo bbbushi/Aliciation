@@ -1,6 +1,7 @@
 """Explicit GUI task organization, separate from execution grants and budgets."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import time
 
@@ -26,7 +27,7 @@ class WorkerManagementMixin:
                                  # NEXT has no reviewed public session-deletion API.
                                  'delete': False}}
 
-    def management_settings(self, payload):
+    def management_settings(self, payload, *, worker=None):
         keys = {'session_epoch', 'request_id', 'revision', 'sync_archive', 'sync_delete'}
         if (not isinstance(payload, dict) or set(payload) != keys
                 or type(payload['sync_archive']) is not bool or type(payload['sync_delete']) is not bool):
@@ -36,7 +37,7 @@ class WorkerManagementMixin:
             epoch = self._epoch(payload)
             old = self.ledger.replay(epoch, payload['request_id'], receipt_payload)
             if old is not None:
-                return self.status_locked()
+                return self._status_response_locked(worker)
             if self.closing or self.paused:
                 raise ChannelError(409, 'draining', '正在停止协作任务，请稍后再修改整理设置')
             current = self.management_settings_locked()
@@ -54,13 +55,13 @@ class WorkerManagementMixin:
                     self.ledger.conn.execute('UPDATE worker_management_settings SET revision=revision+1,'
                                              'sync_archive=?,sync_delete=? WHERE id=1',
                                              (int(payload['sync_archive']), int(payload['sync_delete'])))
-                result = self.status_locked()
+                result = self._status_response_locked(worker)
                 self.ledger.receipt(epoch, payload['request_id'], receipt_payload, result)
             return result
 
     def _management_ready_locked(self, task):
         if task['state'] not in MANAGEABLE or not task['agent_idle']:
-            raise ChannelError(409, 'task_busy', '请先停止任务并确认 DSH 会话已空闲；未知状态不能归档或删除')
+            raise ChannelError(409, 'task_busy', '请先停止任务并确认协作者已空闲；未知状态不能归档或删除')
         if self.ledger.conn.execute("SELECT 1 FROM worker_attempts WHERE task_id=? AND state IN "
                 "('queued','starting','running','waiting_permission','collecting','stopping') LIMIT 1", (task['task_id'],)).fetchone():
             raise ChannelError(409, 'task_busy', '此任务仍有未结束的执行记录')
@@ -152,21 +153,26 @@ class WorkerManagementMixin:
             self.ledger.conn.execute('INSERT INTO worker_requests(epoch,request_id,digest,result) VALUES(?,?,?,?)',
                                      (row['epoch'], row['request_id'], row['digest'], encoded))
 
-    def manage_task(self, action, payload):
+    def manage_task(self, action, payload, *, worker=None):
         keys = {'session_epoch', 'task_id', 'request_id', 'revision', 'settings_revision'}
         if not isinstance(payload, dict) or set(payload) != keys or action not in {'archive', 'restore', 'delete'}:
             raise ChannelError(400, 'invalid_request', '任务整理参数无效')
         identity(payload['request_id'])
         receipt_payload = {'action': action, **payload}
-        with self.control_lock:
+        # Resolve immutable worker ownership before choosing the control lock.
+        # Epoch and task revision are rechecked below after any lock wait/reset.
+        with self.service._lock:
+            task = self._task_scope_locked(self.ledger.task(payload['task_id'], self._epoch(payload)), worker)
+            control = self.control_lock if self._task_worker(task) == 'dsh-agent' else nullcontext()
+        with control:
             with self.service._lock:
                 epoch = self._epoch(payload)
+                task = self._task_scope_locked(self.ledger.task(payload['task_id'], epoch), worker)
                 old = self.ledger.replay(epoch, payload['request_id'], receipt_payload)
                 if old is not None:
                     return old
                 if self.closing or self.paused:
                     raise ChannelError(409, 'draining', '正在停止协作任务，请稍后再整理')
-                task = self.ledger.task(payload['task_id'], epoch)
                 operation = self.ledger.conn.execute("SELECT * FROM worker_management_operations "
                     "WHERE task_id=? AND state='pending'", (task['task_id'],)).fetchone()
                 reserved = self.ledger.conn.execute('SELECT state FROM worker_management_operations '
@@ -176,10 +182,11 @@ class WorkerManagementMixin:
                     # request. Only a new explicit GUI action gets a new ID.
                     return self._management_result_locked(task['task_id'], epoch, completed=False,
                                                           error='management_pending')
-                settings = self.management_settings_locked()
+                is_dsh = self._task_worker(task) == 'dsh-agent'
+                settings = self.management_settings_locked() if is_dsh else None
                 if type(payload['revision']) is not int or payload['revision'] != task['version']:
                     raise ChannelError(409, 'task_changed', '任务版本已变化，请重新打开详情')
-                if (type(payload['settings_revision']) is not int
+                if is_dsh and (type(payload['settings_revision']) is not int
                         or payload['settings_revision'] != settings['revision']):
                     raise ChannelError(409, 'management_settings_changed', '任务整理设置已变化，请刷新后重试')
                 self._management_ready_locked(task)
@@ -189,7 +196,9 @@ class WorkerManagementMixin:
                     raise ChannelError(409, 'management_pending', '任务整理记录不完整，不能执行冲突操作')
                 if operation is not None and operation['action'] != action:
                     raise ChannelError(409, 'management_pending', '请先确认上一次整理操作，不能切换操作')
-                sync = operation is not None or settings['sync_delete' if action == 'delete' else 'sync_archive']
+                # Only DSH owns a remote-session management contract. Claude's
+                # local records must never depend on DSH pairing or preferences.
+                sync = is_dsh and (operation is not None or settings['sync_delete' if action == 'delete' else 'sync_archive'])
                 if not sync:
                     with self.service.store.source_transaction():
                         self._apply_management_locked(task, action, sync=False)
@@ -248,7 +257,7 @@ class WorkerManagementMixin:
                 self.service._channels.check_epoch(epoch)
                 if self.closing or self.paused or generation != self.generation or bridge is not self.bridge:
                     raise ChannelError(409, 'session_changed', '会话已变化；整理结果待重新确认')
-                task = self.ledger.task(payload['task_id'], epoch)
+                task = self._task_scope_locked(self.ledger.task(payload['task_id'], epoch), worker)
                 if task['management_pending'] != action:
                     raise ChannelError(409, 'management_pending', '整理记录已变化，未移动 Alice 任务')
                 if error is not None and (error.uncertain or retrying):
