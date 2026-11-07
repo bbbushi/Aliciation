@@ -1918,6 +1918,7 @@ function handleEvent(ev, node, userNode, requestId) {
     markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui",
       ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
     markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
+    noteInspectorLink(node);  // request_id 此时才确定；新回复的入口在完成时补挂（元数据行不会自行重渲染）
     confirmComposerRequest(id);
     setChatNotice("");
     scrollBottom();
