@@ -537,6 +537,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.persona_view())
             elif path == "/addons/context-inspector" or path.startswith("/addons/context-inspector/"):
                 self._addon_static(path)
+            elif path in ("/api/plugins/context-inspector/status", "/api/plugins/context-inspector/requests",
+                          "/api/plugins/context-inspector/request", "/api/plugins/context-inspector/body"):
+                self._plugin_get(path)
             elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
