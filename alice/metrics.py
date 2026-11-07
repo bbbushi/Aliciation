@@ -68,6 +68,8 @@ def flush_calls(store):
     """Called only under the owner's Store lock; never commit a business transaction."""
     if store.conn.in_transaction:
         return
+    from .context_observation import flush as flush_observation
+    flush_observation(store)  # 观测事件走同一安全落盘边界（队列缺失时其内部自守）
     with store._llm_event_lock:
         pending = list(store._llm_events)
         if not pending:

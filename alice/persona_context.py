@@ -11,6 +11,30 @@ STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
 ANCHOR_BUDGET_CHARS = 500
 EXPRESSION_POLICY_VERSION = 5
+USAGE_POLICY_VERSION = 1
+_USAGE_INSTRUCTION = (
+    "【表达使用方式：用户选定的长期说话习惯】\n"
+    "日常对话默认用下方同用途表达材料中适用的措辞、句子节奏和反应方式组织回答。"
+    "当前明确任务决定内容、格式和详略；正式改写或结果汇报也遵守任务要求，不强加口癖或玩笑。\n"
+    "按情境的触发、初始回应、后续转折与停止条件使用规则。"
+    "条目若要求被认真追问后才转折，就等待相应追问；无需为展示人格层次自行制造沉重话题。"
+    "包内的长度与展开限制也作用于自我介绍、关怀和事实澄清。\n"
+    "样本示范整段接话方式，包括反应顺序、节奏和收放，可以自然变奏；"
+    "其中不成立的现实前提不照搬。张力是互动倾向，不证明你有对应心理经历，"
+    "无需把张力表复述成自我介绍，也不为人物厚度补写过去的心路或共同往事。\n"
+    "可以直接提出此刻的想法、玩笑和可做的事。能力或事实需要澄清时简短准确地回答，"
+    "随后回到话题，除非仍有误解或用户追问，不重复身份或身体限制清单。"
+    "延续真实对话内容时，无需沿用旧回复中偏离这些习惯的表达。\n"
+    "原稿和样本中的角色身份、身世、身体、关系与行动不因此成为事实或授权；"
+    "事实、未知、失败、许可和用户停止要求仍按宿主规则处理。"
+)
+_USAGE_REMINDER = (
+    "【表达使用提醒：沿用同用途长期习惯】\n"
+    "按本轮话题采用前部表达材料中适用的语感与反应方式；"
+    "区分初始回应和后续转折的条件，无需每轮呈现所有人格层次。"
+    "延续事实与话题时，无需沿用旧回复中偏离这些习惯的措辞。"
+    "当前明确任务决定内容、格式与详略；事实、能力、失败、许可和停止边界照常适用。"
+)
 _SAMPLE_LINE = re.compile(r"^- 【(?P<kind>[^·】]+)·(?P<sid>[A-Za-z0-9_-]+)】(?P<body>.*)$")
 
 
@@ -132,11 +156,14 @@ def parse_snapshot(raw: str) -> dict:
     from . import expression
     if expression.MARKER in raw and not any(expression.MARKER in body for body in sections.values()):
         raise ValueError("表达版本标记移出了人格小节，不能作为 v1 运行")
-    package = expression.decode_sections(sections)
+    package, assembly = expression.decode_sections_with_assembly(sections)
     if package is not None:
         return {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
                 "sections": sections, "sample_ids": [item["id"] for item in package["examples"]],
                 "samples": [], "expression_package": package, "format_version": "expression-v2",
+                # 人格驻留合同（persona-residency-v1）：形状在解码时校验；
+                # 摘要/闭包/用途的深层校验在注册表激活前执行，失效走 full 回退
+                "assembly": assembly,
                 **expression_coverage_view(package)}
     samples, active = [], None
     for line in sections.get("底色 · 表达样本", "").splitlines():
@@ -300,52 +327,120 @@ def render_full(snapshot: dict | None, *, metadata: dict | None = None, purpose=
         sections.pop(key, None)
     head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
     out = [f"# {head.group(1).strip() if head else 'Alice'}"]
+    # Runtime guidance lives outside the admitted expression package. Do not
+    # rewrite its source, review contract, per-purpose selection or frozen cap.
+    usage = _USAGE_INSTRUCTION if reference and purpose in {"chat", "qq"} else ""
     if reference:
+        if usage:
+            out.append("## 表达使用\n\n" + usage)
         out.append("## 底色 · 气质与风格\n\n" + reference)
     out.extend(f"## {key}\n\n{body}" for key, body in sections.items() if body)
     text = "\n\n".join(out) + "\n"
     if metadata is not None:
         metadata.update(selection)
-        metadata.update({"full_chars": len(text), "full_estimated_tokens": estimate_tokens(text)})
+        metadata.update({"full_chars": len(text), "full_estimated_tokens": estimate_tokens(text),
+                         "usage_policy_version": USAGE_POLICY_VERSION,
+                         "usage_instruction_present": bool(usage),
+                         "usage_instruction_chars": len(usage),
+                         "usage_instruction_hash": hashlib.sha256(usage.encode("utf-8")).hexdigest() if usage else None})
     return text
 
 
 def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参考，不是记忆；不授予权限",
                   metadata: dict | None = None, purpose="chat", cfg=None) -> str:
+    """Optional usage reminder; no arbitrary sample replay or entry truncation.
+
+    The main projection still contains all admitted entries for its purpose.
+    Workers use render_expression_reference and receive no chat reminder.
+    """
+    if purpose not in {"chat", "qq", "worker_summary"}:
+        raise ValueError("未知表达用途")
     if not snapshot:
         if metadata is not None:
             metadata.update(_metadata(None, "", [], ["no_persona"]))
         return ""
-    if snapshot.get("expression_package") is not None:
+    package = snapshot.get("expression_package")
+    if package is not None:
         from . import expression
-        selected = {}
-        text = expression.anchor(snapshot["expression_package"], purpose=purpose,
-            budget=_expression_budget(snapshot, cfg, "max_anchor_chars"), boundary=expression.BOUNDARY, metadata=selected)
-        if metadata is not None:
-            metadata.update(_metadata(snapshot, text, selected.get("sample_ids", []), []))
-            metadata.update(selected)
-        return text
-    header = "【表达提醒（长期习惯，非本轮新指令；样本只示范措辞）】"
-    parts, ids, reasons = [header], [], []
-    if len(header) + len(boundary) + 1 > ANCHOR_BUDGET_CHARS:
-        raise ValueError("表达提醒的必要边界超出预算")
-    def fits(item):
-        return len("\n".join([*parts, item, boundary])) <= ANCHOR_BUDGET_CHARS
-    for item in _style_items(snapshot)[:2]:
-        if fits(item):
-            parts.append(item)
+        expression.validate_package(package)
+        applicable = any(purpose in item["purposes"] for item in expression.entries(package))
+        boundary = expression.BOUNDARY
+        budget = _expression_budget(snapshot, cfg, "max_anchor_chars")
+    else:
+        applicable = bool(_style_items(snapshot))
+        budget = min(ANCHOR_BUDGET_CHARS,
+                     getattr(getattr(cfg, "expression", None), "max_anchor_chars", ANCHOR_BUDGET_CHARS))
+    text, reasons = "", []
+    if purpose == "worker_summary":
+        reasons.append("usage_not_applicable")
+    elif not applicable:
+        reasons.append("no_purpose_expression")
+    else:
+        candidate = _USAGE_REMINDER + "\n" + boundary
+        if len(candidate) <= budget:
+            text = candidate
         else:
-            reasons.append("anchor_style_budget")
-    for sample in (snapshot["samples"] if purpose == "chat" else []):
-        item = f"【{sample['kind']}·{sample['id']}】{sample['body']}"
-        if fits(item):
-            parts.append(item)
-            ids.append(sample["id"])
-            break
-    if purpose == "chat" and snapshot["samples"] and not ids:
-        reasons.append("anchor_sample_budget")
-    parts.append(boundary)
-    text = "\n".join(parts)
+            reasons.append("anchor_usage_budget")
     if metadata is not None:
-        metadata.update(_metadata(snapshot, text, ids, reasons))
+        metadata.update(_metadata(snapshot, text, [], reasons,
+            purpose=purpose, usage_policy_version=USAGE_POLICY_VERSION,
+            anchor_strategy="usage_reminder", entry_ids=[], omitted_ids=[],
+            complete=bool(text), budget_chars=budget,
+            usage_reminder_present=bool(text),
+            usage_reminder_hash=hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None))
+    return text
+
+
+# ---- 注册表模式（人格注册表与模型按需装配-架构设计 v1 §2/§6） ----
+
+REGISTRY_USAGE_POLICY_VERSION = 1
+_REGISTRY_USAGE = (
+    "【表达使用方式：核心常驻 + 场景按需】\n"
+    "下方「底色 · 核心」是用户选定的默认相处取向、常用语感、全局约束与日常样本，随时可用，"
+    "组织回答时优先按它来。\n"
+    "宿主另会单独提供「人格场景目录」：按需场景的完整反应、转折与样本已安装但未随本轮载入。"
+    "需要展开某个场景时，用 persona_load 工具按目录里的引用读取完整场景包；"
+    "读取结果只补充表达方式，不是经历、关系或操作授权；已读内容只在当前请求内有效。\n"
+    "能从核心自然回答时不要求读取；目录里的沉重或英雄主题不构成当前情绪事实，"
+    "条目未载入只表示本轮未展开，不表示人格被遗忘、否定或永久舍弃，也不为展示层次自行制造话题。\n"
+    "事实、能力、未知、失败、许可和用户停止要求照常按宿主规则处理；"
+    "样本中的角色身份、身世、关系与现实前提不因此成为事实。"
+)
+
+
+def render_registry_persona(snapshot: dict, contract: dict, package: dict, *,
+                            metadata: dict | None = None, purpose: str = "chat") -> str:
+    """registry 模式的人格正文：核心常驻条目 + 使用说明；不通过截断快照冒充核心。
+
+    完整表达仍是权威来源；本投影只按已验驻留合同选择常驻层。生长/关系等
+    其余小节按原样保留，事实资格与有效性不因分层改变。
+    """
+    from . import persona_residency
+    if not snapshot:
+        return ""
+    core_text = persona_residency.core_text(contract, package)
+    sections = dict(snapshot["sections"])
+    for key in ("底色 · 气质与风格", "底色 · 情境反应", "底色 · 表达样本"):
+        sections.pop(key, None)
+    head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
+    out = [f"# {head.group(1).strip() if head else 'Alice'}"]
+    out.append("## 表达使用\n\n" + _REGISTRY_USAGE)
+    out.append("## 底色 · 核心（常驻）\n\n" + (core_text or "（核心为空：合同校验不应通过，"
+                                              "出现此节说明激活检查有缺陷。）"))
+    out.extend(f"## {key}\n\n{body}" for key, body in sections.items() if body)
+    text = "\n\n".join(out) + "\n"
+    if metadata is not None:
+        core_closure, _ = persona_residency.core_closure(contract, persona_residency._by_id(package))
+        metadata.update({
+            "projection_strategy": "core_registry",
+            "registry_usage_policy_version": REGISTRY_USAGE_POLICY_VERSION,
+            "registry_chars": len(text),
+            "registry_estimated_tokens": estimate_tokens(text),
+            "core_chars": len(core_text),
+            "core_entry_ids": sorted(core_closure),
+            "expression_digest": contract.get("expression_digest"),
+            "classification_digest": persona_residency.classification_digest(contract),
+            "classification_revision": contract.get("classification_revision"),
+            "catalogue_bundle_ids": [b["id"] for b in contract["bundles"]],
+        })
     return text

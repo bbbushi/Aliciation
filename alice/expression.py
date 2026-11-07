@@ -425,23 +425,36 @@ def editor_sections(package: dict) -> dict:
             for title, groups in zip(TITLES, SECTION_GROUPS)}
 
 
-def encode_sections(package: dict) -> dict:
+def encode_sections(package: dict, assembly: dict | None = None) -> dict:
     validate_package(package)
     bodies = editor_sections(package)
     # Full typed metadata exists only here, in the same authoritative Markdown.
     # A hash binds all visible bodies; independent JSON audits cannot affect runtime.
     envelope = {"package": package, "body_hashes": {k: digest(v) for k, v in bodies.items()}}
+    if assembly is not None:
+        # 人格驻留合同（persona-residency-v1）：结构+对当前 package 的完整校验在保存时执行；
+        # 无效合同拒绝保存，不让运行时靠回退兜底坏分类。
+        from . import persona_residency
+        contract = persona_residency.parse_contract(assembly)
+        if contract is None:
+            raise ValueError("驻留分类结构无效")
+        issues = persona_residency.validate_contract(contract, package)
+        if issues:
+            raise ValueError("驻留分类未通过校验：" + "；".join(i["code"] for i in issues))
+        envelope["assembly"] = contract
     data = base64.b64encode(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()).decode()
     bodies[TITLES[0]] = "<!-- alice-expression-v2:" + data + " -->\n\n" + bodies[TITLES[0]]
     return bodies
 
 
-def decode_sections(sections: dict) -> dict | None:
+def decode_sections_with_assembly(sections: dict) -> tuple[dict | None, dict | None]:
+    """解码并返回 (package, assembly)。assembly 为可选驻留合同（形状校验在此，
+    摘要/闭包/用途的深层校验在运行时激活前执行——失效走 full 回退而非拒绝安装）。"""
     markers = [(title, body) for title, body in sections.items() if MARKER in body]
     if not markers:
         if any(_has_unmarked_v2(title, body) for title, body in sections.items() if title in TITLES):
             raise ValueError("v2 表达正文缺少版本元数据，禁止回退 v1")
-        return None
+        return None, None
     if len(markers) != 1 or markers[0][0] != TITLES[0]:
         raise ValueError("表达版本标记位置无效")
     text = markers[0][1]
@@ -454,8 +467,14 @@ def decode_sections(sections: dict) -> dict | None:
         envelope = strict_json(base64.b64decode(match[1], validate=True).decode("utf-8"))
     except (ValueError, UnicodeError) as exc:
         raise ValueError("表达元数据不可解析") from exc
-    if not isinstance(envelope, dict) or set(envelope) != {"package", "body_hashes"}:
+    if not isinstance(envelope, dict) or set(envelope) not in (
+            {"package", "body_hashes"}, {"package", "body_hashes", "assembly"}):
         raise ValueError("表达元数据结构无效")
+    assembly = envelope.get("assembly")
+    if assembly is not None:
+        from . import persona_residency
+        if persona_residency.parse_contract(assembly) is None:
+            raise ValueError("驻留分类结构无效（形状）；请重新准备分层")
     package = envelope["package"]
     validate_package(package)
     bodies = {k: sections.get(k, "").strip() for k in TITLES}
@@ -467,7 +486,11 @@ def decode_sections(sections: dict) -> dict | None:
             raise ValueError("用户修订表达缺少同版修订记录")
     else:
         validate_package(package, activation=True)
-    return package
+    return package, assembly
+
+
+def decode_sections(sections: dict) -> dict | None:
+    return decode_sections_with_assembly(sections)[0]
 
 
 def _has_unmarked_v2(title, body):

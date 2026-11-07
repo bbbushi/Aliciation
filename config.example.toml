@@ -9,6 +9,7 @@ api_key = ""                   # 直接填在这里（user/ 不入 git，不会�
 [persona]
 # 近位锚整条选材并计入总预算；效果须独立人工对照，默认保持关闭。
 expression_anchor = false  # P1b 近位表达提醒（默认关；人工对照开关）
+expression_mode = "full"   # 人格投影：full=完整用途投影；registry=核心常驻+场景按需（需已准备驻留分层，合同无效自动回退 full）
 name = "Alice"       # AI 的名字
 # 数据触发：每累计 N 条新记忆演化一次人格。安静则不变（没有时间兜底）
 evolve_every_memories = 15
@@ -37,6 +38,8 @@ recap_span_max_rows = 60
 recap_max_chars = 600
 recap_inject_count = 2
 recap_inject_chars = 1200
+observer_enabled = true        # 上下文观测 SDK：装配与调用的元数据事件（只读查询面用）
+observer_body_capture = false  # 正文快照（本机调试用；写入 user/data/observation，10请求/7天/50MiB 有限额度）
 recent_turns = 16              # 最近消息条数上限，按完整往返选择；不是16次用户发送
 active_days = 2                # 活跃层/仓库层分界（天）
 survival_days = 7              # 生存过滤线（天）
@@ -71,3 +74,16 @@ provider = "qq-official"
 app_id = ""
 sender_id = ""
 chat_type = "c2c"
+
+# 上下文观测插件（固定同源独立页；采集开关独立在 [context] observer_*）
+[plugins]
+context_inspector_enabled = false  # 显式启用后提供 /addons/context-inspector/ 页面与聊天回复旁入口
+
+# 人格注册表（expression_mode="registry" 时生效；准备时冻结分类额度，运行配置只能收紧）
+[expression]
+max_core_chars = 2200           # 核心常驻正文上限
+max_registry_chars = 1600       # 场景目录序列化上限
+max_registry_bundles = 12       # 目录场景包数量上限
+max_scene_expanded_chars = 2400 # 单场景完整闭包 / 本轮按需正文总量上限
+max_persona_load_calls = 2      # persona_load 每轮调用次数
+max_persona_loaded_bundles = 2  # 本轮最多读取的场景包数

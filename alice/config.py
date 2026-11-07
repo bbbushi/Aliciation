@@ -39,6 +39,9 @@ class PersonaConfig:
     name: str = "Alice"
     # P1b 近位表达提醒（默认关；人工对照开关，效果未验不预填）
     expression_anchor: bool = False
+    # 人格投影模式（20261107 注册表设计 §6/§8）：full=完整用途投影；registry=核心常驻+场景按需
+    # （需快照带有效 assembly 且渠道 GUI；合同无效自动 full 回退并记录原因）
+    expression_mode: str = "full"
     # 数据触发：每累计 N 条新记忆演化一次。安静则不变（无时间兜底，特性而非缺陷）
     evolve_every_memories: int = 15
 
@@ -56,6 +59,14 @@ class ExpressionConfig:
     max_anchor_chars: int = 500
     max_item_chars: int = 2400
     max_review_chars: int = 240_000
+    # 人格注册表（20261107 设计 §6）：运行投影新增上限只能收紧冻结的完整表达资源约束；
+    # 准备时冻结分类额度，运行配置扩大须重新明确准备
+    max_core_chars: int = 2200
+    max_registry_chars: int = 1600
+    max_registry_bundles: int = 12
+    max_scene_expanded_chars: int = 2400
+    max_persona_load_calls: int = 2
+    max_persona_loaded_bundles: int = 2
 
     def __post_init__(self):
         for name, low, high in (
@@ -95,6 +106,9 @@ class ContextConfig:
     recap_max_chars: int = 600
     recap_inject_count: int = 2
     recap_inject_chars: int = 1200
+    # 上下文观测 SDK（20261107 补充设计）：元数据默认开；正文快照默认关（本机调试用）
+    observer_enabled: bool = True
+    observer_body_capture: bool = False
     # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
     total_budget_tokens: int = 100_000
     reply_reserve_tokens: int = 4_000
@@ -197,6 +211,13 @@ def _channels(raw: dict) -> ChannelsConfig:
 
 
 @dataclass
+class PluginsConfig:
+    # 上下文观测插件（20261107 插件设计 §5）：固定页面开关，默认关；
+    # 采集开关独立在 context.observer_*，插件开关不擅自改采集值
+    context_inspector_enabled: bool = False
+
+
+@dataclass
 class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
@@ -204,6 +225,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
 
 def _build(cls, raw: dict):
@@ -224,6 +246,7 @@ def load(path: Path | str | None = None) -> Config:
         memory=_build(MemoryConfig, raw.get("memory", {})),
         channels=_channels(raw.get("channels", {})),
         expression=_build(ExpressionConfig, raw.get("expression", {})),
+        plugins=_build(PluginsConfig, raw.get("plugins", {})),
     )
 
 

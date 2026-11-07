@@ -127,6 +127,8 @@ class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceS
         self._llm_event_lock = threading.Lock()
         self._llm_events = deque(maxlen=2000)
         self._llm_events_dropped = 0
+        from . import context_observation
+        context_observation.install(self)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
         self.conn = sqlite3.connect(db_path, check_same_thread=False)

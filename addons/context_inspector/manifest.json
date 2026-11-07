@@ -1,0 +1,9 @@
+{
+  "id": "context-inspector",
+  "title": "上下文观测插件",
+  "interface_version": 1,
+  "protocol_version": "ctx-obs/1",
+  "entry": "index.html",
+  "files": ["index.html", "inspector.js", "inspector.css", "observer-client.js"],
+  "description": "从一条回复进入，核对人格、记忆、前情、历史与工具结果如何进入模型请求；只提供实际记录，不评判人格或猜测模型内部原因。"
+}

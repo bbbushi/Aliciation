@@ -226,6 +226,7 @@
         <option value="history">人格历史快照</option>
         <option value="tombstones">遗忘墓碑（实际记录）</option>
         <option value="skills">技能（次级观察）</option>
+        <option value="traces">调用轨迹（SDK 观测）</option>
       </select>
       <section id="obs-overview">
         <h3>数据与判断状态</h3>
@@ -274,6 +275,11 @@
         <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
         <details><summary>已有变更记录（原文；模型说明不是独立裁定）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
         <p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p>
+      </section>
+      <section id="obs-traces" class="hidden">
+        <h3>调用轨迹 · 上下文观测 SDK</h3>
+        <p class="obs-hint">只读投影：请求 → 模型调用 → 尝试。快照是应用交给模型客户端的参数，不是供应商内部上下文；无正文处如实显示未留存。打开与刷新不触发模型调用或维护。</p>
+        <div id="obs-traces-list"></div>
       </section>
       <section id="obs-detail" class="hidden">
         <div class="obs-head"><strong id="obs-detail-title">条目详情</strong><button id="obs-detail-close" class="card-x" type="button" title="关闭详情">×</button></div>

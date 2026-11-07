@@ -425,6 +425,44 @@ class ChatService:
     def observer_context_basis(self, *, scope=None, limit="10") -> dict:
         return self._observer_read(observation.context_basis, scope=scope, limit=limit)
 
+    def observer_context_requests(self, *, scope=None, limit="20", request_id=None) -> dict:
+        return self._observer_read(observation.context_requests, scope=scope,
+                                   limit=limit, request_id=request_id)
+
+    def observer_context_body(self, *, scope=None, hash=None, request_id=None) -> dict:
+        return self._observer_read(observation.context_body, scope=scope,
+                                   content_hash=hash, request_id=request_id)
+
+    # ---- 上下文观测插件（20261107 插件设计 §6）：薄命名空间，委托同一核心投影 ----
+
+    def plugin_inspector_status(self, *, scope=None) -> dict:
+        from . import context_observation
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+            return self._observer_read(
+                lambda store, **kw: {"plugin": context_observation.plugin_status(self.cfg)}, scope=scope)
+
+    def plugin_inspector_requests(self, *, scope=None, limit="20") -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_requests, scope=scope, limit=limit)
+
+    def plugin_inspector_request(self, *, scope=None, request_id=None) -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_requests, scope=scope,
+                                   request_id=request_id)
+
+    def plugin_inspector_body(self, *, scope=None, request_id=None, hash=None) -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_body, scope=scope,
+                                   content_hash=hash, request_id=request_id)
+
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
         return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)
@@ -667,6 +705,27 @@ class ChatService:
             if action == "cancel":
                 return update.cancel(self.store, payload)
             return update.rollback(self.store, payload.get("token"), payload.get("revision"), payload.get("session_epoch"), cfg=self.cfg)
+
+    def persona_residency(self, payload) -> dict:
+        """驻留分层准备/查看/应用（注册表设计 §3.1）；GUI 专用，绝不经模型或 QQ 触发。"""
+        from . import expression_update as update
+        if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+            raise ValueError("驻留分层参数无效")
+        action = payload["action"]
+        permitted = {"status": {"action"}, "prepare": {"action"},
+                     "apply": {"action"}, "cancel": {"action"}}
+        if action not in permitted or set(payload) - permitted[action]:
+            raise ValueError("驻留分层动作或字段无效")
+        if action == "status":
+            with self._lock:
+                return update.residency_status(self.store, self.cfg)
+        with self._channels.control(), self._workers.control_lock, self._lock:
+            persona_reset.require_clear()
+            if action == "prepare":
+                return update.residency_prepare(self.store, self.client, self.cfg)
+            if action == "apply":
+                return update.residency_apply(self.store, self.cfg, payload)
+            return update.residency_cancel()
 
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""

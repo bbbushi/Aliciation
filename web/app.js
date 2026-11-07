@@ -406,6 +406,8 @@ function renderTurnMetadata(node) {
     : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
   if (!fromQQ) {
     if (node.dataset.workerBound === "true") meta.textContent += unavailable ? " · 协作任务正文当前不可用" : " · 含协作任务资料";
+    // GUI 回复在此提前返回；入口必须挂在本分支内（插件仅本机 GUI 通道提供）
+    if (assistant && channel === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
     return;
   }
   if (assistant) {
@@ -419,6 +421,38 @@ function renderTurnMetadata(node) {
     const reason = node.dataset.sourceAvailable === "unknown" ? "正在核对来源资格" : "来源期限或渠道范围";
     meta.textContent += ` · ${assistant ? "原回复" : "原消息"}当前不可在此展示（${reason}）；${assistant ? "投递" : "消息"}记录保留`;
   }
+}
+
+// 上下文观测插件入口（20261107 插件设计 §7）：从回复携带 request_id 进入；缺 ID 只能进列表。
+let inspectorEnabled = null;
+async function inspectorProbe() {
+  if (inspectorEnabled !== null) return inspectorEnabled;
+  try {
+    const r = await fetch("/api/plugins/context-inspector/status",
+      { headers: { "X-Alice-Intent": "observer" }, cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    inspectorEnabled = d.status === "ok" && d.plugin && d.plugin.enabled === true;
+  } catch { inspectorEnabled = false; }
+  return inspectorEnabled;
+}
+
+function noteInspectorLink(node) {
+  const requestId = node.dataset.requestId;
+  if (!requestId) return;
+  const meta = node.querySelector(".message-meta");
+  if (!meta || meta.querySelector(".ci-jump")) return;
+  inspectorProbe().then((ok) => {
+    // 追加时刻再去重：连续两次渲染会在探针 resolve 前都通过调用时守卫
+    const target = node.querySelector(".message-meta");
+    if (!ok || !node.isConnected || !target || target.querySelector(".ci-jump")) return;
+    const link = document.createElement("a");
+    link.className = "link ci-jump";
+    link.href = `/addons/context-inspector/?request_id=${encodeURIComponent(requestId)}`;
+    link.target = "_blank";
+    link.rel = "opener";
+    link.textContent = "查看本轮上下文";
+    target.append(document.createTextNode(" · "), link);
+  });
 }
 
 function redactSourceNode(node, pending = false) {
@@ -1332,7 +1366,8 @@ async function openExpressionUpdate(expression, prefill = {}) {
       `<p class="hint">当前结构化表达中的用户修订会按已记录的范围合入；准备后请核对当前→候选及原稿→适配。</p>`) +
     `<p class="hint">缺少原稿时可继续使用原表达；这里不会从摘要反推原文。关闭窗口不会激活候选，也不会取消正在进行的准备；可从更新记录找回结果并取消候选。</p>` +
     `<p id="expression-update-status" class="hint" role="status"></p><button id="expression-prepare" class="btn primary" type="button">准备表达候选</button>` +
-    `<details class="expression-review"><summary>已有候选与恢复记录（${operations.length} 项）</summary><div id="expression-operation-list"></div></details>`;
+    `<details class="expression-review"><summary>已有候选与恢复记录（${operations.length} 项）</summary><div id="expression-operation-list"></div></details>` +
+    `<div id="expression-residency"><p class="hint">正在读取驻留分层状态…</p></div>`;
   if (prefill.source_op_id) {
     $("#expression-source").value = prefill.source_op_id;
     $("#expression-source-input").classList.toggle("hidden", !!$("#expression-source").value);
@@ -1426,6 +1461,130 @@ async function openExpressionUpdate(expression, prefill = {}) {
       if (expressionViewVisible(view)) view.querySelectorAll("input,textarea,select,button").forEach(el => el.disabled = false);
     }
   };
+  renderResidency(view);
+}
+
+// 驻留分层（注册表设计 §3.1）：沿用表达更新视图的准备/查看/应用流程
+const residencyAPI = (data) => postJSON("/api/persona/residency", data);
+
+async function renderResidency(view) {
+  const holder = view.querySelector("#expression-residency");
+  if (!holder) return;
+  let d;
+  try { d = await residencyAPI({ action: "status" }); }
+  catch (e) { holder.replaceChildren(node("p", `驻留分层状态读取失败：${e.message}`, "hint")); return; }
+  if (!expressionViewVisible(view)) return;
+  if (d.reason === "no_v2_package") {
+    holder.replaceChildren(node("p", "当前人格不是 v2 结构化表达，无法分层；按完整表达投影运行。", "hint"));
+    return;
+  }
+  const issues = Array.isArray(d.issues) ? d.issues : [];
+  const preview = d.preview;
+  const ready = d.registry_ready;
+  const head = document.createElement("details");
+  head.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = `驻留分层（核心常驻 + 场景按需）· ${ready ? "已分层可用" : d.has_assembly ? "已分层但未通过校验" : "未分层"} · 模式 ${d.mode}`;
+  head.append(summary);
+  const body = document.createElement("div");
+  if (preview) {
+    const size = document.createElement("p");
+    size.className = "hint";
+    size.textContent = `核心 ${preview.core_chars} 字（${preview.core_entry_ids.length} 条） · 目录 ${preview.bundles.length} 个场景 · ${preview.catalogue_chars} 字`;
+    body.append(size);
+    const list = document.createElement("details");
+    const listSummary = document.createElement("summary");
+    listSummary.textContent = `各条目归属（${preview.per_entry.length} 条）`;
+    list.append(listSummary);
+    for (const entry of preview.per_entry) {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = `${entry.id} [${entry.group}] → ${entry.where.length ? entry.where.join("、") : "未归属"}`;
+      list.append(p);
+    }
+    body.append(list);
+    for (const b of preview.bundles) {
+      const det = document.createElement("details");
+      const detSummary = document.createElement("summary");
+      detSummary.textContent = `${b.label} · ${b.chars} 字 · ${b.purposes.join("/")}`;
+      det.append(detSummary);
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = `适用：${b.when} · 闭包 ${b.closure_ids.length} 条`;
+      det.append(p);
+      body.append(det);
+    }
+  }
+  if (issues.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "校验问题：" + issues.map(i => i.code + (i.detail ? `(${typeof i.detail === "string" ? i.detail : JSON.stringify(i.detail)})` : "")).join("；");
+    body.append(p);
+  }
+  if (d.staged) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = `已有暂存候选（${d.staged.matches_current ? "与当前表达同版，可应用" : "表达已变化；应用前需重新准备"}）`;
+    body.append(p);
+  }
+  const actions = document.createElement("div");
+  actions.className = "expression-review";
+  const prepareBtn = document.createElement("button");
+  prepareBtn.type = "button";
+  prepareBtn.className = "btn";
+  prepareBtn.textContent = ready ? "重新准备分层" : "准备驻留分层";
+  prepareBtn.addEventListener("click", async () => {
+    if (prepareBtn.disabled) return;
+    prepareBtn.disabled = true;
+    try {
+      const r = await residencyAPI({ action: "prepare" });
+      if (!expressionViewVisible(view)) return;
+      if (r.staged) { toast("分层候选已暂存；核对归属与大小后可应用。", 5000); await renderResidency(view); }
+      else {
+        const p = document.createElement("p");
+        p.className = "hint";
+        p.textContent = "分类未通过结构校验：" + (r.issues || []).map(i => i.code).join("；") + "。原表达保持不变，可重新准备。";
+        holder.append(p);
+        prepareBtn.disabled = false;
+      }
+    } catch (e) {
+      prepareBtn.disabled = false;
+      if (expressionViewVisible(view)) holder.append(node("p", `准备失败：${e.message}；原表达保持不变。`, "hint"));
+    }
+  });
+  actions.append(prepareBtn);
+  if (d.staged) {
+    const applyBtn = document.createElement("button");
+    applyBtn.type = "button";
+    applyBtn.className = "btn primary";
+    applyBtn.textContent = "应用此分层";
+    applyBtn.disabled = !d.staged.matches_current;
+    applyBtn.addEventListener("click", async () => {
+      if (applyBtn.disabled) return;
+      applyBtn.disabled = true;
+      try {
+        const r = await residencyAPI({ action: "apply" });
+        if (!expressionViewVisible(view)) return;
+        toast(r.notice || "分层已保存进人格。", 6000);
+        await renderResidency(view);
+      } catch (e) {
+        applyBtn.disabled = false;
+        if (expressionViewVisible(view)) holder.append(node("p", `应用失败：${e.message}`, "hint"));
+      }
+    });
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn ghost";
+    cancelBtn.textContent = "取消候选";
+    cancelBtn.addEventListener("click", async () => {
+      cancelBtn.disabled = true;
+      try { await residencyAPI({ action: "cancel" }); await renderResidency(view); }
+      catch (e) { cancelBtn.disabled = false; }
+    });
+    actions.append(applyBtn, cancelBtn);
+  }
+  head.append(body, actions);
+  holder.replaceChildren(head);
 }
 
 function showExpressionCandidate(result) {
@@ -1887,6 +2046,7 @@ function handleEvent(ev, node, userNode, requestId) {
     markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui",
       ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
     markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
+    noteInspectorLink(node);  // request_id 此时才确定；新回复的入口在完成时补挂（元数据行不会自行重渲染）
     confirmComposerRequest(id);
     setChatNotice("");
     scrollBottom();

@@ -78,6 +78,11 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
         args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         args = {}
+    if name == "persona_load":
+        registry = source_context.get("persona_registry") if source_context else None
+        if registry is None:
+            return json.dumps({"error": "persona_registry_unavailable"})
+        return registry.execute(name, args)
     if not isinstance(args, dict):
         args = {}
     memory_session = source_context.get("memory_session") if source_context else None
@@ -174,8 +179,19 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     call_id = uuid.uuid4().hex
     stream = None
     last_chunk_had_usage = False
+    # 调用接入：最终 SDK 参数在发送前冻结；SDK 不发送请求，只随业务调用记录
+    trace_call = (observation or {}).get("trace_call")
+    if trace_call is not None:
+        try:
+            trace_call.freeze_final(kwargs)
+        except Exception:
+            trace_call = None
+    attempt = trace_call.begin_attempt() if trace_call is not None else None
+    send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
     try:
-        stream = client.chat.completions.create(**kwargs)
+        stream = client.chat.completions.create(**send_kwargs)
+        if attempt is not None:
+            attempt.response_started()
         for chunk in stream:
             actual_model = getattr(chunk, "model", None) or actual_model
             u = getattr(chunk, "usage", None)
@@ -221,6 +237,21 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
                 status="cancelled" if failure and not isinstance(failure, Exception) else "error" if failure else "ok",
                 usage_state=("partial_receipt" if receipt_usage and incomplete
                              else "reported" if receipt_usage else "unknown"))
+        if attempt is not None:
+            usage_receipt = {}
+            for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+                v = getattr(receipt_usage, src, None)
+                if type(v) is int and v >= 0:
+                    usage_receipt[dst] = v
+            attempt.finish(
+                status=("cancelled" if failure and not isinstance(failure, Exception)
+                        else "error" if failure else "ok" if last_chunk_had_usage else "stream_interrupted"),
+                usage=usage_receipt,
+                usage_state=("partial_receipt" if receipt_usage and incomplete
+                             else "reported" if receipt_usage else "unknown"),
+                error_type=type(failure).__name__ if failure is not None else None,
+                model=actual_model, model_source="receipt" if actual_model else "requested",
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)))
         if stream is not None and callable(getattr(stream, "close", None)):
             try:
                 stream.close()
@@ -279,6 +310,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     ts = ts if ts is not None else time.time()
     started_at = time.monotonic()
     request_id = request_id or uuid.uuid4().hex
+    # 上下文观测 SDK（20261107 补充设计）：请求轨迹；观察故障不影响对话
+    from . import context_observation
+    ctx_trace = context_observation.begin_request(store, cfg, request_id=request_id,
+                                                  scope=source_scope)
     def request_blocks():
         blocks = [{"kind": b.kind, "name": b.name, "estimated_tokens": b.tokens}
                   for manifest in manifests for b in manifest.blocks]
@@ -295,6 +330,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                      "blocks": request_blocks(),
                      "tool_schema_count": len(active_tools),
                      "tool_names": [t["function"]["name"] for t in active_tools]}
+            if extra.get("trace_call") is None and ctx_trace is not None:
+                # 调用接入：最终参数在 llm.chat/_stream_round 的 freeze_final 边界补齐
+                extra["trace_call"] = ctx_trace.prepare_call(
+                    purpose=purpose, tool_round=round_number, messages=messages,
+                    tools=active_tools or None,
+                    parameters={"model": cfg.llm.chat_model, "temperature": 0.8,
+                                "stream": purpose == "main_stream"})
         return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
     def attempt_usage(detail=None):
@@ -364,6 +406,34 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             sections, persona_growth.evidence_rows(store) if has_growth else {})
         persona_snapshot = {**persona_snapshot, "sections": sections}
     growth_refs = growth_basis["refs"]
+    # 人格注册表激活（注册表设计 §8）：GUI + registry 模式 + 快照带 assembly + 合同深校验；
+    # 任何不成立都回退既有 full 投影并记录固定原因，不偷偷重分类
+    persona_registry = None
+    persona_fallback = None
+    if (cfg.persona.expression_mode == "registry" and source_scope == "gui"
+            and persona_snapshot is not None and persona_snapshot.get("expression_package") is not None
+            and persona_snapshot.get("assembly")):
+        from . import persona_residency
+        from .context_persona import PersonaRegistryContext
+        issues = persona_residency.validate_contract(
+            persona_snapshot["assembly"], persona_snapshot["expression_package"],
+            limits={"max_core_chars": cfg.expression.max_core_chars,
+                    "max_registry_chars": cfg.expression.max_registry_chars,
+                    "max_registry_bundles": cfg.expression.max_registry_bundles,
+                    "max_scene_expanded_chars": cfg.expression.max_scene_expanded_chars})
+        if issues:
+            persona_fallback = ("invalid_contract:" +
+                                ",".join(sorted({i["code"] for i in issues})))[:160]
+        else:
+            candidate = PersonaRegistryContext(store, cfg, persona_snapshot,
+                                               persona_snapshot["assembly"],
+                                               persona_snapshot["expression_package"],
+                                               scope=source_scope)
+            if candidate.catalogue:
+                persona_registry = candidate
+            else:
+                persona_fallback = "catalogue_empty"
+        source_context["persona_registry"] = persona_registry
     recap_session, recap_exposed = None, False
     recap_usage, recap_calls = {}, 0
     transform_inputs = grounding.transform_sources(user_text) if cfg.context.transform_review_enabled else []
@@ -388,6 +458,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             memory_session.workspace = workspace
             memory_tools = memory_tools + WORKSPACE_TOOLS
             source_context["working_set"] = workspace
+    if persona_registry is not None:
+        from .context_persona import PERSONA_LOAD_TOOLS
+        memory_tools = memory_tools + PERSONA_LOAD_TOOLS
     tools = memory_tools + learning_tools(store,cfg) + ([SEARCH_TOOL] if search_session is not None else [])
     extra_messages = []
     if transform_inputs:
@@ -413,14 +486,28 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     anchor_msg = None
     expression_meta, anchor_meta = {}, {}
     expression_purpose = "chat" if source_scope == "gui" else "qq"
-    rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
-                                                    purpose=expression_purpose, cfg=cfg)
+    if persona_registry is not None:
+        rendered_persona = persona_context.render_registry_persona(
+            persona_snapshot, persona_registry.contract, persona_registry.package,
+            metadata=expression_meta, purpose=expression_purpose)
+    else:
+        rendered_persona = persona_context.render_full(persona_snapshot, metadata=expression_meta,
+                                                        purpose=expression_purpose, cfg=cfg)
+    expression_meta.setdefault("persona_projection", {
+        "mode_requested": cfg.persona.expression_mode,
+        "mode_effective": "registry" if persona_registry is not None else "full",
+        "fallback_reason": persona_fallback,
+        "projection_strategy": "core_registry" if persona_registry is not None else "complete_per_purpose",
+        **(persona_registry.metadata() if persona_registry is not None else {})})
     if cfg.persona.expression_anchor and persona_snapshot is not None:
         _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta,
                                                        purpose=expression_purpose, cfg=cfg)
         if _anchor_text:
             anchor_msg = {"role": "system", "content": _anchor_text}
     reserved = _ctx.messages_tokens(extra_messages + ([anchor_msg] if anchor_msg else []), tools)
+    if persona_registry is not None:
+        # 目录块 + 按需读取额度计入请求预算（注册表设计 §6）；字符按保守 token 估算计入
+        reserved += persona_registry.reserved_chars()
     # Select once with a bounded reservation for recap and its trusted envelope.
     # Generation consumes this immutable boundary; it never causes re-selection
     # or a second catalogue/workspace initialization or a second paid generation.
@@ -444,6 +531,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     boundary = manifests[0].history
     if memory_session is not None and cfg.context.history_enabled:
         memory_session.history = HistoryContext(memory_session, boundary=boundary)
+    if ctx_trace is not None:
+        # 组装接入·选择决策：历史窗口取舍（exclusions 逐条 + 保留汇总），不宣称扫描全库
+        ctx_trace.selections(
+            [(f"history:{e.get('id')}", False, str(e.get("reason", "unspecified")))
+             for e in (boundary.get("exclusions") or []) if isinstance(e, dict)]
+            + [(f"history:{tid}", True, "complete_window")
+               for tid in (boundary.get("retained_ids") or [])])
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
@@ -466,7 +560,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     recap_calls += 1
                     resp = yield lambda: chat(client, cfg, recap_messages,
                                               model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                              observation=observe("recap_generate"),
+                                              observation=observe("recap_generate",
+                                                                  trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                                      purpose="recap_generate", messages=recap_messages,
+                                                                      parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                                                  "stream": False})),
                                               on_attempt_usage=attempt_usage(recap_usage))
                     recap_raw = resp.choices[0].message.content or ''
                     recap_md = recap_session.parse(recap_raw, span_rows)
@@ -480,7 +578,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                             recap_calls += 1
                             reviewed = yield lambda: chat(client, cfg, review_messages,
                                 model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                                observation=observe("recap_review"),
+                                observation=observe("recap_review",
+                                                    trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                        purpose="recap_review", messages=review_messages,
+                                                        parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                                    "stream": False})),
                                 on_attempt_usage=attempt_usage(recap_usage))
                             verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                             recap_session.review = verdict
@@ -517,12 +619,23 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         messages[-1:-1] = [envelope, material]
         manifests[0].add("stable", "current_request_recap_status", envelope["content"])
         manifests[0].add("background", "current_request_recap", recap_block)
+    if persona_registry is not None:
+        # 注册表目录：宿主标识资料块，插在当前用户消息之前（注册表设计 §2/§4）
+        registry_block = persona_registry.catalogue_block()
+        messages[-1:-1] = [{"role": "system", "content": registry_block}]
+        for manifest in manifests:
+            manifest.add("background", "persona_registry", registry_block)
     messages.extend(extra_messages)
     for manifest in manifests:
         for extra in extra_messages:
             manifest.add("stable", "request_capability", extra["content"])
         if anchor_msg:
             manifest.add("stable", "expression_anchor", anchor_msg["content"])
+    if ctx_trace is not None:
+        # 组装接入·块登记：清单是同一记录的投影；锚/工具轮重建消息后按内容现算位置
+        for manifest in manifests:
+            for blk in manifest.blocks:
+                ctx_trace.block(blk.kind, blk.name, blk.content, estimated_tokens=blk.tokens)
     reply = ""
     round_number = 0
     while True:
@@ -537,6 +650,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 '检索回执中的existing_observations仅表示原有留存，不能当作本轮新写入。'}]
             for manifest in manifests:
                 manifest.add("stable", "closing_rule", messages[-1]["content"])
+            if ctx_trace is not None:
+                ctx_trace.block("stable", "closing_rule", messages[-1]["content"])
         if anchor_msg is not None:
             # P1b：锚每次请求前重建替换（同一份不堆积；工具回执后同样生效）
             messages = [m for m in messages
@@ -612,6 +727,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             memory_session.sent.update(memory_session.loaded)
             if memory_session.history is not None:
                 memory_session.history.sent.update(memory_session.history.loaded)
+        if persona_registry is not None:
+            persona_registry.note_sent()
+        if persona_registry is not None and not persona_registry.valid():
+            reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
+            break
         if not growth_valid():
             reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
             break
@@ -629,8 +749,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 on_delta(piece)
         if not msg.tool_calls:
             reply = (msg.content or "").strip()
+            # Ordinary replies also report "not_selected". The audit must exist
+            # even when no rewrite/recap review ran in this turn.
+            review_audit = transform_audit if transform_inputs else recap_reply_audit
             if reply_review_selected:
-                review_audit = transform_audit if transform_inputs else recap_reply_audit
                 fallback = '\n'.join(transform_inputs if transform_inputs else recap_session.excerpts)
                 review_audit.update(draft_sha256=hashlib.sha256(reply.encode()).hexdigest(),
                     policy_sha256=hashlib.sha256(grounding.policy('rewrite' if transform_inputs else 'recap_reply').encode()).hexdigest())
@@ -645,7 +767,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     review_audit['calls'] += 1
                     reviewed = yield lambda: chat(client, cfg, review_messages,
                         model=cfg.llm.cheap_model, json_mode=True, retry=False,
-                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review"),
+                        observation=observe("rewrite_review" if transform_inputs else "recap_reply_review",
+                                            trace_call=None if ctx_trace is None else ctx_trace.prepare_call(
+                                                purpose="rewrite_review" if transform_inputs else "recap_reply_review",
+                                                messages=review_messages,
+                                                parameters={"model": cfg.llm.cheap_model, "json_mode": True,
+                                                            "stream": False})),
                         on_attempt_usage=attempt_usage(review_audit['usage']))
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                     review_audit['status'] = 'accepted' if verdict['valid'] else 'original_preserved'
@@ -655,6 +782,18 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 except Exception as exc:
                     review_audit.update(status='original_preserved', error=type(exc).__name__)
                     reply = fallback
+            if ctx_trace is not None:
+                try:
+                    ctx_trace.reply_processed(kind="reply_review",
+                                              detail={"selected": reply_review_selected,
+                                                      "transform": bool(transform_inputs),
+                                                      "status": review_audit.get("status"),
+                                                      "reason": str(review_audit.get("reason", ""))[:200],
+                                                      "error": review_audit.get("error")})
+                except Exception:
+                    # Observation must not discard an already received reply or
+                    # cause another model request through the failure path.
+                    print("（回复后处理观测暂失败；聊天继续。）")
             break
         if closing:
             # Even a nonconforming provider cannot dispatch another tool here.
@@ -678,6 +817,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         for tc in msg.tool_calls:
             if memory_session is not None and not memory_session.valid():
                 reply = "本轮记忆或历史资料已变更或失效，需要重新取得当前资料后再谈。"
+                break
+            if persona_registry is not None and not persona_registry.valid():
+                reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
                 break
             if not growth_valid():
                 reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
@@ -743,6 +885,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                   source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
+    if ctx_trace is not None:
+        ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
+                         rounds=persona_basis["model_rounds_started"])
     basis = {"request_id": request_id, "user_turn_id": user_id, "assistant_turn_id": assistant_id,
              "mode": cfg.context.assembly_mode, "history_selection": boundary,
              "persona": persona_basis,

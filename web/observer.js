@@ -138,6 +138,11 @@
     const epoch = generation;
     try {
       while (opened && epoch === generation && !stopped) {
+        if (view() === "traces") {
+          await renderTraces(epoch);
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          continue;
+        }
         if (pending.snapshot) {
           pending.snapshot = false;
           status(snapshot ? "正在读取；最后有效快照仍可查看。" : "正在读取首次快照…");
@@ -183,6 +188,121 @@
     }
   }
   function addChange(message, from, to) { changes.push({ message, from, to }); }
+
+  // ---- 调用轨迹（SDK 观测投影）----
+  const stateLabels = { entered: "已进入调用", ok: "收到响应", error: "失败", cancelled: "已取消", stream_interrupted: "流中断" };
+  const purposeLabels = { main: "主对话", main_stream: "主对话·流式", main_fallback: "主对话·回落",
+    recap_generate: "前情生成", recap_review: "前情审查", rewrite_review: "改写审查", recap_reply_review: "前情回复审查" };
+  let tracesFetchedAt = 0, tracesSignature = "";
+
+  async function renderTraces(epoch) {
+    const now = Date.now();
+    if (now - tracesFetchedAt < 3900) { await new Promise((r) => setTimeout(r, 1200)); return; }
+    tracesFetchedAt = now;
+    const d = await request("requests", { limit: "12" }, epoch);
+    if (!d) return;
+    const list = el("obs-traces-list");
+    const signature = JSON.stringify((d.requests || []).map((r) => [r.request_id, r.event_count, r.finished]));
+    if (signature === tracesSignature && list.childElementCount) return;
+    tracesSignature = signature;
+    list.replaceChildren();
+    if (!d.requests || !d.requests.length) {
+      list.append(node("p", "暂无请求轨迹；进行一次对话后出现。", "obs-hint"));
+      return;
+    }
+    for (const request of d.requests) renderTraceRequest(list, request);
+  }
+
+  function renderTraceRequest(list, request) {
+    const card = document.createElement("details");
+    const head = node("summary", null, "obs-trace-head");
+    const short = String(request.request_id || "?").slice(0, 8);
+    head.append(node("strong", `请求 ${short}…`),
+      node("span", ` ${request.event_count} 事件 · ${request.calls.length} 次调用 · ${request.finished ? "已结束" : "进行中"}`, "obs-hint"));
+    card.append(head);
+    const meta = node("p", null, "obs-hint");
+    meta.textContent = `时间 ${time(request.first_event_at)} · 渠道 ${request.scope || "?"} · 代际 ${String(request.session_epoch || "?").slice(0, 8)}…`
+      + (request.assistant_turn_id ? ` · 回复 #${request.assistant_turn_id}` : "")
+      + (request.gaps && request.gaps.length ? ` · 观测缺口 ${request.gaps.length}` : "");
+    card.append(meta);
+    for (const call of request.calls) renderTraceCall(card, request, call);
+    if (request.blocks && request.blocks.length) {
+      const blocks = document.createElement("details");
+      blocks.append(node("summary", `装配块 ${request.blocks.length} · 选择记录 ${request.selections.length}`));
+      const table = node("div");
+      for (const block of request.blocks) {
+        const row = node("p", `#${block.seq} [${block.kind}] ${block.name} · ${block.chars ?? "?"} 字`, "obs-hint");
+        row.append(bodyButton(block.content_hash, block.body_state, request.request_id));
+        table.append(row);
+      }
+      if (request.selections && request.selections.length) {
+        const shown = request.selections.filter((s) => !s.included).slice(0, 12);
+        table.append(node("p", `未入选 ${request.selections.filter((s) => !s.included).length} 条（示前 12）：`
+          + shown.map((s) => `${s.source_id}（${s.reason}）`).join("、"), "obs-hint"));
+      }
+      blocks.append(table);
+      card.append(blocks);
+    }
+    list.append(card);
+  }
+
+  function renderTraceCall(card, request, call) {
+    const wrap = document.createElement("details");
+    const last = call.attempts[call.attempts.length - 1] || {};
+    const head = node("summary", null, "obs-trace-head");
+    head.append(node("strong", purposeLabels[call.purpose] || call.purpose || "调用"),
+      node("span", ` · 轮${call.tool_round ?? 0} · ${stateLabels[last.status] || last.status || "无尝试"}`
+        + (last.duration_ms != null ? ` · ${last.duration_ms}ms` : "")
+        + (last.usage ? ` · 入${last.usage.prompt ?? "?"}/出${last.usage.completion ?? "?"}tok` : ""), "obs-hint"));
+    wrap.append(head);
+    const params = call.parameters || {};
+    const covered = Object.entries(params.covered || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" · ");
+    wrap.append(node("p", `参数：${covered || "未记录"}`
+      + ((params.uncovered || []).length ? ` · 未覆盖：${params.uncovered.join("、")}` : ""), "obs-hint"));
+    if (call.tools && call.tools.length) wrap.append(node("p", `工具：${call.tools.join("、")}`, "obs-hint"));
+    const messages = (call.messages && call.messages.order) || [];
+    const table = node("div");
+    for (const entry of messages) {
+      const row = node("p", `${entry.seq} ${entry.role} · ${entry.chars ?? "?"} 字`
+        + (entry.tool_call_id ? ` · tool:${String(entry.tool_call_id).slice(0, 10)}…` : ""), "obs-hint");
+      row.append(bodyButton(entry.content_hash, entry.body, request.request_id));
+      table.append(row);
+    }
+    if (call.bindings && call.bindings.length) {
+      const names = call.bindings.map((b) => `${b.name}→消息${b.message_seq}`).slice(0, 16).join("、");
+      table.append(node("p", `块绑定：${names}${call.bindings.length > 16 ? " …" : ""}`, "obs-hint"));
+    }
+    wrap.append(table);
+    if (request.reply_postprocess) {
+      wrap.append(node("p", `回复处理：${request.reply_postprocess.kind} · ${JSON.stringify(request.reply_postprocess.detail || {})}`, "obs-hint"));
+    }
+    card.append(wrap);
+  }
+
+  function bodyButton(contentHash, bodyState, requestId) {
+    if (!contentHash || bodyState === "none") return node("span", "（未留存正文）", "obs-hint");
+    if (bodyState && bodyState !== "stored" && bodyState !== "head" && bodyState !== "on_disk") {
+      return node("span", `（正文：${bodyState}）`, "obs-hint");
+    }
+    const wrap = document.createElement("span");
+    const button = node("button", "看留存正文", "btn ghost");
+    button.type = "button";
+    const pre = node("pre", null, "obs-text");
+    pre.hidden = true;
+    button.addEventListener("click", async () => {
+      if (!pre.hidden) { pre.hidden = true; return; }
+      button.disabled = true;
+      const d = await request("body", { hash: contentHash, request_id: requestId || "" }, generation, () => true).catch(() => null);
+      button.disabled = false;
+      pre.textContent = !d ? "读取失败；稍后重试。"
+        : d.stored ? (d.text || "（空）") + (d.truncated ? "\n…（已截断）" : "")
+        : `未留存正文（${d.reason || "not_retained"}）；不能用当前数据补画历史。`;
+      pre.hidden = false;
+    });
+    wrap.append(button, pre);
+    return wrap;
+  }
+
   function acceptSnapshot(d) {
     const old = snapshot;
     if (!firstTime) firstTime = d.sampled_at;
@@ -658,6 +778,7 @@
   function changeView() {
     el("obs-overview").classList.toggle("hidden", view() !== "overview");
     el("obs-persona").classList.toggle("hidden", view() !== "persona");
+    el("obs-traces").classList.toggle("hidden", view() !== "traces");
     el("obs-browser").classList.toggle("hidden", !isList());
     el("obs-layer").classList.toggle("hidden", view() !== "memories");
     el("obs-kind").classList.toggle("hidden", view() !== "memories");
