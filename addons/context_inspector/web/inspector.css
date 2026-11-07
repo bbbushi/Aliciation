@@ -1,9 +1,24 @@
-/* 上下文观测插件 · 仪表板形态（复刻 dsh-context 版式：KPI 行 + 组成卡 + 趋势卡 + DNA + 浏览器）。 */
+/* 上下文观测插件 · 仪表板形态（复刻 dsh-context 版式）。
+   本页自包含：不链接聊天应用的 style.css（那里 body overflow:hidden 是内部滚动布局，
+   会锁死本页滚动；主题变量也与本页冲突）。 */
 :root {
   --ci-bg: #f2f4f8; --ci-card: #ffffff; --ci-line: #e4e8ef; --ci-ink: #1c2733;
   --ci-sub: #67788c; --ci-accent: #4C72B0;
 }
-body { background: var(--ci-bg); color: var(--ci-ink); }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: var(--ci-bg); color: var(--ci-ink);
+  font-size: 14px; line-height: 1.6; font-weight: 450;
+  min-height: 100vh; overflow-y: auto; overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-weight: 650; color: var(--ci-ink); }
+p { margin: 4px 0; }
+pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+button { font-family: inherit; }
+a { color: var(--ci-accent); }
+details > summary { list-style: revert; }
 
 .ci-top { padding: 16px 22px 8px; }
 .ci-head-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
