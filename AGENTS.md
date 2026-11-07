@@ -25,8 +25,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-05 Codex按用户要求交付人格导入跨用途依赖冲突修复：仅alice/expression.py、expression_prepare.py、修复说明及本交接4路径提交推trial/windows-v0.2-20261028并向main新提PR。PR23已合main 57f1b93（与原HEAD eaf2974提交树相同），本次以最新main为基线；快照.git/pr-delivery/20261105-232045保留。禁止直推/直接合并main，旧私有资料与头像不入本次提交。
-- 修复仅在两个生成阶段捕获完整结构校验后的专用用途冲突，深拷贝并按依赖队列保守收窄purposes，覆盖传递/环，保留chat/正文/ID/来源/links；提示补齐用途子集约束。原适配changes先对原模型回执核账，再采用宿主候选，用途差异独立私有记账；用户修订合入后、运行时及激活仍严格校验/双审，无新增模型调用或权限，不变准备协议3/宪法能力清单。GUI未新增用途调整明细。
-- 本轮两份源码compileall、源码diff空白和独立只读交付核对通过；未运行机器自测/冒烟/业务/模型/假模型/临时DB/故障注入/真人验收，未启停应用或重新导入，未读写user/。原定位轮仅查询本机回执路径清单且无匹配，c_fame具体引用对象/失败阶段及另一开发者的真实复验仍待确认；GUI未新增用途调整明细，不宣称本机复现或整链通过。
-- 既有F0—F3及R1—R8/N1—N3和b1ffbd7/ef99c42已随PR23入main；旧报告及修前95场景93通过2失败/修后独立28/28仍为历史限定证据，不回填本次。W5、起服共存与实料效果仍待验，W6—W9/前情退休为设计、D1—D5/蓝图待裁决、P1b默认关；仍HTTPS、trial经PR合main，备份/stash/其他worktree保留。
-- 并行头像：橙发V15/V16及小图v5保留；白龙小图pixel-finish-v4/small-pixel-v4.png已获确认并冻结。大图V5压暗虹膜被用户否决；按新附件1509506c（与V3大图SHA一致）重新出V6，只以源图保留紫瞳亮度/瞳孔/高光与眉眼嘴构图，增强细像素阶梯。候选docs/assets/avatar-concepts/white-dragon-20261104/source-repixel-v6/large-face-preserved-v6.png、prompts-large.txt与原图对照compare.html已存，preferred.json记录小图通过/V5拒绝/V6待审；内置image_gen及pixel_avatar_design协作，1254透明RGBA无损复制，已目视/alpha核验，仍有少量发束与虹膜下部亮块转绘差异。未改运行时资源/源码/UI/user/、跑应用测试或提交推送。
+- 2026-11-07 Codex按用户要求交付44白名单文件：人格导入恢复/覆盖/片段修复/限定复审/检查点/有限表达豁免，DSH与Claude分离及浮窗、2张运行头像、12份人格说明和CLI契约。用户分支trial/windows-v0.2-20261028，PR24已合main 0b64f56且与原HEAD369e808提交树相同，本次同步最新main后推分支提新PR；快照.git/pr-delivery/20261107-043450保留，不直接推/合main。
+- 人格准备协议12、initial_plus_delta_v3：五字段合同绑定标准/原稿/registry与实现摘要，7字段硬回归证据和context_check必须绑定实际修改，缺失仍拒绝；interpretation_warning仅记录解释分歧。JSON恢复仅语法；结构纠错一次、必修与可选共用一次，后者失败整包回退已验基线，成功阶段显式续跑绑定与额度不重置。保留情绪张力，事实/能力/授权/停止/私有用途仍严格；无关键词自动放行。
+- 开发轮真实操作imp_20261107_041623_efc6d9单次HTTP200，586.766秒、9阶段各1attempt、事务completed/人格version1；事实25/25，可选r_late_night失真后连同r_food整包回退，最终源40/41、规则5/5、样本2/5，认知6adopt/2adapt。证据D:/alice_tmp/有限表达豁免实测-20261107/index.html本机保留；该轮经公共HTTP写user/data安装审计、未改配置，新硬证据/warning/JSON恢复等未触发，安装后聊天未验，不将旧失败回填。
+- DSH/Claude分工具status/tasks/detail/events/控制及旧API兼容；归属/epoch/版本锁内核验，独立政策凭据控制/历史权限退避，写前作废旧响应、不自动重试写；仍共享Store、读取等锁最多0.5秒，各1执行+4待办，Claude引用未开放同任务续跑。双浮窗/已读/引用保留，未连接64px、可信就绪/派工放大，位置v2右上纵排/短视口换列和拖动取消保持；报错消失反馈不等于实际功能验收。
+- 本轮全alice编译、4JS语法/源码补丁检查及3路只读交付核对通过；仅GET首页/运行接口200，未重启或新做模型/导入/业务/机器测试、未读写user/。现有服务可访问不代表本提交重新起服共存通过，双工具/GUI/人格效果仍待验；原82份私有资料和docs/assets候选保留。橙发V15/V16及小v5、白龙小v4冻结/大V6待审；备份/stash/其他worktree、W6—W9/蓝图待裁决范围不变。

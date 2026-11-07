@@ -162,12 +162,17 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         # ---------- 基础 ----------
 
         def _send(self, code: int, body: bytes, ctype: str) -> None:
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # A cancelled browser request has no recipient for another response.
+                # Keep this boundary around socket writes, not business execution.
+                self.close_connection = True
 
         def _json(self, obj, code: int = 200) -> None:
             self._send(code, _json_bytes(obj), "application/json; charset=utf-8")
@@ -293,6 +298,39 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             except Exception:
                 self._json({"error": "连接状态暂时无法确认，请刷新后查看", "code": "connector_unavailable"}, 503)
 
+        def _scoped_worker_result(self, path: str, query: dict, posting: bool):
+            if path == "/api/workers":
+                if posting:
+                    raise ChannelError(405, "method_not_allowed", "工具目录只接受读取")
+                if query:
+                    raise ValueError("工具目录不接受查询参数")
+                return svc.worker_catalog()
+            match = re.fullmatch(r"/api/workers/(dsh|claude)/(.+)", path)
+            if not match:
+                raise ChannelError(404, "not_found", "协作接口不存在")
+            worker, action = match.groups()
+            reads = {"status", "policy", "task-settings", "tasks", "tasks/detail", "tasks/events", "permissions/list"}
+            writes = {"policy", "connection", "task-settings", "tasks/detail", "tasks/events",
+                      "tasks/cancel", "tasks/review", "tasks/revoke", "tasks/archive", "tasks/restore",
+                      "tasks/delete", "tasks/recover_local", "permissions/list", "permissions/answer",
+                      "inputs", "artifacts/download"}
+            if action not in reads | writes:
+                raise ChannelError(404, "not_found", "协作接口不存在")
+            if action not in (writes if posting else reads):
+                raise ChannelError(405, "method_not_allowed", "该协作接口不支持此请求方式")
+            if posting:
+                payload = self._bounded_body(32768)
+            else:
+                keys = ({"limit", "before", "archived"} if action == "tasks" else
+                        {"session_epoch", "task_id"} if action == "tasks/detail" else
+                        {"session_epoch", "task_id", "after_cursor", "limit"} if action == "tasks/events" else set())
+                if set(query) - keys or any(len(values) != 1 for values in query.values()):
+                    raise ValueError("查询参数无效")
+                payload = {key: values[0] if key in {"session_epoch", "task_id"} else int(values[0])
+                           for key, values in query.items()} if keys else None
+            read_only = not posting or action in {"tasks/detail", "tasks/events", "permissions/list"}
+            return svc.worker_api(worker, action, payload, read_only=read_only)
+
         def _worker_route(self, path: str) -> None:
             posting = self.command == "POST"
             if (not self._trusted_intent("workers", json_body=posting)
@@ -300,11 +338,14 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     or len(self.headers.get_all("Origin", [])) > 1):
                 self._json({"error": "协作记录仅供本机 GUI 使用", "code": "gui_only"}, 403)
                 return
+            code = 200
             try:
                 query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
                 if posting and query:
                     raise ValueError("写操作不接受查询参数")
-                if posting:
+                if path == "/api/workers" or path.startswith("/api/workers/"):
+                    result = self._scoped_worker_result(path, query, posting)
+                elif posting:
                     payload = self._bounded_body(32768)
                     if path == "/api/collaborators":
                         result = svc.collaborators(payload)
@@ -324,8 +365,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     elif path == "/api/worker-permissions/answer":
                         result = svc.worker_permissions("answer", payload)
                     else:
-                        self._json({"error": "not found"}, 404)
-                        return
+                        raise ChannelError(404, "not_found", "协作接口不存在")
                 elif path == "/api/collaborators" and not query:
                     result = svc.collaborators()
                 elif path == "/api/claude-policy" and not query:
@@ -333,18 +373,22 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 elif path == "/api/worker-permissions/list" and not query:
                     result = svc.worker_permissions("list")
                 elif path == "/api/worker-tasks":
-                    if set(query) - {"limit", "before", "archived"} or any(len(v) != 1 for v in query.values()):
+                    if set(query) - {"limit", "before", "archived", "worker_id"} or any(len(v) != 1 for v in query.values()):
                         raise ValueError("分页参数无效")
-                    result = svc.worker_tasks("list", {key: int(value[0]) for key, value in query.items()})
+                    result = svc.worker_tasks("list", {
+                        key: value[0] if key == "worker_id" else int(value[0])
+                        for key, value in query.items()})
                 else:
                     raise ValueError("查询无效")
-                self._json(result)
             except ChannelError as exc:
-                self._channel_error(exc)
+                result, code = {"error": str(exc), "code": exc.code}, exc.status
             except (ValueError, TypeError):
-                self._json({"error": "协作请求参数无效", "code": "invalid_request"}, 400)
+                result, code = {"error": "协作请求参数无效", "code": "invalid_request"}, 400
             except Exception:
-                self._json({"error": "协作记录暂不可用，请重新同步", "code": "workers_unavailable"}, 503)
+                result, code = {"error": "协作记录暂不可用，请重新同步", "code": "workers_unavailable"}, 503
+            # Sending is outside business-error translation: never send a second
+            # response because the first response could not reach the browser.
+            self._json(result, code)
 
         def _channel_route(self, path: str) -> None:
             """Machine credentials never grant GUI, memory, model or P1 authority."""
@@ -461,12 +505,16 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("worker-tasks.js", "application/javascript; charset=utf-8")
             elif path == "/claude-gate.js":
                 self._file("claude-gate.js", "application/javascript; charset=utf-8")
+            elif path == "/claude-settings.js":
+                self._file("claude-settings.js", "application/javascript; charset=utf-8")
             elif path == "/worker-tasks.css":
                 self._file("worker-tasks.css", "text/css; charset=utf-8")
             elif path == "/assets/dsh-avatar-a-v1.png":
                 self._file("assets/dsh-avatar-a-v1.png", "image/png")
             elif path == "/assets/dsh-avatar-small-v1.png":
                 self._file("assets/dsh-avatar-small-v1.png", "image/png")
+            elif path in {"/assets/claude-avatar-large-v1.png", "/assets/claude-avatar-small-v1.png"}:
+                self._file(path.lstrip("/"), "image/png")
             elif path == "/discovery.css":
                 self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
@@ -479,7 +527,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json(svc.chat_activity())
             elif path == "/api/connectors/qq":
                 self._connector_route()
-            elif path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list", "/api/claude-policy"):
+            elif (path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list", "/api/claude-policy", "/api/workers")
+                  or path.startswith("/api/workers/")):
                 self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
@@ -629,8 +678,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         def _route_post(self, path: str) -> None:
             if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download",
-                         "/api/worker-task-settings", "/api/worker-permissions/answer", "/api/claude-policy")
-                    or path.startswith("/api/worker-tasks/")):
+                         "/api/worker-task-settings", "/api/worker-permissions/list",
+                         "/api/worker-permissions/answer", "/api/claude-policy")
+                    or path.startswith("/api/worker-tasks/") or path == "/api/workers"
+                    or path.startswith("/api/workers/")):
                 self._worker_route(path)
                 return
             if path in ("/api/chat/search/status", "/api/chat/search/cancel", "/api/discovery/memory"):
@@ -680,13 +731,17 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 md_text = str(body.get("persona_md") or "").strip()
                 source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
                 reset = bool(body.get("reset"))
+                resume_op_id = body.get("resume_op_id")
                 if not md_text:
                     self._json({"error": "人格文档是空的"}, 400)
                 else:
                     try:
-                        self._json(svc.install_persona(md_text, source, reset=reset))
+                        self._json(svc.install_persona(md_text, source, reset=reset, resume_op_id=resume_op_id))
                     except ValueError as e:
-                        self._json({"error": str(e)}, 400)
+                        result = {"error": str(e)}
+                        if isinstance(getattr(e, "import_status", None), dict):
+                            result["import_status"] = e.import_status
+                        self._json(result, 400)
                     except Exception:
                         self._json({"error": "人格安装未能确认，请先核对当前状态与导入记录，不要连续重试。"}, 500)
             elif path == "/api/seed":
@@ -694,11 +749,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 md_text = str(body.get("persona_md") or "").strip()
                 source = str(body.get("source") or "用户导入").strip()[:60] or "用户导入"
                 reset = bool(body.get("reset"))
+                resume_op_id = body.get("resume_op_id")
                 if md_text:  # 自定义导入；外部角色文档需要模型准备阶段
                     try:
-                        self._json(svc.install_persona(md_text, source, reset=reset))
+                        self._json(svc.install_persona(md_text, source, reset=reset, resume_op_id=resume_op_id))
                     except ValueError as e:
-                        self._json({"error": str(e)}, 400)
+                        result = {"error": str(e)}
+                        if isinstance(getattr(e, "import_status", None), dict):
+                            result["import_status"] = e.import_status
+                        self._json(result, 400)
                 else:
                     tags = body.get("tags") or []
                     if not (2 <= len(tags) <= 4) or not set(tags) <= set(svc.state()["tags"]):

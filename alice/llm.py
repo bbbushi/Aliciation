@@ -63,6 +63,7 @@ def chat(
     model: str | None = None,
     tools: list[dict] | None = None,
     json_mode: bool = False,
+    temperature: float = 0.8,
     retry: bool = True,
     observation: dict | None = None,
     on_attempt_usage=None,
@@ -71,7 +72,7 @@ def chat(
     kwargs: dict[str, Any] = {
         "model": model or cfg.llm.chat_model,
         "messages": messages,
-        "temperature": 0.8,
+        "temperature": temperature,
     }
     if tools:
         kwargs["tools"] = tools

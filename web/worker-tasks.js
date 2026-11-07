@@ -1,7 +1,72 @@
 /* GUI-only, read-on-demand work records. Opening this panel never dispatches work. */
 "use strict";
 (() => {
-  const $ = (id) => document.getElementById(id);
+  const workers = new Map();
+  const tools = [
+    { name: "dsh-agent", label: "DSH", prefix: "" },
+    { name: "claude-agent", label: "Claude", prefix: "claude-" },
+  ];
+  const templates = ["collaborator-dock", "worker-tasks", "workers-dock-preview"];
+  // One markup template and one controller implementation; every instance owns
+  // its DOM IDs, requests, selection, read markers, settings and window state.
+  function createDOM(tool) {
+    const elements = new Map(), roots = templates.map((id) => {
+      const source = document.getElementById(id);
+      return { source, root: tool.prefix ? source.cloneNode(true) : source };
+    });
+    for (const { root } of roots) {
+      for (const element of [root, ...root.querySelectorAll("[id]")]) {
+        const original = element.id;
+        elements.set(original, element); element.dataset.workerPart = original;
+        element.id = `${tool.prefix}${original}`;
+      }
+      root.dataset.worker = tool.name;
+    }
+    for (const { source, root } of roots) {
+      for (const element of [root, ...root.querySelectorAll("*")]) {
+        for (const attribute of ["aria-controls", "aria-describedby", "aria-labelledby", "for"]) {
+          if (element.hasAttribute(attribute)) element.setAttribute(attribute,
+            element.getAttribute(attribute).split(/\s+/).map((id) => elements.get(id)?.id || id).join(" "));
+        }
+        for (const attribute of ["aria-label", "title"]) {
+          if (element.hasAttribute(attribute)) element.setAttribute(attribute, element.getAttribute(attribute).replaceAll("DSH", tool.label));
+        }
+        if (tool.prefix) for (const child of element.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) child.textContent = child.textContent.replaceAll("DSH", tool.label);
+        }
+      }
+      if (tool.prefix) source.after(root);
+    }
+    elements.get("workers-btn").dataset.worker = tool.name;
+    if (tool.name === "claude-agent") {
+      const button = elements.get("workers-btn");
+      button.querySelector(".collaborator-avatar-large").src = "/assets/claude-avatar-large-v1.png";
+      button.querySelector(".collaborator-avatar-small").src = "/assets/claude-avatar-small-v1.png";
+      elements.get("workers-window-portrait").src = "/assets/claude-avatar-large-v1.png";
+    }
+    return elements;
+  }
+  const instances = tools.map((tool) => ({ tool, elements: createDOM(tool) }));
+  function syncWindowLayout() {
+    const panels = [...document.querySelectorAll(".worker-panel")].filter((panel) => !panel.classList.contains("hidden") && panel.dataset.transition !== "closing");
+    const app = document.getElementById("app");
+    app.classList.toggle("workers-open", panels.length > 0);
+    app.classList.toggle("workers-docked", panels.some((panel) => panel.dataset.presentation === "docked"));
+  }
+  function focusWindow(panel) {
+    for (const sibling of document.querySelectorAll(".worker-panel")) sibling.dataset.front = String(sibling === panel);
+  }
+  function claimDock(workerId) {
+    for (const [name, controller] of workers) if (name !== workerId) controller.undock();
+  }
+  function createWorker(tool, elements) {
+  const workerId = tool.name, workerLabel = tool.label, isDsh = workerId === "dsh-agent";
+  const api = `/api/workers/${isDsh ? "dsh" : "claude"}`;
+  const $ = (id) => elements.get(id) || (isDsh || !id.startsWith("workers-") ? document.getElementById(id) : null);
+  const registration = (data = registry) => data?.worker?.name === workerId ? data.worker : null;
+  const policyVersion = (data) => data?.revision;
+  const policyEnabled = (data = registry) => data?.policy?.enabled === true;
+  const managementSettings = () => isDsh ? registry?.task_management : { revision: 0, sync_archive: false, sync_delete: false, capabilities: {} };
   const panel = $("worker-tasks"), app = $("app");
   const activeStates = new Set(["queued", "starting", "preparing", "running", "working", "waiting_permission", "collecting", "stopping"]);
   const endedStates = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
@@ -18,12 +83,15 @@
   let opened = false, closing = false, closeFocus = false, settingsOpened = false, stopped = false, connected = false, timer = null, polling = false;
   let epoch = null, registry = null, nextBefore = null, selection = null, selectedTask = null, viewGeneration = 0;
   let eventCursor = 0, eventMore = false, listBusy = false, actionBusy = false, policyDirty = false;
-  let archivedView = false, listGeneration = 0, listDepth = 40, management = null, taskSettingsDirty = false;
+  let archivedView = false, listGeneration = 0, listDepth = 40, activityDepth = 40, management = null, taskSettingsDirty = false;
   let taskSignature = "", artifactSignature = "", following = true, savedListScroll = 0;
   let controlGeneration = 0, dispatchWatchUntil = 0;
-  const tasks = new Map(), seen = new Map(), eventNodes = new Map(), messageNodes = new Map();
+  let statusFresh = false, statusPromise = null, pollAgain = false, lastStatusAt = 0, policyWriteToken = null;
+  const reads = new Map(), syncState = Object.fromEntries(["status", "list", "detail"].map((name) =>
+    [name, { failures: 0, nextAt: 0, error: "", lastAt: 0 }]));
+  const tasks = new Map(), activityTasks = new Map(), seen = new Map(), eventNodes = new Map(), messageNodes = new Map();
   const controllers = new Set();
-  const readPrefix = "alice.collaborator-read.v1.dsh-agent.";
+  const readPrefix = `alice.collaborator-read.v1.${workerId}.`;
   const readIdentity = /^[A-Za-z0-9_-]{16,128}$/;
   function readKey(taskId) {
     return typeof epoch === "string" && readIdentity.test(epoch) && typeof taskId === "string" && readIdentity.test(taskId)
@@ -38,7 +106,17 @@
   }
   function savedRead(taskId) {
     const key = readKey(taskId);
-    try { return key ? readValue(localStorage.getItem(key)) : 0; }
+    try {
+      if (!key) return 0;
+      let value = localStorage.getItem(key);
+      // Before workers had independent windows, Claude read markers used the
+      // DSH namespace too. Task IDs are unique; migrate only this exact task.
+      if (value === null && !isDsh) {
+        value = localStorage.getItem(`alice.collaborator-read.v1.dsh-agent.${epoch}.${taskId}`);
+        if (value !== null) try { localStorage.setItem(key, String(readValue(value))); } catch { /* The old read marker is still usable. */ }
+      }
+      return readValue(value);
+    }
     catch { return 0; } // Reading still works when browser storage is unavailable.
   }
   function readThrough(taskId) {
@@ -63,6 +141,7 @@
   }
   function canReadSelected(taskId) {
     return opened && selection === taskId && !stopped && !document.hidden && !settingsOpened
+      && panel.dataset.front === "true"
       && !app.inert && !panel.inert && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
       && !$("workers-detail").classList.contains("hidden") && panel.getClientRects().length > 0;
   }
@@ -108,7 +187,7 @@
     return { available: !unavailable, reason, label: unavailable ? description[0] : "", message: description[1] };
   }
   function status(message, error = false) {
-    for (const name of ["workers-status", "workers-settings-status"]) {
+    for (const name of isDsh ? ["workers-status", "workers-settings-status"] : ["workers-status"]) {
       text(name, message); $(name).dataset.error = String(error); $(name).title = message;
     }
   }
@@ -123,11 +202,15 @@
     const visualParts = [art, $("workers-avatar-status"), $("workers-count")];
     const portraits = [...button.querySelectorAll(".collaborator-avatar-image")];
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const storageKey = `alice.collaborator-position.v1.${button.dataset.worker}`;
+    // Start this layout in an ordered column, rather than restoring the old
+    // independent positions that could overlap. Subsequent drags stay personal.
+    const storageKey = `alice.collaborator-position.v2.${button.dataset.worker}`;
+    const siblings = instances.map(({ elements }) => elements.get("workers-btn"));
     const clamp = (n) => Math.max(0, Math.min(1, n));
     const doubleClickMs = 500;
-    let position = { x: 1, y: 1 }, drag = null, suppressClick = false, frame = null;
+    let position = { x: 1, y: 0 }, customPosition = false, drag = null, suppressClick = false, frame = null;
     let clickTimer = null, pendingClick = null, workBaseline = null;
+    let lastReady = null, wasWorking = false, manualSize = false;
     let sizeAnimations = [], areaWidth = area.clientWidth, areaHeight = area.clientHeight;
     const interactive = () => !stopped && !document.hidden && !button.closest("[inert]")
       && !app.classList.contains("hidden") && !app.classList.contains("nav-open")
@@ -198,6 +281,7 @@
       const saved = JSON.parse(localStorage.getItem(storageKey));
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
         position = { x: clamp(saved.x), y: clamp(saved.y) };
+        customPosition = true;
       }
     } catch { /* Position storage is optional, including in private browsing. */ }
     function bounds() {
@@ -216,11 +300,30 @@
       // Visibility preserves its size, so the next resize can restore it.
       button.style.visibility = box && !opened && !closing ? "" : "hidden";
       if (!box) return;
+      if (!customPosition) {
+        // Reserve each portrait's actual bounds (including badges/status), so
+        // mixed small/large portraits keep a gap. Short views wrap leftward.
+        let right = area.clientWidth - box.left, top = box.top, columnWidth = 0;
+        for (const sibling of siblings) {
+          const width = sibling.offsetWidth, height = sibling.offsetHeight;
+          if (!width || !height) continue;
+          if (top > box.top && top + height > area.clientHeight - box.top) {
+            right -= columnWidth + 12; top = box.top; columnWidth = 0;
+          }
+          if (sibling === button) {
+            position = { x: box.width ? clamp((right - width - box.left) / box.width) : 0,
+              y: box.height ? clamp((top - box.top) / box.height) : 0 };
+            break;
+          }
+          top += height + 12; columnWidth = Math.max(columnWidth, width);
+        }
+      }
       button.style.left = `${box.left + position.x * box.width}px`;
       button.style.top = `${box.top + position.y * box.height}px`;
       button.style.right = "auto"; button.style.bottom = "auto";
     }
     function move(left, top, box) {
+      customPosition = true;
       position = { x: box.width ? clamp((left - box.left) / box.width) : position.x,
         y: box.height ? clamp((top - box.top) / box.height) : position.y };
       place();
@@ -237,7 +340,7 @@
       if (ended.moved) {
         clearClick();
         suppressClick = true;
-        if (cancelled) position = ended.position;
+        if (cancelled) { position = ended.position; customPosition = ended.customPosition; }
         else save();
       }
       if (button.hasPointerCapture(ended.pointerId)) button.releasePointerCapture(ended.pointerId);
@@ -252,7 +355,7 @@
       suppressClick = false;
       drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
         left: box.left + position.x * box.width, top: box.top + position.y * box.height,
-        position: { ...position }, moved: false, box };
+        position: { ...position }, customPosition, moved: false, box };
       try { button.setPointerCapture(event.pointerId); } catch { drag = null; }
     });
     button.addEventListener("pointermove", (event) => {
@@ -290,6 +393,7 @@
       if (pendingClick && now - pendingClick.at <= doubleClickMs && pendingClick.pointerType === pointerType
           && Math.hypot(event.clientX - pendingClick.x, event.clientY - pendingClick.y) <= 12) {
         event.preventDefault();
+        manualSize = true;
         setSize(button.dataset.size === "small" ? "large" : "small"); return;
       }
       clearClick();
@@ -304,18 +408,18 @@
       if (event.key === "Escape") clearClick();
       if (event.key === "Escape" && drag) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
     });
-    const resize = new ResizeObserver(() => {
+    const resize = new ResizeObserver((entries) => {
       if (area.clientWidth !== areaWidth || area.clientHeight !== areaHeight) {
         areaWidth = area.clientWidth; areaHeight = area.clientHeight; stopSizeMotion();
       }
-      if (drag) finish(true);
+      if (drag && entries.some(({ target }) => target === area || target === button)) finish(true);
       cancelAnimationFrame(frame); frame = requestAnimationFrame(place);
     });
-    resize.observe(area); resize.observe(button);
+    resize.observe(area); siblings.forEach((sibling) => resize.observe(sibling));
     window.addEventListener("blur", cancelInteraction);
     document.addEventListener("visibilitychange", () => { if (document.hidden) cancelInteraction(); });
     window.addEventListener("pagehide", () => { cancelInteraction(); cancelAnimationFrame(frame); resize.disconnect(); });
-    window.addEventListener("pageshow", () => { resize.observe(area); resize.observe(button); place(); });
+    window.addEventListener("pageshow", () => { resize.observe(area); siblings.forEach((sibling) => resize.observe(sibling)); place(); });
     reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopSizeMotion(); });
     place();
     return {
@@ -323,28 +427,47 @@
       layout: place,
       targetRect() { return bounds() && button.getClientRects().length ? art.getBoundingClientRect() : null; },
       syncWork(data) {
-        const used = data.policy?.runs_used;
-        if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(data.revision)) return;
-        if (!workBaseline || workBaseline.epoch !== data.session_epoch || workBaseline.revision !== data.revision) {
-          workBaseline = { epoch: data.session_epoch, revision: data.revision, used }; return;
+        const worker = registration(data);
+        const ready = isDsh ? data.connection?.connected === true : worker?.available === true;
+        const working = Number(worker?.running) > 0 || Number(worker?.queued) > 0 || activeStates.has(worker?.state);
+        const readinessChanged = lastReady !== null && lastReady !== ready;
+        const used = worker?.runs_used ?? (isDsh ? data.policy?.runs_used : null);
+        const revision = policyVersion(data);
+        let dispatched = working && !wasWorking;
+        if (Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(revision)) {
+          if (!workBaseline || workBaseline.epoch !== data.session_epoch || workBaseline.revision !== revision) {
+            workBaseline = { epoch: data.session_epoch, revision, used };
+          } else if (used > workBaseline.used) {
+            workBaseline.used = used; dispatched = true;
+          }
         }
-        if (used > workBaseline.used) {
-          workBaseline.used = used;
+        if (readinessChanged) manualSize = false;
+        if (dispatched) {
+          manualSize = false;
           setSize("large");
-          return true;
+        } else if (!manualSize && (lastReady === null || readinessChanged || wasWorking && !working && !ready)) {
+          setSize(ready || working ? "large" : "small");
         }
+        lastReady = ready; wasWorking = working;
+        return dispatched;
       },
     };
   }
-  function renderAvatar(running = 0, unread = 0) {
-    const worker = registry?.collaborators?.find((row) => row.name === "dsh-agent");
+  function renderAvatar(running = 0, unread = 0, queued = 0) {
+    const worker = registration();
     // Registration controls which tools are represented; a temporary disconnect
     // must not remove the entry needed to read that tool's existing sessions.
-    show("collaborator-dock", !!worker);
+    show("collaborator-dock", true);
     const button = $("workers-btn");
-    const paired = registry?.connection?.connected === true && worker?.available === true;
-    const statusLabel = !connected ? "状态待同步" : !paired ? "未连接" : running ? "工作中" : "已连接";
-    button.dataset.state = !connected ? "unknown" : !paired ? "disconnected" : running ? "working" : "connected";
+    const ready = isDsh ? registry?.connection?.connected === true && worker?.available === true : worker?.available === true;
+    const claudeStates = { disabled: "未授权", ready: "授权就绪", running: "工作中", waiting_permission: "等待权限答复", recovery_required: "待核实停止", draining: "正在停止" };
+    const statusLabel = !connected ? "状态待同步" : !statusFresh ? "状态待更新" : isDsh
+      ? !ready ? state(worker?.state) : running ? "工作中" : queued ? "等待执行" : "已连接"
+      : claudeStates[worker?.state] || (ready ? "授权就绪" : "暂不可用");
+    // A failed HTTP read does not prove the worker disconnected. Preserve the
+    // last known portrait state, with a separate stale label and timestamp.
+    button.dataset.state = !connected ? "unknown" : !ready ? "disconnected" : running || queued ? "working" : "connected";
+    button.dataset.stale = String(!statusFresh);
     panel.dataset.state = button.dataset.state;
     const portrait = $("workers-window-portrait"), source = button.querySelector(button.dataset.size === "small"
       ? ".collaborator-avatar-small" : ".collaborator-avatar-large").src;
@@ -352,17 +475,17 @@
     button.dataset.unread = String(unread > 0);
     text("workers-avatar-status", statusLabel);
     text("workers-count", unread ? String(Math.min(unread, 99)) + (unread > 99 ? "+" : "") : "");
-    const details = [statusLabel, running ? `${running} 个任务运行中` : "", unread ? `${unread} 个任务未读` : ""].filter(Boolean).join("，");
-    button.setAttribute("aria-label", `${opened ? "收起" : "打开"} DSH 会话，${details}`);
-    button.title = `DSH · ${details}。单击查看会话，${avatarSizeHint(button)}，拖动调整位置。`;
+    const details = [statusLabel, running ? `${running} 个任务占用执行槽` : "", queued ? `${queued} 个任务排队` : "", unread ? `${unread} 个任务未读` : ""].filter(Boolean).join("，");
+    button.setAttribute("aria-label", `${opened ? "收起" : "打开"} ${workerLabel} 会话，${details}`);
+    button.title = `${workerLabel} · ${details}。单击查看会话，${avatarSizeHint(button)}，拖动调整位置。`;
   }
   function setupWorkerWindow() {
     const handle = $("workers-window-handle"), dockButton = $("workers-window-dock");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const storageKey = "alice.collaborator-window.v1.dsh-agent";
+    const storageKey = `alice.collaborator-window.v1.${workerId}`;
     const clamp = (n) => Math.max(0, Math.min(1, n));
     let mode = "floating", position = { x: 1, y: 0.08 }, drag = null, suppressClick = false;
-    let expansion = [], expansionArea = null, collapseDone = null;
+    let expansion = [], expansionArea = null, collapseDone = null, hasSavedPosition = false;
     const timing = { duration: 420, easing: "cubic-bezier(.4, 0, .2, 1)", fill: "both" };
     function stopExpansion() {
       const animations = expansion, done = collapseDone;
@@ -393,7 +516,9 @@
     }
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey));
-      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) position = { x: clamp(saved.x), y: clamp(saved.y) };
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        position = { x: clamp(saved.x), y: clamp(saved.y) }; hasSavedPosition = true;
+      }
     } catch { /* Window placement is optional, local-only presentation state. */ }
     function area() {
       const style = getComputedStyle(app), nav = $("app-nav");
@@ -408,13 +533,14 @@
     const dockWidth = () => Math.min(780, Math.max(620, window.innerWidth * 0.44));
     function canDock() { const box = area(); return box.width - dockWidth() >= 460 && box.height >= 320; }
     function save() {
+      hasSavedPosition = true;
       try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* Still movable. */ }
     }
     function render() {
       if (closing) return;
       if (mode === "docked" && !canDock()) mode = "floating";
       panel.dataset.presentation = mode;
-      app.classList.toggle("workers-docked", opened && mode === "docked");
+      syncWindowLayout();
       dockButton.textContent = mode === "docked" ? "恢复浮窗" : "固定右侧";
       dockButton.disabled = mode !== "docked" && !canDock();
       dockButton.title = dockButton.disabled ? "窗口较窄，保留浮窗以免挤压主聊天" : mode === "docked" ? "移出侧栏，恢复浮动窗口" : "将此窗口固定在右侧";
@@ -451,6 +577,7 @@
         if (cancelled) { mode = ended.mode; position = ended.position; }
         else {
           mode = event && atRightEdge(event) ? "docked" : "floating";
+          if (mode === "docked") claimDock(workerId);
           save();
         }
       }
@@ -499,7 +626,9 @@
     }, true);
     dockButton.onclick = () => {
       if (!opened || dockButton.disabled) return;
-      stopExpansion(); finish(true); mode = mode === "docked" ? "floating" : "docked"; render();
+      stopExpansion(); finish(true); mode = mode === "docked" ? "floating" : "docked";
+      if (mode === "docked") claimDock(workerId);
+      render();
     };
     window.addEventListener("blur", () => { stopExpansion(); finish(true); });
     document.addEventListener("visibilitychange", () => { if (document.hidden) { stopExpansion(); finish(true); } });
@@ -508,12 +637,13 @@
     reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopExpansion(); });
     return {
       completeTransition: stopExpansion,
+      undock() { if (mode === "docked") { stopExpansion(); finish(true); mode = "floating"; render(); } },
       open(origin) {
         stopExpansion(); finish(true); mode = "floating";
         $("workers-list-view").closest(".worker-workspace").scrollLeft = 0;
         const box = area(), rect = app.getBoundingClientRect();
         const width = Math.min(960, box.width), height = Math.min(680, box.height);
-        if (origin?.width && origin?.height) {
+        if (!hasSavedPosition && origin?.width && origin?.height) {
           // Keep the expanded workspace near its avatar, clamped to the main
           // content area. The desktop avatar retains its own saved position.
           position = { x: box.width > width ? clamp((origin.left - rect.left - box.left - 12) / (box.width - width)) : 0,
@@ -538,7 +668,7 @@
         panel.dataset.presentation = "floating";
         Object.assign(panel.style, { left: `${frame.left - rect.left}px`, top: `${frame.top - rect.top}px`,
           width: `${frame.width}px`, height: `${frame.height}px`, maxWidth: "none", maxHeight: "none", right: "auto", bottom: "auto" });
-        app.classList.remove("workers-docked"); avatarControl.layout();
+        syncWindowLayout(); avatarControl.layout();
         const target = avatarControl.targetRect();
         collapseDone = done;
         if (!animate || reducedMotion.matches || typeof panel.animate !== "function" || document.hidden
@@ -588,7 +718,17 @@
     clearEventView(message); $("workers-artifacts").replaceChildren();
     show("workers-events-more", false); show("workers-events-restart", false); show("workers-latest", false);
   }
-  async function request(path, payload) {
+  function request(path, payload) {
+    const reading = payload === undefined || /\/tasks\/(detail|events)$/.test(path);
+    const key = reading ? `${controlGeneration}:${path}:${JSON.stringify(payload ?? null)}` : null;
+    if (key && reads.has(key)) return reads.get(key);
+    const promise = performRequest(path, payload);
+    if (!key) return promise;
+    reads.set(key, promise);
+    promise.finally(() => { if (reads.get(key) === promise) reads.delete(key); }).catch(() => {});
+    return promise;
+  }
+  async function performRequest(path, payload) {
     const controller = new AbortController(); controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
@@ -597,10 +737,14 @@
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const e = new Error([404, 405].includes(response.status) && !data.code ? "当前服务尚未加载协作接口；应用更新并重启后才能读取。" : (data.error || data.message || "暂时无法读取协作记录"));
+        const e = new Error(data.code === "host_busy" ? "Alice 正在处理其他操作，稍后继续同步；已显示的记录保留。"
+          : [404, 405].includes(response.status) && !data.code ? "当前服务尚未加载协作接口；应用更新并重启后才能读取。" : (data.error || data.message || "暂时无法读取协作记录"));
         e.code = data.code; throw e;
       }
       return data;
+    } catch (e) {
+      if (e.name === "AbortError") { const timeoutError = new Error("本次读取或操作等待超时，结果待确认。"); timeoutError.code = "request_timeout"; throw timeoutError; }
+      throw e;
     } finally { clearTimeout(timeout); controllers.delete(controller); }
   }
   function clearDetail() {
@@ -617,26 +761,36 @@
   function acceptEpoch(next) {
     if (typeof next !== "string" || !readIdentity.test(next)) throw new Error("服务未返回有效会话身份");
     if (epoch && epoch !== next) {
-      seen.clear(); clearDetail(); selection = null; archivedView = false; resetList();
+      controlGeneration++; registry = null; connected = false; statusFresh = false; lastStatusAt = 0;
+      for (const channel of Object.values(syncState)) Object.assign(channel, { failures: 0, nextAt: 0, error: "", lastAt: 0 });
+      seen.clear(); activityTasks.clear(); activityDepth = 40; clearDetail(); selection = null; archivedView = false; resetList();
       showTaskDetail(false);
-      policyDirty = false; $("workers-token").value = ""; $("workers-advanced").open = false; $("workers-native-ack").checked = false;
-      taskSettingsDirty = false;
-      text("workers-pairing-result", ""); text("workers-policy-result", ""); text("workers-task-settings-result", "");
+      if (isDsh) {
+        policyDirty = false; $("workers-token").value = ""; $("workers-advanced").open = false; $("workers-native-ack").checked = false;
+        taskSettingsDirty = false;
+        text("workers-pairing-result", ""); text("workers-policy-result", ""); text("workers-task-settings-result", "");
+      }
       status("会话已切换，旧任务正文已从本页清除。");
       invalidateChatSources();
     }
     epoch = next;
   }
   function setRegistry(data) {
-    if (registry && (registry.revision !== data.revision || registry.policy?.enabled && !data.policy?.enabled)) {
+    if (data.worker_id !== workerId || !registration(data)) throw new Error("宿主返回的工具身份不匹配，未更新窗口。");
+    connected = true; statusFresh = true; lastStatusAt = Date.now();
+    Object.assign(syncState.status, { failures: 0, nextAt: 0, error: "", lastAt: lastStatusAt });
+    if (registry && (policyVersion(registry) !== policyVersion(data) || policyEnabled(registry) && !policyEnabled(data))) {
       // Policy changes invalidate bodies already rendered or waiting in a fetch.
-      clearDetail(); resetList(); policyDirty = false;
+      clearDetail(); activityTasks.clear(); activityDepth = 40; resetList(); policyDirty = false;
       invalidateChatSources();
     }
-    if (registry?.task_management?.revision !== data.task_management?.revision) taskSettingsDirty = false;
+    if (isDsh && registry?.task_management?.revision !== data.task_management?.revision) taskSettingsDirty = false;
     registry = data;
+    window.dispatchEvent(new CustomEvent("alice-worker-status", { detail: { workerId, data, error: null } }));
+    if (!isDsh) window.AliceClaudeGate?.syncStatus(data);
     if (avatarControl.syncWork(data)) dispatchWatchUntil = 0;
-    const worker = data.collaborators?.find((row) => row.name === "dsh-agent");
+    if (!isDsh) { renderList(); updateControls(); return; }
+    const worker = registration(data);
     text("workers-connection", worker ? `DSH · ${state(worker.state)}${worker.reason ? `：${worker.reason}` : ""}` : "宿主未返回 DSH 注册信息，暂不可启用。");
     const paired = data.connection?.connected === true;
     text("workers-capabilities", paired ? (data.policy?.enabled ? "已连接，现有授权和剩余额度继续有效。请在主聊天描述任务，由 Alice 派工。" : "已连接，派工授权尚未开启。可核对原范围后恢复授权，或设置新的任务范围。")
@@ -691,52 +845,104 @@
     renderList();
     updateControls();
   }
+  function staleRead() { const error = new Error("读取期间状态已变化，正在重新同步。"); error.code = "stale_read"; return error; }
+  function readStatus(force = false) {
+    if (statusPromise) return statusPromise;
+    if (!force && statusFresh && Date.now() - lastStatusAt < 1000) return Promise.resolve(registry);
+    if (stopped || actionBusy) return Promise.reject(staleRead());
+    const generation = controlGeneration, session = epoch;
+    const pending = (async () => {
+      try {
+        const data = await request(`${api}/status`);
+        if (stopped || generation !== controlGeneration || session !== epoch && data.session_epoch !== epoch) throw staleRead();
+        if (data.worker_id !== workerId || !registration(data)) throw new Error("宿主返回的工具身份不匹配。");
+        acceptEpoch(data.session_epoch); setRegistry(data);
+        return data;
+      } catch (e) {
+        if (!stopped && generation === controlGeneration && e.code !== "stale_read") {
+          statusFresh = false; renderList(); updateControls();
+          window.dispatchEvent(new CustomEvent("alice-worker-status", { detail: { workerId, data: null, error: e.message } }));
+          if (!isDsh) window.AliceClaudeGate?.statusUnavailable(e.message);
+        }
+        throw e;
+      }
+    })();
+    statusPromise = pending;
+    pending.finally(() => { if (statusPromise === pending) statusPromise = null; }).catch(() => {});
+    return pending;
+  }
+  function beginPolicyWrite() {
+    if (stopped || actionBusy) throw new Error("该工具正在处理另一项操作，请稍后再保存授权。");
+    policyWriteToken = {};
+    actionBusy = true; controlGeneration++; viewGeneration++;
+    statusPromise = null; statusFresh = false;
+    clearTimeout(timer); renderList(); updateControls();
+    if (!isDsh) window.AliceClaudeGate?.statusUnavailable("正在更新 Claude 授权，等待重新核验。");
+    return policyWriteToken;
+  }
+  function endPolicyWrite(token) {
+    if (!token || policyWriteToken !== token) return;
+    policyWriteToken = null;
+    // Invalidate both reads issued before the write and any consumer that was
+    // still awaiting them. An old promise's finally cannot clear a newer read.
+    controlGeneration++; viewGeneration++; statusPromise = null; statusFresh = false;
+    actionBusy = false; renderList(); updateControls();
+    for (const channel of Object.values(syncState)) channel.nextAt = 0;
+    if (polling) pollAgain = true; else schedule(0);
+  }
   function updateControls() {
+    if (isDsh) {
     const paired = registry?.connection?.connected === true;
     const hasConnection = registry?.connection?.has_connection === true || paired;
-    const worker = registry?.collaborators?.find((row) => row.name === "dsh-agent");
-    const canUse = paired && worker?.available === true;
+    const worker = registration();
+    const canUse = statusFresh && paired && worker?.available === true;
     const credential = registry?.credential;
     const managedAvailable = credential?.supported === true && ["ready", "missing"].includes(credential.state);
     $("workers-managed-connect").textContent = credential?.configured === true ? "使用已保存令牌连接" : "生成令牌并连接";
-    $("workers-managed-connect").disabled = actionBusy || !epoch || hasConnection || !managedAvailable;
-    $("workers-rotate-token").disabled = actionBusy || !epoch || hasConnection || registry?.policy?.enabled === true
+    $("workers-managed-connect").disabled = actionBusy || !statusFresh || !epoch || hasConnection || !managedAvailable;
+    $("workers-rotate-token").disabled = actionBusy || !statusFresh || !epoch || hasConnection || registry?.policy?.enabled === true
       || credential?.supported !== true || credential?.configured !== true;
     $("workers-token").disabled = actionBusy || !epoch || hasConnection;
-    $("workers-connect").disabled = actionBusy || !epoch || hasConnection || !$("workers-token").value.trim();
+    $("workers-connect").disabled = actionBusy || !statusFresh || !epoch || hasConnection || !$("workers-token").value.trim();
     $("workers-disconnect").disabled = actionBusy || !epoch || !hasConnection;
     for (const name of ["workers-max-runs", "workers-max-seconds", "workers-workspace", "workers-mode", "workers-native-ack"]) $(name).disabled = actionBusy || !canUse;
     $("workers-enabled").disabled = actionBusy || !epoch || !canUse && !registry?.policy?.enabled;
-    $("workers-policy-save").disabled = actionBusy || !epoch || !canUse && !registry?.policy?.enabled;
+    $("workers-policy-save").disabled = actionBusy || !statusFresh || !epoch || !canUse && !registry?.policy?.enabled;
     $("workers-policy-save").textContent = $("workers-enabled").checked ? registry?.policy?.enabled ? "保存授权设置" : "保存并开启授权" : "保存为关闭授权";
     const taskSettings = registry?.task_management;
     const settingsKnown = Number.isSafeInteger(taskSettings?.revision);
     $("workers-sync-archive").disabled = actionBusy || !epoch || !settingsKnown;
     $("workers-sync-delete").disabled = actionBusy || !epoch || !settingsKnown || taskSettings?.capabilities?.delete !== true;
     $("workers-task-settings-save").disabled = actionBusy || !epoch || !settingsKnown;
+    }
     for (const name of ["workers-unarchived", "workers-archived"]) $(name).disabled = actionBusy || !epoch;
     updateTaskControls();
     updateManagementControls();
   }
   function renderList() {
-    const rows = [...tasks.values()].filter((task) => (task.archived === true) === archivedView)
+    const rows = [...tasks.values()].filter((task) => task.name === workerId && (task.archived === true) === archivedView)
       .sort((a, b) => Number(activeStates.has(b.state)) - Number(activeStates.has(a.state)) || Number(b.updated_at || 0) - Number(a.updated_at || 0));
     // A main-chat reference can target an older conversation beyond the loaded
     // page. Keep that explicitly selected conversation visible in the sidebar.
-    if (selectedTask?.task_id === selection && (selectedTask.archived === true) === archivedView
+    if (selectedTask?.name === workerId && selectedTask?.task_id === selection && (selectedTask.archived === true) === archivedView
         && !rows.some((task) => task.task_id === selection)) rows.unshift(selectedTask);
     const shown = new Set(rows.map((task) => task.task_id));
     for (const child of [...$("workers-list").children]) if (!shown.has(child.dataset.taskId)) child.remove();
     $("workers-unarchived").setAttribute("aria-pressed", String(!archivedView));
     $("workers-archived").setAttribute("aria-pressed", String(archivedView));
     text("workers-empty", archivedView ? "还没有已归档任务。归档后的任务保留在这里，可查看、恢复或删除。"
-      : registry?.connection?.connected && registry?.policy?.enabled ? "还没有未归档任务。在主聊天告诉 Alice 要做什么；也可以切换到“已归档”查看旧记录。"
-      : "还没有未归档任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天描述目标。");
-    let unread = 0, running = 0;
+      : registration()?.available && policyEnabled() ? `还没有未归档任务。在主聊天告诉 Alice 要交给 ${workerLabel} 的工作；也可以切换到“已归档”查看旧记录。`
+      : isDsh ? "还没有未归档任务。请在“设置 → DSH”连接并授权任务范围，然后在主聊天描述目标。"
+      : "还没有未归档任务。请在“设置 → Claude”配置本地 CLI 并授权，然后在主聊天描述目标。");
+    let unread = 0;
+    const worker = registration();
+    const running = Number.isSafeInteger(worker?.running) ? worker.running
+      : [...activityTasks.values()].filter((task) => activeStates.has(task.state) && task.state !== "queued").length;
+    const queued = Number.isSafeInteger(worker?.queued) ? worker.queued
+      : [...activityTasks.values()].filter((task) => task.state === "queued").length;
+    for (const task of activityTasks.values()) if (Number(task.last_sequence || 0) > readThrough(task.task_id)) unread++;
     for (const [position, task] of rows.entries()) {
       const hasUnread = !archivedView && Number(task.last_sequence || 0) > readThrough(task.task_id);
-      if (hasUnread) unread++;
-      if (activeStates.has(task.state)) running++;
       let button = [...$("workers-list").children].find((child) => child.dataset.taskId === task.task_id);
       if (!button) {
         button = node("button", undefined, "worker-task"); button.type = "button"; button.dataset.taskId = task.task_id;
@@ -756,14 +962,15 @@
         if (focused) button.focus({ preventScroll: true });
       }
     }
-    renderAvatar(running, unread);
+    renderAvatar(running, unread, queued);
     show("workers-empty", rows.length === 0); show("workers-more", nextBefore !== null);
   }
   async function syncList(older = false) {
     if (listBusy || actionBusy) return;
     listBusy = true; $("workers-more").disabled = true;
-    const session = epoch, generation = controlGeneration, listVersion = listGeneration, archived = archivedView;
-    const wanted = listDepth + (older ? 40 : 0), incoming = new Map();
+    let session = epoch;
+    const generation = controlGeneration, listVersion = listGeneration, archived = archivedView;
+    const wanted = Math.max(listDepth + (older ? 40 : 0), archived ? 0 : activityDepth), incoming = new Map();
     const stale = () => session !== epoch || generation !== controlGeneration || listVersion !== listGeneration || archived !== archivedView;
     try {
       // Re-read the visible prefix so removed or moved rows cannot linger in a
@@ -772,9 +979,13 @@
       while (before < wanted) {
         const params = new URLSearchParams({ limit: String(Math.min(100, wanted - before)), archived: archived ? "1" : "0" });
         if (before) params.set("before", String(before));
-        const data = await request(`/api/worker-tasks?${params}`);
-        if (stale() || data.session_epoch !== epoch) return;
-        for (const row of data.tasks || []) if ((row.archived === true) === archived) incoming.set(row.task_id, row);
+        const data = await request(`${api}/tasks?${params}`);
+        if (generation !== controlGeneration || listVersion !== listGeneration || archived !== archivedView
+            || session !== epoch && data.session_epoch !== epoch) return;
+        if (data.worker_id !== workerId) throw new Error("宿主返回的会话列表归属不匹配。");
+        acceptEpoch(data.session_epoch); session = epoch;
+        if (stale()) return;
+        for (const row of data.tasks || []) if (row.name === workerId && (row.archived === true) === archived) incoming.set(row.task_id, row);
         next = Number.isSafeInteger(data.next_before) && data.next_before > before ? data.next_before : null;
         if (next === null) break;
         before = next;
@@ -791,6 +1002,24 @@
         }
       }
       tasks.clear(); for (const [key, row] of incoming) tasks.set(key, row);
+      // Archived browsing must not erase the current worker's unread badge or
+      // make its running tasks appear idle. Only summaries are read here.
+      if (archived) {
+        const activityIncoming = new Map();
+        let cursor = 0;
+        while (cursor < activityDepth) {
+          const params = new URLSearchParams({ limit: String(Math.min(100, activityDepth - cursor)), archived: "0", before: String(cursor) });
+          const activity = await request(`${api}/tasks?${params}`);
+          if (stale() || activity.session_epoch !== epoch) return;
+          for (const row of activity.tasks || []) if (row.name === workerId && row.archived !== true) activityIncoming.set(row.task_id, row);
+          if (!Number.isSafeInteger(activity.next_before) || activity.next_before <= cursor) break;
+          cursor = activity.next_before;
+        }
+        activityTasks.clear(); for (const [key, row] of activityIncoming) activityTasks.set(key, row);
+      } else {
+        activityDepth = wanted;
+        activityTasks.clear(); for (const [key, row] of incoming) activityTasks.set(key, row);
+      }
       if (newlyUnavailable) invalidateChatSources();
       listDepth = wanted; nextBefore = next; renderList();
     } finally {
@@ -809,7 +1038,8 @@
   }
   function updateTaskControls() {
     if (!$('workers-recover')) {
-      const button = document.createElement('button'); button.id = 'workers-recover';
+      const button = document.createElement('button'); button.id = `${tool.prefix}workers-recover`;
+      button.type = 'button'; button.className = 'btn ghost'; elements.set('workers-recover', button);
       button.textContent = '人工核实后恢复';
       $('workers-cancel').after(button);
       button.onclick = () => {
@@ -840,14 +1070,14 @@
     const content = taskContentState(task), pending = !!task.management_pending;
     $("workers-cancel").disabled = actionBusy || pending || !(activeStates.has(task.state) || ["unknown", "waiting"].includes(task.state)) || task.state === "stopping" || !!task.cancel_requested && task.state !== "unknown";
     $("workers-cancel").textContent = task.state === "unknown" && task.cancel_requested ? "重试停止" : "请求停止";
-    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || !content.available || (task.name !== "claude-agent" && (registry?.policy?.enabled !== true || registry?.connection?.connected !== true));
+    $("workers-supplement").disabled = actionBusy || pending || task.archived === true || task.session_closed === true || !content.available || (task.name !== "claude-agent" && (!statusFresh || registry?.policy?.enabled !== true || registry?.connection?.connected !== true));
     $("workers-supplement").textContent = task.name === 'claude-agent' ? '让 Alice 查看' : '让 Alice 补充';
     $("workers-review").disabled = actionBusy || pending || !content.available || !["completed", "succeeded"].includes(task.state);
     $("workers-revoke").disabled = actionBusy || pending || !content.available;
   }
   function updateManagementControls() {
     const task = selectedTask, pending = task?.management_pending;
-    const settingsKnown = Number.isSafeInteger(registry?.task_management?.revision);
+    const settingsKnown = Number.isSafeInteger(managementSettings()?.revision);
     const allowed = !actionBusy && !!epoch && settingsKnown && manageable(task);
     $("workers-archive").textContent = task?.archived ? "恢复任务" : "归档任务";
     $("workers-archive").disabled = !allowed || !!pending;
@@ -858,12 +1088,13 @@
     text("workers-management-hint", !settingsKnown ? "当前服务尚未提供任务管理设置，请更新并重载后再试。"
       : pending ? `${managementNames[pending] || "管理操作"}结果待确认。仅可按原来的${task.management_sync_dsh ? "同步 DSH" : "只处理 Alice"}选择明确重试，不会自动重发。`
       : !manageable(task) ? "仅已结束且执行槽已空闲的任务可以归档、恢复或删除；unknown仍不能整理。正文已撤销也可清理。"
-      : task.archived ? "已归档，正文保留；恢复只回列表与历史，不会重新激活已关闭的 DSH 会话，也不会还原已撤销正文。"
+      : task.archived ? "已归档，正文保留；恢复只回列表与历史，不会重新执行任务或还原已撤销正文。"
       : task.session_closed ? "原协作会话已关闭，当前任务不能继续派工；记录仍可查看、归档或删除。"
-      : "归档会保留正文并暂停此任务的后续派工；删除无法恢复。同步范围在“设置 → DSH”中选择。");
+      : isDsh ? "归档会保留正文并暂停此任务的后续派工；删除无法恢复。同步范围在“设置 → DSH”中选择。"
+      : "归档、恢复和删除只整理 Alice 中的 Claude 任务记录；不修改 CLI 历史或工作目录。删除无法恢复。");
     if (!management) return;
     const sameTask = task?.task_id === management.taskId && task?.version === management.version;
-    const sameSettings = registry?.task_management?.revision === management.settingsRevision;
+    const sameSettings = managementSettings()?.revision === management.settingsRevision;
     const samePending = (pending || null) === management.pending;
     const remoteReady = !management.syncDsh || registry?.connection?.connected === true
       && registry?.task_management?.capabilities?.[management.action] === true;
@@ -876,23 +1107,24 @@
     $("workers-management-back").disabled = actionBusy;
   }
   function beginManagement(action) {
-    const task = selectedTask, settings = registry?.task_management;
+    const task = selectedTask, settings = managementSettings();
     if (actionBusy || !managementNames[action] || !manageable(task) || !Number.isSafeInteger(settings?.revision)) return;
     if (task.management_pending && task.management_pending !== action) return;
-    const syncDsh = task.management_pending ? task.management_sync_dsh === true
-      : (action === "delete" ? settings.sync_delete : settings.sync_archive) === true;
+    const syncDsh = isDsh && (task.management_pending ? task.management_sync_dsh === true
+      : (action === "delete" ? settings.sync_delete : settings.sync_archive) === true);
     management = { action, taskId: task.task_id, version: task.version, settingsRevision: settings.revision,
       syncDsh, pending: task.management_pending || null };
     const descriptions = {
       archive: "将任务移入 Alice 的“已归档”列表。正文保留，恢复前不能继续派工。",
-      restore: "将任务移回“进行中与历史”列表。恢复不会重新执行任务、激活已关闭的 DSH 会话、恢复已撤销正文或授予新权限。",
+      restore: "将任务移回“进行中与历史”列表。恢复不会重新执行任务、恢复已撤销正文或授予新权限。",
       delete: "删除 Alice 的任务记录并撤销相关正文，无法恢复。工作目录中的文件不受此操作影响。"
     };
     text("workers-management-title", `${management.pending ? "重新确认" : "确认"}${managementNames[action]}任务`);
     text("workers-management-description", `任务 ${task.task_id}：${descriptions[action]}`);
     text("workers-management-scope", syncDsh
       ? `${action === "delete" ? "本次还会永久删除 DSH 对应专属会话，无法恢复。" : `本次还会同步${managementNames[action]} DSH 对应专属会话。`}${management.pending ? "沿用原待确认操作的选择。" : "依据已保存的同步设置。"}`
-      : `本次只处理 Alice，DSH 会话保持不变。${management.pending ? "沿用原待确认操作的选择。" : "同步选项可在“设置 → DSH”中更改。"}`);
+      : isDsh ? `本次只处理 Alice，DSH 会话保持不变。${management.pending ? "沿用原待确认操作的选择。" : "同步选项可在“设置 → DSH”中更改。"}`
+      : "本次仅整理 Alice 中的 Claude 任务记录，不修改 Claude CLI 历史或工作目录。");
     text("workers-management-result", "");
     const submit = $("workers-management-submit");
     submit.textContent = `${management.pending ? "确认重试" : "确认"}${managementNames[action]}${syncDsh ? "（含 DSH）" : "（仅 Alice）"}`;
@@ -914,7 +1146,7 @@
     text("workers-management-result", `正在${managementNames[choice.action]}，结果尚未确认…`);
     $("workers-management-result").dataset.error = "false";
     try {
-      const data = await request(`/api/worker-tasks/${choice.action}`, { session_epoch: session, task_id: choice.taskId,
+      const data = await request(`${api}/tasks/${choice.action}`, { session_epoch: session, task_id: choice.taskId,
         request_id: id(), revision: choice.version, settings_revision: choice.settingsRevision });
       if (session !== epoch || generation !== controlGeneration || data.session_epoch !== session || data.task_id !== choice.taskId) return;
       closeManagement();
@@ -924,11 +1156,12 @@
           throw new Error("宿主返回的管理结果不完整，需要重新核对状态");
         }
         if (choice.action === "delete") { forgetSeen(choice.taskId); invalidateChatSources(); }
+        if (["delete", "archive"].includes(choice.action)) activityTasks.delete(choice.taskId);
         // Archive/restore preserves the position actually read, not the latest sequence.
         if (choice.action === "restore") archivedView = false;
         selection = null; clearDetail(); resetList();
         showTaskDetail(false);
-        status(`已${managementNames[choice.action]} Alice 任务${data.synced_dsh === true ? `，并已同步${managementNames[choice.action]} DSH 专属会话。` : "；DSH 会话未改动。"}`);
+        status(`已${managementNames[choice.action]} Alice 中的 ${workerLabel} 任务${data.synced_dsh === true ? `，并已同步${managementNames[choice.action]} DSH 专属会话。` : "记录。"}`);
         if (opened) $(archivedView ? "workers-archived" : "workers-unarchived").focus({ preventScroll: true });
       } else {
         if (selectedTask?.task_id === choice.taskId) {
@@ -936,7 +1169,8 @@
             management_pending: data.management_pending || null, management_sync_dsh: data.management_sync_dsh === true };
           if (tasks.has(choice.taskId)) tasks.set(choice.taskId, selectedTask);
         }
-        const message = data.management_pending ? `${managementNames[choice.action]}尚未确认，Alice 记录未移动。恢复 DSH 连接后，可按原选择明确重试。`
+        const message = !isDsh ? `${managementNames[choice.action]}尚未确认，Alice 记录未移动。请同步任务状态后重新确认，没有自动重试。`
+          : data.management_pending ? `${managementNames[choice.action]}尚未确认，Alice 记录未移动。恢复 DSH 连接后，可按原选择明确重试。`
           : `${managementNames[choice.action]}未完成，Alice 记录未移动。请检查 DSH 连接和同步设置，再重新确认；没有自动重试。`;
         text("workers-management-result", message); $("workers-management-result").dataset.error = "true";
         status(message, true);
@@ -962,7 +1196,7 @@
     const generation = controlGeneration;
     updateControls(); renderList(); result("正在保存任务管理同步设置…", false);
     try {
-      const data = await request("/api/worker-task-settings", { session_epoch: session, request_id: id(), revision: settings.revision,
+      const data = await request(`${api}/task-settings`, { session_epoch: session, request_id: id(), revision: settings.revision,
         sync_archive: archive, sync_delete: deletion });
       if (session !== epoch || generation !== controlGeneration || data.session_epoch !== session) return;
       taskSettingsDirty = false; setRegistry(data);
@@ -1221,7 +1455,7 @@
   }
   function appendEvent(event) {
     if (!Number.isSafeInteger(event.sequence) || event.sequence <= eventCursor || eventNodes.has(event.event_id)) return;
-    const actor = event.actor === "alice" ? "alice" : ["dsh", "agent", "dsh-agent"].includes(event.actor) ? "dsh" : "host";
+    const actor = event.actor === "alice" ? "alice" : ["dsh", "claude", "agent", "dsh-agent", "claude-agent"].includes(event.actor) ? "agent" : "host";
     const isMessage = ["agent_message_delta", "agent_message_completed"].includes(event.type);
     const isConversation = isMessage || ["alice_message_queued", "agent_question"].includes(event.type);
     const target = $(isConversation ? "workers-messages" : "workers-history-events");
@@ -1251,7 +1485,7 @@
     const truncation = entry.truncated ? " · 片段已截断" : "";
     entry.meta.textContent = isConversation
       ? `${time(event.observed_at)}${event.type === "alice_message_queued" ? " · 已登记" : ""}${truncation}`
-      : `#${event.sequence} · ${time(event.observed_at)} · ${actor === "dsh" ? workerLabel + " 报告，未经宿主事实复核" : "宿主记录"}${truncation}`;
+      : `#${event.sequence} · ${time(event.observed_at)} · ${actor === "agent" ? workerLabel + " 报告，未经宿主事实复核" : "宿主记录"}${truncation}`;
     entry.root.dataset.attention = String(["tool_failed", "run_failed", "connection_lost"].includes(event.type));
     if (event.type === "alice_message_sent") {
       // This is a host receipt, not a second message or a replacement for the brief.
@@ -1278,6 +1512,7 @@
   }
   function renderDetail(data) {
     const task = data.task;
+    if (task?.name !== workerId) throw new Error("任务所属工具与当前窗口不一致，请从对应工具入口打开。");
     const content = taskContentState(task);
     if (selectedTask?.task_id === task.task_id && taskContentState(selectedTask).available && !content.available) invalidateChatSources();
     if (selectedTask?.task_id === task.task_id && !taskContentState(selectedTask).available && content.available) clearEventView();
@@ -1291,7 +1526,7 @@
       $("workers-task-state").title = $("workers-task-state").textContent;
       text("workers-task-meta", `${task.name === "claude-agent" ? "Claude CLI" : task.name === "dsh-agent" ? "DSH" : "协作者"} · ${state(task.state)}${content.label ? ` · ${content.label}` : ""}${task.archived ? " · 已归档" : ""}${task.session_closed ? " · 协作会话已关闭" : ""} · 最后更新 ${time(task.updated_at)} · ${task.task_id}`);
       const worker = task.name === "claude-agent" ? "Claude CLI" : task.name === "dsh-agent" ? "DSH" : "协作者";
-      const cap = registry?.collaborators?.find((row) => row.name === task.name)?.capabilities;
+      const cap = registration()?.capabilities;
       const hasTools = data.tool_details_available === true || cap?.tool_details === true || cap?.tool_events === true;
       text("workers-tool-note", hasTools ? `工具事件来自 ${worker} 的公开报告，未经宿主内容核实。` : `${worker} 当前接口未提供工具详情。`);
       const reported = task.usage || data.usage || {};
@@ -1340,7 +1575,7 @@
     if (actionBusy || !opened || !selection || $("workers-detail").classList.contains("hidden")) return;
     const selected = selection, generation = viewGeneration, session = epoch;
     let data;
-    try { data = await request("/api/worker-tasks/detail", { session_epoch: session, task_id: selected }); }
+    try { data = await request(`${api}/tasks/detail`, { session_epoch: session, task_id: selected }); }
     catch (e) {
       if (e.code === "not_found" && current(selected, generation, session)) {
         controlGeneration++; forgetSeen(selected); selection = null; clearDetail(); resetList();
@@ -1370,7 +1605,7 @@
     }
     let response;
     try {
-      response = await request("/api/worker-tasks/events", { session_epoch: session, task_id: selected, after_cursor: eventCursor, limit: 100 });
+      response = await request(`${api}/tasks/events`, { session_epoch: session, task_id: selected, after_cursor: eventCursor, limit: 100 });
     } catch (e) {
       if (e.code === "resync_required" && current(selected, generation, session)) { clearDetail(); status("工作记录游标已过期，正在重新同步。", true); return; }
       throw e;
@@ -1403,28 +1638,60 @@
   function schedule(delay) {
     clearTimeout(timer);
     if (!visible()) return;
-    const active = [...tasks.values()].some((task) => activeStates.has(task.state));
-    timer = setTimeout(poll, delay ?? (Date.now() < dispatchWatchUntil ? 1000
-      : opened && selection || active ? 1800 : opened || settingsOpened ? 5000 : 10000));
+    if (delay === 0) for (const channel of Object.values(syncState)) channel.nextAt = 0;
+    const worker = registration(), pending = Date.now() < dispatchWatchUntil;
+    const active = Number(worker?.running) > 0 || Number(worker?.queued) > 0
+      || [...activityTasks.values()].some((task) => activeStates.has(task.state) || task.state === "unknown");
+    const enabled = policyEnabled() || isDsh && registry?.connection?.has_connection === true;
+    if (delay === undefined && !pending && !active && !opened && !settingsOpened && registry && !enabled) return;
+    let wait = delay ?? (pending || active ? 2000 : opened || settingsOpened ? 5000 : 30000);
+    const relevant = [syncState.status, syncState.list, ...(opened && selection ? [syncState.detail] : [])];
+    if (delay === undefined && relevant.every((item) => item.nextAt > Date.now())) {
+      wait = Math.max(wait, Math.min(...relevant.map((item) => item.nextAt)) - Date.now());
+    }
+    timer = setTimeout(() => poll(), wait);
   }
-  async function poll() {
-    clearTimeout(timer);
-    if (polling || actionBusy || !visible()) return;
-    polling = true;
+  async function syncChannel(name, work, force = false) {
+    const channel = syncState[name];
+    if (!force && channel.nextAt > Date.now()) return;
     const generation = controlGeneration;
     try {
-      const data = await request("/api/collaborators");
-      if (!visible() || generation !== controlGeneration) return;
-      connected = true; acceptEpoch(data.session_epoch); setRegistry(data);
-      await syncList();
-      if (generation !== controlGeneration) return;
-      if (opened && selection) await syncDetail();
-      if (generation !== controlGeneration) return;
-      const worker = registry.collaborators?.find((row) => row.name === "dsh-agent");
-      status(worker && worker.state !== "ready" ? (worker.reason || `DSH · ${state(worker.state)}`) : `已同步 · ${time(Date.now() / 1000)}`);
+      await work();
+      if (stopped || generation !== controlGeneration) return;
+      channel.failures = 0; channel.nextAt = 0; channel.error = ""; channel.lastAt = Date.now();
     } catch (e) {
-      if (!stopped) { connected = false; renderList(); status(`连接暂不可用；执行状态未确认。${e.message}`, true); }
-    } finally { polling = false; schedule(connected ? undefined : 10000); }
+      if (stopped || generation !== controlGeneration || e.code === "stale_read") return;
+      channel.failures++; channel.nextAt = Date.now() + Math.min(60000, 5000 * 2 ** Math.min(4, channel.failures - 1));
+      channel.error = e.message;
+    }
+  }
+  function renderSyncStatus() {
+    const errors = [["状态", syncState.status], ["会话列表", syncState.list], ...(opened && selection ? [["消息", syncState.detail]] : [])]
+      .filter(([, item]) => item.error).map(([label, item]) => `${label}暂未更新：${item.error}`);
+    const last = lastStatusAt ? `上次状态同步 ${time(lastStatusAt / 1000)}` : "状态尚未同步";
+    const worker = registration();
+    status(errors.length ? `${workerLabel} · ${last}。${errors.join("；")}`
+      : `${workerLabel} · ${worker && worker.state !== "ready" ? worker.reason || state(worker.state) : "已同步"} · ${time((syncState.list.lastAt || lastStatusAt) / 1000)}`, errors.length > 0);
+  }
+  async function poll(force = false) {
+    clearTimeout(timer);
+    if (polling) { if (force) pollAgain = true; return; }
+    if (actionBusy || !visible()) return;
+    polling = true;
+    try {
+      // Status and local history are independent reads. A bridge/status error
+      // must not prevent opening a stored conversation or obtaining its epoch.
+      const statusRead = syncChannel("status", () => readStatus(true), force);
+      const listRead = syncChannel("list", () => syncList(), force);
+      const detailRead = async () => {
+        if (visible() && !actionBusy && epoch && opened && selection) await syncChannel("detail", () => syncDetail(), force);
+      };
+      await Promise.all([statusRead, listRead, epoch ? detailRead() : listRead.then(detailRead)]);
+      if (visible() && !actionBusy) { renderList(); updateControls(); renderSyncStatus(); }
+    } finally {
+      polling = false;
+      if (pollAgain) { pollAgain = false; schedule(0); } else schedule();
+    }
   }
   function layout() {
     windowFrame.layout();
@@ -1438,10 +1705,10 @@
     const origin = getComputedStyle(avatar).visibility === "hidden" ? null
       : avatar.querySelector(".collaborator-avatar-art").getBoundingClientRect();
     window.AliceObserver?.close(); window.AliceEvaluations?.close(); opened = true;
-    panel.classList.remove("hidden"); app.classList.add("workers-open"); avatar.setAttribute("aria-expanded", "true");
+    panel.classList.remove("hidden"); focusWindow(panel); syncWindowLayout(); avatar.setAttribute("aria-expanded", "true");
     renderList(); windowFrame.open(origin); avatarControl.layout();
     $("workers-list-view").scrollTop = savedListScroll;
-    $("workers-window-avatar").focus({ preventScroll: true }); poll();
+    $("workers-window-avatar").focus({ preventScroll: true }); poll(true);
   }
   function close(returnFocus = true) {
     avatarControl.cancel();
@@ -1455,8 +1722,12 @@
     const complete = () => {
       if (!closing) return;
       closing = false; delete panel.dataset.transition;
-      panel.classList.add("hidden"); app.classList.remove("workers-open");
+      panel.classList.add("hidden"); syncWindowLayout();
       panel.inert = priorInert || app.classList.contains("nav-open");
+      if (panel.dataset.front === "true") {
+        const remaining = [...document.querySelectorAll(".worker-panel")].find((other) => other !== panel && !other.classList.contains("hidden") && other.dataset.transition !== "closing");
+        if (remaining) focusWindow(remaining);
+      }
       renderList(); avatarControl.layout();
       if (closeFocus && !stopped && !document.hidden && document.hasFocus() && !settingsOpened && !app.inert && !app.classList.contains("nav-open")
           && (document.activeElement === document.body || panel.contains(document.activeElement))) {
@@ -1468,6 +1739,7 @@
     schedule();
   }
   function setSettingsVisible(value) {
+    if (!isDsh) { settingsOpened = value === true; value ? poll(true) : schedule(); return; }
     if (value) { avatarControl.cancel(); if (closing) windowFrame.completeTransition(); }
     settingsOpened = value === true && !$("settings-modal").classList.contains("hidden")
       && !$("workers-config").classList.contains("hidden");
@@ -1476,7 +1748,7 @@
       schedule(); return;
     }
     status("正在同步 DSH 连接与授权状态…");
-    poll();
+    poll(true);
   }
   async function select(taskId) {
     if (actionBusy) return;
@@ -1507,14 +1779,19 @@
         || actionBusy || typeof taskId !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(taskId)) return;
     avatarControl.cancel();
     if (!opened) open();
+    else focusWindow(panel);
     const generation = viewGeneration;
     try {
       if (!epoch) {
-        const data = await request("/api/collaborators");
+        const data = await request(`${api}/tasks?limit=1&archived=0`);
         if (!opened || !visible() || app.inert || actionBusy || generation !== viewGeneration) return;
-        connected = true; acceptEpoch(data.session_epoch); setRegistry(data);
+        if (data.worker_id !== workerId) throw new Error("宿主返回的会话归属不匹配。");
+        acceptEpoch(data.session_epoch);
       }
-      if (opened && !app.inert && !actionBusy) await select(taskId);
+      if (opened && !app.inert && !actionBusy) {
+        await select(taskId);
+        if (opened && !app.inert && selection === taskId && panel.dataset.front === "true") $("workers-window-avatar").focus({ preventScroll: true });
+      }
     } catch (e) { if (opened) status(e.message, true); }
   }
   async function mutate(action, extra = {}) {
@@ -1524,7 +1801,7 @@
     for (const name of ["workers-cancel", "workers-supplement", "workers-review", "workers-revoke"]) $(name).disabled = true;
     try {
       const body = { session_epoch: session, request_id: id(), ...(selected ? { task_id: selected, revision: selectedTask?.version } : {}), ...extra };
-      await request(`/api/worker-tasks/${action}`, body);
+      await request(`${api}/tasks/${action}`, body);
       if (action === "revoke" && session === epoch) {
         if (selected === selection) clearDetail();
         invalidateChatSources();
@@ -1534,7 +1811,8 @@
     finally { actionBusy = false; updateControls(); schedule(0); }
   }
   async function configure(action, extra = {}) {
-    if (actionBusy || !epoch) return;
+    if (!isDsh || actionBusy || !epoch) return;
+    if (!statusFresh && action !== "disconnect") { status("请先同步当前 DSH 状态再修改连接或授权。", true); return; }
     actionBusy = true; controlGeneration++; viewGeneration++; updateControls();
     const session = epoch, generation = controlGeneration;
     const resultId = action === "policy" ? "workers-policy-result" : "workers-pairing-result";
@@ -1544,7 +1822,7 @@
     $(resultId).dataset.error = "false";
     const payload = { session_epoch: session, request_id: id(), ...(action === "policy" ? {} : { action }), ...extra };
     try {
-      const data = await request("/api/collaborators", payload);
+      const data = await request(`${api}/${action === "policy" ? "policy" : "connection"}`, payload);
       if (session !== epoch || generation !== controlGeneration || data.session_epoch !== session) return;
       policyDirty = false; setRegistry(data);
       const setup = typeof data.setup_message === "string" ? data.setup_message.slice(0, 1000) : "";
@@ -1575,7 +1853,7 @@
   async function download(taskId, artifactId, name) {
     const session = epoch;
     try {
-      const response = await fetch("/api/worker-artifacts/download", { method: "POST", headers: { "X-Alice-Intent": "workers", "Content-Type": "application/json" },
+      const response = await fetch(`${api}/artifacts/download`, { method: "POST", headers: { "X-Alice-Intent": "workers", "Content-Type": "application/json" },
         body: JSON.stringify({ session_epoch: session, task_id: taskId, artifact_id: artifactId }), cache: "no-store" });
       if (!response.ok) throw new Error("产物尚不可下载或授权已经变化");
       const blob = await response.blob(); if (epoch !== session) return;
@@ -1587,8 +1865,11 @@
   const avatarControl = setupAvatarDrag($("workers-btn"));
   $("workers-close").onclick = () => close();
   $("workers-window-avatar").onclick = () => close();
-  $("workers-refresh").onclick = poll;
-  $("workers-settings-refresh").onclick = poll;
+  $("workers-refresh").onclick = () => poll(true);
+  if (isDsh) $("workers-settings-refresh").onclick = () => poll(true);
+  const activateWindow = () => { focusWindow(panel); markVisibleRead(); };
+  panel.addEventListener("pointerdown", activateWindow, true);
+  panel.addEventListener("focusin", activateWindow);
   $("workers-unarchived").onclick = () => selectArchiveView(false);
   $("workers-archived").onclick = () => selectArchiveView(true);
   $("workers-more").onclick = () => syncList(true).catch((e) => status(e.message, true));
@@ -1607,7 +1888,7 @@
   $("workers-supplement").onclick = () => {
     if (!selection || $("workers-supplement").disabled) return;
     const accepted = window.AliceComposer?.setWorkerReference({
-      task_id: selection, title: selectedTask?.title || "协作会话", session_epoch: epoch,
+      collaborator: workerId, task_id: selection, title: selectedTask?.title || "协作会话", session_epoch: epoch,
     });
     if (!accepted) {
       status("暂时无法更换任务引用，请先处理主聊天中的发送状态。", true); return;
@@ -1631,6 +1912,7 @@
     }
   });
   $("workers-management-confirm").onsubmit = (event) => { event.preventDefault(); manageTask(); };
+  if (isDsh) {
   $("workers-task-settings").oninput = () => { taskSettingsDirty = true; updateControls(); };
   $("workers-task-settings").onsubmit = (event) => { event.preventDefault(); saveTaskSettings(); };
   $("workers-token").oninput = updateControls;
@@ -1676,6 +1958,7 @@
     configure("policy", { revision: registry.revision, enabled, max_runs: max, max_seconds: seconds,
       workspace_root: workspace, permission_mode: mode, native_permissions_ack: acknowledged });
   };
+  }
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && opened && !app.inert && !app.classList.contains("nav-open") && panel.contains(document.activeElement)) {
       event.preventDefault();
@@ -1684,23 +1967,67 @@
       else close();
     }
   });
-  document.addEventListener("visibilitychange", () => visible() ? poll() : clearTimeout(timer));
+  document.addEventListener("visibilitychange", () => visible() ? poll(true) : clearTimeout(timer));
   new ResizeObserver(layout).observe(app);
+  let appWasVisible = visible();
   new MutationObserver(() => {
     if (closing && (app.inert || app.classList.contains("hidden") || app.classList.contains("nav-open"))) windowFrame.completeTransition();
-    if (visible()) schedule(0); else clearTimeout(timer);
+    const nowVisible = visible();
+    if (nowVisible !== appWasVisible) { appWasVisible = nowVisible; nowVisible ? poll(true) : clearTimeout(timer); }
   }).observe(app, { attributes: true, attributeFilter: ["class", "inert"] });
-  window.addEventListener("pagehide", () => { $("workers-token").value = ""; clearTimeout(timer); controllers.forEach((controller) => controller.abort()); });
-  window.AliceWorkers = { close, openTask, setSettingsVisible,
+  window.addEventListener("pagehide", () => { if (isDsh) $("workers-token").value = ""; clearTimeout(timer); controllers.forEach((controller) => controller.abort()); });
+  const refresh = () => {
+    for (const channel of Object.values(syncState)) channel.nextAt = 0;
+    if (polling) pollAgain = true; else schedule(0);
+  };
+  const controller = { close, openTask, setSettingsVisible, readStatus, beginPolicyWrite, endPolicyWrite, undock: windowFrame.undock,
+    refresh,
     noteTool(name) {
       if (!["dispatch_worker", "send_worker_message"].includes(name)) return;
       // A tool announcement is only intent: refresh promptly, but expand only
       // when the host confirms that its execution counter actually increased.
-      dispatchWatchUntil = Date.now() + 30000; schedule(0);
+      dispatchWatchUntil = Date.now() + 30000; refresh();
     },
-    refreshAfterTurn() { schedule(0); },
+    refreshAfterTurn: refresh,
     shutdown() {
     stopped = true; avatarControl.cancel(); setSettingsVisible(false); close(false); clearTimeout(timer); controllers.forEach((controller) => controller.abort());
   } };
   schedule(0);
+  return controller;
+  }
+  for (const { tool, elements } of instances) workers.set(tool.name, createWorker(tool, elements));
+  const broadcast = (method, ...args) => { for (const controller of workers.values()) controller[method](...args); };
+  window.AliceWorkers = {
+    close(returnFocus = true) { broadcast("close", returnFocus); },
+    openTask(taskId, collaborator = "dsh-agent") { return workers.get(collaborator)?.openTask(taskId); },
+    setSettingsVisible(value) { workers.get("dsh-agent").setSettingsVisible(value); },
+    setToolSettingsVisible(workerId, value) { workers.get(workerId)?.setSettingsVisible(value); },
+    readStatus(workerId, options = {}) {
+      const controller = workers.get(workerId);
+      return controller ? controller.readStatus(options.fresh === true || options.force === true) : Promise.reject(new Error("工具未接入。"));
+    },
+    beginPolicyWrite(workerId) {
+      const controller = workers.get(workerId);
+      if (!controller) throw new Error("工具未接入。");
+      return controller.beginPolicyWrite();
+    },
+    endPolicyWrite(workerId, token) { workers.get(workerId)?.endPolicyWrite(token); },
+    noteTool(name) { broadcast("noteTool", name); },
+    refresh(workerId) { workerId ? workers.get(workerId)?.refresh() : broadcast("refresh"); },
+    refreshAfterTurn() { broadcast("refreshAfterTurn"); },
+    shutdown() { broadcast("shutdown"); window.AliceClaudeGate?.shutdown(); },
+  };
+  // This lightweight directory has no connection probes. A failed directory
+  // read cannot remove known tools or stop their independent window reads.
+  const directoryAbort = new AbortController();
+  const directoryTimer = setTimeout(() => directoryAbort.abort(), 15000);
+  fetch("/api/workers", { headers: { "X-Alice-Intent": "workers" }, cache: "no-store", signal: directoryAbort.signal })
+    .then((response) => response.ok ? response.json() : null)
+    .then((data) => {
+      for (const row of data?.workers || []) {
+        const instance = instances.find(({ tool }) => tool.name === row.worker_id);
+        if (instance) instance.elements.get("collaborator-dock").dataset.registered = "true";
+      }
+    }).catch(() => {}).finally(() => clearTimeout(directoryTimer));
+  window.addEventListener("pagehide", () => directoryAbort.abort(), { once: true });
 })();

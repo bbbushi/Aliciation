@@ -34,6 +34,9 @@ async function api(path, opts = {}) {
     const error = new Error(body.error || `HTTP ${r.status}`);
     error.status = r.status;
     error.code = body.code;
+    if (body.import_status && typeof body.import_status === "object" && !Array.isArray(body.import_status)) {
+      error.importStatus = body.import_status;
+    }
     throw error;
   }
   return r.json();
@@ -61,18 +64,28 @@ function toast(msg, ms = 2600) {
   toastTimer = setTimeout(() => t.classList.add("hidden"), ms);
 }
 
+function workerCollaborator(value = "dsh-agent") {
+  return ["dsh-agent", "claude-agent"].includes(value) ? value : null;
+}
+
+function workerDisplayName(collaborator) {
+  return { "dsh-agent": "DSH", "claude-agent": "Claude" }[workerCollaborator(collaborator)] || "协作者";
+}
+
 function validWorkerTarget(target) {
-  return !!target && target.collaborator === "dsh-agent" && typeof target.task_id === "string"
+  return !!target && !!workerCollaborator(target.collaborator) && typeof target.task_id === "string"
     && /^[A-Za-z0-9_-]{16,128}$/.test(target.task_id);
 }
 
 function renderComposerWorkerReference() {
   const reference = composerWorkerReference, locked = busy || !!uncertainSend;
   $("#composer-worker-reference").classList.toggle("hidden", !reference);
-  $("#composer-worker-label").textContent = reference ? `DSH · ${reference.title || `会话 ${reference.taskId.slice(-8)}`}` : "";
+  $("#composer-worker-label").textContent = reference ? `${workerDisplayName(reference.collaborator)} · ${reference.title || `会话 ${reference.taskId.slice(-8)}`}` : "";
   $("#composer-worker-open").title = reference ? `查看协作任务：${reference.title || reference.taskId}` : "";
-  $("#composer-worker-status").textContent = !reference ? "" : busy ? "正在提交本条补充，引用已锁定"
-    : uncertainSend ? "请求结果待确认，引用已锁定" : "本条消息将补充到此协作任务";
+  $("#composer-worker-status").textContent = !reference ? "" : busy ? "正在提交引用消息，引用已锁定"
+    : uncertainSend ? "请求结果待确认，引用已锁定"
+    : reference.collaborator === "claude-agent" ? "让 Alice 查看或讨论此任务；Claude 暂不支持同会话续跑"
+    : "让 Alice 处理此任务的补充或追问";
   $("#composer-worker-clear").disabled = locked || shuttingDown;
   $("#composer-worker-open").disabled = shuttingDown || !reference || reference.epoch !== sessionEpoch;
 }
@@ -84,8 +97,8 @@ function setComposerWorkerReference(value) {
   if (busy || shuttingDown || uncertainSend) {
     toast("当前请求尚未确认，暂时不能更换任务引用。请先同步记录。"); return false;
   }
-  if (!validWorkerTarget({ collaborator: "dsh-agent", task_id: value.task_id })) return false;
-  composerWorkerReference = { taskId: value.task_id, epoch: sessionEpoch,
+  if (!validWorkerTarget(value)) return false;
+  composerWorkerReference = { collaborator: workerCollaborator(value.collaborator), taskId: value.task_id, epoch: sessionEpoch,
     title: typeof value.title === "string" && value.title.trim() ? value.title.trim().slice(0, 240) : "" };
   renderComposerWorkerReference();
   return true;
@@ -98,15 +111,17 @@ function confirmComposerRequest(requestId) {
   if (reference && pending.draftUnchanged && $("#input").value.trim() === pending.text) {
     $("#input").value = ""; resizeComposer();
   }
-  if (reference && composerWorkerReference?.taskId === reference.taskId && composerWorkerReference.epoch === reference.epoch) {
+  if (reference && composerWorkerReference?.taskId === reference.taskId && composerWorkerReference.epoch === reference.epoch
+      && composerWorkerReference.collaborator === reference.collaborator) {
     composerWorkerReference = null;
   }
   renderComposerWorkerReference();
 }
 
-async function openReferencedWorkerTask(taskId) {
+async function openReferencedWorkerTask(taskId, collaborator = "dsh-agent") {
+  if (!validWorkerTarget({ task_id: taskId, collaborator })) return;
   if (typeof window.AliceWorkers?.openTask !== "function") { toast("协作会话入口尚未就绪，请刷新页面。"); return; }
-  try { await window.AliceWorkers.openTask(taskId); }
+  try { await window.AliceWorkers.openTask(taskId, collaborator); }
   catch { toast("暂时无法打开这项协作任务，请稍后同步记录。"); }
 }
 
@@ -118,20 +133,21 @@ function markUserWorkerTarget(node, turn, localTitle = "") {
     node.querySelector(".message-worker-target")?.remove(); userWorkerTargets.delete(node); return;
   }
   const previous = userWorkerTargets.get(node);
+  const collaborator = workerCollaborator(target.collaborator);
   const available = target.available === true || target.available === undefined && !!localTitle;
-  const record = { taskId: target.task_id, epoch: sessionEpoch, available,
-    title: available ? localTitle || (previous?.taskId === target.task_id ? previous.title : "") : "" };
+  const record = { collaborator, taskId: target.task_id, epoch: sessionEpoch, available,
+    title: available ? localTitle || (previous?.taskId === target.task_id && previous.collaborator === collaborator ? previous.title : "") : "" };
   userWorkerTargets.set(node, record);
   let button = node.querySelector(".message-worker-target");
   if (!button) {
     button = document.createElement("button"); button.type = "button"; button.className = "message-worker-target";
     button.onclick = () => {
       const current = userWorkerTargets.get(node);
-      if (node.isConnected && current?.available && current.epoch === sessionEpoch) openReferencedWorkerTask(current.taskId);
+      if (node.isConnected && current?.available && current.epoch === sessionEpoch) openReferencedWorkerTask(current.taskId, current.collaborator);
     };
     node.insertBefore(button, node.querySelector(".txt"));
   }
-  button.textContent = (record.title ? `DSH · ${record.title}` : `DSH · 会话 ${record.taskId.slice(-8)}`)
+  button.textContent = `${workerDisplayName(record.collaborator)} · ${record.title || `会话 ${record.taskId.slice(-8)}`}`
     + (record.available ? "" : " · 已不可用");
   button.disabled = !record.available || record.epoch !== sessionEpoch;
   button.title = `${button.disabled ? "此任务引用当前不可用" : "查看引用的协作会话"} · ${record.taskId}`;
@@ -142,7 +158,9 @@ $("#composer-worker-clear").onclick = () => {
   composerWorkerReference = null; renderComposerWorkerReference(); $("#input").focus({ preventScroll: true });
 };
 $("#composer-worker-open").onclick = () => {
-  if (composerWorkerReference?.epoch === sessionEpoch && !shuttingDown) openReferencedWorkerTask(composerWorkerReference.taskId);
+  if (composerWorkerReference?.epoch === sessionEpoch && !shuttingDown) {
+    openReferencedWorkerTask(composerWorkerReference.taskId, composerWorkerReference.collaborator);
+  }
 };
 window.AliceComposer = { setWorkerReference: setComposerWorkerReference };
 
@@ -330,7 +348,8 @@ function workerReportFor(node, turn) {
   const report = turn.worker_report;
   if (!assistant || channel !== "gui" || !report || typeof report.task_id !== "string" || !report.task_id
       || typeof report.attempt_id !== "string" || !report.attempt_id) return null;
-  return { taskId: report.task_id, state: typeof report.state === "string" ? report.state : "unknown",
+  return { collaborator: workerCollaborator(report.collaborator), taskId: report.task_id,
+    state: typeof report.state === "string" ? report.state : "unknown",
     kind: ["alice_summary", "status"].includes(report.kind) ? report.kind : "legacy_transcript" };
 }
 
@@ -338,12 +357,12 @@ function historyDisplayContent(node, turn, fallback = "") {
   const report = workerReportFor(node, turn);
   // Older services can still return the full host transcript. Never place it in
   // the main conversation, including the raw-text cache or source refreshes.
-  if (report?.kind === "legacy_transcript") return `DSH ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
+  if (report?.kind === "legacy_transcript") return `${workerDisplayName(report.collaborator)} ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
   if (report && turn.source_bound === true && (turn.source_available !== true
       || !Number.isFinite(Number(turn.source_expires_at)) || Number(turn.source_expires_at) * 1000 <= Date.now())) {
     return WORKER_HISTORY_PLACEHOLDER;
   }
-  if (report?.kind === "status") return turn.content || `DSH ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
+  if (report?.kind === "status") return turn.content || `${workerDisplayName(report.collaborator)} ${WORKER_REPORT_STATES[report.state] || "任务状态已更新"}。`;
   return turn.content || fallback;
 }
 
@@ -357,23 +376,27 @@ function renderTurnMetadata(node) {
   if (channel === "gui" && node.classList.contains("worker-report")) {
     const summary = node.dataset.workerReportKind === "alice_summary";
     const taskId = node.dataset.workerTaskId;
+    const collaborator = workerCollaborator(node.dataset.workerReportCollaborator);
+    const workerName = workerDisplayName(collaborator);
     let link = meta.querySelector(".worker-report-link");
     // Keep a focused entry intact when a source-only poll repeats the same report.
-    if (!link || link.dataset.taskId !== taskId || meta.dataset.workerReportKind !== node.dataset.workerReportKind) {
-      meta.textContent = summary ? "DSH任务总结 · " : "";
+    if (!link || link.dataset.taskId !== taskId || link.dataset.collaborator !== (collaborator || "")
+        || meta.dataset.workerReportKind !== node.dataset.workerReportKind) {
+      meta.textContent = summary ? `${workerName} 任务总结 · ` : "";
       link = document.createElement("button");
       link.type = "button"; link.className = "link worker-report-link"; link.textContent = "查看协作会话";
       link.dataset.taskId = taskId; meta.dataset.workerReportKind = node.dataset.workerReportKind;
+      link.dataset.collaborator = collaborator || "";
+      link.disabled = !collaborator;
       link.onclick = async () => {
-        if (!node.isConnected || node.dataset.channel !== "gui" || node.dataset.workerTaskId !== taskId) return;
-        if (typeof window.AliceWorkers?.openTask !== "function") { toast("协作会话入口尚未就绪，请刷新页面。"); return; }
-        try { await window.AliceWorkers.openTask(taskId); }
-        catch { toast("暂时无法打开这项协作任务，请稍后同步记录。"); }
+        if (!node.isConnected || node.dataset.channel !== "gui" || node.dataset.workerTaskId !== taskId
+            || node.dataset.workerReportCollaborator !== collaborator) return;
+        await openReferencedWorkerTask(taskId, collaborator);
       };
       meta.appendChild(link);
     }
-    meta.title = summary ? "Alice 基于 DSH 公开自报生成的总结，未核验产物；DSH 原文保留在协作会话。"
-      : node.dataset.workerReportKind === "legacy_transcript" ? "历史宿主状态通知；DSH 原文仅在协作会话展示，这不是 Alice 总结。"
+    meta.title = summary ? `Alice 基于 ${workerName} 公开自报生成的总结，未核验产物；${workerName} 原文保留在协作会话。`
+      : node.dataset.workerReportKind === "legacy_transcript" ? `历史宿主状态通知；${workerName} 原文仅在协作会话展示，这不是 Alice 总结。`
       : "宿主任务状态通知；这不是 Alice 总结。";
     if (unavailable) meta.title += node.dataset.sourceAvailable === "unknown" ? " 正在核对任务资料资格。" : " 任务正文当前不可用，仍可查看任务状态。";
     return;
@@ -436,11 +459,13 @@ function markSourceProjection(node, turn) {
   node.classList.toggle("worker-report-notice", !!report && report.kind !== "alice_summary");
   if (report) {
     node.dataset.workerTaskId = report.taskId;
+    node.dataset.workerReportCollaborator = report.collaborator || "";
     node.dataset.workerReportState = report.state;
     node.dataset.workerReportKind = report.kind;
     node.querySelector("details.think")?.remove();
   } else {
-    delete node.dataset.workerTaskId; delete node.dataset.workerReportState; delete node.dataset.workerReportKind;
+    delete node.dataset.workerTaskId; delete node.dataset.workerReportCollaborator;
+    delete node.dataset.workerReportState; delete node.dataset.workerReportKind;
   }
   if (typeof turn.source_bound !== "boolean") return;
   node.dataset.sourceBound = String(turn.source_bound);
@@ -485,7 +510,7 @@ function invalidateSourceDisplays() {
     const target = userWorkerTargets.get(node), button = node.querySelector(".message-worker-target");
     if (target && button) {
       target.available = false; target.title = ""; button.disabled = true;
-      button.textContent = `DSH · 会话 ${target.taskId.slice(-8)} · 状态待同步`;
+      button.textContent = `${workerDisplayName(target.collaborator)} · 会话 ${target.taskId.slice(-8)} · 状态待同步`;
       button.title = `任务引用状态待同步 · ${target.taskId}`;
     }
   }
@@ -850,12 +875,20 @@ function showWelcome(s, reseting = false) {
       go: $("#import-go"),
       idle: "安装并开始",
       busy: "安装中…",
+      reset: true,
       back: () => closeModal(),
     },
-    async (md, src) => {
-      if (!await confirmQQReset()) throw new Error("已取消初始化；请先处理 QQ 桥的待发送回复。");
-      const st = await postJSON("/api/persona", { persona_md: md, source: src, reset: true });
+    async (md, src, resumeOpId, installed) => {
+      if (!await confirmQQReset()) {
+        const error = new Error("已取消初始化；请先处理 QQ 桥的待发送回复。");
+        error.importCancelled = true;
+        throw error;
+      }
+      const st = await postJSON("/api/persona", { persona_md: md, source: src, reset: true,
+        ...(resumeOpId ? {resume_op_id: resumeOpId} : {}) });
+      installed();
       await startChat(st);
+      showInstalledCoverage(st.expression_coverage);
     },
   );
 
@@ -914,66 +947,122 @@ function validateMd(md) {
   return { ok: true, msg: "含「## 底色」小节，可以安装。缺失的生长小节会自动补齐。" };
 }
 
+// Keep the pending operation across preview/modal recreation, in this page only.
+// The server remains authoritative for source, policy, epoch and attempt limits.
+let personaImportAttempt = null;
+let personaImportPending = false;
+
 function wireImport(els, install) {
-  let md = "";
-  let source = "";
+  let md = els.box.value;
+  let source = els.box.dataset.importSource || "";
+  let pending = false;
+  let fileReadVersion = 0;
+  const binding = () => JSON.stringify([md.trim(), source.trim().slice(0, 60) || "用户导入", !!els.reset]);
+  const attempt = () => personaImportAttempt?.binding === binding() ? personaImportAttempt : null;
+  const paint = () => {
+    const v = validateMd(md);
+    const current = attempt();
+    els.check.textContent = current?.message || (!md.trim() ? "" : (v.ok ? "✓ " : "✗ ") + v.msg);
+    els.check.className = "check" + (current ? " warn" : (v.ok && !v.warn ? " ok" : "") + (v.warn ? " warn" : "") + (v.note ? " note" : ""));
+    els.go.disabled = pending || !v.ok || current?.blocked === true;
+    els.go.textContent = pending ? els.busy : current?.resumeOpId ? "继续安装" : current?.installed ? "已安装" : els.idle;
+    els.preview.disabled = pending || !md.trim();
+    els.box.disabled = pending;
+    els.pick.disabled = pending;
+    els.file.disabled = pending;
+  };
   const refresh = (text) => {
+    fileReadVersion += 1;
     md = text;
     els.box.value = text;
-    const v = validateMd(text);
-    els.check.textContent = !text.trim() ? "" : (v.ok ? "✓ " : "✗ ") + v.msg;
-    els.check.className = "check" + (v.ok && !v.warn ? " ok" : "") + (v.warn ? " warn" : "") + (v.note ? " note" : "");
-    els.go.disabled = !v.ok;
-    els.preview.disabled = !text.trim();
+    els.box.dataset.importSource = source;
+    if (personaImportAttempt && personaImportAttempt.binding !== binding()) personaImportAttempt = null;
+    paint();
+  };
+  const readFile = async (file) => {
+    const version = ++fileReadVersion;
+    try {
+      const text = await file.text();
+      if (pending || version !== fileReadVersion) return;
+      source = file.name;
+      refresh(text);
+    } catch (e) {
+      toast(`文件读取失败：${e.message}`, 4000);
+    }
   };
 
   els.pick.onclick = () => els.file.click();
   els.file.onchange = async (e) => {
     const f = e.target.files[0];
-    if (!f) return;
-    source = f.name;
-    refresh(await f.text());
+    if (!f || pending) return;
+    await readFile(f);
   };
   els.box.oninput = () => { source = ""; refresh(els.box.value); };
 
   /* 拖放 */
-  els.drop.addEventListener("dragover", (e) => {
+  els.drop.ondragover = (e) => {
     e.preventDefault();
     els.drop.classList.add("over");
-  });
-  els.drop.addEventListener("dragleave", () => els.drop.classList.remove("over"));
-  els.drop.addEventListener("drop", async (e) => {
+  };
+  els.drop.ondragleave = () => els.drop.classList.remove("over");
+  els.drop.ondrop = async (e) => {
     e.preventDefault();
     els.drop.classList.remove("over");
+    if (pending) return;
     const f = e.dataTransfer.files[0];
     if (!f) return;
     if (!/\.(md|markdown|txt)$/i.test(f.name)) {
       toast("只认 .md / .markdown / .txt", 3000);
       return;
     }
-    source = f.name;
-    refresh(await f.text());
-  });
+    await readFile(f);
+  };
 
   els.preview.onclick = () => {
     openModal("人格预览", `${md.trim().length} 字`, `<div class="md">${renderMd(md)}</div>`, [
-      { label: "返回编辑", onClick: () => (els.back ? els.back(md) : closeModal()) },
+      { label: "返回编辑", onClick: () => (els.back ? els.back(md, source) : closeModal()) },
       { label: "关闭", onClick: closeModal },
     ]);
   };
 
   els.go.onclick = async () => {
-    els.go.disabled = true;
-    const idle = els.go.textContent;
-    els.go.textContent = els.busy;
+    if (pending || attempt()?.blocked || !validateMd(md).ok) return;
+    if (personaImportPending) { toast("已有一次人格安装正在处理，请先等它返回结果。", 4000); return; }
+    const submittedBinding = binding();
+    const resumeOpId = attempt()?.resumeOpId;
+    pending = true;
+    personaImportPending = true;
+    paint();
     try {
-      await install(md, source || "用户导入");
+      await install(md, source || "用户导入", resumeOpId, () => {
+        // Installation already succeeded even if a later view refresh fails.
+        personaImportAttempt = {binding: submittedBinding, installed: true, blocked: true,
+          message: "人格已安装。请查看当前人格，不要重复安装。"};
+      });
     } catch (e) {
-      toast(e.message, 5000);
-      els.go.textContent = idle;
-      els.go.disabled = !validateMd(md).ok;
+      if (attempt()?.installed) {
+        toast(`人格已安装，但界面刷新未完成：${e.message}。请查看当前人格。`, 6000);
+      } else if (e.importCancelled) {
+        toast(e.message, 5000);
+      } else {
+        const status = e.importStatus;
+        const canResume = status?.can_resume === true && typeof status.resume_op_id === "string"
+          && /^imp_(?:[0-9a-f]{32}|[0-9]{8}_[0-9]{6}_[0-9a-f]{6})$/.test(status.resume_op_id);
+        const note = canResume ? "已保留通过验收的阶段。点击「继续安装」只继续未完成阶段，已用额度不会重置。"
+          : status ? "本次不能继续；请先核对导入记录和失败原因，不会自动重新生成。"
+          : "安装结果暂不能确认。请先核对当前人格与导入记录，不要连续重新提交。";
+        personaImportAttempt = {binding: submittedBinding, resumeOpId: canResume ? status.resume_op_id : null,
+          blocked: !canResume, message: `${e.message} ${note}`};
+        toast(personaImportAttempt.message, 7000);
+      }
+    } finally {
+      pending = false;
+      personaImportPending = false;
+      paint();
     }
   };
+  paint();
+  return (text, name = "") => { source = name; refresh(text); };
 }
 
 /* ---------- 弹层 ---------- */
@@ -1019,6 +1108,7 @@ async function openPersonaView() {
   const body = p.installed
     ? (p.growth_note ? `<p class="hint">${esc(p.growth_note)}</p>` : "") +
       (p.expression?.coverage_status ? `<p class="hint">${esc(p.expression.coverage_status)}</p>` : "") +
+      expressionCoverage(p.expression) +
       `<div class="md">${renderMd(p.display_md ?? p.md)}</div>` +
       (p.changelog && p.changelog.length
         ? `<div class="changelog"><div class="panel-title small">最近变更</div><ul>${p.changelog
@@ -1130,13 +1220,47 @@ const expressionDisposition = (status) => ({retained: "原意保留", adapted: "
 const expressionLegacyChoice = (choice) => ({preserve: "保留当前本节", replace: "采用原稿本节新表达",
   merge: "保留两者：原稿新表达＋当前本节"}[choice] || "范围待核对");
 
-function expressionReviews(reviews) {
+function expressionCoverage(value) {
+  const report = value?.coverage_report;
+  const warnings = Array.isArray(value?.warnings) ? value.warnings.filter(item => typeof item === "string") : [];
+  const notices = Array.isArray(value?.review_notices) ? value.review_notices.filter(item => typeof item === "string") : [];
+  if (!report && !warnings.length && value?.coverage_policy !== "source_coverage_v1") return "";
+  const metric = (key, label) => {
+    const row = report?.[key];
+    const validCount = number => Number.isInteger(number) && number >= 0;
+    const count = validCount(row?.covered) && validCount(row?.total) ? `${row.covered}/${row.total}` : "数量待确认";
+    const percent = typeof row?.percent === "number" && Number.isFinite(row.percent) && row.percent >= 0 && row.percent <= 100
+      && validCount(row?.total) && row.total > 0 ? `${row.percent}%` : "未提供/待确认";
+    return `<li>${esc(label)}：${esc(percent)}（${esc(count)}）</li>`;
+  };
+  return `<section class="expression-review"><h3>原稿覆盖</h3>` +
+    `<p class="hint">按原稿源单元与场景统计；规则和样本分别记录，不等于逐条行为要求全部保留，也不代表真人效果已验收。</p>` +
+    (report?.reviewed === true ? "" : `<p class="hint">此覆盖记录尚未完成独立核对，不能作为通过结论。</p>`) +
+    `<ul>${metric("sources", "源单元")}${metric("rules", "规则场景")}${metric("examples", "样本场景")}</ul>` +
+    (warnings.length ? `<h4>覆盖提示</h4><p class="hint">普通遗漏可带提示安装；事实、失真和硬约束未满足仍阻止安装。</p><ul>` +
+      warnings.map(warning => `<li>${esc(warning)}</li>`).join("") + "</ul>" : "") +
+    (notices.length ? `<h4>表达审阅提示</h4><p class="hint">以下措辞或语气意见不作为安装否决，也不改变覆盖统计，可结合成品人工判断。</p><ul>` +
+      notices.map(notice => `<li>${esc(notice)}</li>`).join("") + "</ul>" : "") + `</section>`;
+}
+
+function showInstalledCoverage(value) {
+  const warnings = Array.isArray(value?.warnings) ? value.warnings.filter(item => typeof item === "string") : [];
+  const notices = Array.isArray(value?.review_notices) ? value.review_notices.filter(item => typeof item === "string") : [];
+  if (!warnings.length && !notices.length) return;
+  openModal("人格已安装", "已保留可用表达，覆盖缺口和表达审阅提示可在当前人格页继续查看。",
+    expressionCoverage(value), [{label: "查看当前人格", onClick: openPersonaView}, {label: "开始聊天", cls: "btn primary", onClick: closeModal}]);
+}
+
+function expressionReviews(reviews, coveragePolicy) {
   const label = value => ({passed: "已完成核对", failed: "核对不满足", rejected: "核对不满足",
+    partial: coveragePolicy === "source_coverage_v1" ? "存在普通覆盖缺口" : "结果见核对详情",
     not_reviewed: "尚未核对", user_config: "用户明确配置", invalidated_by_user: "用户修订后原核对已失效"}[value] || "结果见核对详情");
   const rowsLabel = (rows, valid) => rows.length ? (rows.every(row => row.verdict === valid) ? "已完成核对" : "核对不满足") : "尚无完整回执";
   const fact = Array.isArray(reviews?.fact) ? rowsLabel(reviews.fact, "valid") : label(reviews?.fact);
   const fidelityRows = ["fidelity_sources", "fidelity_items", "fidelity_scenarios"].flatMap(key => Array.isArray(reviews?.[key]) ? reviews[key] : []);
-  const fidelity = fidelityRows.length ? rowsLabel(fidelityRows, "passed") : label(reviews?.fidelity);
+  const ordinaryMissing = coveragePolicy === "source_coverage_v1" && fidelityRows.some(row => row.verdict === "missing")
+    && fidelityRows.every(row => ["passed", "missing"].includes(row.verdict));
+  const fidelity = ordinaryMissing ? "存在普通覆盖缺口，详见提示" : fidelityRows.length ? rowsLabel(fidelityRows, "passed") : label(reviews?.fidelity);
   return `<p>成品事实：${esc(fact)}；表达保真与覆盖：${esc(fidelity)}。</p>` +
     `<details><summary>核对详情</summary><pre>${esc(expressionText(reviews))}</pre></details>`;
 }
@@ -1153,13 +1277,14 @@ function expressionDetails(result) {
       `</ul><p class="hint">这些选择与本条候选的准备版本绑定。调整范围需要另行准备并重新核对，不会改动本条候选。</p></details>` : "") +
     (result.rollback_token ? `<p class="hint">此次表达更新已通过独立回退操作恢复。原更新记录和回退记录分别保留，可在下方核对关联。</p>` : "") +
     `<p class="hint">表达长度：${result.projection_chars == null ? "未知" : esc(result.projection_chars)} 字符。审议结果仅供核对，不代表真人效果通过。</p>` +
+    expressionCoverage(result) +
     (gaps.length ? `<h3>缺口与阻止应用的原因</h3><ul>${gaps.map(g => `<li>${esc(expressionText(g))}</li>`).join("")}</ul>` : "") +
     `<details class="expression-review" open><summary>准备时的表达 → 候选表达（${currentDiff.length} 节）</summary>` +
     (currentDiff.length ? currentDiff.map(d => `<details class="expression-item"><summary>${esc(d.section || "表达小节")} · ${d.before === d.after ? "正文未变" : "含变更"}</summary>` +
       `<p class="hint">${esc(expressionText(d.policy || result.baseline_policy || "保留范围待核对"))}</p>` +
       `<h4>准备时的表达</h4><pre>${esc(expressionText(d.before))}</pre><h4>候选表达</h4><pre>${esc(expressionText(d.after))}</pre></details>`).join("") :
       `<p class="hint">此记录没有可用的当前→候选对照；不能据此认定既有修订已保留。未生成候选时请先查看缺口；历史记录请另核对当时版本。</p>`) + `</details>` +
-    `<details class="expression-review"><summary>事实核对与表达保真核对</summary>${expressionReviews(result.reviews)}</details>` +
+    `<details class="expression-review"><summary>事实核对与表达保真核对</summary>${expressionReviews(result.reviews, result.coverage_policy)}</details>` +
     `<details class="expression-review"><summary>原文 → 适配 → 排除或缺口（${diff.length} 项）</summary>` +
     (diff.length ? diff.map(d => `<details class="expression-item"><summary>${esc(d.source_id || "源单元")} · ${esc(expressionDisposition(d.disposition))}</summary>` +
       `<h4>原文</h4><pre>${esc(expressionText(d.original))}</pre><h4>适配后</h4><pre>${esc(expressionText(d.adapted))}</pre>` +
@@ -1379,7 +1504,7 @@ function showExpressionCandidate(result) {
     ]);
 }
 
-function openPersonaImport(prefill = "") {
+function openPersonaImport(prefill = "", prefillSource = "") {
   $("#modal-title").textContent = "导入人格文档";
   $("#modal-meta").textContent = "会替换当前人格；旧版自动存进 history，可回滚。";
   $("#modal-body").innerHTML = `
@@ -1404,7 +1529,7 @@ function openPersonaImport(prefill = "") {
   foot.appendChild(cancel);
   $("#modal").classList.remove("hidden");
 
-  wireImport(
+  const setImportText = wireImport(
     {
       drop: $("#m-drop"),
       pick: $("#m-pick"),
@@ -1415,19 +1540,22 @@ function openPersonaImport(prefill = "") {
       go: $("#m-go"),
       idle: "替换并保存",
       busy: "替换中…",
-      back: (text) => openPersonaImport(text),
+      reset: false,
+      back: (text, name) => openPersonaImport(text, name),
     },
-    async (md, src) => {
-      await postJSON("/api/persona", { persona_md: md, source: src });
+    async (md, src, resumeOpId, markInstalled) => {
+      const installed = await postJSON("/api/persona", { persona_md: md, source: src,
+        ...(resumeOpId ? {resume_op_id: resumeOpId} : {}) });
+      markInstalled();
       state = await api("/api/state");
-      toast("人格已替换，旧版已快照");
+      const warningCount = (Array.isArray(installed.expression_coverage?.warnings) ? installed.expression_coverage.warnings.length : 0)
+        + (Array.isArray(installed.expression_coverage?.review_notices) ? installed.expression_coverage.review_notices.length : 0);
+      toast(warningCount ? `人格已替换，旧版已快照；有 ${warningCount} 项覆盖或表达审阅提示，请在当前人格页查看。` : "人格已替换，旧版已快照", warningCount ? 6000 : 3000);
       await openPersonaView();
     },
   );
   if (prefill) {
-    const box = $("#m-md");
-    box.value = prefill;
-    box.dispatchEvent(new Event("input"));
+    setImportText(prefill, prefillSource);
   }
   setTimeout(() => $("#m-md").focus(), 30);
 }
@@ -1486,6 +1614,7 @@ function openSettings(section = "general") {
 function closeSettings() {
   $("#settings-modal").classList.add("hidden");
   window.AliceWorkers?.setSettingsVisible(false);
+  window.AliceClaudeSettings?.setVisible(false);
   window.AliceQQ?.close();
 }
 
@@ -1653,6 +1782,7 @@ $("#shutdown-btn").onclick = async () => {
   shuttingDown = true;
   clearInterval(syncTimer);
   $("#settings-modal").classList.add("hidden");
+  window.AliceClaudeSettings?.setVisible(false);
   window.AliceQQ?.close();
   window.AliceObserver?.shutdown();
   window.AliceEvaluations?.shutdown();
@@ -1784,7 +1914,7 @@ async function send() {
     return;
   }
   if (uncertainSend?.workerReference && (uncertainSend.text !== text || uncertainSend.epoch !== sessionEpoch)) {
-    setChatNotice("上一条任务补充的结果尚未确认，不能更换文字或目标后作为重试发送。请先同步记录，或核对原请求结果。");
+    setChatNotice("上一条任务引用消息的结果尚未确认，不能更换文字或目标后作为重试发送。请先同步记录，或核对原请求结果。");
     return;
   }
   if (window.AliceEvaluations?.canSend() === false) {
@@ -1797,7 +1927,7 @@ async function send() {
   const requestId = retry?.requestId || crypto.randomUUID().replaceAll("-", "");
   const reference = retry ? retry.workerReference : composerWorkerReference;
   const workerReference = reference ? { ...reference } : null;
-  const workerTarget = workerReference ? { collaborator: "dsh-agent", task_id: workerReference.taskId } : null;
+  const workerTarget = workerReference ? { collaborator: workerReference.collaborator, task_id: workerReference.taskId } : null;
   // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
   const evaluationId = retry ? retry.evaluationId : window.AliceEvaluations?.peekForSend();
   const payload = { text, request_id: requestId,
@@ -1959,11 +2089,12 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "appearance", "qq", "workers", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
+    window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
   }
   window.AliceUI = { selectSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
@@ -1989,7 +2120,8 @@ boot().catch(showStartupError);
     byId("nav-backdrop").classList.toggle("hidden", !open);
     byId("nav-toggle").setAttribute("aria-expanded", String(open));
     // On a small screen the navigation overlays the page, so its background is inert.
-    for (const id of ["chat", "observer", "evaluations", "worker-tasks"]) byId(id).inert = open;
+    for (const id of ["chat", "observer", "evaluations"]) byId(id).inert = open;
+    document.querySelectorAll(".worker-panel").forEach((panel) => { panel.inert = open; });
     if (open) focus(byId("nav-close"));
     else if (returnFocus) focus(byId("nav-toggle"));
   }
