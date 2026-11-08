@@ -57,7 +57,7 @@ class PersonaRegistryContext:
             ref = f"{_REF_PREFIX}{item['id']}@{self.classification_digest.split(':')[-1][:16]}:{self.nonce}"
             self.refs[ref] = item["id"]
         self.loaded = {}          # bundle_id -> True（本轮已读）
-        self.loaded_chars = 0     # 去重后正文的运行记账
+        self.loaded_chars = 0     # 实际返回的场景正文记账；重复读取同一场景不再返回正文
         self.requested_refs: list[str] = []
         self.sent: set[str] = set()
         self.calls = 0
@@ -135,7 +135,10 @@ class PersonaRegistryContext:
                 self.events.append({"action": "persona_load", "status": "budget_exceeded",
                                     "bundle": bundle_id, "reason": "bundle_limit"})
                 continue
-            if parts["rest_chars"] > remaining:
+            # text 同时含场景自有条目与必要依赖；仅记 rest_chars 会漏掉
+            # own 正文。按实际返回文本计数，也包含条目间分隔符。
+            text_chars = len(parts["text"])
+            if text_chars > remaining:
                 item.update({"status": "budget_exceeded",
                              "notice": "加上该场景必要依赖后无法完整放入本轮预算"})
                 items.append(item)
@@ -143,9 +146,8 @@ class PersonaRegistryContext:
                                     "bundle": bundle_id, "reason": "chars"})
                 continue
             self.loaded[bundle_id] = True
-            self.loaded_chars += parts["rest_chars"] + len(
-                persona_residency.core_text(self.contract, self.package)) * 0  # core 不重复计入
-            remaining -= parts["rest_chars"]
+            self.loaded_chars += text_chars
+            remaining -= text_chars
             item.update({"status": "loaded", "entry_ids": list(bundle["entry_ids"]),
                          "dependency_ids": sorted(parts["rest"]),
                          "already_present_ids": parts["present"],
