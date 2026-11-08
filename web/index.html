@@ -358,8 +358,14 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
     <div class="modal-body settings-body">
+      <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
+        <div class="discovery-settings-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
+        <p class="settings-hint">管理自动寻找、聊天查找、额度与资料保存。普通草稿在切换分区或关闭设置后保留，未保存的密钥会清空。</p>
+        <p id="discovery-settings-status" class="discovery-status" role="status" aria-live="polite">等待联网搜索设置加载…</p>
+        <div class="discovery-settings-sources"><p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p><button id="discovery-settings-preferences" class="link" type="button" disabled>选择平台与兴趣</button></div>
+      </section>
       <section class="settings-section hidden" data-settings-section="appearance">
         <label class="panel-title" for="ui-texture">屏幕纹理</label>
         <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">

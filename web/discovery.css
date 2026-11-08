@@ -26,7 +26,7 @@
 .discovery-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
 .discovery-controls { min-width: 0; gap: 13px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .discovery-controls:not(.hidden) { display: grid; }
-.discovery-preferences-head, .discovery-preferences-note, #discovery-settings-box { grid-column: 1 / -1; }
+.discovery-preferences-head, .discovery-preferences-note { grid-column: 1 / -1; }
 .discovery-preferences-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .discovery-preferences-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .discovery-preferences-note { margin: 0; font-size: 13px; color: var(--muted); }
@@ -38,8 +38,8 @@
 .discovery-box details > .discovery-field + .discovery-check { margin-top: 10px; }
 .discovery-box > h2, .discovery-results h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .discovery-hint { margin: 8px 0 10px; font-size: 13px; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; }
-.discovery-panel .discovery-hint strong { font-weight: 600; color: var(--ink); }
-.discovery-panel form { margin: 0; }
+:is(.discovery-panel, .discovery-settings) .discovery-hint strong { font-weight: 600; color: var(--ink); }
+:is(.discovery-panel, .discovery-settings) form { margin: 0; }
 .discovery-form { display: grid; gap: 10px; padding-top: 12px; }
 .discovery-field { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
 .discovery-field input, .discovery-field textarea { width: 100%; }
@@ -48,8 +48,15 @@
 .discovery-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .discovery-check { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; line-height: 1.7; }
 .discovery-check > input { flex-shrink: 0; margin: 4px 0 0; }
-.discovery-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
-.discovery-panel .discovery-policy-section { padding-top: 13px; margin-top: 3px; border-top: 1px solid var(--line); }
+:is(.discovery-panel, .discovery-settings) fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+:is(.discovery-panel, .discovery-settings) .discovery-policy-section { padding-top: 13px; margin-top: 3px; border-top: 1px solid var(--line); }
+.discovery-settings { min-width: 0; }
+.discovery-settings-head, .discovery-settings-sources { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.discovery-settings-head h2, .discovery-settings-sources p { margin: 0; }
+.discovery-settings .discovery-status { margin-block: 0; }
+.discovery-settings .discovery-form { padding-top: 4px; }
+.discovery-settings .discovery-policy-section[open] > summary { margin-bottom: 10px; }
+.discovery-settings .discovery-actions { padding-top: 12px; border-top: 1px solid var(--line); }
 .discovery-policy-section > legend, .discovery-policy-section > summary { font-size: 14px; font-weight: 600; }
 .discovery-policy-section > summary { cursor: pointer; }
 .discovery-scope-fields { display: grid; gap: 10px; margin-top: 12px; }

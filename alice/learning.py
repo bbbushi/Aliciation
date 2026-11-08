@@ -93,6 +93,10 @@ def material_packet(*, packet_id, source_id, version_id, title, url, text, quote
     excerpt = text[start:].encode('utf-8')[:4096].decode('utf-8',errors='ignore')
     if quote not in excerpt:
         excerpt = text[text.index(quote):].encode('utf-8')[:4096].decode('utf-8',errors='ignore')
+    if source_id.startswith('tieba:') and reading_policy.get('tieba_reader_version') == 2:
+        # Preserve the actual bounded discussion, including later-page opinions.
+        # The source store independently enforces the user's current text quota.
+        excerpt = text
     return {'id':packet_id,'source_id':source_id,'version':version_id,'title':title,'url':url,
             'evidence':excerpt,'evidence_kind':'page_excerpt','origin':'external',
             'scope':scope,'created_at':created_at,'expires_at':expires_at,

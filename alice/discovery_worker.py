@@ -6,13 +6,14 @@ waits for exactly GO\\n before any operation can make a request. The parent
 serializes this small admission write with foreground/cancellation admission.
 Without that flag, one JSON line (or JSON followed by EOF) runs immediately.
 Read one final JSON result from stdout. Never put credentials in argv.
-Input: {version: 1, op: plan|search|read|interpret|reflect|bili_http|tieba_forum_check,
+Input: {version: 1, op: plan|search|read|interpret|reflect|bili_http|tieba_forum_check|tieba_page,
         timeout_seconds?: positive number, response_bytes?: positive integer, ...}.
   plan: interests: [{id, text}], platforms: [platform_id], model: {...}
   search: platform, query, provider: {kind, api_key?|endpoint?, engines?,
                                    allow_loopback?}, limit?: positive integer
   read: candidate: {platform, url, title?, snippet?}
-  Tieba search/read: tieba_options?: {preferred_forums?, read_replies?, reply_limit?}
+  Tieba search/read: tieba_options?: {preferred_forums?, read_replies?, read_nested?, reply_limit?, search_sort?, published_after?}
+  tieba_page: candidate, page, page_size (exactly one anonymous GET)
   tieba_forum_check: forum_name (one explicit public forum-name check)
   interpret: evidence: [read data, ...] (1..3), model: {...}
   bili_http: request: fixed addon HTTP frame, context: current search/read scope
@@ -28,6 +29,7 @@ Search snippets are transient and must not be persisted as reading evidence.
 from __future__ import annotations
 
 from dataclasses import asdict
+import argparse
 import base64
 import json
 import math
@@ -43,7 +45,7 @@ MAX_INPUT_BYTES = 192 * 1024
 MAX_OUTPUT_BYTES = 192 * 1024
 MAX_MODEL_INPUT_BYTES = 112 * 1024
 MAX_INTEREST_CHARS = 600
-_TIMEOUTS = {"plan": 60.0, "search": 15.0, "read": 20.0, "interpret": 60.0, "reflect":60.0, "bili_http": 30.0, "tieba_forum_check": 20.0}
+_TIMEOUTS = {"plan": 60.0, "search": 15.0, "read": 20.0, "interpret": 60.0, "reflect":60.0, "bili_http": 30.0, "tieba_forum_check": 20.0, "tieba_page": 20.0}
 _COVERAGE = {"page_text_excerpt", "static_page_excerpt", "video_description_only", "page_description_only",
              "zhihu_answer_excerpt", "zhihu_article_excerpt", "zhihu_question_excerpt", "forum_main_post_excerpt", "forum_thread_excerpt"}
 
@@ -77,7 +79,7 @@ def _field(value: object, name: str, limit: int, *, empty: bool = False) -> str:
 
 
 def _model_json(model: object, system: str, data: dict, *, usage: sources.Usage,
-                timeout: float, max_tokens: int) -> dict:
+                timeout: float, max_tokens: int, input_bytes: int = MAX_MODEL_INPUT_BYTES) -> dict:
     if not isinstance(model, dict):
         _fail("model_config", "尚未配置用于内容发现的模型")
     base = model.get("base_url", "")
@@ -102,7 +104,7 @@ def _model_json(model: object, system: str, data: dict, *, usage: sources.Usage,
     if model_host in {"api.deepseek.com", "open.bigmodel.cn"}:
         payload["thinking"] = {"type": "disabled"}
     body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if len(body) > MAX_MODEL_INPUT_BYTES:
+    if len(body) > input_bytes:
         _fail("input_limit", "本轮模型输入超过额度")
     usage.model_calls += 1
     raw, _ = sources.request_bytes(endpoint, usage=usage, timeout=timeout,
@@ -164,13 +166,16 @@ def _interpret(payload: dict, usage: sources.Usage, timeout: float) -> dict:
     evidence = payload.get("evidence")
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
         _fail("invalid_evidence", "阅读判断需要 1 至 3 份实际读取的材料")
+    tieba_limit = payload.get("tieba_text_limit", 30000)
+    if type(tieba_limit) is not int or not 80 <= tieba_limit <= 9007199254740991:
+        _fail("invalid_evidence", "贴吧文字额度无效")
     inputs = []
     for index, item in enumerate(evidence):
         if not isinstance(item, dict):
             _fail("invalid_evidence", "材料格式无效")
         source = sources.normalize_candidate(item)
         text, coverage = item.get("text"), item.get("coverage")
-        if (not isinstance(text, str) or not 80 <= len(text) <= sources.MAX_TEXT_CHARS
+        if (not isinstance(text, str) or not 80 <= len(text) <= (tieba_limit if source["platform"] == "tieba" else sources.MAX_TEXT_CHARS)
                 or coverage not in _COVERAGE):
             _fail("invalid_evidence", "需要标明覆盖范围的实际页面文字")
         # Bound prompt size independently of the read cap; this is explicitly an excerpt.
@@ -186,8 +191,9 @@ def _interpret(payload: dict, usage: sources.Usage, timeout: float) -> dict:
         "不能把其他编号材料中的事实、观点或引文混入这一条，也不能在这一条做跨材料比较。"
         "跨材料比较需要保留多份依赖关系，本阶段不输出这种比较判断。"
         "video_description_only 只代表视频简介，不能称看过视频；description_only 不能称读过全文，其他均仅节选。"
-        "forum_thread_excerpt 是同一帖首页的主帖与回帖节选，按楼层分开归属观点；"
-        "不能把回帖说成楼主观点，不能推定各楼来自不同人，也不能将这些回帖当作完整讨论、热评或全吧共识。"
+        "forum_thread_excerpt 是同一帖分页取得的主帖与回帖节选，可能含接口附带的楼中楼节选；"
+        "按楼层、发言者和所属楼层区分观点、支持、反对及争议，楼中楼的具体回复对象仅在文字明确时归属。"
+        "不能把回帖说成楼主观点，不能推定身份未确认的各楼来自不同人，也不能将节选当作完整讨论、热评或全吧共识。"
         "不能从标题、简介推导正文没出现的事实。不相关、拦截/登录/验证码页面、纯导航或不足以支持判断的内容应跳过。"
         "输出唯一 JSON 对象 {items:[...]}，最多3项、每份 evidence 最多一项；无可用材料返回空数组。"
         "每项恰好字段 evidence_index（输入中的整数）、summary（最多800字）、author_view（最多600字）、"
@@ -202,7 +208,8 @@ def _interpret(payload: dict, usage: sources.Usage, timeout: float) -> dict:
         _fail('protocol','价值细节策略无效')
     system += 'summary与interpretation合计建议字数按价值为'+json.dumps(targets)+'；可为关键条件调整，仍须遵守各字段上限，不机械截断。'
     result = _model_json(payload.get("model"), system, {"evidence": inputs},
-                         usage=usage, timeout=timeout, max_tokens=3000)
+                         usage=usage, timeout=timeout, max_tokens=3000,
+                         input_bytes=max(MAX_MODEL_INPUT_BYTES, tieba_limit * 4 * len(inputs) + 16384))
     items = result.get("items")
     if set(result) != {"items"} or not isinstance(items, list) or len(items) > 3:
         _fail("model_schema", "阅读结果字段不符合约定")
@@ -261,6 +268,9 @@ def run_operation(payload: dict, usage: sources.Usage) -> dict:
     if op == "tieba_forum_check":
         return sources.check_tieba_forum(payload.get("forum_name"), usage=usage, timeout=timeout,
                                         response_bytes=response_bytes, network_proxy=network_proxy)
+    if op == "tieba_page":
+        return sources.read_tieba_page(payload.get("candidate"), payload.get("page"), payload.get("page_size"),
+            usage=usage, timeout=timeout, response_bytes=response_bytes, network_proxy=network_proxy)
     if op == "search":
         limit = payload.get("limit", sources.MAX_RESULTS)
         if type(limit) is not int or limit <= 0:
@@ -285,16 +295,22 @@ def run_operation(payload: dict, usage: sources.Usage) -> dict:
                                         network_proxy=network_proxy)
         return {"status": 200, "body_base64": base64.b64encode(body).decode("ascii")}
     return sources.read(payload.get("candidate"), usage=usage, timeout=timeout, response_bytes=response_bytes,
-                        network_proxy=network_proxy, tieba_options=payload.get("tieba_options"))
+                        network_proxy=network_proxy, tieba_options=payload.get("tieba_options"),
+                        tieba_text_limit=payload.get("tieba_text_limit", 30000))
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input-bytes", type=int, default=MAX_INPUT_BYTES)
+    input_limit = parser.parse_args().input_bytes
+    if input_limit <= 0:
+        parser.error("input-bytes must be positive")
     usage = sources.Usage()
     op = "invalid"
     output_limit = MAX_OUTPUT_BYTES
     try:
-        raw = sys.stdin.buffer.readline(MAX_INPUT_BYTES + 1)
-        if len(raw) > MAX_INPUT_BYTES and not raw.endswith(b"\n"):
+        raw = sys.stdin.buffer.readline(input_limit + 1)
+        if len(raw) > input_limit:
             _fail("input_limit", "工作进程输入超过额度")
         payload = sources._json_body(raw)
         if (payload.get("version") != 1 or not isinstance(payload.get("op"), str)
