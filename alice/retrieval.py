@@ -28,7 +28,7 @@ CONSTITUTION = """# {name} 的运行宪法
 - 上下文保留：提供 context_keep/context_release 时，我可提议跨轮保留或移出已读资料，容量和期限由宿主决定。移出不删除记忆、不解除已暴露资料的依赖，也不能修改历史、当前问题或人格核心。
 - 人格与表达：用户选定的说话习惯和样本由用户管理，普通演化只提议自我叙事与关系小节，有依据的生长内容在依据失效时暂不使用。用户可在本机人格面板编辑表达、导入原稿或回退；我没有代替用户保存、安装或续跑的工具。审查通过不等于真实聊天效果已验收。
 - 联网查资料：在本机网页和已获准的本人 QQ 私聊中，搜索工具可用时，我可以根据话题自行提炼公开关键词、查找和阅读资料，不必等用户说“搜索”；已有信息足够时直接回应。只使用开放的平台，不向搜索发送私密聊天、记忆或凭据。
-- 阅读与见闻：搜索结果不等于读过全文，只能按工具实际返回的范围使用，不能声称看过未读取的视频、评论或页面内容。在已开启的范围内，可记录有用户原话依据的兴趣、择要保存已读见闻，并形成带来源和不确定性的观点；自行阅读不代表用户更喜欢该主题。
+- 阅读与见闻：搜索结果不等于读过全文，只能按工具实际返回的范围使用，不能声称看过未读取的视频、评论或页面内容。近期对话可接续仍获准的资料讨论及出处，不代表重新联网或永久记住。贴吧可按发帖日期筛选，读取时间不代表内容新。获准后可按额度翻页读回帖及接口附带的楼中楼节选，按发言者与楼层区分观点，不代表完整讨论或共识。在已开启的范围内，可记录有用户原话依据的兴趣、择要保存已读见闻，并形成带来源和不确定性的观点；自行阅读不代表用户更喜欢该主题。
 - QQ 连接：支持已绑定用户本人的私聊文字，不支持群聊。用户在本机网页“连接 QQ”完成组件准备、扫码、身份确认和开始聊天；我可以说明入口，不能代安装或授权，也不能把组件已安装当成已经连接。
 - 协作会话：本机 GUI 授权后，可通过工具向 DSH 或本地 Claude 派发有界任务、查询状态、读取公开回复和请求停止。DSH 可在原任务继续补充或追问；Claude 暂不支持同会话续跑。窗口通知和任务引用不代表已经读过正文，需要通过工具读取；本轮绑定任务引用时，只操作该目标。
 - 执行状态：派工受理不等于完成，协作者自报不等于我检查或验收过，期望产物不等于已收取。停止请求不等于已确认停止；状态或费用未知时如实说明，不能当成已停止或零费用。
@@ -128,7 +128,8 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
                    reserved_tokens: int = 0, manifest_out: list | None = None,
                    memory_session=None, recap_block: str | None = None,
                    request_id=None, recap_available: bool | None = None,
-                   recap_reserve_tokens: int = 0, protect_recent_history: bool = False) -> list[dict]:
+                   recap_reserve_tokens: int = 0, protect_recent_history: bool = False,
+                   continue_sources: bool = False) -> list[dict]:
     """系统提示 + 最近 N 轮原文（C0：完整往返 + 去重 + 总预算内选择连续后缀）。
 
     reserved_tokens：调用方预留的工具 schema 与回复量（从历史预算中扣除）。
@@ -179,19 +180,40 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         manifest.add("background", "scoped_stances", block)
         messages.append({"role": "user", "content": block})
     now_str = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M %A")
+    # Both window selection passes consume dictionaries (sqlite3.Row lacks
+    # get); normalize before either pass, not only during audience projection.
+    raw_rows = [dict(row) for row in store.model_history_turns(cfg.context.recent_turns * 2)]
+    restored, source_exclusions = {}, []
+    if continue_sources:
+        # Only the configured recent window can be restored. Reserve the small
+        # provenance directory before selecting the final suffix; never rescan
+        # old history or append every full 200-reply thread on a follow-up.
+        from .discovery_memory import source_history_block
+        window = ctx.complete_round_suffix(raw_rows, cfg.context.recent_turns)
+        restored, source_exclusions = store.source_history_projection(
+            window, scope=source_scope, known_ids=[p["id"] for p in source_packets])
+        source_turns = [{"turn_id": tid, "packet_ids": entry["packet_ids"]}
+                        for tid, entry in sorted(restored.items())]
+        continuation_ids = list(dict.fromkeys(pid for row in source_turns for pid in row["packet_ids"]))
+        continuation_packets = store.source_packets_for(continuation_ids, scope=source_scope) if continuation_ids else []
+        if continuation_packets:
+            material_tokens += ctx.estimate_tokens(source_history_block(continuation_packets, source_turns))
+        elif restored:
+            restored = {}  # No unqualified historical prose on a failed lookup.
     # C0：历史预算 = 总预算 − 稳定提示/资料 − 调用方预留（工具 schema+回复）
     budget = cfg.context.total_budget_tokens
     history_budget = None
     if budget:
         history_budget = max(0, budget - material_tokens - reserved_tokens
                              - cfg.context.reply_reserve_tokens - recap_reserve_tokens - 128)
-    raw_rows = store.model_history_turns(cfg.context.recent_turns * 2)
     # Apply the audience projection BEFORE selection and before serializing rows.
     projected = []
     for row in raw_rows:
         r = dict(row)
         if store.turn_worker_refs(r["id"]):
             r["content"] = store.turn_display(r["id"], scope=source_scope)
+        elif r["id"] in restored:
+            r["content"] = restored[r["id"]]["content"]
         projected.append(r)
     if projected and projected[-1]["role"] == "user" and current_user_text is not None:
         projected[-1]["content"] = current_user_text
@@ -216,6 +238,17 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
                  "message_limit": cfg.context.recent_turns, "history_token_budget": history_budget,
                  "policy": "complete_recent_window_protected" if protect_recent_history else "complete_suffix_then_budget",
                  "recap_reserved_tokens": recap_reserve_tokens}
+    continuation_block = None
+    source_turns = [{"turn_id": r["id"], "packet_ids": restored[r["id"]]["packet_ids"]}
+                    for r in turns if r["id"] in restored]
+    continuation_ids = list(dict.fromkeys(pid for row in source_turns for pid in row["packet_ids"]))
+    if continuation_ids:
+        continuation_packets = store.source_packets_for(continuation_ids, scope=source_scope)
+        if not continuation_packets:
+            raise ValueError("接续对话的来源已失效；未执行模型调用")
+        continuation_block = source_history_block(continuation_packets, source_turns)
+    selection["source_continuation"] = {"packet_ids": continuation_ids, "turns": source_turns,
+                                         "excluded": source_exclusions}
     history_seen = {r["content"] for r in turns if r["role"] == "user"}
     # 去重（C0 最小面）：与历史逐字相同的用户材料块不重复装配（工具结果不在此列）
     deduped = []
@@ -225,11 +258,15 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
             continue
         deduped.append(m)
     messages = [messages[0]] + deduped
+    if continuation_block:
+        messages.append({"role": "user", "content": continuation_block})
     manifest = ctx.ContextManifest(history=selection)
     manifest.add("stable", "constitution+persona+memory-area", system_prompt)
     for m in deduped:
         kind = "index" if m["content"].startswith("本轮本机记忆资料") else "background"
         manifest.add(kind, "material", m["content"])
+    if continuation_block:
+        manifest.add("background", "source_continuation", continuation_block)
     if turns and turns[-1]["role"] == "user":
         content = turns[-1]["content"]
         if current_user_text is not None:

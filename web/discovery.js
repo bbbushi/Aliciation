@@ -2,8 +2,8 @@
 "use strict";
 (() => {
   const $ = (id) => document.getElementById(id);
-  const panel = $("discovery"), app = $("app"), trigger = $("discovery-btn");
-  if (!panel || !app || !trigger) return;
+  const panel = $("discovery"), app = $("app"), trigger = $("discovery-btn"), settingsPanel = $("discovery-settings");
+  if (!panel || !app || !trigger || !settingsPanel) return;
   panel.innerHTML = `
     <div class="discovery-header">
       <div><span class="discovery-kicker">ALICE / DISCOVER</span><h1 id="discovery-title">内容发现</h1>
@@ -18,6 +18,7 @@
         <button id="discovery-run" class="btn primary" type="button" data-write>现在找一轮</button>
         <button id="discovery-cancel" class="btn ghost hidden" type="button" data-write>停止这次寻找</button>
         <button id="discovery-preferences-toggle" class="btn ghost" type="button" aria-expanded="false" aria-controls="discovery-preferences">偏好设置</button>
+        <button id="discovery-settings-open" class="link" type="button">联网搜索设置</button>
       </div></div>
       <div id="discovery-next" class="discovery-next hidden"><p id="discovery-next-text"></p><button id="discovery-next-action" class="btn ghost" type="button"></button></div>
       <div id="discovery-bound" class="discovery-bound hidden"><span id="discovery-bound-text"></span>
@@ -27,9 +28,9 @@
       <div class="discovery-grid">
         <div id="discovery-preferences" class="discovery-controls hidden">
           <div class="discovery-preferences-head"><h2>寻找偏好</h2><button id="discovery-preferences-close" class="link" type="button">返回资料</button></div>
-          <p class="discovery-hint discovery-preferences-note">平台点击即保存；兴趣和活动设置编辑后保存。收起设置会保留未保存的草稿。</p>
+          <p class="discovery-hint discovery-preferences-note">平台点击即保存；兴趣编辑后保存。自动寻找、额度和访问方式已移到「设置 → 联网搜索」。收起偏好会保留兴趣草稿。</p>
           <details id="discovery-platforms-box" class="discovery-box"><summary>去哪里找</summary>
-            <p class="discovery-hint">只在你开放的平台寻找公开内容。贴吧默认只读主帖，首页回帖需另行允许；私信、观看历史与账号操作不随开关开放。</p>
+            <p class="discovery-hint">只在你开放的平台寻找公开内容。贴吧回帖分页与楼中楼节选可在设置中开启；私信、观看历史与账号操作不随开关开放。</p>
             <div id="discovery-platforms"><p class="discovery-hint">正在等待读取…</p></div>
           </details>
           <details id="discovery-interests-box" class="discovery-box" open><summary>找什么</summary>
@@ -56,7 +57,7 @@
               <p id="discovery-interest-draft" class="discovery-draft hidden"></p>
             </form>
           </details>
-          <details id="discovery-settings-box" class="discovery-box"><summary>自动寻找与高级设置</summary>
+          <div id="discovery-settings-box">
             <form id="discovery-settings-form" class="discovery-form">
               <label class="discovery-check"><input id="discovery-enabled" type="checkbox"><span>允许内容访问（总开关）</span></label>
               <label class="discovery-check"><input id="discovery-background" type="checkbox"><span>按兴趣自动寻找</span></label>
@@ -68,9 +69,11 @@
               <label class="discovery-check"><input id="discovery-paid" type="checkbox"><span>允许使用已配置的模型选题和整理资料（可能产生费用，仍受我的额度约束）</span></label>
               <details id="discovery-tieba-scope-box" class="discovery-policy-section"><summary>贴吧回帖阅读</summary>
                 <div class="discovery-scope-fields">
-                  <label class="discovery-check"><input id="discovery-tieba-read-replies" type="checkbox" disabled><span>允许读取帖子首页的公开回帖文字</span></label>
-                  <label class="discovery-field discovery-reply-limit-field">每帖最多读取多少条回帖<input id="discovery-tieba-reply-limit" type="number" min="1" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
-                  <p id="discovery-tieba-replies-hint" class="discovery-hint">默认仅主帖。允许回帖后仍只读首页，不翻页，不含楼中楼、图片或视频；接口实际返回可能少于设置数量。</p>
+                  <label class="discovery-check"><input id="discovery-tieba-read-replies" type="checkbox" disabled><span>允许按楼层翻页阅读公开回帖</span></label>
+                  <label class="discovery-check"><input id="discovery-tieba-read-nested" type="checkbox" disabled><span>同时阅读楼中楼节选</span></label>
+                  <label class="discovery-field discovery-reply-limit-field">每帖回复总量（含楼中楼）<input id="discovery-tieba-reply-limit" type="number" min="1" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
+                  <label class="discovery-field discovery-reply-limit-field">每帖文字额度（字符）<input id="discovery-tieba-text-limit" type="number" min="80" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
+                  <p id="discovery-tieba-replies-hint" class="discovery-hint">回复建议先读 200 条，主帖不占条数；文字额度默认 30000 字符，可自行调整。开启后按楼层依次读取，楼中楼紧随所属楼层；只读接口附带的楼中楼节选，不保证完整。达到条数、文字或网络额度即停止；不含图片或视频。资料会标注实际读取量，增加额度也会增加耗时和上下文用量。</p>
                   <p id="discovery-tieba-scope-support" class="discovery-hint">等待当前服务提供回帖设置。</p>
                   <p class="discovery-hint discovery-scope-notice">保存范围后，不再符合范围的旧资料及相关引用可能停用；已经失效的资料不会因重新放宽范围而恢复。</p>
                 </div>
@@ -122,7 +125,7 @@
               <div class="discovery-actions"><button id="discovery-settings-save" class="btn primary" type="submit" data-write>保存设置</button>
                 <button id="discovery-settings-reset" class="link" type="button">重新载入设置</button></div>
             </form>
-          </details>
+          </div>
         </div>
         <section class="discovery-results" aria-labelledby="discovery-results-title">
           <div class="discovery-results-head"><h2 id="discovery-results-title">找到的资料</h2><p id="discovery-card-count" class="discovery-hint"></p></div>
@@ -132,6 +135,8 @@
         </section>
       </div>
     </div>`;
+  // Keep one form, one draft and the existing revision-checked save path.
+  settingsPanel.append($("discovery-settings-box"));
 
   // This is a notice beside the existing composer, not a second chat or send path.
   const composerNotice = document.createElement("div");
@@ -143,7 +148,7 @@
   composerNotice.append(composerText, composerCancel);
   $("chat").querySelector("footer").prepend(composerNotice);
 
-  let opened = false, working = false, generation = 0, timer = null, controller = null;
+  let opened = false, settingsOpened = false, working = false, generation = 0, timer = null, controller = null;
   let snapshot = null, dataset = null, fresh = false, settingsDirty = false, settingsRevision = null;
   let interestDirty = false, interestRevision = null, editingInterest = null, stopped = false;
   let settingsEdit = 0, interestEdit = 0;
@@ -154,6 +159,7 @@
   const taskLabels = { idle: "等待下一次合格活动", queued: "等待开始", starting: "正在准备", running: "正在寻找", plan: "正在选择角度", search: "正在寻找材料", read: "正在读取内容", interpret: "正在整理材料与看法", bili_search: "正在准备 B站搜索", bili_read: "正在准备读取视频信息", bili_http: "正在访问 B站公开接口", planning: "正在选择角度", searching: "正在寻找材料", reading: "正在读取内容", synthesizing: "正在整理材料与看法", committing: "正在保存资料", completed: "本次寻找已完成", succeeded: "本次寻找已完成", skipped: "本次未继续寻找", cancelled: "本次已停止", cancelling: "正在停止", draining: "正在收回本次任务", failed: "本次寻找未完成", unavailable: "发现服务暂不可用", interrupted: "本次寻找已中断" };
   const biliStages = { device: "匿名设备准备", wbi_keys: "搜索参数准备", search: "视频搜索", video_info: "视频信息读取" };
   taskLabels.tieba_forum_check = "正在检测吧名";
+  taskLabels.tieba_page = "正在读取贴吧楼层与回复";
   taskLabels.reflect = "正在消化见闻与修订看法";
   taskLabels.browser_search = "正在通过独立浏览器搜索";
   taskLabels.browser_read = "正在读取指定页面正文";
@@ -241,7 +247,9 @@
     if (has(value, "verification_required")) parts.push(value.verification_required === true ? "观察到额外验证信号" : value.verification_required === false ? "未观察到额外验证信号" : "验证信号未取得");
     return parts.join(" · ");
   }
-  function status(message, kind = "") { text("discovery-status", message); $("discovery-status").dataset.kind = kind; }
+  function status(message, kind = "") {
+    for (const id of ["discovery-status", "discovery-settings-status"]) { text(id, message); $(id).dataset.kind = kind; }
+  }
   function button(label, callback, cls = "btn ghost") {
     const b = node("button", label, cls); b.type = "button"; b.dataset.write = "";
     b.addEventListener("click", callback); return b;
@@ -316,8 +324,9 @@
     return values;
   }
   function revealSetting(input) {
-    showPreferences(true);
-    for (let parent = input.parentElement; parent && parent !== panel; parent = parent.parentElement) {
+    if (settingsPanel.contains(input)) showSettings();
+    else showPreferences(true);
+    for (let parent = input.parentElement; parent && parent !== panel && parent !== settingsPanel; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
     }
   }
@@ -325,17 +334,25 @@
   mountPolicyFields();
   function currentRevision() { return snapshot?.settings?.revision; }
   function settingsConflict() { return settingsDirty && settingsRevision !== currentRevision(); }
+  function focusSetting(field) {
+    for (let parent = field; parent && parent !== panel && parent !== settingsPanel; parent = parent.parentElement) {
+      if (parent.tagName === "DETAILS") parent.open = true;
+    }
+    const target = field.id === "discovery-settings-box" ? $("discovery-settings-title")
+      : field.tagName === "DETAILS" ? field.querySelector("summary") : field;
+    requestAnimationFrame(() => { target.focus({ preventScroll: true }); target.scrollIntoView({ block: "nearest" }); });
+  }
+  function showSettings(target = "discovery-settings-title") {
+    if (!settingsOpened) window.AliceUI?.openSettings("discovery");
+    const field = $(target); if (field) focusSetting(field);
+  }
   function showPreferences(show, target = null) {
+    if (show && target && settingsPanel.contains($(target))) { showSettings(target); return; }
     $("discovery-preferences").classList.toggle("hidden", !show);
     $("discovery-preferences-toggle").setAttribute("aria-expanded", String(show));
     if (show && target) {
       const field = $(target); if (!field) return;
-      if (field.tagName === "DETAILS") field.open = true;
-      for (let parent = field.parentElement; parent && parent !== panel; parent = parent.parentElement) {
-        if (parent.tagName === "DETAILS") parent.open = true;
-      }
-      const focus = field.tagName === "DETAILS" ? field.querySelector("summary") : field;
-      focus.focus(); focus.scrollIntoView({ block: "nearest" });
+      focusSetting(field);
     }
     if (!show) $("discovery-preferences-toggle").focus();
   }
@@ -386,19 +403,22 @@
     }
     if (!preview.children.length) preview.append(node('p','暂无已分级见闻。'));
     const platforms = list(snapshot.platforms).filter((p) => p.enabled).map((p) => p.name || p.label);
+    text("discovery-settings-platforms", `已开放平台：${platforms.length ? platforms.join("、") : "暂无"}。`);
     const interests = list(snapshot.interests).filter((i) => i.enabled && i.external_allowed).map((i) => i.topic);
     const names = (rows, empty) => rows.length ? rows.slice(0, 3).join("、") + (rows.length > 3 ? ` 等 ${rows.length} 项` : "") : empty;
     text("discovery-context", `${names(platforms, "未选平台")} · ${names(interests, "未添加兴趣")}`);
     const tiebaEnabled = list(snapshot.platforms).some((p) => p.id === "tieba" && p.enabled);
     text("discovery-tieba-scope", tiebaEnabled ? tiebaScopeLabel(s) : "");
     $("discovery-tieba-scope").classList.toggle("hidden", !tiebaEnabled);
-    text("discovery-mode", s.enabled ? `自动寻找已开启 · ${s.window_start === s.window_end ? "全天" : `${s.window_start}–${s.window_end}（北京时间）`} · 手动找一轮不限时段` : "发现已暂停");
+    text("discovery-mode", s.enabled ? `${s.background_enabled ? `自动寻找已开启 · ${s.window_start === s.window_end ? "全天" : `${s.window_start}–${s.window_end}（北京时间）`}` : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"} · 手动找一轮不限时段` : "内容访问已暂停");
     text("discovery-toggle-enabled", s.enabled ? "暂停发现" : "开启发现");
   }
   function updateControls() {
     const ready = fresh && !!dataset && Number.isInteger(currentRevision()) && !working && !stopped;
-    panel.querySelectorAll("[data-write]").forEach((n) => { n.disabled = !ready || n.dataset.ineligible === "true"; });
+    for (const root of [panel, settingsPanel]) root.querySelectorAll("[data-write]").forEach((n) => { n.disabled = !ready || n.dataset.ineligible === "true"; });
     $("discovery-refresh").disabled = working || stopped;
+    $("discovery-settings-refresh").disabled = working || stopped;
+    $("discovery-settings-preferences").disabled = working || stopped;
     $("discovery-settings-reset").disabled = working || !snapshot;
     $("discovery-interest-reset").disabled = working;
     const forumCheck = snapshot?.tieba_forum_check;
@@ -418,7 +438,8 @@
     text("discovery-next-text", reconnect ? "尚未取得最新状态，重新读取后可以继续操作。" : issue?.message || "");
     text("discovery-next-action", reconnect ? "重新读取" : issue?.label || "");
     $("discovery-next-action").disabled = reconnect ? false : !ready;
-    text("discovery-preferences-toggle", settingsDirty || interestDirty ? "偏好设置 · 未保存" : "偏好设置");
+    text("discovery-preferences-toggle", interestDirty ? "偏好设置 · 未保存" : "偏好设置");
+    text("discovery-settings-open", settingsDirty ? "联网搜索设置 · 未保存" : "联网搜索设置");
     $("discovery-cancel").classList.toggle("hidden", !active);
     $("discovery-cancel").disabled = !ready || !task.id || ["draining", "cancelling"].includes(task.state);
     composerCancel.disabled = working || stopped || $("input").disabled;
@@ -433,12 +454,14 @@
     return {
       replies: typeof s.tieba_read_replies === "boolean",
       limit: Number.isSafeInteger(s.tieba_reply_limit) && s.tieba_reply_limit > 0,
+      nested: typeof s.tieba_read_nested === "boolean",
+      textLimit: Number.isSafeInteger(s.tieba_text_limit) && s.tieba_text_limit >= 80,
     };
   }
   function tiebaScopeLabel(settings) {
     const support = tiebaScopeSupport();
     const reading = support.replies ? settings.tieba_read_replies
-      ? support.limit ? `主帖 + 首页回帖（最多 ${quota(settings.tieba_reply_limit)} 条）` : "回帖数量待确认"
+      ? support.limit ? `主帖 + ${support.nested ? "分页回帖" : "首页回帖"}（合计最多 ${quota(settings.tieba_reply_limit)} 条${support.nested && settings.tieba_read_nested ? "，含楼中楼节选" : ""}）` : "回帖数量待确认"
       : "仅主帖" : "回帖设置未提供";
     return `贴吧阅读：${reading} · 优先吧可按兴趣设置`;
   }
@@ -449,8 +472,12 @@
     const readingReplies = repliesSupported && $("discovery-tieba-read-replies").checked;
     $("discovery-tieba-reply-limit").disabled = !readingReplies;
     $("discovery-tieba-reply-limit").required = readingReplies;
-    text("discovery-tieba-scope-support", !repliesSupported ? "当前服务尚未提供可用的首页回帖设置；此项不可修改，也不会提交。" : "");
-    $("discovery-tieba-scope-support").classList.toggle("hidden", repliesSupported);
+    $("discovery-tieba-read-nested").disabled = !readingReplies || !support.nested;
+    $("discovery-tieba-text-limit").disabled = !support.textLimit;
+    $("discovery-tieba-text-limit").required = support.textLimit;
+    const fullySupported = repliesSupported && support.nested && support.textLimit;
+    text("discovery-tieba-scope-support", !fullySupported ? "当前运行服务尚未提供完整的分页与楼中楼设置，请重启服务后使用新功能；不支持的字段不会提交。" : "");
+    $("discovery-tieba-scope-support").classList.toggle("hidden", fullySupported);
   }
   function providerFields() {
     tiebaScopeFields();
@@ -487,7 +514,7 @@
     $("discovery-tieba-access").disabled = !tiebaSupported;
     if (!tiebaSupported) $("discovery-tieba-access").value = "";
     text("discovery-tieba-hint", !tiebaSupported ? "当前服务尚未提供贴吧访问方式；此项不会提交。"
-      : $("discovery-tieba-access").value === "native" ? "贴吧原生入口无需第三方搜索服务。优先吧按兴趣设置；默认只读公开主帖，首页回帖需在“贴吧回帖阅读”中另行允许，不含楼中楼、图片或视频。"
+      : $("discovery-tieba-access").value === "native" ? "贴吧原生入口无需第三方搜索服务。优先吧按兴趣设置；回帖翻页和楼中楼节选在“贴吧回帖阅读”中配置，不含图片或视频。"
       : "搜索词会交给下面选择的第三方服务；保存后需在贴吧平台卡中单独允许该通道。回帖仍需另行允许；优先吧匹配以实际取得的归属为准。");
     text("discovery-key-state", snapshot?.settings?.provider_key_present ? "已保存密钥；内容不会回显。" : "尚未保存搜索服务密钥。SearXNG 是否需要密钥取决于该服务。");
   }
@@ -513,12 +540,14 @@
     const tiebaSupport = tiebaScopeSupport();
     $("discovery-tieba-read-replies").checked = tiebaSupport.replies && s.tieba_read_replies;
     $("discovery-tieba-reply-limit").value = tiebaSupport.limit ? String(s.tieba_reply_limit) : "";
+    $("discovery-tieba-read-nested").checked = tiebaSupport.nested && s.tieba_read_nested;
+    $("discovery-tieba-text-limit").value = tiebaSupport.textLimit ? String(s.tieba_text_limit) : "";
     $("discovery-endpoint").value = s.provider_endpoint || ""; $("discovery-key").value = ""; $("discovery-clear-key").checked = false;
     $("discovery-engines").value = s.provider_engines || "duckduckgo";
     providerFields();
   }
   function renderPlatforms() {
-    const rows = list(snapshot.platforms), signature = JSON.stringify([rows, snapshot.settings.bilibili_access, snapshot.settings.zhihu_access, snapshot.settings.tieba_access, snapshot.settings.tieba_read_replies, snapshot.settings.tieba_reply_limit]);
+    const rows = list(snapshot.platforms), signature = JSON.stringify([rows, snapshot.settings.bilibili_access, snapshot.settings.zhihu_access, snapshot.settings.tieba_access, snapshot.settings.tieba_read_replies, snapshot.settings.tieba_reply_limit, snapshot.settings.tieba_read_nested, snapshot.settings.tieba_text_limit]);
     if (signature === platformSignature) return; platformSignature = signature;
     const target = $("discovery-platforms"); target.replaceChildren();
     if (!rows.length) { target.append(node("p", "暂时没有可配置的平台。", "discovery-hint")); return; }
@@ -825,6 +854,7 @@
     text("discovery-storage-usage", "尚未读取来源内容池用量。");
     text("discovery-sharing-warning", ""); $("discovery-sharing-warning").classList.add("hidden");
     text("discovery-context", "正在读取寻找范围…"); text("discovery-mode", ""); $("discovery-next").classList.add("hidden");
+    text("discovery-settings-platforms", "尚未读取平台状态。");
     showPreferences(false);
     providerFields(); paintDiscussion();
   }
@@ -893,10 +923,10 @@
   }
   function schedule() {
     clearTimeout(timer);
-    if (opened && !stopped && !document.hidden) timer = setTimeout(() => refresh(), 7000);
+    if ((opened || settingsOpened) && !stopped && !document.hidden) timer = setTimeout(() => refresh(), 7000);
   }
   async function refresh() {
-    if (!opened || working || stopped || document.hidden) { schedule(); return; }
+    if ((!opened && !settingsOpened) || working || stopped || document.hidden) { schedule(); return; }
     const epoch = generation; working = true; updateControls();
     try { const data = await request("GET", null, epoch); if (data) adopt(data); }
     catch (error) { if (epoch === generation) unavailable(error.name === "AbortError" ? "读取超时，暂时保留设置草稿；没有发起新的寻找任务。" : error.message); }
@@ -949,7 +979,7 @@
     await mutate("undiscuss", {}, "正在取消引用…", "已取消资料引用。输入框中的草稿保留，可自行编辑。");
   }
   async function refreshDiscussion() {
-    if (opened) { refresh(); return; }
+    if (opened || settingsOpened) { refresh(); return; }
     if (!pendingDiscussion || working || stopped || document.hidden) return;
     const epoch = generation; working = true; updateControls();
     try {
@@ -973,18 +1003,42 @@
   }
   function close(returnFocus = true) {
     if (!opened) return;
-    opened = false; generation++; working = false; fresh = false; clearTimeout(timer); controller?.abort(); controller = null;
-    $("discovery-key").value = "";
+    opened = false;
+    if (!settingsOpened) suspendView();
     panel.classList.add("hidden"); app.classList.remove("discovering"); trigger.setAttribute("aria-expanded", "false"); trigger.removeAttribute("aria-current");
     $("chat-nav").classList.add("selected"); $("chat-nav").setAttribute("aria-current", "page");
     cardSignature = ""; $("discovery-cards").replaceChildren();
     if (returnFocus && !app.inert) trigger.focus();
+  }
+  function suspendView() {
+    generation++; working = false; fresh = false; clearTimeout(timer); controller?.abort(); controller = null;
+    $("discovery-key").value = "";
+    updateControls();
+  }
+  function setSettingsVisible(value) {
+    const next = !!value && !stopped;
+    if (settingsOpened === next) return;
+    settingsOpened = next;
+    if (next) {
+      if (!snapshot) status("正在读取联网搜索设置…", "waiting");
+      refresh();
+    } else {
+      $("discovery-key").value = "";
+      if (!opened) suspendView();
+    }
   }
 
   trigger.addEventListener("click", () => opened ? close() : open());
   $("discovery-close").addEventListener("click", goChat);
   for (const id of ["chat-nav", "observer-btn", "evaluations-btn"]) $(id).addEventListener("click", () => close(false), true);
   $("discovery-refresh").addEventListener("click", refresh);
+  $("discovery-settings-refresh").addEventListener("click", refresh);
+  $("discovery-settings-open").addEventListener("click", () => showSettings());
+  $("discovery-settings-preferences").addEventListener("click", () => {
+    window.AliceUI?.closeSettings();
+    if (!opened) open();
+    showPreferences(true, "discovery-platforms-box");
+  });
   $("discovery-preferences-toggle").addEventListener("click", () => showPreferences($("discovery-preferences").classList.contains("hidden")));
   $("discovery-preferences-close").addEventListener("click", () => showPreferences(false));
   $("discovery-toggle-enabled").addEventListener("click", toggleEnabled);
@@ -1034,10 +1088,19 @@
         const raw = $("discovery-tieba-reply-limit").value.trim(), limit = Number(raw);
         if (!raw || !Number.isSafeInteger(limit) || limit <= 0) {
           showPreferences(true, "discovery-tieba-reply-limit");
-          status("每帖回帖数量须为可准确表示的正整数。实际只读取首页，不会为了凑数翻页。", "waiting"); return;
+          status("每帖回复总量须为可准确表示的正整数，楼中楼也计入条数。", "waiting"); return;
         }
         settings.tieba_reply_limit = limit;
       }
+    }
+    if (tiebaSupport.nested) settings.tieba_read_nested = $("discovery-tieba-read-nested").checked;
+    if (tiebaSupport.textLimit) {
+      const raw = $("discovery-tieba-text-limit").value.trim(), limit = Number(raw);
+      if (!raw || !Number.isSafeInteger(limit) || limit < 80) {
+        showPreferences(true, "discovery-tieba-text-limit");
+        status("每帖文字额度须为至少 80 的可准确表示整数。", "waiting"); return;
+      }
+      settings.tieba_text_limit = limit;
     }
     if (settings.provider_kind === "searxng") {
       const engines = $("discovery-engines").value.split(",").map((name) => name.trim()).filter(Boolean);
@@ -1084,7 +1147,7 @@
     const editAtSend = interestEdit;
     mutate("interest", payload, "正在保存兴趣…", payload.enabled ? "兴趣已保存，Alice 可以在你开放的范围内自行选择搜索角度。" : "兴趣已保存并停用，不会用于寻找内容。", { revision: interestRevision, after: () => { if (editAtSend === interestEdit) resetInterest(); } });
   });
-  document.addEventListener("visibilitychange", () => { clearTimeout(timer); if (!document.hidden) { if (opened) refresh(); else refreshDiscussion(); } });
+  document.addEventListener("visibilitychange", () => { clearTimeout(timer); if (!document.hidden) { if (opened || settingsOpened) refresh(); else refreshDiscussion(); } });
   new MutationObserver(() => {
     updateControls();
     if (!$("input").disabled) refreshDiscussion();
@@ -1093,13 +1156,13 @@
   panel.addEventListener("keydown", (event) => { if (event.key === "Escape" && !app.inert) { event.preventDefault(); goChat(); } });
   new MutationObserver(() => {
     panel.inert = app.classList.contains("nav-open");
-    if (app.classList.contains("hidden")) { close(false); clearIdentity(); }
+    if (app.classList.contains("hidden")) { close(false); setSettingsVisible(false); clearIdentity(); }
   }).observe(app, { attributes: true, attributeFilter: ["class"] });
   new MutationObserver(() => {
-    if (!$("shutdown-screen").classList.contains("hidden")) { close(false); stopped = true; pendingDiscussion = null; paintDiscussion(); clearTimeout(discussionTimer); }
+    if (!$("shutdown-screen").classList.contains("hidden")) { close(false); setSettingsVisible(false); stopped = true; pendingDiscussion = null; paintDiscussion(); clearTimeout(discussionTimer); }
     else stopped = false;
   }).observe($("shutdown-screen"), { attributes: true, attributeFilter: ["class"] });
-  window.addEventListener("pagehide", () => { close(false); stopped = true; controller?.abort(); clearTimeout(discussionTimer); $("discovery-key").value = ""; });
-  window.AliceDiscovery = { close, refreshAfterTurn: () => { if (opened) refresh(); }, shutdown: () => { close(false); stopped = true; } };
+  window.addEventListener("pagehide", () => { close(false); setSettingsVisible(false); stopped = true; controller?.abort(); clearTimeout(discussionTimer); $("discovery-key").value = ""; });
+  window.AliceDiscovery = { close, setSettingsVisible, refreshAfterTurn: () => { if (opened || settingsOpened) refresh(); }, shutdown: () => { close(false); setSettingsVisible(false); stopped = true; } };
   updateControls(); providerFields();
 })();

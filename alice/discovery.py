@@ -41,7 +41,7 @@ DEFAULTS = {
     "share_in_qq": False, "save_memories": False, "provider_kind": "native",
     "provider_endpoint": "", "provider_key": "", "provider_engines": "duckduckgo",
     "bilibili_access": "native", "zhihu_access": "third_party", "tieba_access": "native", "network_mode": "system", "daily_network": 1000, "daily_response_mib": 1024,
-    "tieba_read_replies": False, "tieba_reply_limit": 20,
+    "tieba_read_replies": False, "tieba_read_nested": False, "tieba_reply_limit": 200, "tieba_text_limit": 30000,
     "daily_shares": 20, "daily_memory_writes": 10, "pool_capacity": 100,
     "source_pool_bytes": 200 * 1024 * 1024, "chat_material_limit": 2,
     "chat_dependency_limit": 8, "external_recall_limit": 10,
@@ -73,7 +73,7 @@ POSITIVE_SETTINGS = frozenset({
     "seen_ttl_days", "block_ttl_days", "less_share_days", "discussion_minutes",
     "activity_timeout_seconds", "search_timeout_seconds", "read_timeout_seconds", "model_timeout_seconds",
 })
-POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes", "browser_resource_bytes", "tieba_reply_limit"})
+POSITIVE_INTEGERS = frozenset({"search_results", "search_response_bytes", "read_response_bytes", "model_response_bytes", "browser_resource_bytes", "tieba_reply_limit", "tieba_text_limit"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS discovery_config (
  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value TEXT NOT NULL);
@@ -236,11 +236,15 @@ def _third_party(platform, settings):
 
 def _tieba_options(settings):
     return {"preferred_forums": list(settings.get("_tieba_preferred_forums", [])), "read_replies": settings["tieba_read_replies"],
-            "reply_limit": settings["tieba_reply_limit"]}
+            "read_nested": settings["tieba_read_nested"], "reply_limit": settings["tieba_reply_limit"],
+            "search_sort": settings.get("_tieba_search_sort", "recent"),
+            "published_after": settings.get("_tieba_published_after")}
 
 
 def _tieba_scope_changed(previous, settings):
     return (previous["tieba_read_replies"] != settings["tieba_read_replies"]
+            or previous["tieba_read_nested"] != settings["tieba_read_nested"]
+            or previous["tieba_text_limit"] != settings["tieba_text_limit"]
             or previous["tieba_reply_limit"] != settings["tieba_reply_limit"])
 
 
@@ -283,8 +287,14 @@ def _seen_key(platform, value, settings, *, content=False):
 
 def _validate_tieba_evidence(doc, settings):
     """Recheck the reader's bounded scope before interpretation and publication."""
-    from .discovery_tieba import normalize_forums
+    from .discovery_tieba import normalize_forums, timestamp
     forum, count = doc.get("tieba_forum"), doc.get("tieba_reply_count")
+    nested = doc.get("tieba_nested_reply_count")
+    published, basis = doc.get("tieba_published_at"), doc.get("tieba_published_at_basis")
+    if (basis not in ("unknown", "first_floor_time", "thread_create_time")
+            or (published is None) != (basis == "unknown")
+            or published is not None and (type(published) is not int or timestamp(published) != published)):
+        raise _Stopped("worker_protocol")
     if not isinstance(forum, str):
         raise _Stopped("worker_protocol")
     if forum:
@@ -298,6 +308,16 @@ def _validate_tieba_evidence(doc, settings):
             or doc["tieba_replies_requested"] != settings["tieba_read_replies"]
             or type(count) is not int or not 0 <= count <= settings["tieba_reply_limit"]
             or count > 0 and not settings["tieba_read_replies"]
+            or type(nested) is not int or not 0 <= nested <= count
+            or type(doc.get("tieba_nested_requested")) is not bool
+            or doc["tieba_nested_requested"] != (settings["tieba_read_replies"] and settings["tieba_read_nested"])
+            or nested > 0 and not doc["tieba_nested_requested"]
+            or type(doc.get("tieba_pages_read")) is not int or not 1 <= doc["tieba_pages_read"] <= 9007199254740991
+            or not settings["tieba_read_replies"] and doc["tieba_pages_read"] != 1
+            or type(doc.get("tieba_nested_partial")) is not bool
+            or not isinstance(doc.get("tieba_read_stop"), str)
+            or doc["tieba_read_stop"] not in {"main_only", "end", "reply_limit", "text_limit", "pagination_unconfirmed", "repeated_page"}
+            or not isinstance(doc.get("text"), str) or not 80 <= len(doc["text"]) <= settings["tieba_text_limit"]
             or doc.get("coverage") != ("forum_thread_excerpt" if count else "forum_main_post_excerpt")):
         raise _Stopped("worker_protocol")
 
@@ -528,13 +548,17 @@ class DiscoveryCoordinator:
         conn = self.service.store.conn
         packets = []
         for row in conn.execute(
-                "SELECT p.id,m.forum_name,m.reply_count,m.replies_requested FROM source_packets p "
+                "SELECT p.id,p.payload_json,m.forum_name,m.reply_count,m.replies_requested FROM source_packets p "
                 "LEFT JOIN discovery_tieba_sources m ON m.packet_id=p.id "
                 "WHERE p.source_id LIKE 'tieba:%' AND p.revoked=0").fetchall():
             # A missing record cannot establish the previously read scope.
             count = row["reply_count"]
+            policy = json.loads(row["payload_json"]).get("reading_policy") or {}
+            nested = policy.get("tieba_nested_reply_count", 0)
             valid = (type(count) is int and count >= 0 and row["replies_requested"] in (0, 1)
                      and (count == 0 or row["replies_requested"] == 1)
+                     and type(nested) is int and 0 <= nested <= count
+                     and (nested == 0 or settings["tieba_read_nested"])
                      and (count == 0 or settings["tieba_read_replies"] and count <= settings["tieba_reply_limit"]))
             if not valid:
                 packets.append(row["id"])
@@ -605,9 +629,9 @@ class DiscoveryCoordinator:
                 "wikipedia": ("公开百科条目", ["条目正文节选"]),
                 "bilibili": ("公开视频信息与文字简介，不含视频理解", ["视频信息", "视频简介"]),
                 "zhihu": ("与链接身份对应的公开问题、回答或文章正文", ["问题描述", "指定回答", "文章正文"]),
-                "tieba": ("主帖及获准的首页回复文字，不采集楼中楼、图片或视频" if settings["tieba_read_replies"]
+                "tieba": ("主帖及获准的分页回复文字；楼中楼需另行开启，仅取得接口附带节选；不读图片或视频" if settings["tieba_read_replies"]
                           else "帖子主楼的公开文字，不采集回复或楼中楼",
-                          ["主帖文字节选", "首页回复文字节选"] if settings["tieba_read_replies"] else ["主帖文字节选"]),
+                          ["主帖文字节选", "分页回复文字节选"] + (["楼中楼文字节选"] if settings["tieba_read_nested"] else []) if settings["tieba_read_replies"] else ["主帖文字节选"]),
             }[identity]
             method = ({"wikipedia": "平台公开接口", "bilibili": "B站站内只读接口", "tieba": "贴吧公开搜索入口"}.get(identity, "")
                       if not _third_party(identity, settings) else settings["provider_kind"])
@@ -630,7 +654,7 @@ class DiscoveryCoordinator:
                     "last_result": latest, "last_message": _reason(latest) if latest else "尚未确认当前浏览器会话的访问状态"}
             if identity == "tieba":
                 platforms[-1]["scope_notice"] = "按各兴趣的优先吧排序当前关键词结果页；没有合适材料时可读其它吧，不遍历吧内列表"
-                platforms[-1]["scope_notice"] += (f"；读取主帖及首页最多 {settings['tieba_reply_limit']} 条回复，不翻页、不读楼中楼"
+                platforms[-1]["scope_notice"] += (f"；按楼层分页，回复合计最多 {settings['tieba_reply_limit']} 条；" + ("包含接口附带的楼中楼节选" if settings["tieba_read_nested"] else "不读楼中楼")
                                                    if settings["tieba_read_replies"] else "；仅主帖文字，不读取回复")
         interests = []
         for row in self.service.store.conn.execute("SELECT * FROM discovery_interests ORDER BY created_at DESC"):
@@ -810,7 +834,7 @@ class DiscoveryCoordinator:
             raise ChannelError(400, "invalid_request", "设置字段无效")
         settings = copy.deepcopy(previous)
         for key, value in changes.items():
-            if key in {"enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies"}:
+            if key in {"enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies", "tieba_read_nested"}:
                 settings[key] = _bool(value)
             elif key in ("window_start", "window_end"):
                 settings[key] = _clock(value)
@@ -826,6 +850,7 @@ class DiscoveryCoordinator:
                 if (type(value) not in (int, float) or not math.isfinite(value) or value < 0
                         or key not in NONNEGATIVE_TIMES and value == 0
                         or key in POSITIVE_INTEGERS and type(value) is not int
+                        or key == "tieba_text_limit" and value < 80
                         or value > 9007199254740991):
                     raise ChannelError(400, "invalid_request", "此配置需要有效的正数；活动和分享间隔可为0")
                 settings[key] = value
@@ -1092,7 +1117,11 @@ class DiscoveryCoordinator:
 
     def record_chat_locked(self, request, usage, *, explicit=False):
         """Record facts, not inferred adoption. Offered material retires conservatively."""
-        packets = usage.get("packet_ids", [])
+        continued = set(usage.get("continued_ids", []))
+        offered = set(usage.get("offered_ids", []))
+        # Continuing an existing conversation is not another background share;
+        # don't charge it again or keep extending the card's sharing cooldown.
+        packets = [pid for pid in usage.get("packet_ids", []) if pid not in continued or pid in offered]
         conn = self.service.store.conn
         if usage.get("reply_saved") and packets:
             now = time.time()
@@ -1533,15 +1562,15 @@ class DiscoveryCoordinator:
         if self._unavailable:
             raise _Stopped("worker_not_reaped")
         diagnostic = _diagnostic({"stage": data["request"]["purpose"]}) if op == "bili_http" else {}
-        tieba_stage = (op == "tieba_forum_check" or op in ("search", "read")
+        tieba_stage = (op in ("tieba_forum_check", "tieba_page") or op in ("search", "read")
                        and (data.get("platform") if op == "search" else data.get("candidate", {}).get("platform")) == "tieba")
-        tieba_stage_name = "forum_check" if op == "tieba_forum_check" else op
+        tieba_stage_name = "forum_check" if op == "tieba_forum_check" else "read" if op == "tieba_page" else op
         if tieba_stage:
             diagnostic = _diagnostic({"platform": "tieba", "stage": tieba_stage_name})
             if op != "tieba_forum_check":
                 data = {**data, "tieba_options": _tieba_options(settings)}
         job["diagnostic"] = diagnostic
-        phase = "model" if op in ("plan", "interpret", "reflect") else "read" if (op in ("read", "tieba_forum_check") or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
+        phase = "model" if op in ("plan", "interpret", "reflect") else "read" if (op in ("read", "tieba_forum_check", "tieba_page") or op == "bili_http" and data["request"]["purpose"] == "video_info") else "search"
         maximum = settings[phase + "_response_bytes"]
         output_limit = max(192 * 1024, maximum * 2 + 65536)
         remaining = deadline - time.monotonic()
@@ -1549,11 +1578,15 @@ class DiscoveryCoordinator:
             raise _Stopped("timeout")
         timeout = min(remaining, settings[phase + "_timeout_seconds"])
         operation_deadline = min(deadline, time.monotonic() + timeout)
-        if op in ("search", "read", "bili_http", "tieba_forum_check"):
+        if op in ("search", "read", "bili_http", "tieba_forum_check", "tieba_page"):
             data = {**data, "network_proxy": settings.get("_network_proxy", "")}
+        input_limit = 192 * 1024
+        if op == "interpret":
+            data = {**data, "tieba_text_limit": settings["tieba_text_limit"]}
+            input_limit = max(input_limit, settings["tieba_text_limit"] * 6 * len(data.get("evidence", [])) + 65536)
         encoded = _json({"version": 1, "op": op, "require_admission": True,
                          "timeout_seconds": timeout, "response_bytes": maximum, **data}).encode("utf-8")
-        if len(encoded) > 192 * 1024:
+        if len(encoded) > input_limit:
             raise _Stopped("input_limit")
         attempt = self._reserve_step(job, cancel, settings, op, maximum,
                                      query_attempt=op == "bili_http" and data["request"]["purpose"] == "search")
@@ -1568,7 +1601,7 @@ class DiscoveryCoordinator:
             env = {key: value for key, value in os.environ.items()
                    if key.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "LANG", "LC_ALL"}}
             env["PYTHONIOENCODING"] = "utf-8"
-            process = subprocess.Popen([sys.executable, "-m", "alice.discovery_worker"],
+            process = subprocess.Popen([sys.executable, "-m", "alice.discovery_worker", "--input-bytes", str(input_limit)],
                                        cwd=str(Path(__file__).resolve().parent.parent),
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                        env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -1818,7 +1851,8 @@ class DiscoveryCoordinator:
                     code = exc.code
                     continue  # A different already-selected page is not a retry.
                 normalized = normalize_candidate(data, plan["platform"])
-                if normalized["url"] != candidate["url"] or not isinstance(data.get("text"), str) or not 80 <= len(data["text"]) <= 12000:
+                text_limit = settings["tieba_text_limit"] if plan["platform"] == "tieba" else 12000
+                if normalized["url"] != candidate["url"] or not isinstance(data.get("text"), str) or not 80 <= len(data["text"]) <= text_limit:
                     raise _Stopped("worker_protocol")
                 if plan["platform"] == "tieba":
                     _validate_tieba_evidence(data, settings)
@@ -1917,12 +1951,12 @@ class DiscoveryCoordinator:
             if doc["platform"] == "tieba":
                 version = doc["content_hash"] + ":" + settings["_tieba_policy_version"] + ":" + str(int(now))
             from .learning import material_packet
+            from .discovery_tieba import reading_policy
             source = material_packet(packet_id=packet_id, source_id=doc['platform']+':'+_identity(url),
                 version_id=version,title=title,url=url,text=doc['text'],quote=quote,
                 created_at=now,expires_at=now+settings['source_ttl_hours']*3600,
                 scope=['gui','qq-owner'] if settings['share_in_qq'] else ['gui'],coverage=coverage,
-                reading_policy={'tieba_reply_count':doc.get('tieba_reply_count',0),
-                                'tieba_replies_requested':doc.get('tieba_replies_requested',False)},
+                reading_policy=reading_policy(doc, settings['tieba_text_limit']),
                 author_view=texts['author_view'],interpretation=texts['interpretation'],
                 uncertainty='阅读范围：'+coverage+'。'+texts['uncertainty'],keywords=interest['summary'])
             source["uncertainty"] = _utf8(source["uncertainty"], 1500)
@@ -1971,8 +2005,8 @@ class DiscoveryCoordinator:
     # 选材方式与调度差异。发布仍走原有 _publish_locked / SearchSession._publish_locked
     # 两条（前者含模型卡字段与观察入账，后者是快路径节选卡），由统一包装按入口选择。
 
-    def rank_candidates(self, platform, query, raw_candidates, *, settings, preferred_forums=None):
-        """候选规范化、URL 去重与优先吧/相关度排序（前台后台同一次序）。"""
+    def rank_candidates(self, platform, query, raw_candidates, *, settings, preferred_forums=None, selection=None):
+        """候选去重、日期筛选及软优先吧排序；搜索摘要始终不作为正文。"""
         from .discovery_sources import normalize_candidate
         if not isinstance(raw_candidates, list) or len(raw_candidates) > settings["search_results"]:
             raise _Stopped("worker_protocol")
@@ -1983,18 +2017,53 @@ class DiscoveryCoordinator:
                 candidates.append(candidate)
                 urls.add(candidate["url"])
         preferred = set(preferred_forums or []) if platform == "tieba" else set()
+        if platform == "tieba":
+            after = settings.get("_tieba_published_after")
+            counts = {"before_date": 0, "date_unknown": 0}
+            if after is not None:
+                selected = []
+                for candidate in candidates:
+                    stamp = candidate.get("published_at")
+                    if stamp is None:
+                        counts["date_unknown"] += 1
+                    elif stamp < after:
+                        counts["before_date"] += 1
+                    else:
+                        selected.append(candidate)
+                candidates = selected
+            if selection is not None:
+                selection.update(counts)
+            if settings.get("_tieba_search_sort", "recent") == "recent":
+                # Source publication time leads relevance, rather than letting
+                # a word-dense old story displace current discussions again.
+                candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
+                    c.get("published_at") or 0,
+                    text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
+                return candidates
         candidates.sort(key=lambda c: (c.get("forum_name") in preferred,
                                        text_score(query, c["title"] + " " + c.get("snippet", ""))), reverse=True)
         return candidates
 
     def read_document(self, job, cancel, settings, platform, candidate, deadline, *, bilibili_public_view=False):
-        """读取一个候选并做协议校验——三条传输路径（原生/原生B站/浏览器）的统一分发。
+        """读取一个候选并做协议校验；贴吧每页复用同一个宿主监督与预算入口。
 
         bilibili_public_view：B站浏览器模式下，读取用固定公开视图端点（无需播放）
         而非通用浏览器会话——保留后台轮原有的这条语义。
         """
         browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
         native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
+        if platform == "tieba":
+            from . import discovery_tieba
+            from .discovery_sources import DiscoveryError, finish_tieba_read
+            try:
+                parsed = discovery_tieba.read(candidate, tieba_options=_tieba_options(settings),
+                    text_limit=settings["tieba_text_limit"], fetch_page=lambda page, size: self._execute(
+                        job, cancel, settings, "tieba_page", {"candidate": candidate, "page": page, "page_size": size}, deadline))
+                return finish_tieba_read(candidate, parsed)
+            except DiscoveryError as exc:
+                if exc.diagnostic:
+                    job["diagnostic"] = _diagnostic(exc.diagnostic)
+                raise _Stopped(exc.code) from None
         if browser and platform == "bilibili" and bilibili_public_view:
             return self._execute_bilibili(job, cancel, settings, "read", {"candidate": candidate}, deadline)
         if browser:
@@ -2019,9 +2088,10 @@ class DiscoveryCoordinator:
         else:
             response = self._execute(job, cancel, settings, "search",
                                      {"platform": platform, "query": query, "provider": provider, **payload}, deadline)
-        preferred = _preferred_forums(interest) if interest is not None else []
+        preferred = _preferred_forums(interest) if interest is not None else settings.get("_tieba_preferred_forums", [])
+        job["selection_summary"] = {}
         return self.rank_candidates(platform, query, response.get("candidates"),
-                                    settings=settings, preferred_forums=preferred)
+                                    settings=settings, preferred_forums=preferred, selection=job["selection_summary"])
 
 
 class _Stopped(Exception):
@@ -2040,14 +2110,16 @@ def _coverage(value, doc=None):
     if doc and doc.get("platform") == "tieba":
         place = "贴吧「" + doc["tieba_forum"] + "」" if doc["tieba_forum"] else "贴吧（吧归属未取得）"
         count = doc["tieba_reply_count"]
-        if count:
-            return place + f"主帖及首页 {count} 条回复文字节选，不含楼中楼、图片或视频"
-        return place + ("主帖文字节选；本页未取得可用回复文字，不含楼中楼、图片或视频"
-                        if doc["tieba_replies_requested"] else "主帖文字节选，不含回复、楼中楼、图片或视频")
+        nested = doc["tieba_nested_reply_count"]
+        scope = place + f"主帖及 {count - nested} 条回帖、{nested} 条楼中楼文字节选；读取 {doc['tieba_pages_read']} 页"
+        reason = {"main_only": "仅主帖", "end": "已到接口末页", "reply_limit": "达到回复额度",
+                  "text_limit": "达到文字额度，末条可能截断", "pagination_unconfirmed": "后续页码未能确认",
+                  "repeated_page": "后续页无新楼层，已停止"}[doc["tieba_read_stop"]]
+        return scope + "；" + reason + ("；楼中楼仅为接口附带节选，可能遗漏" if doc["tieba_nested_requested"] else "；未读楼中楼") + "；不含图片或视频，不代表完整讨论"
     return {"page_text_excerpt": "公开正文节选", "static_page_excerpt": "静态页面文字节选",
             "zhihu_answer_excerpt": "知乎指定回答正文节选", "zhihu_article_excerpt": "知乎指定文章正文节选",
             "zhihu_question_excerpt": "知乎问题描述节选，不含回答", "forum_main_post_excerpt": "贴吧主帖文字节选，不含回复",
-            "forum_thread_excerpt": "贴吧主帖及首页回复文字节选，不含楼中楼、图片或视频",
+            "forum_thread_excerpt": "贴吧主帖及获准回复文字节选，不含图片或视频",
             "video_description_only": "仅视频简介，未观看视频", "page_description_only": "仅页面简介"}.get(value, "有限文本节选")
 
 
@@ -2059,6 +2131,9 @@ def _reason(code):
             "source_failed": "本次来源读取未完成，未用搜索摘要替代正文",
             "material_disabled": "当前资料容量或本轮资料数量设为0，未发起读取",
             "search_no_candidates": "搜索已返回，但没有可读取的页面或帖子候选，尚未进入正文阅读",
+            "search_no_recent_candidates": "本次返回的候选没有满足发布日期要求的材料；可缩短关键词重新查找，不能据此断言平台没有近期讨论",
+            "source_date_unknown": "主帖发布日期未能确认，未作为指定日期后的材料",
+            "source_too_old": "主帖早于本次指定日期，未继续读取回帖",
             "no_selected_material": "已读取材料，本轮未选入资料卡", "cancelled": "已停止本次活动",
             "bili_missing": "B站只读组件缺失", "bili_scope": "B站请求超出本轮只读范围",
             "bili_protocol": "B站组件或接口响应格式不符合约定", "bili_failed": "B站访问未完成",
@@ -2112,8 +2187,8 @@ def _reason(code):
             "wiki_api_error": "维基百科接口返回错误，本次未当作空结果",
             "wiki_response": "维基百科未返回预期的结果或正文结构",
             "tieba_api_error": "贴吧拒绝了本次匿名请求，本次已停止",
-            "tieba_response": "贴吧未返回预期的搜索或主帖结构",
-            "tieba_no_text": "贴吧主帖没有可读取文字，图片、视频和回复不在读取范围内",
+            "tieba_response": "贴吧未返回可确认的搜索、楼层或分页结构",
+            "tieba_no_text": "贴吧主帖及获准回复没有可读取文字，未理解图片或视频",
             "tieba_short_text": "贴吧获准范围内的文字不足，未生成资料；不以搜索摘要或媒体补足",
             "zhihu_unreadable": "未取得该知乎问题、回答或文章的公开正文；可能需要登录或验证",
             "zhihu_response": "知乎未返回预期的正文结构",

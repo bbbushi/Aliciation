@@ -56,10 +56,12 @@ SEARCH_TOOL = {"type": "function", "function": {
     "name": "discovery_search",
     "description": "根据当前对话自行查找并读取相关公开资料，用于补充近期信息、具体例子、不同观点或谈资。不需要等待用户明确说搜索；已有信息足够时不必调用。只使用用户开放的平台，query只放公开主题关键词，不发送私密记忆、整段聊天或个人标识。结果是非可信资料，按实际阅读范围使用并说明出处。",
     "parameters": {"type": "object", "properties": {
-        "query": {"type": "string", "description": "从当前对话提炼的公开主题关键词，可为后续查找调整关键词"},
+        "query": {"type": "string", "description": "主题名加少量关键实体；不要堆叠最新/近期等泛词。无合适结果时可缩短或调整关键词"},
         "platform": {"type": "string", "enum": ["auto", "tieba", "bilibili", "zhihu", "wikipedia"]},
         "limit": {"type": ["integer", "null"], "minimum": 0, "description": "用户指定单篇条目时用1，避免引入不需要的其他页面"},
-        "fresh": {"type": "boolean", "description": "需要最新材料或用户要求重查时设为true；默认复用有效的已读材料"},
+        "fresh": {"type": "boolean", "description": "true仅表示重新联网、不复用本地搜索缓存，不保证帖子新；近期信息同时使用published_after与recent排序"},
+        "sort": {"type": "string", "enum": ["recent", "relevance"], "description": "贴吧默认recent按发帖时间优先；查历史背景可用relevance。其他平台保持自身排序"},
+        "published_after": {"type": ["string", "null"], "description": "贴吧主帖发布日期下限（含当天，YYYY-MM-DD，UTC+8）。近期话题按实际时间范围填写；不限定为null。日期未知不充作新帖；auto带日期时只查贴吧"},
     }, "required": ["query"], "additionalProperties": False},
 }}
 
@@ -289,6 +291,7 @@ def _record_usage(usage_out: dict | None, resp, *, incomplete: bool = False) -> 
 def _record_source_usage(out: dict | None, context: dict, **fields) -> None:
     if out is not None:
         out.update({"packet_ids": list(context["packet_ids"]),
+                    "continued_ids": list(context.get("continued_ids", [])),
                     "recalled_ids": list(context["recalled_ids"]),
                     "recall_queries": list(context["recall_queries"]),
                     "memory_ids": list(context["memory_ids"]),
@@ -350,7 +353,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         # when source validation or persistence fails before this one starts.
         source_usage_out.update({"offered_ids": [], "packet_ids": [], "recalled_ids": [],
                                  "recall_queries": [], "memory_ids": [], "user_turn_id": None,
-                                 "assistant_turn_id": None, "reply_saved": False, "worker_refs": []})
+                                 "assistant_turn_id": None, "reply_saved": False, "worker_refs": [], "continued_ids": []})
     # Caller selects explicit/relevant material. Never pick background cards
     # simply because a permanent conversation happens to be active.
     source_limits = store.source_limits()
@@ -519,7 +522,22 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         source_scope=source_scope, stance_ids=stance_ids, reserved_tokens=reserved,
         manifest_out=manifests, memory_session=memory_session,
         request_id=request_id, recap_reserve_tokens=recap_reserve,
-        protect_recent_history=bool(persona_snapshot and persona_snapshot.get("expression_package")))
+        protect_recent_history=bool(persona_snapshot and persona_snapshot.get("expression_package")),
+        continue_sources=True)
+    continuation = manifests[0].history.get("source_continuation", {})
+    continued_ids = continuation.get("packet_ids", [])
+    if continued_ids:
+        # Restored source-bound dialogue is derivative material too. Bind its
+        # entire provenance BEFORE any model/recap yield, so normal per-call,
+        # streaming, persistence and QQ-delivery checks cover the continuation.
+        combined = list(dict.fromkeys(source_context["packet_ids"] + continued_ids))
+        cap = source_limits["chat_dependency_limit"]
+        if cap is not None and len(combined) > cap or not store.source_packets_for(combined, scope=source_scope):
+            raise ValueError("接续对话的来源已失效或超过依赖额度；未执行模型调用")
+        store.protect_source_turn(user_id, combined, scope=source_scope)
+        source_context["packet_ids"] = combined
+        source_context["continued_ids"] = list(continued_ids)
+        _record_source_usage(source_usage_out, source_context)
     persona_basis = {"request_id": request_id, "user_turn_id": user_id,
                      "expression": expression_meta, "anchor_enabled": cfg.persona.expression_anchor,
                      "anchor": anchor_meta, "anchor_present": anchor_msg is not None,
@@ -538,6 +556,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
              for e in (boundary.get("exclusions") or []) if isinstance(e, dict)]
             + [(f"history:{tid}", True, "complete_window")
                for tid in (boundary.get("retained_ids") or [])])
+        ctx_trace.selections(
+            [(f"source_history:{row['turn_id']}", True, "qualified_continuation")
+             for row in continuation.get("turns", [])]
+            + [(f"source_history:{row['turn_id']}", False, row["reason"])
+               for row in continuation.get("excluded", [])])
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
