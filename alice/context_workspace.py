@@ -11,6 +11,7 @@ import hashlib
 
 from .context import estimate_tokens
 from .context_memory import dump, tool, version, prior_notice
+from .memory_projection import conversation_content
 
 TOOLS = [
     tool('context_keep', '提议跨轮保留本轮memory_load返回且已随模型请求发送的普通记忆；宿主决定容量与期限，不是永久记忆。',
@@ -74,7 +75,7 @@ class _ScopeSet:
             item, row = self.items[mid], rows[mid]
             item['turns_left'] -= 1  # TTL counts this channel's requests, never tool subcalls.
             ref = f"memory:{mid}@{version(row)[:16]}:{session.nonce}"
-            body = {'ref': ref, 'kind': row['kind'], 'title': row['title'], 'content': row['content'],
+            body = {'ref': ref, 'kind': row['kind'], 'title': row['title'], 'content': conversation_content(row),
                     'recorded_at': datetime.fromtimestamp(row['created_at']).astimezone().isoformat(),
                     'turns_left': item['turns_left'], **prior_notice(row)}
             cost = len(dump(body)) + 1
@@ -134,7 +135,7 @@ class _ScopeSet:
                 elif ref not in session.explicitly_loaded or ref not in session.sent:
                     status = 'not_loaded'
                 else:
-                    cost = len(dump({'title': row['title'], 'content': row['content']}))
+                    cost = len(dump({'title': row['title'], 'content': conversation_content(row)}))
                     used = sum(item['cost'] for item in self.items.values())
                     if (len(self.items) >= self.cfg.context.working_set_max_items or
                             used + cost > self.cfg.context.working_set_max_chars):

@@ -20,14 +20,13 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
 - **能力增减须同步宪法「存在事实」清单**（`alice/retrieval.py`：我有什么/没有什么）——自模型与实际能力的漂移本身就是认知错误源（2026-10-31 烟味事件的教训）。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
-- **分支流程（2026-11-03 当前用户更新，2026-11-05 合并后保留）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。其他改动（含 Claude 直调）在完成对应验收及共存检查后走 **PR 合入 main**；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径。本机 origin 为 SSH。
+- **分支流程（2026-11-03 当前用户更新，2026-11-05 合并后保留）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。其他改动（含 Claude 直调）在完成对应验收及共存检查后走 **PR 合入 main**；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。本机 origin 为 SSH。
 
 
 ## 当前
 
-- 2026-11-08 ZCode：导入失败定位与修复——用户重置后（旧会话归档 archive/20261108-075758，含爱弥斯人格）导入爱弥斯报「表达资源上限字段无效」0.005s 瞬时 400：根因是注册表六项上限新增进 ExpressionConfig 但不在 expression.DEFAULT_LIMITS 白名单，limits_for(cfg) 全量拒绝（导入管线第一站的回归）。修复：六项收编为一等上限。修复后真实导入成功（installed=true version1 47460字，sources 75%/rules 100%）。四套自检过；服务 PID 7041 已加载。
-- 2026-11-08 Codex按用户要求交付 `docs/设计文档/上下文组装优化/人格预引导-核心流程与插件控制台-架构设计-v1-20261108.md`：核心可选流程+固定官方插件控制台；唯一默认关业务开关，安装成功后幂等两阶段/已有安装显式启动，独立状态与存储/提取隔离、最多两次调用/可跳过、首次仅完整阶段二试写≤800字且一次性领取；API/候选版本/取消/并发/观测与G0–G4真人对照明确。第三四步反馈学习/沉淀不做。仅设计未施工/未改user或服务/未模型调用。注册表7项修复仍在工作区待真人（见同目录实施交接），不由本设计认证效果。
-- 修复已加载：旧99153忽略SIGINT，CUA和AppleEvents超时；核对无未完成对话、worker_tasks为空，SQLite备份后SIGTERM退出空闲旧服务，00:42:27启动新PID1045（显式user/config.toml、8800/no-open），首页/插件200、日志就绪。备份 `/private/tmp/alice-before-residency-fixes-20261108-004227.db`；日志同目录alice-residency-fixes-20261108-004227.log。仅读user状态/备份与正常起服写入，未手改配置/人格/历史；full保持，未推送/提交，部署不等于registry真人验收。
-- ZCode 11-08检查过近轮观测并修match_bindings为单调配对（3aacb8b），历史绑定不回写；报告重启加载，备份 `/private/tmp/alice-before-registry-restart-20261107-234717.db` 及后续更新备份，当前PID本轮未核实。插件已有单页KPI/组成/趋势/DNA/树及正文展开、自包含CSS滚动/入口done和历史GUI修复，上一棒报告浏览器实测；正式备注导出/P4迁移细绑定仍依后续交付核对。
-- SDK/插件原9728a00/60f79c9等采集与正文保管、request_id+hash归属和同源addon保留；观测10请求自动停止此前仅标语未见扣减，修复状态待核实。普通回复review_audit未赋值与该处观测异常隔离修复已并入f579412，不自动重放旧失败请求；旧数据库/配置备份均保留。
-- ytq已合origin/main 7bb4573，worker_permissions/LLM收据队列接线；persona.py导入观测遗留见未完成总览。协议12/initial_plus_delta_v3边界及内容修复额度不变，Windows与本机导入分开；双工具/GUI/长期人格待验、Claude同任务续跑引用未开放，私有资料/冻结头像/快照/备份/stash/其他worktree及W6—W9/蓝图范围保留；ytq工作及明确要求时推送、main只走PR。
+- 2026-11-08 Codex按用户要求交付本地上下文优化，共8个白名单文件（AGENTS、6个核心Python、1份评估报告），目标trial/windows-v0.2-20261028及PR→main；提交基线48cee7a已是最新origin/main，无需重放。本轮快照.git/pr-delivery/20261108-162946及codex/before-delivery-20261108-162946保留；仅走PR，不直接push/合并main。
+- 最终CONSTITUTION按用户批准的存在事实稿精简，Alice名下7047→3052个LF字符，正文hash e27e04bd49d46aaf021fdc217bcc07d24e1bbe254f92d6001fd5275492abaef0；usage提示full/registry均v2，样本话题/关怀/收尾非每轮必做。memory_projection仅对严格原始捐赠先验九字段模板隐藏原候选聊天投影，接入legacy/recall/indexed/工作集；原数据、版本/权限/检索排名不改，未知或修订格式原样回退，非全局脱敏。context_persona改按实际返回text含自有条目/依赖/分隔符计账。
+- 本轮全alice compileall与git diff --check通过，代码/文档两路只读复核无明确阻断项，凭据模式扫描无命中；仅GET现有首页/runtime均200，未启停服务/调用模型/业务机器自测。前开发会话真实请求正文19007→14366、输入usage12462→9655且新宪法已注入，但上下文不同且未取得该轮最终回复，不能当受控成本或人格效果验收；多场景人工验收及重新起服共存仍待用户。
+- 源码哈希变化会使旧未完成导入检查点跨版本续跑被拒绝，已安装人格/记忆不被改写。legacy想法重复、registry目录近似预算/跨包依赖重复及最终metadata刷新仍待办；观点单正文/结构化审计、人称转换、样本/关系阶段修改及registry激活待裁决。QQ/联网/协作授权与停止边界保留，10请求正文采集自动停止仍未认证。
+- 原82份私有资料和docs/assets候选全部排除交付并保留，旧stash/其他worktree及先前备份不动；本轮未读写user/或配置，先前context_inspector_enabled/observer_body_capture开关及用户自行重启安排不变。协议12/initial_plus_delta_v3、DSH/Claude双轨/浮窗、冻结头像、W6—W9/蓝图与既往Windows实测范围保留；远端提交及PR结果见本轮交付回执/git日志。
