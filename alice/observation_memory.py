@@ -291,7 +291,10 @@ class ObservationStoreMixin:
         for row in self.conn.execute("SELECT id,payload_json FROM retained_evidence WHERE revoked=0 AND source_id LIKE 'tieba:%'"):
             policy = json.loads(row["payload_json"]).get("reading_policy") or {}
             count = policy.get("tieba_reply_count", 0)
-            if count and (not settings["tieba_read_replies"] or count > settings["tieba_reply_limit"]):
+            nested = policy.get("tieba_nested_reply_count", 0)
+            if (type(count) is not int or type(nested) is not int or not 0 <= nested <= count
+                    or count and (not settings["tieba_read_replies"] or count > settings["tieba_reply_limit"])
+                    or nested and not settings["tieba_read_nested"]):
                 ids.append(row["id"])
         self.revoke_retained_evidence(ids)
 

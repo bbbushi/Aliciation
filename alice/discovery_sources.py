@@ -192,8 +192,9 @@ def normalize_candidate(candidate: dict, platform: str | None = None) -> dict:
               "title": _clean(candidate.get("title"), 300),
               "coverage": "search_snippet", "snippet": _plain(candidate.get("snippet", ""), 1200)}
     if actual == "tieba":
-        from .discovery_tieba import forum_name
+        from .discovery_tieba import forum_name, timestamp
         result["forum_name"] = forum_name(candidate.get("forum_name"))
+        result["published_at"] = timestamp(candidate.get("published_at"))
     return result
 
 
@@ -704,8 +705,28 @@ def check_tieba_forum(name: str, *, usage: Usage, timeout: float = 20,
         target, usage=usage, timeout=timeout, response_bytes=response_bytes, network_proxy=network_proxy))
 
 
+def read_tieba_page(candidate: dict, page: int, page_size: int, *, usage: Usage,
+                   timeout: float, response_bytes: int, network_proxy: str) -> dict:
+    from .discovery_tieba import _data, page_url
+    payload = _tieba_fetch_json(page_url(candidate, page, page_size), usage=usage,
+        timeout=timeout, response_bytes=response_bytes, network_proxy=network_proxy)
+    _data(payload, "read")  # Record API rejection/verification on this page's attempt.
+    return payload
+
+
+def finish_tieba_read(candidate: dict, parsed: dict) -> dict:
+    """Apply the same evidence boundary to host-paged and standalone reads."""
+    candidate = normalize_candidate(candidate, "tieba")
+    if parsed.get("tieba_text_chars", 0) < 80:
+        _fail("tieba_short_text", "贴吧获准范围内的文字不足，本轮未采纳；不以搜索摘要或媒体补足")
+    return {**{key: value for key, value in parsed.items() if key != "tieba_text_chars"},
+            "platform": "tieba", "url": candidate["url"],
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "content_hash": hashlib.sha256(parsed["text"].encode("utf-8")).hexdigest()}
+
+
 def read(candidate: dict, *, usage: Usage, timeout: float = 20, response_bytes: int = MAX_READ_BYTES,
-         network_proxy: str = "", tieba_options: dict | None = None) -> dict:
+         network_proxy: str = "", tieba_options: dict | None = None, tieba_text_limit: int = 30000) -> dict:
     candidate = normalize_candidate(candidate)
     platform, url = candidate["platform"], candidate["url"]
     parts = urlsplit(url)
@@ -731,10 +752,10 @@ def read(candidate: dict, *, usage: Usage, timeout: float = 20, response_bytes: 
         coverage = "page_text_excerpt"
     elif platform == "tieba":
         from . import discovery_tieba
-        parsed = discovery_tieba.read(candidate, tieba_options=tieba_options, text_limit=MAX_TEXT_CHARS,
+        parsed = discovery_tieba.read(candidate, tieba_options=tieba_options, text_limit=tieba_text_limit,
                                      fetch_json=lambda target: _tieba_fetch_json(
             target, usage=usage, timeout=timeout, response_bytes=response_bytes, network_proxy=network_proxy))
-        title, text, coverage = parsed["title"], parsed["text"][:MAX_TEXT_CHARS], parsed["coverage"]
+        return finish_tieba_read(candidate, parsed)
     else:
         body, headers = request_bytes(url, usage=usage, timeout=timeout, limit=response_bytes,
                                       headers={"Accept": "text/html,application/xhtml+xml,text/plain"},
@@ -755,13 +776,9 @@ def read(candidate: dict, *, usage: Usage, timeout: float = 20, response_bytes: 
                 text, coverage = parser.text, "static_page_excerpt"
                 if len(text) < 160 and parser.description:
                     text, coverage = parser.description, "page_description_only"
-    if (parsed.get("tieba_text_chars", 0) if platform == "tieba" else len(text)) < 80:
-        if platform == "tieba":
-            _fail("tieba_short_text", "贴吧获准范围内的文字不足，本轮未采纳；不以搜索摘要或媒体补足")
+    if len(text) < 80:
         _fail("unreadable", "未取得足够公开文字；可能需要登录、脚本或平台暂不支持")
     result = {"platform": platform, "url": url, "title": title, "text": text,
               "coverage": coverage, "fetched_at": datetime.now(timezone.utc).isoformat(),
               "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest()}
-    if platform == "tieba":
-        result.update({key: parsed[key] for key in ("tieba_forum", "tieba_reply_count", "tieba_replies_requested", "tieba_page")})
     return result

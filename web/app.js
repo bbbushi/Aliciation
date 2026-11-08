@@ -1772,6 +1772,7 @@ function openSettings(section = "general") {
 
 function closeSettings() {
   $("#settings-modal").classList.add("hidden");
+  window.AliceDiscovery?.setSettingsVisible(false);
   window.AliceWorkers?.setSettingsVisible(false);
   window.AliceClaudeSettings?.setVisible(false);
   window.AliceQQ?.close();
@@ -2249,14 +2250,15 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "appearance", "qq", "workers", "claude", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "discovery", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
+    window.AliceDiscovery?.setSettingsVisible(section === "discovery" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
   }
-  window.AliceUI = { selectSettings };
+  window.AliceUI = { selectSettings, openSettings, closeSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
   // Keep one-turn paid permission visible even when developer navigation is closed.
   function syncEvaluationNotice() {
