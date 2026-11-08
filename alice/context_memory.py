@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime
 
 from .context import estimate_tokens
+from .memory_projection import conversation_content
 from .store import text_score
 
 
@@ -93,7 +94,7 @@ class MemoryContext:
                     "kind": row["kind"], "title": row["title"][:120],
                     "hint": "观点及其依据" if row["kind"] == "stance" else "对话事件或约定",
                     "recorded_at": datetime.fromtimestamp(row["created_at"]).astimezone().isoformat(),
-                    "occurred_at": None, "estimated_chars": len(row["content"]),
+                    "occurred_at": None, "estimated_chars": len(conversation_content(row)),
                     "detail_state": "not_loaded"}
             cost = len(dump(item)) + 1
             if size + cost > cap:
@@ -121,7 +122,7 @@ class MemoryContext:
                 continue
             ref = f"memory:{row['id']}@{version(row)[:16]}:{self.nonce}"
             item = {"ref": ref, "kind": row["kind"], "title": row["title"],
-                    "content": row["content"], "occurred_at": None,
+                    "content": conversation_content(row), "occurred_at": None,
                     "recorded_at": datetime.fromtimestamp(row["created_at"]).astimezone().isoformat(),
                     **prior_notice(row)}
             cost = len(dump(item))
@@ -226,7 +227,7 @@ class MemoryContext:
                     item["status"] = "already_loaded"
                 else:
                     body = {**item, "status": "loaded", "kind": row["kind"],
-                            "title": row["title"], "content": row["content"],
+                            "title": row["title"], "content": conversation_content(row),
                             "recorded_at": datetime.fromtimestamp(row["created_at"]).astimezone().isoformat(),
                             **prior_notice(row)}
                     if len(dump(body)) > self.cfg.context.memory_expanded_chars:
