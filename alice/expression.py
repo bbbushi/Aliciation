@@ -23,6 +23,9 @@ DEFAULT_LIMITS = {
     "max_links": 1200, "max_metadata_chars": 120000, "max_projection_chars": 6000,
     "max_worker_chars": 1600, "max_item_chars": 2400, "max_review_chars": 240000,
     "max_anchor_chars": 500,
+    # 人格注册表（20261107 设计 §6）：与上面同属表达资源上限，limits_for(cfg) 全量合法
+    "max_core_chars": 2200, "max_registry_chars": 1600, "max_registry_bundles": 12,
+    "max_scene_expanded_chars": 2400, "max_persona_load_calls": 2, "max_persona_loaded_bundles": 2,
 }
 FREE_TEXT_MARKER = "【整节自由文本】"
 REVISION_FORMAT = "expression-revisions-v1"
