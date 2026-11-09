@@ -1277,7 +1277,9 @@ class ChatService:
         with self._lock:
             warning = None
             try:
-                if extract:
+                if extract and not self.cfg.maintenance.replaces_extraction:
+                    # R01：compact 承接记忆形成时退出不再强制付费提取；未压缩
+                    # 原文留在库中，下次 serve 的空闲执行器按原许可补上。
                     from . import extraction
 
                     n = extraction.extract_pending(self.store, self.client, self.cfg, force=True)

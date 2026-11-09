@@ -188,6 +188,10 @@ class MaintenanceConfig:
     """
     # compact：自动触发（廉价检查排队，不在聊天路径同步执行）
     auto_compact_enabled: bool = False
+    # R01：由 compact 异步替代旧轮末/退出同步提取（回复后只排队不等待；需 auto_compact）。
+    # 关闭时（默认）旧提取路径原样保留；两模式共用「compact 提交推进 extract_cursor」的
+    # 去重契约，同段原文不会被两条流程重复提为记忆。
+    replaces_extraction: bool = False
     compact_pressure_rounds: int = 8        # 默认窗口外未压缩完整往返累计到该数即排队
     compact_min_interval_minutes: int = 45  # 距上次成功压缩的最小间隔
     compact_max_span_rounds: int = 12       # 单次压缩最多处理的完整往返数
@@ -205,6 +209,11 @@ class MaintenanceConfig:
     def __post_init__(self):
         if type(self.auto_compact_enabled) is not bool or type(self.auto_tidy_enabled) is not bool:
             raise ValueError("maintenance 自动触发开关必须为布尔值")
+        if type(self.replaces_extraction) is not bool:
+            raise ValueError("maintenance.replaces_extraction 必须为布尔值")
+        if self.replaces_extraction and not self.auto_compact_enabled:
+            raise ValueError("maintenance.replaces_extraction 需同时启用 auto_compact_enabled，"
+                             "否则既无同步提取也无异步压缩，记忆形成会整体停摆")
         for name, low, high in (("compact_pressure_rounds", 2, 200),
                                 ("compact_min_interval_minutes", 5, 10080),
                                 ("compact_max_span_rounds", 1, 100),

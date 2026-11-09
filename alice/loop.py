@@ -482,23 +482,30 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         worker_names = {tool["function"]["name"] for tool in worker_session.tools}
         extra_messages.append({"role": "system", "content": worker_session.description()})
     # 前缀宪法精简（优化设计 §10）：scoped 模式按本轮实际暴露构造前缀计划；
-    # 计划随 system prompt 进入 build_messages 的材料计账（预算重核算），legacy 完全不经过。
+    # 计划在 build_messages 内、来源接续算清后经工厂构造（审查 R03：能力事实
+    # 含接续来源的真实计数），并随 system prompt 进入材料计账（预算重核算）。
+    # legacy 完全不经过本模块。
     from . import prefix_policy as _pp
-    prefix_plan = None
-    if cfg.context.prefix_policy_mode == "scoped":
-        prefix_plan = _pp.build_prefix_plan(
+    _plan_tool_names = {t["function"]["name"] for t in tools}
+    _plan_memory_mode = "indexed" if memory_session is not None else "direct"
+    _plan_registry = persona_registry is not None
+    _plan_learning = learning_enabled
+    _plan_worker_refs = len(worker_refs)
+    _plan_external_recall = source_allow_external_recall is True
+
+    def _prefix_plan_factory(source_packet_count, continued_count):
+        return _pp.build_prefix_plan(
             cfg, name=cfg.persona.name, scope=source_scope,
-            tool_names={t["function"]["name"] for t in tools},
-            worker_tool_names=worker_names,
-            learning_tools=learning_enabled,
-            memory_mode="indexed" if memory_session is not None else "direct",
-            has_registry=persona_registry is not None,
-            source_packet_count=len(packet_ids),
-            worker_ref_count=len(worker_refs),
-            external_recall_allowed=source_allow_external_recall is True,
-            source_dependent=bool(packet_ids or worker_refs))
-    interaction_meta = (_pp.interaction_metadata() if prefix_plan is not None
-                        else interaction_policy.metadata())
+            tool_names=_plan_tool_names, worker_tool_names=worker_names,
+            learning_tools=_plan_learning, memory_mode=_plan_memory_mode,
+            has_registry=_plan_registry, source_packet_count=source_packet_count,
+            continued_count=continued_count, worker_ref_count=_plan_worker_refs,
+            external_recall_allowed=_plan_external_recall,
+            source_dependent=bool(source_packet_count or _plan_worker_refs))
+
+    prefix_plan = None
+    prefix_plan_out: list = []
+    interaction_meta = None
     # 双维护（compact）：已提交批次的接续状态替换被覆盖原文的上下文职能；
     # 状态正文是引用资料，随材料计账（retrieval 内一并计入并登记清单）。
     compact_block_text = None
@@ -547,7 +554,14 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         manifest_out=manifests, memory_session=memory_session,
         request_id=request_id, recap_reserve_tokens=recap_reserve,
         protect_recent_history=bool(persona_snapshot and persona_snapshot.get("expression_package")),
-        continue_sources=True, prefix_plan=prefix_plan, compact_block=compact_block_text)
+        continue_sources=True,
+        prefix_plan_factory=(_prefix_plan_factory
+                             if cfg.context.prefix_policy_mode == "scoped" else None),
+        prefix_plan_out=prefix_plan_out, compact_block=compact_block_text)
+    prefix_plan = prefix_plan_out[0] if prefix_plan_out else None
+    if interaction_meta is None:
+        interaction_meta = (_pp.interaction_metadata() if prefix_plan is not None
+                            else interaction_policy.metadata())
     continuation = manifests[0].history.get("source_continuation", {})
     continued_ids = continuation.get("packet_ids", [])
     if continued_ids:
@@ -983,12 +997,23 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         # L01：回复已落盘、维护（提取/审核）仍在同一请求内——让界面能区分
         # “还在生成”与“正在整理”，不再把维护耗时当作卡住。
         on_reply_saved()
-    try:
-        yield from extraction.extract_pending_steps(store, client, cfg, request_id=request_id)
-    except Exception as e:  # 提取失败不影响当轮对话
-        print(f"（记忆提取暂失败：{type(e).__name__}）")
-        if on_maintenance_warning is not None:
-            on_maintenance_warning("extraction_failed")
+    if not cfg.maintenance.replaces_extraction:
+        # 旧轮末同步提取（达到阈值时在本请求内等待模型）。replaces_extraction
+        # 开启后由 compact 异步承接（审查 R01）：回复后只做廉价排队检查，
+        # compact 提交时推进 extract_cursor 作为两流程的去重契约。
+        try:
+            yield from extraction.extract_pending_steps(store, client, cfg, request_id=request_id)
+        except Exception as e:  # 提取失败不影响当轮对话
+            print(f"（记忆提取暂失败：{type(e).__name__}）")
+            if on_maintenance_warning is not None:
+                on_maintenance_warning("extraction_failed")
+    else:
+        try:
+            from . import maintenance as _maintenance
+            for note in _maintenance.queue_due_tasks(store, cfg):
+                print(f"（{note}）")
+        except Exception:
+            pass  # 排队检查失败不影响已保存回复；欠账由空闲执行器重新评估
     return reply
 
 
@@ -1033,9 +1058,14 @@ def run_chat(store: Store, client, cfg: Config) -> None:
                 except Exception as e:  # 后台任务失败不影响对话
                     print(f"（{watcher.__name__} 暂失败：{e}）")
     finally:
-        try:
-            n = extraction.extract_pending(store, client, cfg, force=True)
-            if n:
-                print(f"（退出前提取了 {n} 条新记忆）")
-        except Exception as e:
-            print(f"（退出前记忆提取失败：{e}）")
+        if cfg.maintenance.replaces_extraction:
+            # R01：compact 承接记忆形成；CLI 无空闲执行器，未压缩原文留在库中，
+            # 下次 serve 的自动触发按原许可合并处理，退出不再强制付费提取。
+            print("（退出前跳过同步提取：compact 模式已启用，待下次空闲压缩）")
+        else:
+            try:
+                n = extraction.extract_pending(store, client, cfg, force=True)
+                if n:
+                    print(f"（退出前提取了 {n} 条新记忆）")
+            except Exception as e:
+                print(f"（退出前记忆提取失败：{e}）")
