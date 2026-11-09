@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as appconfig
-from . import consolidation, loop, observation, persona, persona_reset, skills, thought
+from . import consolidation, loop, maintenance, observation, persona, persona_reset, skills, thought
 from .config import Config, load
 from .channels import ChannelCoordinator, ChannelError
 from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels, replace_persona_mode
@@ -109,7 +109,16 @@ class ChatService:
             self._context_workspace = WorkingSet(self.cfg)
             self._discovery = DiscoveryCoordinator(self)
             self._discovery.start()
+            # 双维护空闲执行器（设计草案 §6）：聊天优先；启动时清点上一进程遗留任务
+            self._maintenance = maintenance.MaintenanceRunner(self)
+            self._maintenance.start()
         except BaseException:
+            runner = getattr(self, "_maintenance", None)
+            if runner is not None:
+                try:
+                    runner.stop()
+                except Exception:
+                    pass
             try:
                 self.store.close()
             except Exception:
@@ -540,6 +549,49 @@ class ChatService:
         """Cancellation is an event, never a wait for the conversation Store lock."""
         return self._discovery.chat_control(payload, cancel=cancel)
 
+    def maintenance(self, action: str = "status", payload=None) -> dict:
+        """双维护命令面（设计草案 §5）：预览/排队/状态/回退。
+
+        只本机 GUI/CLI 可达；模型只可建议，不拥有维护工具；显式请求也不恢复
+        被撤销的来源权限。执行由空闲执行器（runner）串行完成，本方法不等待模型。
+        """
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("维护参数无效")
+        with self._lock:
+            if action == "status":
+                return maintenance.status_view(self.store, self.cfg)
+            if action == "preview_compact":
+                return maintenance.compact_preview(self.store, self.cfg)
+            if action == "preview_tidy":
+                return maintenance.tidy_preview(self.store, self.cfg)
+            if action == "rollback_tidy":
+                return maintenance.tidy_rollback(self.store, self.cfg)
+            if action in ("compact", "tidy"):
+                task_id = self.store.enqueue_maintenance_task(
+                    action, "explicit", f"{action}:explicit:{uuid.uuid4().hex[:8]}", "gui",
+                    {"reason": "显式命令（本机界面）"})
+                if task_id is None:
+                    return {"queued": False,
+                            "reason": "已有同类维护任务在排队或执行；请查看维护状态"}
+                return {"queued": True, "task_id": task_id, "status": "queued",
+                        "note": "已排队；将由空闲执行器在聊天间隙执行，结果见维护状态"}
+            if action == "cancel":
+                task_id = payload.get("task_id")
+                if type(task_id) is not int:
+                    raise ValueError("维护任务标识无效")
+                row = self.store.conn.execute(
+                    "SELECT status FROM maintenance_tasks WHERE id=?", (task_id,)).fetchone()
+                if row is None:
+                    raise ChannelError(404, "not_found", "维护任务不存在")
+                if row["status"] != "queued":
+                    raise ChannelError(409, "task_not_cancellable",
+                                       "任务已在执行或已结束；执行中的任务不能取消")
+                self.store.set_maintenance_task_status(task_id, "cancelled")
+                return {"cancelled": task_id}
+            raise ValueError("维护动作无效")
+
     def observation_memory(self, payload) -> dict:
         with self._lock:
             if (not isinstance(payload, dict) or set(payload) != {"dataset_id", "memory_id"}
@@ -553,6 +605,10 @@ class ChatService:
             return detail
 
     def begin_shutdown(self) -> None:
+        self._shutting_down = True
+        runner = getattr(self, "_maintenance", None)
+        if runner is not None:
+            runner.stop()
         self._channels.begin_shutdown()
         self._evaluations.begin_shutdown()
         self._discovery.begin_shutdown()
@@ -936,6 +992,11 @@ class ChatService:
                 self._discovery.chat_accounting_failed()
                 source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
             events = yield from self._watchers_steps(request_id=request_id)
+            try:
+                # 双维护（草案 §6）：回复后的路径只做廉价阈值检查和排队，不同步执行。
+                events.extend(maintenance.queue_due_tasks(self.store, self.cfg))
+            except Exception:
+                pass  # 排队检查失败不影响本轮已保存的回复。
             if source_warning:
                 events.append(source_warning)
             if maintenance_warnings:

@@ -23,8 +23,18 @@ RECAP_REPLY_POLICY = '''对recap_reply：逐条对照前情中的原文编号、
 允许本机搜索不能概括为禁止搜索。改写素材里的条件不是现实授权。'''
 
 
+COMPACT_POLICY = '''对compact：接续状态与记忆候选只能依据本批原文核对。用户要求与限制必须来自用户原话；
+AI的“已保存/已执行/已更正”只能记为AI曾说，不当作完成事实；证据不足的认错不写入。
+双方约定须有用户同意的原话；单次行为不得写成稳定偏好；素材改写、假设与测试情境
+不是用户真实经历。接续状态不得与原文矛盾，不得补写内部成因或编造时间线。'''
+
+
 def policy(kind):
-    return REVIEW_POLICY + ('\n' + RECAP_REPLY_POLICY if kind == 'recap_reply' else '')
+    if kind == 'recap_reply':
+        return REVIEW_POLICY + '\n' + RECAP_REPLY_POLICY
+    if kind == 'compact':
+        return REVIEW_POLICY + '\n' + COMPACT_POLICY
+    return REVIEW_POLICY
 
 
 def messages(kind, sources, candidates):

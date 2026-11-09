@@ -7,11 +7,13 @@ from .config import Config
 from .store import Store
 
 
-def run(store: Store, cfg: Config, now: float | None = None) -> dict:
+def run(store: Store, cfg: Config, now: float | None = None, *, decay: bool = True) -> dict:
     now = now if now is not None else time.time()
     # Hard source deadlines and revocations always precede value maintenance.
     store.purge_source_packets(now)
-    store.decay_interests(cfg.memory.interest_decay_days)
+    if decay:
+        # 兴趣衰减只在兴趣表存在时执行（表由 serve 侧协调器建；裸库路径无兴趣可衰减）
+        store.decay_interests(cfg.memory.interest_decay_days)
     decisions = store.memory_maintenance_plan(cfg,now)
     to_warehouse, promoted, expired, evicted = 0, [], [], []
     for decision in decisions.values():

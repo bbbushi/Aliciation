@@ -268,6 +268,32 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             except Exception:
                 self._json({"error": "内容发现暂不可用，请刷新后查看", "code": "discovery_unavailable"}, 503)
 
+        def _maintenance_route(self) -> None:
+            """双维护命令面：预览/排队/取消/回退；执行不占本请求（空闲执行器串行）。"""
+            posting = self.command == "POST"
+            if (not self._trusted_intent("gui", json_body=posting)
+                    or len(self.headers.get_all("X-Alice-Intent", [])) != 1
+                    or len(self.headers.get_all("Origin", [])) > 1):
+                self._json({"error": "请从本机网页操作维护任务", "code": "gui_only"}, 403)
+                return
+            if urlparse(self.path).query:
+                self._json({"error": "维护操作不接受查询参数", "code": "invalid_request"}, 400)
+                return
+            try:
+                if not posting:
+                    self._json(svc.maintenance())
+                else:
+                    body = self._bounded_body(16384)
+                    if not isinstance(body.get("action"), str):
+                        raise ValueError("缺少操作")
+                    self._json(svc.maintenance(body["action"], body))
+            except ChannelError as exc:
+                self._channel_error(exc)
+            except ValueError as exc:
+                self._json({"error": str(exc), "code": "invalid_request"}, 400)
+            except Exception:
+                self._json({"error": "维护状态暂不可用，请刷新后查看", "code": "maintenance_unavailable"}, 503)
+
         def _connector_route(self) -> None:
             """Local GUI controls a fixed helper; request data never selects code or paths."""
             posting = self.command == "POST"
@@ -533,6 +559,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
+            elif path == "/api/maintenance":
+                self._maintenance_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
             elif path == "/addons/context-inspector" or path.startswith("/addons/context-inspector/"):
@@ -789,6 +817,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 return
             if path == "/api/discovery":
                 self._discovery_route()
+                return
+            if path == "/api/maintenance":
+                self._maintenance_route()
                 return
             if path == "/api/connectors/qq":
                 self._connector_route()

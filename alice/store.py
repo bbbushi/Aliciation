@@ -12,6 +12,7 @@ from pathlib import Path
 from .discovery_memory import SCHEMA as SOURCE_SCHEMA, SOURCE_SHADOW, SourceStoreMixin
 from .observation_memory import ObservationStoreMixin
 from .learning import LearningStoreMixin
+from .maintenance import SCHEMA as MAINTENANCE_SCHEMA, MaintenanceStoreMixin
 from .worker_context import SCHEMA as WORKER_CONTEXT_SCHEMA, WORKER_SHADOW, WorkerStoreMixin
 
 SCHEMA = """
@@ -122,7 +123,7 @@ def memory_score(m: sqlite3.Row, now: float) -> float:
     return usage_score(m, now)
 
 
-class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
+class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceStoreMixin):
     def __init__(self, db_path: Path):
         self._llm_event_lock = threading.Lock()
         self._llm_events = deque(maxlen=2000)
@@ -145,6 +146,7 @@ class Store(LearningStoreMixin, WorkerStoreMixin, ObservationStoreMixin, SourceS
         self.init_observation_memory()
         self.init_learning()
         self.conn.executescript(WORKER_CONTEXT_SCHEMA)
+        self.conn.executescript(MAINTENANCE_SCHEMA)
         self.purge_source_packets()
 
     def _migrate(self) -> None:

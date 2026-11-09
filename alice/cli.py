@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -64,6 +65,26 @@ def _seed_wizard(store: Store, client, cfg: Config) -> None:
     print(f"人格底色已生成：{path}")
 
 
+def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
+    """双维护显式命令（设计草案 §5）：先预览（不改数据）再创建任务并同步执行。"""
+    from . import maintenance
+    from .steps import drive
+    preview = (maintenance.compact_preview(store, cfg) if kind == "compact"
+               else maintenance.tidy_preview(store, cfg))
+    print(json.dumps(preview, ensure_ascii=False, indent=2))
+    client = make_client(cfg)
+    task_id = store.enqueue_maintenance_task(
+        kind, "explicit", f"{kind}:cli:{uuid.uuid4().hex[:8]}", "gui", {"reason": "CLI 显式命令"})
+    if task_id is None:
+        print("已有同类维护任务在排队，未重复创建（用 serve 的维护状态查看）。")
+        return
+    print(f"任务 {task_id} 执行中（模型调用约 {preview['estimated_model_calls']} 次）……")
+    steps = (maintenance.compact_task_steps(store, client, cfg, task_id) if kind == "compact"
+             else maintenance.tidy_task_steps(store, client, cfg, task_id))
+    result = drive(steps)
+    print("结果：" + (json.dumps(result, ensure_ascii=False) if result else "未执行（任务已被认领或失效）"))
+
+
 def cmd_chat(store: Store, cfg: Config) -> None:
     summary = consolidation.run_if_due(store, cfg)
     if summary:
@@ -93,6 +114,9 @@ def main() -> None:
     p_recall = sub.add_parser("recall", help="手动检索仓库/长期记忆")
     p_recall.add_argument("query")
     sub.add_parser("consolidate", help="立即运行分层维护与生存过滤")
+    sub.add_parser("compact", help="压缩一段已完成的普通对话为接续状态（双维护；先预览）")
+    sub.add_parser("tidy", help="整理记忆库：去重合并与长正文浓缩（双维护；先预览）")
+    sub.add_parser("tidy-rollback", help="回退最近一次整理批次的浓缩正文（窗口内）")
     sub.add_parser("evolve", help="立即运行人格演化")
     sub.add_parser("deliberate", help="立即运行思辨（从记忆消化观点）")
     p_seed = sub.add_parser("seed", help="安装自定义初始人格（markdown 文件）")
@@ -128,6 +152,14 @@ def main() -> None:
         elif args.cmd == "consolidate":
             _print_consolidation(consolidation.run(store, cfg))
             print("分层维护完成。")
+        elif args.cmd == "compact":
+            _run_maintenance_cmd(store, cfg, "compact")
+        elif args.cmd == "tidy":
+            _run_maintenance_cmd(store, cfg, "tidy")
+        elif args.cmd == "tidy-rollback":
+            from . import maintenance
+
+            print(json.dumps(maintenance.tidy_rollback(store, cfg), ensure_ascii=False))
         elif args.cmd == "evolve":
             print(persona.evolve(store, make_client(cfg), cfg))
         elif args.cmd == "deliberate":
