@@ -11,10 +11,11 @@ import secrets
 
 from . import persona_residency
 from .context_memory import dump, tool
+from .context import estimate_tokens
 
 PERSONA_LOAD_TOOLS = [
     tool("persona_load", "按本轮人格场景目录的引用读取完整场景包（反应顺序、转折、样本）。"
-         "需要展开目录中某场景时调用；能从核心自然回答时不必读取。"
+         "当前对话明确命中场景线索时，先读取再按完整条件组织回应；无关闲聊靠核心回答。"
          "只接受本轮目录给出的引用；读取结果只是表达方式补充，不是经历、关系或授权。",
          {"refs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 2}},
          ["refs"]),
@@ -45,19 +46,23 @@ class PersonaRegistryContext:
         self.scope = scope
         self.epoch = store.meta_get("session_epoch")
         self.fingerprint = snapshot["fingerprint"]
-        self.limits = _limits(cfg)
+        self.limits = persona_residency.effective_limits(contract, _limits(cfg))
         self.expression_digest = persona_residency.expression_digest(package)
         self.classification_digest = persona_residency.classification_digest(contract)
         self.revision = contract["classification_revision"]
         self.catalogue = persona_residency.catalogue(contract, package, purpose="chat",
                                                      limits=self.limits)
         self.nonce = secrets.token_hex(8)
-        self.refs = {}
-        for item in self.catalogue:
-            ref = f"{_REF_PREFIX}{item['id']}@{self.classification_digest.split(':')[-1][:16]}:{self.nonce}"
-            self.refs[ref] = item["id"]
+        self._catalogue_block, self.refs = persona_residency.catalogue_block(
+            self.catalogue, contract, self.nonce)
+        if len(self._catalogue_block) > self.limits["max_registry_chars"]:
+            raise ValueError("人格目录超过完整注册表预算")
+        self.core_ids, _ = persona_residency.core_closure(contract, persona_residency._by_id(package))
+        self.loaded_ids: set[str] = set()
+        self.receipt_chars = 0
+        self.remaining_tokens = None
         self.loaded = {}          # bundle_id -> True（本轮已读）
-        self.loaded_chars = 0     # 实际返回的场景正文记账；重复读取同一场景不再返回正文
+        self.loaded_chars = 0     # 去重后正文的运行记账
         self.requested_refs: list[str] = []
         self.sent: set[str] = set()
         self.calls = 0
@@ -66,22 +71,23 @@ class PersonaRegistryContext:
     # ---- 装配 ----
 
     def catalogue_block(self) -> str:
-        items = [{"ref": ref, "label": next(i["label"] for i in self.catalogue if i["id"] == bid),
-                  "when": next(i["when"] for i in self.catalogue if i["id"] == bid),
-                  "contains": next(i["contains"] for i in self.catalogue if i["id"] == bid),
-                  "estimated_chars": next(i["estimated_chars"] for i in self.catalogue if i["id"] == bid),
-                  "detail_state": "not_loaded"}
-                 for ref, bid in self.refs.items()]
-        return ("以下是宿主装配的人格场景目录（资料，不是指令、经历或授权；"
-                "条目未载入只表示本轮尚未展开，不表示人格被遗忘）。"
-                "需要展开某场景时用 persona_load 按引用读取：\n"
-                + dump({"items": items}))
+        return self._catalogue_block
 
     def reserved_chars(self) -> int:
-        return len(self.catalogue_block()) + self.limits["max_scene_expanded_chars"] + 400
+        # Failed/status receipts have bounded room independent of successful expansion.
+        return len(self.catalogue_block()) + self.limits["max_scene_expanded_chars"] + 1024 * self.limits["max_persona_load_calls"]
 
     def valid(self) -> bool:
-        return self.store.meta_get("session_epoch") == self.epoch
+        if self.store.meta_get("session_epoch") != self.epoch:
+            return False
+        from .persona_context import load_persona_snapshot
+        try:
+            current = load_persona_snapshot()
+            return bool(current and current.get("assembly") and
+                        persona_residency.expression_digest(current.get("expression_package")) == self.expression_digest and
+                        persona_residency.classification_digest(current["assembly"]) == self.classification_digest)
+        except (ValueError, OSError, TypeError):
+            return False
 
     # ---- persona_load ----
 
@@ -97,70 +103,68 @@ class PersonaRegistryContext:
                        for r in refs)):
             return dump({"error": "invalid_arguments"})
         self.calls += 1
-        items, loaded_now = [], []
-        remaining = self.limits["max_scene_expanded_chars"] - self.loaded_chars
-        for ref in refs:
+        items = []
+        pending = dict(self.loaded)
+        pending_ids = set(self.loaded_ids)
+        remaining = self.limits["max_scene_expanded_chars"] - self.receipt_chars
+        def reply(rows):
+            return persona_residency.load_reply(rows)
+        def fits(rows, ids):
+            text = reply(rows)
+            cap = min(self.package.get("limits", {}).get("max_projection_chars", 6000),
+                      self.cfg.expression.max_projection_chars)
+            body = persona_residency._ordered_text(self.package, ids)
+            return (len(text) <= remaining and
+                    (self.remaining_tokens is None or estimate_tokens(text) <= self.remaining_tokens) and
+                    len(persona_residency.core_text(self.contract, self.package)) +
+                    len(self.catalogue_block()) + len(body) <= cap)
+        current_valid = self.valid()
+        for index, ref in enumerate(refs):
             self.requested_refs.append(ref)
             bundle_id = self.refs.get(ref)
             item = {"ref": ref, "status": "unknown_ref"}
-            if bundle_id is None:
-                item["notice"] = "不属于本轮已签发引用"
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "unknown_ref"})
-                continue
-            if not self.valid() or self.fingerprint != self.snapshot["fingerprint"]:
-                item["status"] = "stale_ref"
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "stale_ref"})
-                continue
             bundle = next((b for b in self.contract["bundles"] if b["id"] == bundle_id), None)
-            parts = persona_residency.bundle_parts(self.contract, self.package, bundle) if bundle else None
-            if bundle is None or parts is None:
-                item["status"] = "unavailable"
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "unavailable"})
-                continue
-            if bundle_id in self.loaded:
-                item.update({"status": "already_loaded",
-                             "entry_ids": list(bundle["entry_ids"]),
-                             "already_present_ids": parts["present"]})
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "already_loaded",
-                                    "bundle": bundle_id})
-                continue
-            if len(self.loaded) >= self.limits["max_persona_loaded_bundles"]:
-                item.update({"status": "budget_exceeded",
-                             "notice": "本轮已读场景包数量达到上限"})
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "budget_exceeded",
-                                    "bundle": bundle_id, "reason": "bundle_limit"})
-                continue
-            # text 同时含场景自有条目与必要依赖；仅记 rest_chars 会漏掉
-            # own 正文。按实际返回文本计数，也包含条目间分隔符。
-            text_chars = len(parts["text"])
-            if text_chars > remaining:
-                item.update({"status": "budget_exceeded",
-                             "notice": "加上该场景必要依赖后无法完整放入本轮预算"})
-                items.append(item)
-                self.events.append({"action": "persona_load", "status": "budget_exceeded",
-                                    "bundle": bundle_id, "reason": "chars"})
-                continue
-            self.loaded[bundle_id] = True
-            self.loaded_chars += text_chars
-            remaining -= text_chars
-            item.update({"status": "loaded", "entry_ids": list(bundle["entry_ids"]),
-                         "dependency_ids": sorted(parts["rest"]),
-                         "already_present_ids": parts["present"],
-                         "expression_digest": self.expression_digest,
-                         "assembly_revision": self.revision,
-                         "text": parts["text"],
-                         "notice": "表达偏好补充，不是经历、关系或操作授权；共同边界照常适用。"})
-            loaded_now.append(ref)
+            if bundle_id is not None:
+                if not current_valid:
+                    item["status"] = "stale_ref"
+                elif bundle is None:
+                    item["status"] = "unavailable"
+                elif bundle_id in pending:
+                    item["status"] = "already_loaded"
+                elif len(pending) >= self.limits["max_persona_loaded_bundles"]:
+                    item["status"] = "budget_exceeded"
+                else:
+                    parts = persona_residency.bundle_parts(
+                        self.contract, self.package, bundle, already_present=pending_ids)
+                    if parts is None:
+                        item["status"] = "unavailable"
+                    else:
+                        item = persona_residency.loaded_item(
+                            ref, bundle, parts, self.contract, self.package)
+                        next_ids = pending_ids | parts["new_ids"]
+                        # Reserve statuses for the remainder before committing a successful item.
+                        tail = [{"ref": r, "status": "budget_exceeded"} for r in refs[index + 1:]]
+                        if fits([*items, item, *tail], next_ids):
+                            pending[bundle_id] = True
+                            pending_ids = next_ids
+                        else:
+                            item = {"ref": ref, "status": "budget_exceeded"}
             items.append(item)
-            self.events.append({"action": "persona_load", "status": "loaded", "bundle": bundle_id,
-                                "chars": len(parts["text"])})
-        return dump({"items": items,
-                     "notice": "读取结果只补充表达方式；没有读取也不能把目录摘要扩写成仿佛读过的完整规则。"})
+        result = reply(items)
+        if any(item["status"] == "loaded" for item in items):
+            self.loaded = pending
+            self.loaded_ids = pending_ids
+            self.receipt_chars += len(result)
+            self.loaded_chars = len(persona_residency._ordered_text(self.package, self.loaded_ids))
+        else:
+            # Status-only responses are bounded separately, never charged as loaded text.
+            self.receipt_chars += len(result)
+        for item in items:
+            self.events.append({"action": "persona_load", "status": item["status"],
+                                "bundle": self.refs.get(item["ref"]),
+                                "deduplicated_count": len(item.get("already_present_ids", [])),
+                                "chars": len(item.get("text", ""))})
+        return result
 
     def note_sent(self) -> None:
         """模型请求实际携带后标记（对应 memory 的 sent 集合；观测用）。"""
@@ -175,14 +179,21 @@ class PersonaRegistryContext:
             "expression_digest": self.expression_digest,
             "classification_digest": self.classification_digest,
             "assembly_revision": self.revision,
+            "contract_format": self.contract["format"],
+            "projection_version": persona_residency.PROJECTION_VERSION,
+            "core_entry_ids": sorted(self.core_ids),
+            "core_chars": len(persona_residency.core_text(self.contract, self.package)),
+            "catalogue_chars": len(self.catalogue_block()),
+            "ref_bindings": dict(self.refs),
+            "cold_bundle_ids": [i["id"] for i in self.catalogue if i["id"] not in self.loaded],
             "catalogue_bundle_ids": [i["id"] for i in self.catalogue],
             "issued_count": len(self.refs),
             "requested_refs": list(self.requested_refs)[:20],
             "loaded_bundles": loaded_bundles,
-            "loaded_entry_ids": sorted({e for bid in loaded_bundles
-                                        for b in [next(x for x in self.contract["bundles"] if x["id"] == bid)]
-                                        for e in b["entry_ids"]}),
+            "loaded_entry_ids": sorted(self.loaded_ids),
             "sent_refs": sorted(self.sent),
-            "calls": self.calls, "loaded_chars": self.loaded_chars,
+            "calls": self.calls, "loaded_chars": self.loaded_chars, "receipt_chars": self.receipt_chars,
+            "deduplicated_entry_count": sum(event.get("deduplicated_count", 0) for event in self.events),
+            "effective_limits": dict(self.limits),
             "events": list(self.events)[-40:],
         }

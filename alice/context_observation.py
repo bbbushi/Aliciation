@@ -21,6 +21,7 @@ BODY_DIR_LIMIT_BYTES = 50 * 1024 * 1024   # 基础设计 §原文与存储：首
 BODY_RETENTION_SECONDS = 7 * 86400        # 7 天
 BODY_MAX_CHARS = 200000
 _SWEEP_EVERY = 64
+BODY_REQUEST_LIMIT = 10  # O01：正文采集按用户请求计数的上限（与 7 天/50MiB 并列）
 
 _global_lock = threading.Lock()
 _global_observer: ContextObserver | NullObserver | None = None
@@ -34,23 +35,53 @@ def policy_for(cfg) -> CapturePolicy:
     return CapturePolicy(text_capture=capture, body_max_chars=BODY_MAX_CHARS)
 
 
-def observer_for(cfg) -> ContextObserver | NullObserver:
-    """进程级单例；关闭观察时返回空实现，聊天照常运行。"""
+def observer_for(cfg, body_capture=None) -> ContextObserver | NullObserver:
+    """进程级单例；关闭观察时返回空实现，聊天照常运行。
+
+    body_capture：请求边界算出的本次正文采集许可（O01 十请求上限）。
+    None 沿用配置；False 时本请求强制只记元数据——不写正文、不冒充完整。
+    """
     global _global_observer, _global_policy
     if not getattr(cfg.context, "observer_enabled", True):
         return NullObserver()
+    policy = policy_for(cfg)
+    if body_capture is False:
+        policy = CapturePolicy(text_capture="none", body_max_chars=BODY_MAX_CHARS)
     with _global_lock:
-        if _global_observer is None or _global_policy != policy_for(cfg):
-            _global_policy = policy_for(cfg)
-            _global_observer = ContextObserver(sink=AliceSink(), policy=_global_policy)
+        if _global_observer is None or _global_policy != policy:
+            _global_policy = policy
+            _global_observer = ContextObserver(sink=AliceSink(), policy=policy)
         return _global_observer
+
+
+def _body_capture_allowed(store, cfg) -> bool:
+    """按用户请求计数并返回本请求是否仍可采集正文。
+
+    计数持久化于 meta，重启不清零；开关处于关闭期时计数归零，
+    重新开启后从零重新计满十个用户请求。达到上限后第 11 个请求起
+    只记元数据，聊天与观测本体不受影响。
+    """
+    used = int(store.meta_get("ctx_obs_body_used") or 0)
+    if not getattr(cfg.context, "observer_body_capture", False):
+        if used:
+            store.meta_set("ctx_obs_body_used", "0")
+        return False
+    if used >= BODY_REQUEST_LIMIT:
+        return False
+    store.meta_set("ctx_obs_body_used", str(used + 1))
+    return True
 
 
 def begin_request(store, cfg, *, request_id, scope, session_epoch=None,
                   parent_request_id=None):
     """主对话入口：返回 RequestTrace（或空实现）。观察故障不影响业务。"""
     try:
-        observer = observer_for(cfg)
+        if not getattr(cfg.context, "observer_enabled", True):
+            return NullObserver().begin_request(request_id=request_id)
+        allowed = True
+        if getattr(cfg.context, "observer_body_capture", False):
+            allowed = _body_capture_allowed(store, cfg)
+        observer = observer_for(cfg, body_capture=allowed)
         if session_epoch is None:
             session_epoch = store.meta_get("session_epoch")
         return observer.begin_request(request_id=request_id, session_epoch=session_epoch,
@@ -237,22 +268,29 @@ def request_hashes(store, request_id) -> set[str] | None:
     return hashes if found else None
 
 
-def body_quota() -> dict:
+def body_quota(store=None) -> dict:
     """正文额度状态（插件 status 用）；只读盘点，不触发清理。"""
-    return {"body_dir_bytes": _dir_size(_body_dir()),
-            "limit_bytes": BODY_DIR_LIMIT_BYTES,
-            "retention_days": BODY_RETENTION_SECONDS // 86400,
-            "policy": "10个用户请求 · 7天 · 50MiB，以先到者为界；达到上限不截断后冒充完整"}
+    out = {"body_dir_bytes": _dir_size(_body_dir()),
+           "limit_bytes": BODY_DIR_LIMIT_BYTES,
+           "retention_days": BODY_RETENTION_SECONDS // 86400,
+           "policy": "10个用户请求 · 7天 · 50MiB，以先到者为界；达到上限不截断后冒充完整"}
+    if store is not None:
+        used = int(store.meta_get("ctx_obs_body_used") or 0)
+        out["requests"] = {"used": used, "limit": BODY_REQUEST_LIMIT,
+                           "remaining": max(0, BODY_REQUEST_LIMIT - used),
+                           "exhausted": used >= BODY_REQUEST_LIMIT,
+                           "reset": "关闭 observer_body_capture 开关即重置计数；重新开启后重新计满10个用户请求"}
+    return out
 
 
-def plugin_status(cfg) -> dict:
+def plugin_status(cfg, store=None) -> dict:
     """功能发现（插件设计 §6）：插件/采集状态、协议版本与正文额度。"""
     from .context_observer import SCHEMA_VERSION
     return {"enabled": bool(getattr(cfg.plugins, "context_inspector_enabled", False)),
             "protocol_version": SCHEMA_VERSION, "interface_version": 1,
             "capture": {"metadata": bool(getattr(cfg.context, "observer_enabled", True)),
                         "body": bool(getattr(cfg.context, "observer_body_capture", False))},
-            "quota": body_quota() if getattr(cfg.context, "observer_body_capture", False) else None}
+            "quota": body_quota(store) if getattr(cfg.context, "observer_body_capture", False) else None}
 
 
 # ---- 落盘边界：与 metrics.flush_calls 同一安全边界调用 ----

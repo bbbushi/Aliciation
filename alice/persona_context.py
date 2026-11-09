@@ -6,21 +6,23 @@ import hashlib
 import re
 from . import config as paths
 from .context import estimate_tokens
+from .expression_adoption import ADOPTION_GUIDANCE, POLICY_VERSION as ADOPTION_POLICY_VERSION
 
 STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
 ANCHOR_BUDGET_CHARS = 500
 EXPRESSION_POLICY_VERSION = 5
-USAGE_POLICY_VERSION = 2
+USAGE_POLICY_VERSION = 4
 _USAGE_INSTRUCTION = (
-    "【表达使用方式：用户选定的长期说话习惯】\n"
+    ADOPTION_GUIDANCE + "\n【表达使用方式：用户选定的长期说话习惯】\n"
     "日常对话默认用下方同用途表达材料中适用的措辞、句子节奏和反应方式组织回答。"
     "当前明确任务决定内容、格式和详略；正式改写或结果汇报也遵守任务要求，不强加口癖或玩笑。\n"
     "按情境的触发、初始回应、后续转折与停止条件使用规则。"
     "条目若要求被认真追问后才转折，就等待相应追问；无需为展示人格层次自行制造沉重话题。"
     "包内的长度与展开限制也作用于自我介绍、关怀和事实澄清。\n"
     "样本示范整段接话方式，包括反应顺序、节奏和收放，可以自然变奏；"
-    "其中的话题、关怀建议和收尾不是每轮必做动作，是否使用以当前话题和用户意愿为准。"
+    "其中的话题、关怀建议、反问和收尾不是每轮必做动作，按当前话题和用户意愿选择；"
+    "不能用样例中的反问抵消用户明确的互动反馈。"
     "其中不成立的现实前提不照搬。张力是互动倾向，不证明你有对应心理经历，"
     "无需把张力表复述成自我介绍，也不为人物厚度补写过去的心路或共同往事。\n"
     "可以直接提出此刻的想法、玩笑和可做的事。能力或事实需要澄清时简短准确地回答，"
@@ -341,6 +343,7 @@ def render_full(snapshot: dict | None, *, metadata: dict | None = None, purpose=
         metadata.update(selection)
         metadata.update({"full_chars": len(text), "full_estimated_tokens": estimate_tokens(text),
                          "usage_policy_version": USAGE_POLICY_VERSION,
+                         "expression_adoption_policy_version": ADOPTION_POLICY_VERSION,
                          "usage_instruction_present": bool(usage),
                          "usage_instruction_chars": len(usage),
                          "usage_instruction_hash": hashlib.sha256(usage.encode("utf-8")).hexdigest() if usage else None})
@@ -394,21 +397,17 @@ def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参�
 
 # ---- 注册表模式（人格注册表与模型按需装配-架构设计 v1 §2/§6） ----
 
-REGISTRY_USAGE_POLICY_VERSION = 2
+REGISTRY_USAGE_POLICY_VERSION = 5
 _REGISTRY_USAGE = (
-    "【表达使用方式：核心常驻 + 场景按需】\n"
-    "下方「底色 · 核心」是用户选定的默认相处取向、常用语感、全局约束与日常样本，随时可用，"
-    "组织回答时优先按它来。\n"
-    "宿主另会单独提供「人格场景目录」：按需场景的完整反应、转折与样本已安装但未随本轮载入。"
-    "需要展开某个场景时，用 persona_load 工具按目录里的引用读取完整场景包；"
-    "读取结果只补充表达方式，不是经历、关系或操作授权；已读内容只在当前请求内有效。\n"
-    "能从核心自然回答时不要求读取；目录里的沉重或英雄主题不构成当前情绪事实，"
-    "条目未载入只表示本轮未展开，不表示人格被遗忘、否定或永久舍弃，也不为展示层次自行制造话题。\n"
-    "按已载入规则的触发、转折与停止条件使用；样本的话题、关怀建议和收尾不是每轮必做动作。"
-    "当前明确任务决定内容、格式和详略；正式任务不强加口癖或玩笑。"
-    "能力或事实需要澄清时简短准确地回答，随后回到话题，除非仍有误解或用户追问，不重复身份或身体限制清单。\n"
-    "事实、能力、未知、失败、许可和用户停止要求照常按宿主规则处理；"
-    "样本中的角色身份、身世、关系与现实前提不因此成为事实。"
+    ADOPTION_GUIDANCE + "\n核心是默认语感和相处方式，自然用于这次回答。场景索引只作路由，未读不等于已知正文。"
+    "当前对话明确命中索引线索时，先用persona_load展开，再按完整反应、例外和样本组织回应；"
+    "无关闲聊不展开场景，不为展示人格制造话题，也不向用户汇报读取流程。"
+    "读取受限或失败时凭核心回答，不猜场景正文。表达资料不是经历、身份、关系或操作授权；"
+    "事实与能力照实，当前任务和用户停止要求优先。样本用来体会语感，不机械复述。"
+    "条目未载入只表示本轮未展开，不表示人格被遗忘、否定或永久舍弃；"
+    "样本的话题、关怀建议、反问和收尾不是每轮必做动作，按当前话题和用户意愿选择；"
+    "不能用样本中的反问抵消用户明确的互动反馈。"
+    "正式任务不强加口癖或玩笑。"
 )
 
 
@@ -438,6 +437,8 @@ def render_registry_persona(snapshot: dict, contract: dict, package: dict, *,
         metadata.update({
             "projection_strategy": "core_registry",
             "registry_usage_policy_version": REGISTRY_USAGE_POLICY_VERSION,
+            "expression_adoption_policy_version": ADOPTION_POLICY_VERSION,
+            "projection_version": persona_residency.PROJECTION_VERSION,
             "registry_chars": len(text),
             "registry_estimated_tokens": estimate_tokens(text),
             "core_chars": len(core_text),

@@ -75,6 +75,9 @@ class ExpressionConfig:
             ("max_metadata_chars", 1000, 480_000), ("max_projection_chars", 500, 24_000),
             ("max_worker_chars", 200, 6000), ("max_anchor_chars", 100, 2000),
             ("max_item_chars", 100, 9600), ("max_review_chars", 2000, 960_000),
+            ("max_core_chars", 100, 24000), ("max_registry_chars", 100, 24000),
+            ("max_registry_bundles", 1, 64), ("max_scene_expanded_chars", 64, 24000),
+            ("max_persona_load_calls", 1, 8), ("max_persona_loaded_bundles", 1, 64),
         ):
             value = getattr(self, name)
             if type(value) is not int or not low <= value <= high:
@@ -109,6 +112,10 @@ class ContextConfig:
     # 上下文观测 SDK（20261107 补充设计）：元数据默认开；正文快照默认关（本机调试用）
     observer_enabled: bool = True
     observer_body_capture: bool = False
+    # 前缀宪法精简与规则作用域（20261109 设计 §13）：legacy=改造前宪法+互动v1；
+    # scoped=prefix_policy 五类块。首发默认 legacy；切换经配置文件，重启进程加载
+    # （前缀代码不承诺热切换；运行行为以实际加载代码为准）
+    prefix_policy_mode: str = "legacy"
     # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
     total_budget_tokens: int = 100_000
     reply_reserve_tokens: int = 4_000
@@ -125,6 +132,8 @@ class ContextConfig:
             raise ValueError('context.transform_review_enabled 必须为布尔值')
         if self.assembly_mode not in ("legacy", "indexed"):
             raise ValueError("context.assembly_mode 必须为 legacy 或 indexed")
+        if self.prefix_policy_mode not in ("legacy", "scoped"):
+            raise ValueError("context.prefix_policy_mode 必须为 legacy 或 scoped")
         if type(self.working_set_enabled) is not bool:
             raise ValueError("context.working_set_enabled 必须为布尔值")
         if type(self.recap_enabled) is not bool:
@@ -168,6 +177,62 @@ class MemoryConfig:
     extract_every_turns: int = 10
     distill_every_memories: int = 30  # 数据触发：每累计 N 条新记忆提炼一次技能
     deliberate_every_memories: int = 15  # 数据触发：每累计 N 条新事件记忆思辨一次（思想层）
+
+
+@dataclass
+class MaintenanceConfig:
+    """双维护流程（对话压缩 compact + 记忆库整理 tidy，20261109 设计草案）。
+
+    自动触发默认关（人工验收后再开）；显式命令不受这些开关限制。
+    初值为工程起点，参数以真人使用与预算为准，不是效果结论。
+    """
+    # compact：自动触发（廉价检查排队，不在聊天路径同步执行）
+    auto_compact_enabled: bool = False
+    # R01：由 compact 异步替代旧轮末/退出同步提取（回复后只排队不等待；需 auto_compact）。
+    # 关闭时（默认）旧提取路径原样保留；两模式共用「compact 提交推进 extract_cursor」的
+    # 去重契约，同段原文不会被两条流程重复提为记忆。
+    replaces_extraction: bool = False
+    compact_pressure_rounds: int = 8        # 默认窗口外未压缩完整往返累计到该数即排队
+    compact_min_interval_minutes: int = 45  # 距上次成功压缩的最小间隔
+    compact_max_span_rounds: int = 12       # 单次压缩最多处理的完整往返数
+    compact_state_max_chars: int = 800      # 接续状态正文上限
+    # tidy：自动触发
+    auto_tidy_enabled: bool = False
+    tidy_interval_hours: int = 24           # 距上次成功整理的最小间隔
+    tidy_min_new_memories: int = 12         # 新增记忆达到该数才值得排队
+    tidy_duplicate_threshold: float = 0.72  # 同类记忆判重的文本重合度下限
+    tidy_condense_min_chars: int = 600      # 长正文浓缩候选的最小长度
+    tidy_max_candidates: int = 12           # 单次整理进入模型判读的候选上限
+    tidy_rollback_days: int = 7             # 浓缩原文的回退窗口；到期清除不留永久正文日志
+    runner_poll_seconds: int = 20           # 空闲执行器的轮询间隔（聊天优先，忙时跳过）
+
+    def __post_init__(self):
+        if type(self.auto_compact_enabled) is not bool or type(self.auto_tidy_enabled) is not bool:
+            raise ValueError("maintenance 自动触发开关必须为布尔值")
+        if type(self.replaces_extraction) is not bool:
+            raise ValueError("maintenance.replaces_extraction 必须为布尔值")
+        if self.replaces_extraction and not self.auto_compact_enabled:
+            raise ValueError("maintenance.replaces_extraction 需同时启用 auto_compact_enabled，"
+                             "否则既无同步提取也无异步压缩，记忆形成会整体停摆")
+        for name, low, high in (("compact_pressure_rounds", 2, 200),
+                                ("compact_min_interval_minutes", 5, 10080),
+                                ("compact_max_span_rounds", 1, 100),
+                                ("compact_state_max_chars", 200, 4000),
+                                ("tidy_interval_hours", 1, 720),
+                                ("tidy_min_new_memories", 1, 1000),
+                                ("tidy_max_candidates", 2, 48),
+                                ("tidy_rollback_days", 1, 90),
+                                ("runner_poll_seconds", 5, 600)):
+            value = getattr(self, name)
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"maintenance.{name} 超出允许范围")
+        for name, low, high in (("tidy_duplicate_threshold", 0.5, 0.98),
+                                ("tidy_condense_min_chars", 200, 8000)):
+            value = getattr(self, name)
+            if type(value) is not int and type(value) is not float:
+                raise ValueError(f"maintenance.{name} 必须为数值")
+            if not low <= value <= high:
+                raise ValueError(f"maintenance.{name} 超出允许范围")
 
 
 @dataclass
@@ -225,6 +290,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
 
@@ -246,6 +312,7 @@ def load(path: Path | str | None = None) -> Config:
         memory=_build(MemoryConfig, raw.get("memory", {})),
         channels=_channels(raw.get("channels", {})),
         expression=_build(ExpressionConfig, raw.get("expression", {})),
+        maintenance=_build(MaintenanceConfig, raw.get("maintenance", {})),
         plugins=_build(PluginsConfig, raw.get("plugins", {})),
     )
 

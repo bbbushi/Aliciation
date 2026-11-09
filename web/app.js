@@ -302,10 +302,23 @@ function connectionStatus(message, kind = "ready") {
 function renderMemory(m) {
   if (!m || !Number.isFinite(m.active)) return;
   memory = m;
+  let extraction = "";
+  if (m.extraction && m.extraction.last_status) {
+    const e = m.extraction;
+    if (e.last_status === "skipped_source_protected") {
+      extraction = ` · 最近提取：跳过 ${e.skipped ?? 0} 轮（来源保护）`;
+    } else if (e.last_status === "reviewed") {
+      extraction = e.written ? ` · 最近提取：新增 ${e.written} 条` : " · 最近提取：无新增";
+    } else if (e.last_status === "review_failed") {
+      extraction = " · 最近提取：审核未完成";
+    } else if (e.last_status.startsWith("invalid_")) {
+      extraction = " · 最近提取：输出无效";
+    }
+  }
   $("#memory").textContent =
     `活跃 ${m.active} · 仓库 ${m.warehouse} · 长期 ${m.longterm}`
     + (m.pressure ? ` · 高压隔离 ${m.pressure}` : "")
-    + ` · 已忘 ${m.forgotten} · 技能 ${m.skills}`;
+    + ` · 已忘 ${m.forgotten} · 技能 ${m.skills}` + extraction;
 }
 
 /* 稳定行 ID 与请求 ID 只用于界面合并；不将 QQ 身份拼进对话正文。 */
@@ -1152,6 +1165,7 @@ async function openPersonaView() {
     : `<p class="hint">还没有安装人格。点下面的按钮导入一份，或以气质标签生成。</p>`;
   openModal("当前人格", meta, body, [
     ...(p.expression?.sections && p.expression.format !== "invalid" ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
+    ...(p.installed ? [{ label: "人格装配", onClick: openResidencyView }] : []),
     ...(p.expression ? [{ label: "从原稿更新表达", onClick: () => openExpressionUpdate(p.expression) }] : []),
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
@@ -1467,31 +1481,116 @@ async function openExpressionUpdate(expression, prefill = {}) {
 // 驻留分层（注册表设计 §3.1）：沿用表达更新视图的准备/查看/应用流程
 const residencyAPI = (data) => postJSON("/api/persona/residency", data);
 
+function openResidencyView() {
+  openModal("人格装配", "保存分层与启用按需是两个步骤；模式切换后下一条对话生效。",
+    '<div id="residency-view"><div id="expression-residency"><p class="hint">正在读取装配状态…</p></div></div>',
+    [{label: "返回人格", onClick: openPersonaView}, {label: "关闭", onClick: closeModal}]);
+  renderResidency($("#residency-view"));
+}
+
+function residencyReason(reason) {
+  const labels = {no_persona: "尚未安装人格", legacy_persona: "当前人格没有结构化表达包，需要先更新表达",
+    missing_assembly: "尚未保存分层；先准备候选，核对后保存，再启用按需装配",
+    catalogue_empty: "分层没有可用于网页聊天的场景，需要重新准备分层",
+    purpose_not_supported: "当前渠道继续使用原用途的完整投影"};
+  if (reason?.startsWith("invalid_contract:")) return "已保存分层未通过当前校验，需要重新准备；问题见下方";
+  return labels[reason] || reason || "";
+}
+
+function residencyIssue(issue) {
+  const names = {registry_too_large: "场景索引超限", core_too_large: "常驻核心超限",
+    scene_too_large: "场景读取回执超限", index_label_too_large: "场景名过长",
+    index_when_too_large: "适用线索过长", scene_in_core: "专门场景进入了核心",
+    too_many_core_examples: "核心样本超过一条", conditional_constraint_in_core: "条件约束同时进入核心",
+    conditional_constraint_not_available: "条件约束未被聊天场景覆盖",
+    constraints_not_core: "全局约束未进入核心", core_dependency_on_demand: "核心依赖未常驻",
+    default_expression_not_core: "默认取向或语感未常驻，且未声明为场景专用",
+    unknown_scene_expression: "场景专用语感引用无效", scene_expression_in_core: "场景专用语感同时进入核心",
+    scene_expression_not_available: "场景专用语感未被聊天场景覆盖",
+    uncovered_entries: "有条目尚未归属", invalid_shape: "分类结构无效",
+    classification_input_budget: "分类输入超出预算", classification_output_budget: "分类输出超出预算",
+    classification_failed: "分类调用或处理失败", persona_changed: "准备期间人格已变化"};
+  const detail = issue.detail;
+  let text = `${names[issue.code] || issue.code}（${issue.code}）`;
+  if (detail && typeof detail === "object" && Number.isFinite(detail.chars) && Number.isFinite(detail.max)) {
+    text += `：实际 ${detail.chars} / 上限 ${detail.max} 字符`;
+    if (detail.bundle) text += `，场景 ${detail.bundle}`;
+  } else if (detail !== undefined) text += `：${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+  return text;
+}
+
 async function renderResidency(view) {
+  function node(tag, text, cls) {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (cls) el.className = cls;
+    return el;
+  }
   const holder = view.querySelector("#expression-residency");
   if (!holder) return;
+  const generation = (holder.residencyGeneration || 0) + 1;
+  holder.residencyGeneration = generation;
   let d;
   try { d = await residencyAPI({ action: "status" }); }
-  catch (e) { holder.replaceChildren(node("p", `驻留分层状态读取失败：${e.message}`, "hint")); return; }
-  if (!expressionViewVisible(view)) return;
-  if (d.reason === "no_v2_package") {
-    holder.replaceChildren(node("p", "当前人格不是 v2 结构化表达，无法分层；按完整表达投影运行。", "hint"));
+  catch (e) {
+    if (expressionViewVisible(view) && holder.residencyGeneration === generation)
+      holder.replaceChildren(node("p", `装配状态读取失败：${e.message}；请重新打开人格装配。`, "hint"));
     return;
   }
+  if (!expressionViewVisible(view) || holder.residencyGeneration !== generation) return;
   const issues = Array.isArray(d.issues) ? d.issues : [];
   const preview = d.preview;
   const ready = d.registry_ready;
   const head = document.createElement("details");
   head.open = true;
-  const summary = document.createElement("summary");
-  summary.textContent = `驻留分层（核心常驻 + 场景按需）· ${ready ? "已分层可用" : d.has_assembly ? "已分层但未通过校验" : "未分层"} · 模式 ${d.mode}`;
-  head.append(summary);
+  head.append(node("summary", "人格装配（核心常驻 + 场景按需）"));
   const body = document.createElement("div");
-  if (preview) {
+  const modeName = mode => mode === "registry" ? "按需装配" : "完整装配";
+  body.append(node("p", `分层保存：${ready ? "已保存且通过校验" : d.has_assembly ? "已保存，但当前不可用" : "尚未保存有效分层"}`));
+  body.append(node("p", `配置保存：${d.saved_mode ? modeName(d.saved_mode) : "无法确认与当前服务一致"} · 当前服务选择：${modeName(d.mode)}`));
+  body.append(node("p", `下一条本机网页对话预计：${modeName(d.activation.mode_effective)}`));
+  const reason = d.activation.fallback_reason || (!ready ? d.activation.not_ready_reason : null);
+  if (reason) body.append(node("p", `原因：${residencyReason(reason)}`, "hint"));
+  else if (ready && d.mode === "full") body.append(node("p", "分层已保存，按需装配尚未启用。", "hint"));
+  if (d.config_issue) body.append(node("p", `暂不能切换模式：${d.config_issue}`, "hint"));
+  body.append(node("p", "按需启用后，核心与场景目录常驻，AI 可用 persona_load 展开场景；没有读取工具调用也可能正常。QQ 与协作仍按原用途投影。这里显示下一轮预期，实际每轮是否启用、读取了什么请到上下文观测器核对。", "hint"));
+  const observerLink = document.createElement("a");
+  observerLink.href = "/addons/context-inspector/";
+  observerLink.target = "_blank";
+  observerLink.rel = "noopener";
+  observerLink.textContent = "查看上下文观测器";
+  body.append(observerLink);
+  body.append(node("p", "操作顺序：准备分层（会调用模型） → 核对原文归属并保存分层 → 启用按需装配。切换与恢复模式不调用模型，无需重启。", "hint"));
+  body.append(node("p", "新版准备区分默认语感与专题反应；已有分层不会自动变化。旧表达的全局规则若被收窄，请先从原稿更新表达，再准备分层。", "hint"));
+  body.append(node("p", "每次准备最多初次分类加一次修订；失败明细会保留，刷新可查看。原稿与表达条目不因分层改写。", "hint"));
+  if (d.last_preparation) {
+    const last = d.last_preparation;
+    const outcome = {ready: "候选已准备", failed: "未通过", preparing: "尚未完成（中断不会自动续跑）", unavailable: "记录不可读"};
+    body.append(node("h4", `最近一次准备：${outcome[last.outcome] || last.outcome}`));
+    body.append(node("p", `${last.token || ""} · ${last.matches_current ? "对应当前表达与会话" : "记录与当前表达或会话不匹配"}`, "hint"));
+    for (const attempt of last.attempts || []) {
+      const sizes = attempt.sizes || {};
+      body.append(node("p", `第 ${attempt.attempt} 次：${attempt.called ? "已调用模型" : "未调用模型"}` +
+        (Number.isFinite(sizes.catalogue_chars) ? ` · 索引 ${sizes.catalogue_chars} / ${sizes.limits.max_registry_chars} 字符 · 核心 ${sizes.core_chars} / ${sizes.limits.max_core_chars} 字符` : ""), "hint"));
+      for (const issue of attempt.issues || []) body.append(node("p", residencyIssue(issue), "hint"));
+    }
+    for (const issue of last.issues || []) body.append(node("p", residencyIssue(issue), "hint"));
+  }
+  function appendPreview(preview, title) {
+    if (!preview) return;
+    body.append(node("h4", title));
     const size = document.createElement("p");
     size.className = "hint";
     size.textContent = `核心 ${preview.core_chars} 字（${preview.core_entry_ids.length} 条） · 目录 ${preview.bundles.length} 个场景 · ${preview.catalogue_chars} 字`;
     body.append(size);
+    const core = document.createElement("details");
+    core.append(node("summary", "常驻核心原文"), node("pre", preview.core_text || "未提供核心原文"));
+    body.append(core);
+    body.append(node("p", `分类版本：${preview.contract_format || "旧版"} · 条件约束：${preview.conditional_constraint_ids?.join("、") || "无独立声明"}。请核对全局/条件归类，结构通过不代表语义已验收。`, "hint"));
+    body.append(node("p", `场景专用取向/语感：${preview.scene_expression_ids?.join("、") || "无独立声明（旧版请核对条目归属）"}。默认语感应常驻，食物等专题反应只随对应话题展开。`, "hint"));
+    const index = document.createElement("details");
+    index.append(node("summary", "每轮薄索引预览（引用为占位值）"), node("pre", preview.index_text || "旧版未提供"));
+    body.append(index);
     const list = document.createElement("details");
     const listSummary = document.createElement("summary");
     listSummary.textContent = `各条目归属（${preview.per_entry.length} 条）`;
@@ -1500,7 +1599,9 @@ async function renderResidency(view) {
       const p = document.createElement("p");
       p.className = "hint";
       p.textContent = `${entry.id} [${entry.group}] → ${entry.where.length ? entry.where.join("、") : "未归属"}`;
-      list.append(p);
+      const raw = document.createElement("details");
+      raw.append(node("summary", "条目原文"), node("pre", entry.text || "未提供原文"));
+      list.append(p, raw);
     }
     body.append(list);
     for (const b of preview.bundles) {
@@ -1511,79 +1612,80 @@ async function renderResidency(view) {
       const p = document.createElement("p");
       p.className = "hint";
       p.textContent = `适用：${b.when} · 闭包 ${b.closure_ids.length} 条`;
-      det.append(p);
+      det.append(p, node("p", "实际首次展开的正文（已扣除常驻核心）", "hint"), node("pre", b.loaded_text || "无新增正文"));
       body.append(det);
     }
   }
+  appendPreview(preview, "当前已安装分层");
+  if (d.staged) appendPreview(d.staged.preview, "待应用候选（以下内容将替换当前分层）");
   if (issues.length) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = "校验问题：" + issues.map(i => i.code + (i.detail ? `(${typeof i.detail === "string" ? i.detail : JSON.stringify(i.detail)})` : "")).join("；");
+    p.textContent = "校验问题：" + issues.map(residencyIssue).join("；");
     body.append(p);
   }
   if (d.staged) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = `已有暂存候选（${d.staged.matches_current ? "与当前表达同版，可应用" : "表达已变化；应用前需重新准备"}）`;
+    p.textContent = `已有暂存候选（${d.staged.matches_current ? "与当前表达同版，可应用" : "候选已失效或未通过校验；需重新准备"}）`;
     body.append(p);
+    if (d.staged.issues && d.staged.issues.length) {
+      body.append(node("p", "候选问题：" + d.staged.issues.map(residencyIssue).join("；"), "hint"));
+    }
   }
   const actions = document.createElement("div");
   actions.className = "expression-review";
-  const prepareBtn = document.createElement("button");
-  prepareBtn.type = "button";
-  prepareBtn.className = "btn";
-  prepareBtn.textContent = ready ? "重新准备分层" : "准备驻留分层";
-  prepareBtn.addEventListener("click", async () => {
-    if (prepareBtn.disabled) return;
-    prepareBtn.disabled = true;
+  let pending = false;
+  const feedback = node("p", "", "hint");
+  feedback.setAttribute("role", "status");
+  async function perform(payload) {
+    if (pending) return;
+    pending = true;
+    const disabled = new Map([...actions.querySelectorAll("button")].map(button => [button, button.disabled]));
+    disabled.forEach((_, button) => button.disabled = true);
+    feedback.textContent = payload.action === "prepare" ? "正在准备分层，最多两次模型调用（含一次修订），当前装配保持不变…" : "正在保存，请稍候…";
     try {
-      const r = await residencyAPI({ action: "prepare" });
+      const result = await residencyAPI(payload);
       if (!expressionViewVisible(view)) return;
-      if (r.staged) { toast("分层候选已暂存；核对归属与大小后可应用。", 5000); await renderResidency(view); }
-      else {
-        const p = document.createElement("p");
-        p.className = "hint";
-        p.textContent = "分类未通过结构校验：" + (r.issues || []).map(i => i.code).join("；") + "。原表达保持不变，可重新准备。";
-        holder.append(p);
-        prepareBtn.disabled = false;
+      if (payload.action === "prepare" && !result.staged) {
+        toast("分类未通过，已保存实测大小与失败原因；请查看最近一次准备。", 6000);
+        await renderResidency(view);
+      } else {
+        toast(result.notice || (payload.action === "prepare" ? "候选已暂存；核对后保存，再启用按需装配。" : "操作已保存。"), 6000);
+        await renderResidency(view);
       }
     } catch (e) {
-      prepareBtn.disabled = false;
-      if (expressionViewVisible(view)) holder.append(node("p", `准备失败：${e.message}；原表达保持不变。`, "hint"));
+      if (expressionViewVisible(view)) feedback.textContent = `操作未能确认：${e.message}。请点击“刷新状态”核对后再继续。`;
+    } finally {
+      pending = false;
+      disabled.forEach((value, button) => button.disabled = value);
     }
-  });
-  actions.append(prepareBtn);
-  if (d.staged) {
-    const applyBtn = document.createElement("button");
-    applyBtn.type = "button";
-    applyBtn.className = "btn primary";
-    applyBtn.textContent = "应用此分层";
-    applyBtn.disabled = !d.staged.matches_current;
-    applyBtn.addEventListener("click", async () => {
-      if (applyBtn.disabled) return;
-      applyBtn.disabled = true;
-      try {
-        const r = await residencyAPI({ action: "apply" });
-        if (!expressionViewVisible(view)) return;
-        toast(r.notice || "分层已保存进人格。", 6000);
-        await renderResidency(view);
-      } catch (e) {
-        applyBtn.disabled = false;
-        if (expressionViewVisible(view)) holder.append(node("p", `应用失败：${e.message}`, "hint"));
-      }
-    });
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "btn ghost";
-    cancelBtn.textContent = "取消候选";
-    cancelBtn.addEventListener("click", async () => {
-      cancelBtn.disabled = true;
-      try { await residencyAPI({ action: "cancel" }); await renderResidency(view); }
-      catch (e) { cancelBtn.disabled = false; }
-    });
-    actions.append(applyBtn, cancelBtn);
   }
-  head.append(body, actions);
+  function button(label, callback, disabled = false, primary = false) {
+    const el = node("button", label, primary ? "btn primary" : "btn");
+    el.type = "button";
+    el.disabled = disabled;
+    el.addEventListener("click", () => { if (!pending && !el.disabled) callback(); });
+    actions.append(el);
+    return el;
+  }
+  button(ready ? "重新准备分层（调用模型）" : "准备分层（调用模型）", () => perform({action: "prepare"}), !d.has_v2);
+  if (d.staged) {
+    const binding = {token: d.staged.token, expression_digest: d.staged.expression_digest,
+      classification_digest: d.staged.classification_digest};
+    button("保存此分层", () => perform({action: "apply", ...binding}), !d.staged.matches_current || !d.staged.preview, true);
+    button("取消候选", () => perform({action: "cancel", ...binding}));
+  }
+  function setMode(mode) {
+    return perform({action: "set_mode", mode, config_revision: d.config_revision,
+      session_epoch: d.session_epoch, persona_revision: d.persona_revision,
+      expression_digest: d.expression_digest ?? null, classification_digest: d.classification_digest ?? null});
+  }
+  button(d.mode === "registry" && ready ? "按需装配已启用" : "启用按需装配", () => setMode("registry"),
+    !ready || !d.config_writable || d.mode === "registry", true);
+  button("恢复完整装配", () => setMode("full"), !d.config_writable || d.mode === "full");
+  button("刷新状态", () => renderResidency(view));
+  head.append(body, actions, feedback);
   holder.replaceChildren(head);
 }
 
@@ -2036,6 +2138,8 @@ function handleEvent(ev, node, userNode, requestId) {
     sysline(toolMessages[ev.name] || "（翻了一下记忆…）");
   } else if (ev.type === "search") {
     window.AliceChatSearch?.progress(ev, node);
+  } else if (ev.type === "reply_saved") {
+    sysline("（回复已保存；正在整理记忆与来源审核，稍候即完成…）");
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {

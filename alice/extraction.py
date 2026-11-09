@@ -63,6 +63,14 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
     if not ordinary:
         # Fixed shadows contain no usable evidence. Advancing the cursor here
         # prevents force/close/restart from later extracting attachment prose.
+        # M05：整批跳过也留账——用户不必查 SQLite 就能知道这批为何没有新记忆。
+        with store.source_transaction():
+            store.conn.execute('INSERT INTO memory_extraction_batches '
+                '(created_at,session_epoch,source_json,candidates_json,review_json,status,memory_ids) VALUES(?,?,?,?,?,?,?)',
+                (time.time(), store.meta_get('session_epoch') or '',
+                 json.dumps({'turn_from': pending[0]['id'], 'turn_to': pending[-1]['id'], 'turns': len(pending)}),
+                 '{}', json.dumps({'skipped': len(pending), 'reason': 'all_source_protected'}),
+                 'skipped_source_protected', '[]'))
         store.meta_set("extract_cursor", pending[-1]["id"])
         return 0
     if not force and store.count_user_turns(pending) < cfg.memory.extract_every_turns:

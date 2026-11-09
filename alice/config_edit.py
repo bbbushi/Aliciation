@@ -20,7 +20,6 @@ class ConfigConflict(ConfigEditError):
 
 
 _HEADER = re.compile(r"^[ \t]*\[[^\r\n]+\][ \t]*(?:#.*)?$")
-_LLM_HEADER = re.compile(r"^[ \t]*\[llm\][ \t]*(?:#.*)?$")
 _ASSIGN = re.compile(r"^(?P<prefix>[ \t]*)(?P<key>[A-Za-z0-9_-]+)(?P<eq>[ \t]*=[ \t]*)(?P<rest>.*)$")
 _STRING_VALUE = re.compile(
     r'''^(?P<lead>[ \t]*)(?P<value>"(?:\\.|[^"\\])*"|'[^']*')(?P<tail>[ \t]*(?:#.*)?)$'''
@@ -58,45 +57,45 @@ def _split_eol(line: str) -> tuple[str, str]:
     return line, ""
 
 
-def _patched_text(text: str, old: dict, changes: dict[str, str]) -> str:
-    """定位普通 [llm] 与单行字符串键；不确定时拒绝，绝不重排配置。"""
+def _patched_text(text: str, old: dict, changes: dict[str, str], *, section="llm") -> str:
+    """定位普通配置表与单行字符串键；不确定时拒绝，绝不重排配置。"""
     lines = text.splitlines(keepends=True)
     eol = "\r\n" if "\r\n" in text else "\n"
-    llm_header: int | None = None
+    table_header: int | None = None
     section_end: int | None = None
-    in_llm = False
+    in_table = False
     assignments: dict[str, int] = {}
 
     for index, line in enumerate(lines):
         body, _ = _split_eol(line)
         if _HEADER.fullmatch(body):
-            if in_llm and section_end is None:
+            if in_table and section_end is None:
                 section_end = index
-            in_llm = bool(_LLM_HEADER.fullmatch(body))
-            if in_llm:
-                if llm_header is not None:
-                    raise ConfigEditError("配置文件存在重复的 [llm]，请先手工修正")
-                llm_header = index
+            in_table = bool(re.fullmatch(r"[ \t]*\[" + re.escape(section) + r"\][ \t]*(?:#.*)?", body))
+            if in_table:
+                if table_header is not None:
+                    raise ConfigEditError(f"配置文件存在重复的 [{section}]，请先手工修正")
+                table_header = index
             continue
-        if not in_llm:
+        if not in_table:
             continue
         match = _ASSIGN.fullmatch(body)
         if match and match.group("key") in changes:
             key = match.group("key")
             if key in assignments:
-                raise ConfigEditError("[llm] 中有重复的配置项，请先手工修正")
+                raise ConfigEditError(f"[{section}] 中有重复的配置项，请先手工修正")
             if not _STRING_VALUE.fullmatch(match.group("rest")):
-                raise ConfigEditError(f"[llm] 的 {key} 使用了暂不支持的写法，请先手工调整")
+                raise ConfigEditError(f"[{section}] 的 {key} 使用了暂不支持的写法，请先手工调整")
             assignments[key] = index
 
-    existing = old.get("llm", {})
+    existing = old.get(section, {})
     if not isinstance(existing, dict):
-        raise ConfigEditError("[llm] 不是配置表，请先手工修正")
-    if llm_header is None and "llm" in old:
-        raise ConfigEditError("请先把 [llm] 改为普通 TOML 表后再用界面保存")
+        raise ConfigEditError(f"[{section}] 不是配置表，请先手工修正")
+    if table_header is None and section in old:
+        raise ConfigEditError(f"请先把 [{section}] 改为普通 TOML 表后再用界面保存")
     for key in changes:
         if key in existing and key not in assignments:
-            raise ConfigEditError(f"[llm] 的 {key} 使用了暂不支持的写法，请先手工调整")
+            raise ConfigEditError(f"[{section}] 的 {key} 使用了暂不支持的写法，请先手工调整")
 
     for key, index in assignments.items():
         body, suffix = _split_eol(lines[index])
@@ -112,12 +111,12 @@ def _patched_text(text: str, old: dict, changes: dict[str, str]) -> str:
     missing = [key for key in changes if key not in assignments]
     if missing:
         added = [f"{key} = {json.dumps(changes[key], ensure_ascii=False)}{eol}" for key in missing]
-        if llm_header is None:
+        if table_header is None:
             if lines and not lines[-1].endswith("\n"):
                 lines[-1] += eol
             if lines and lines[-1].strip():
                 lines.append(eol)
-            lines.append(f"[llm]{eol}")
+            lines.append(f"[{section}]{eol}")
             lines.extend(added)
         else:
             position = section_end if section_end is not None else len(lines)
@@ -132,19 +131,30 @@ def replace_llm_values(path: Path, changes: dict[str, str], expected_revision: s
     allowed = {"base_url", "chat_model", "cheap_model", "api_key"}
     if not changes or not set(changes) <= allowed or not all(isinstance(v, str) for v in changes.values()):
         raise ConfigEditError("配置更新内容无效")
+    return _replace_string_values(path, changes, expected_revision, section="llm")
+
+
+def replace_persona_mode(path: Path, mode: str, expected_revision: str) -> str:
+    """只改人格装配模式；保留其余字段、注释和凭据，校验后原子发布。"""
+    if mode not in ("full", "registry"):
+        raise ConfigEditError("人格装配模式无效")
+    return _replace_string_values(path, {"expression_mode": mode}, expected_revision, section="persona")
+
+
+def _replace_string_values(path: Path, changes: dict[str, str], expected_revision: str, *, section: str) -> str:
     source = _read(path)
     current = hashlib.sha256(source).hexdigest()
     if current != expected_revision:
         raise ConfigConflict("配置文件已被其他操作修改，请刷新设置后重试")
     text, old = _parse(source)
-    patched = _patched_text(text, old, changes)
+    patched = _patched_text(text, old, changes, section=section)
     try:
         output = patched.encode("utf-8")
     except UnicodeError as exc:
         raise ConfigEditError("配置含有无法保存的字符") from exc
     _, parsed = _parse(output)
     expected = copy.deepcopy(old)
-    expected.setdefault("llm", {}).update(changes)
+    expected.setdefault(section, {}).update(changes)
     if parsed != expected:
         raise ConfigEditError("配置文件使用了复杂 TOML 写法，界面无法安全保留，请手工编辑")
 

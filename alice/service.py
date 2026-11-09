@@ -15,10 +15,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as appconfig
-from . import consolidation, loop, observation, persona, persona_reset, skills, thought
+from . import consolidation, loop, maintenance, observation, persona, persona_reset, skills, thought
 from .config import Config, load
 from .channels import ChannelCoordinator, ChannelError
-from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels
+from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels, replace_persona_mode
 from .llm import make_client, safe_provider_error
 from .evaluation_service import EvaluationCoordinator
 from .discovery import DiscoveryCoordinator
@@ -109,7 +109,16 @@ class ChatService:
             self._context_workspace = WorkingSet(self.cfg)
             self._discovery = DiscoveryCoordinator(self)
             self._discovery.start()
+            # 双维护空闲执行器（设计草案 §6）：聊天优先；启动时清点上一进程遗留任务
+            self._maintenance = maintenance.MaintenanceRunner(self)
+            self._maintenance.start()
         except BaseException:
+            runner = getattr(self, "_maintenance", None)
+            if runner is not None:
+                try:
+                    runner.stop()
+                except Exception:
+                    pass
             try:
                 self.store.close()
             except Exception:
@@ -123,7 +132,7 @@ class ChatService:
     def _memory_stats(self) -> dict:
         s = self.store
         tomb = s.conn.execute("SELECT COUNT(*) AS c FROM memory_tombstones").fetchone()["c"]
-        return {
+        stats = {
             "active": s.count_in_layer("active"),
             "warehouse": s.count_in_layer("warehouse"),
             "longterm": s.count_in_layer("longterm"),
@@ -131,6 +140,21 @@ class ChatService:
             "forgotten": tomb,
             "skills": s.count_skills(),
         }
+        try:
+            # M05：最近一次提取批次的状态——普通写入、来源保护跳过或失败可直读。
+            row = s.conn.execute("SELECT status, review_json, memory_ids, created_at "
+                                 "FROM memory_extraction_batches ORDER BY id DESC LIMIT 1").fetchone()
+            if row is not None:
+                review = json.loads(row["review_json"] or "{}")
+                stats["extraction"] = {
+                    "last_status": row["status"],
+                    "written": len(json.loads(row["memory_ids"] or "[]")),
+                    "skipped": review.get("skipped"),
+                    "at": row["created_at"],
+                }
+        except Exception:
+            pass
+        return stats
 
     def _turn_count(self) -> int:
         """已完成的助手轮数：0 表示这场会话还没真正开始（GUI 据此决定是否显示初始化页）。"""
@@ -441,7 +465,7 @@ class ChatService:
             if not self.cfg.plugins.context_inspector_enabled:
                 return {"status": "disabled", "scope": self._observer_scope}
             return self._observer_read(
-                lambda store, **kw: {"plugin": context_observation.plugin_status(self.cfg)}, scope=scope)
+                lambda store, **kw: {"plugin": context_observation.plugin_status(self.cfg, store)}, scope=scope)
 
     def plugin_inspector_requests(self, *, scope=None, limit="20") -> dict:
         with self._lock:
@@ -525,6 +549,49 @@ class ChatService:
         """Cancellation is an event, never a wait for the conversation Store lock."""
         return self._discovery.chat_control(payload, cancel=cancel)
 
+    def maintenance(self, action: str = "status", payload=None) -> dict:
+        """双维护命令面（设计草案 §5）：预览/排队/状态/回退。
+
+        只本机 GUI/CLI 可达；模型只可建议，不拥有维护工具；显式请求也不恢复
+        被撤销的来源权限。执行由空闲执行器（runner）串行完成，本方法不等待模型。
+        """
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("维护参数无效")
+        with self._lock:
+            if action == "status":
+                return maintenance.status_view(self.store, self.cfg)
+            if action == "preview_compact":
+                return maintenance.compact_preview(self.store, self.cfg)
+            if action == "preview_tidy":
+                return maintenance.tidy_preview(self.store, self.cfg)
+            if action == "rollback_tidy":
+                return maintenance.tidy_rollback(self.store, self.cfg)
+            if action in ("compact", "tidy"):
+                task_id = self.store.enqueue_maintenance_task(
+                    action, "explicit", f"{action}:explicit:{uuid.uuid4().hex[:8]}", "gui",
+                    {"reason": "显式命令（本机界面）"})
+                if task_id is None:
+                    return {"queued": False,
+                            "reason": "已有同类维护任务在排队或执行；请查看维护状态"}
+                return {"queued": True, "task_id": task_id, "status": "queued",
+                        "note": "已排队；将由空闲执行器在聊天间隙执行，结果见维护状态"}
+            if action == "cancel":
+                task_id = payload.get("task_id")
+                if type(task_id) is not int:
+                    raise ValueError("维护任务标识无效")
+                row = self.store.conn.execute(
+                    "SELECT status FROM maintenance_tasks WHERE id=?", (task_id,)).fetchone()
+                if row is None:
+                    raise ChannelError(404, "not_found", "维护任务不存在")
+                if row["status"] != "queued":
+                    raise ChannelError(409, "task_not_cancellable",
+                                       "任务已在执行或已结束；执行中的任务不能取消")
+                self.store.set_maintenance_task_status(task_id, "cancelled")
+                return {"cancelled": task_id}
+            raise ValueError("维护动作无效")
+
     def observation_memory(self, payload) -> dict:
         with self._lock:
             if (not isinstance(payload, dict) or set(payload) != {"dataset_id", "memory_id"}
@@ -538,6 +605,10 @@ class ChatService:
             return detail
 
     def begin_shutdown(self) -> None:
+        self._shutting_down = True
+        runner = getattr(self, "_maintenance", None)
+        if runner is not None:
+            runner.stop()
         self._channels.begin_shutdown()
         self._evaluations.begin_shutdown()
         self._discovery.begin_shutdown()
@@ -713,19 +784,61 @@ class ChatService:
             raise ValueError("驻留分层参数无效")
         action = payload["action"]
         permitted = {"status": {"action"}, "prepare": {"action"},
-                     "apply": {"action"}, "cancel": {"action"}}
+                     "set_mode": {"action", "mode", "config_revision", "session_epoch", "persona_revision",
+                                  "expression_digest", "classification_digest"},
+                     "apply": {"action", "token", "expression_digest", "classification_digest"},
+                     "cancel": {"action", "token", "expression_digest", "classification_digest"}}
         if action not in permitted or set(payload) - permitted[action]:
             raise ValueError("驻留分层动作或字段无效")
         if action == "status":
             with self._lock:
-                return update.residency_status(self.store, self.cfg)
+                return self._persona_residency_status_locked()
         with self._channels.control(), self._workers.control_lock, self._lock:
             persona_reset.require_clear()
+            if action == "set_mode":
+                return self._set_persona_mode_locked(payload)
             if action == "prepare":
                 return update.residency_prepare(self.store, self.client, self.cfg)
             if action == "apply":
                 return update.residency_apply(self.store, self.cfg, payload)
-            return update.residency_cancel()
+            return update.residency_cancel(payload)
+
+    def _persona_residency_status_locked(self) -> dict:
+        from . import expression_update
+        result = expression_update.residency_status(self.store, self.cfg)
+        issue = None
+        try:
+            self._check_config_revision_locked(None, required=False)
+        except ValueError as exc:
+            issue = str(exc)
+        result.update({"config_revision": self._config_revision,
+                       "config_writable": issue is None, "config_issue": issue,
+                       "saved_mode": self.cfg.persona.expression_mode if issue is None else None,
+                       "session_epoch": self.store.meta_get("session_epoch")})
+        return result
+
+    def _set_persona_mode_locked(self, payload) -> dict:
+        """先校验页面绑定与当前合同，写盘成功后同锁发布；不调用模型，不改人格。"""
+        required = {"action", "mode", "config_revision", "session_epoch", "persona_revision",
+                    "expression_digest", "classification_digest"}
+        if set(payload) != required or payload["mode"] not in ("full", "registry"):
+            raise ValueError("装配模式参数无效，请刷新页面后重试")
+        self._check_config_revision_locked(payload["config_revision"], required=True)
+        self._channels.check_epoch(payload["session_epoch"])
+        current = self._persona_residency_status_locked()
+        if any(payload[key] != current.get(key) for key in
+               ("persona_revision", "expression_digest", "classification_digest")):
+            raise ConfigConflict("人格或分层已变化，请刷新后核对，再切换装配模式")
+        if payload["mode"] == "registry" and not current["registry_ready"]:
+            raise ValueError("当前分层尚不可启用；请先准备、核对并保存有效分层")
+        if payload["mode"] != self.cfg.persona.expression_mode:
+            new_revision = replace_persona_mode(self._config_path, payload["mode"], self._config_revision)
+            self.cfg.persona.expression_mode = payload["mode"]
+            self._config_revision = new_revision
+        result = self._persona_residency_status_locked()
+        result["notice"] = ("已启用按需装配，下一条本机网页对话生效，无需重启。" if payload["mode"] == "registry" else
+                            "已恢复完整装配，下一条对话生效；已保存的分层保留，无需重启。")
+        return result
 
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
@@ -779,7 +892,7 @@ class ChatService:
 
     def send(self, text: str, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
              request_id=None, session_epoch=None, nonblocking=False, on_accepted=None,
-             search_intent=None, on_search_progress=None, worker_target=None) -> dict:
+             search_intent=None, on_search_progress=None, worker_target=None, on_reply_saved=None) -> dict:
         """One admitted GUI turn. Existing callers retain blocking admission semantics."""
         request = self._channels.gui_request(text, request_id, session_epoch,
                                             search_intent=search_intent, worker_target=worker_target)
@@ -803,7 +916,8 @@ class ChatService:
                         pass  # Disconnects must not turn acceptance into another generation.
             try:
                 return self._send_locked(request, on_delta, on_tool, on_reasoning,
-                    evaluation_id=evaluation_id, owner_token=token, on_search_progress=on_search_progress)
+                    evaluation_id=evaluation_id, owner_token=token, on_search_progress=on_search_progress,
+                    on_reply_saved=on_reply_saved)
             except BaseException:
                 with self._lock:
                     try:
@@ -820,14 +934,14 @@ class ChatService:
         return {**prior, "events": [], "memory": {}, "deduplicated": True}
 
     def _send_locked(self, request, on_delta=None, on_tool=None, on_reasoning=None, *, evaluation_id=None,
-                     owner_token=None, on_search_progress=None) -> dict:
+                     owner_token=None, on_search_progress=None, on_reply_saved=None) -> dict:
         # Historical private name retained for the channel adapter. The driver
         # now owns each short Store step; callers must not hold the outer lock.
         from .steps import drive
         try:
             return drive(self._send_steps(request, on_delta, on_tool, on_reasoning,
                          evaluation_id=evaluation_id, owner_token=owner_token,
-                         on_search_progress=on_search_progress), self._lock)
+                         on_search_progress=on_search_progress, on_reply_saved=on_reply_saved), self._lock)
         finally:
             # Both GUI and QQ workers own searches; release their in-memory
             # results even when generation or maintenance fails.
@@ -837,7 +951,7 @@ class ChatService:
                 flush_calls(self.store)
 
     def _send_steps(self, request, on_delta, on_tool, on_reasoning, *, evaluation_id,
-                    owner_token, on_search_progress):
+                    owner_token, on_search_progress, on_reply_saved=None):
         text, request_id = request["text"], request["request_id"]
         job = None
         evaluation_warning = None
@@ -864,6 +978,7 @@ class ChatService:
                 on_persist=persisted.append if job else None, request_id=request_id,
                 on_request_progress=lambda: self._channels.publish_locked(request_id),
                 on_maintenance_warning=maintenance_warnings.append,
+                on_reply_saved=on_reply_saved,
                 source_packet_ids=source_ids, source_scope=request["channel_id"],
                 source_allow_external_recall=source_explicit, source_usage_out=source_usage,
                 search_session=search_session, tool_round_limit=settings.get("tool_round_limit", 4),
@@ -877,6 +992,11 @@ class ChatService:
                 self._discovery.chat_accounting_failed()
                 source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
             events = yield from self._watchers_steps(request_id=request_id)
+            try:
+                # 双维护（草案 §6）：回复后的路径只做廉价阈值检查和排队，不同步执行。
+                events.extend(maintenance.queue_due_tasks(self.store, self.cfg))
+            except Exception:
+                pass  # 排队检查失败不影响本轮已保存的回复。
             if source_warning:
                 events.append(source_warning)
             if maintenance_warnings:
@@ -947,7 +1067,7 @@ class ChatService:
 
     def _check_config_revision_locked(self, supplied: str | None, *, required: bool) -> None:
         if self._config_revision is None:
-            raise ValueError("此服务未绑定配置文件，无法从界面修改模型配置")
+            raise ValueError("此服务未绑定配置文件，无法从界面保存配置")
         if required and not isinstance(supplied, str):
             raise ValueError("请刷新设置后再保存配置")
         if supplied is not None and supplied != self._config_revision:
@@ -1157,7 +1277,9 @@ class ChatService:
         with self._lock:
             warning = None
             try:
-                if extract:
+                if extract and not self.cfg.maintenance.replaces_extraction:
+                    # R01：compact 承接记忆形成时退出不再强制付费提取；未压缩
+                    # 原文留在库中，下次 serve 的空闲执行器按原许可补上。
                     from . import extraction
 
                     n = extraction.extract_pending(self.store, self.client, self.cfg, force=True)

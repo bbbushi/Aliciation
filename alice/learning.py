@@ -17,6 +17,19 @@ TIERS = {'high', 'normal', 'low'}
 ATTITUDES = {'interested', 'likes', 'dislikes', 'concerned', 'curious', 'neutral'}
 
 
+class SaveRejected(ValueError):
+    """见闻保存被宿主规则拒绝；code 供工具回执映射固定安全文案。
+
+    继承 ValueError：既有捕获点（dispatch_tool、save_initial_view 的
+    事务回滚）不需要改动；code 让调用方区分开关、来源、额度与字段原因，
+    不再把任意内部异常文本直接回传模型。
+    """
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def detail_targets(cfg):
     values = {tier:getattr(cfg.memory,'observation_'+tier+'_chars') for tier in ('high','normal','low')}
     if any(type(v) is not int or not 1 <= v <= 2500 for v in values.values()):
@@ -35,7 +48,7 @@ CREATE TABLE IF NOT EXISTS interest_evidence (
 CREATE TABLE IF NOT EXISTS learning_decisions (
  identity TEXT PRIMARY KEY, scope TEXT NOT NULL, purpose TEXT NOT NULL,
  source_versions TEXT NOT NULL, memory_id INTEGER, outcome TEXT NOT NULL,
- reason TEXT NOT NULL, created_at REAL NOT NULL
+ reason TEXT NOT NULL, created_at REAL NOT NULL, content_hash TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS deliberation_seen (
  memory_id INTEGER NOT NULL, input_version TEXT NOT NULL, processed_at REAL NOT NULL,
@@ -108,6 +121,10 @@ def material_packet(*, packet_id, source_id, version_id, title, url, text, quote
 class LearningStoreMixin:
     def init_learning(self):
         self.conn.executescript(SCHEMA)
+        if 'content_hash' not in {r[1] for r in self.conn.execute('PRAGMA table_info(learning_decisions)')}:
+            # M03：正文指纹入账——同源不同内容不再被旧决策静默吞掉。
+            with self.conn:
+                self.conn.execute("ALTER TABLE learning_decisions ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''")
         if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='discovery_interests'").fetchone():
             self.migrate_interest_evidence()
         if not self.meta_get('learning_started_at'):
@@ -192,58 +209,88 @@ class LearningStoreMixin:
 
     def save_learning(self, args, context, *, purpose='observation'):
         if context.get('worker_refs'):
-            raise ValueError('协作任务资料尚未开放见闻写入')
+            raise SaveRejected('worker_refs', '协作任务资料尚未开放见闻写入')
         if not self._observation_settings().get('remember_observations'):
-            raise ValueError('未开启见闻保存')
+            raise SaveRejected('switch_off', '未开启见闻保存')
+        if self._observation_settings().get('observation_ttl_hours') == 0:
+            raise SaveRejected('switch_off', '见闻保存期限为0，视为关闭')
         scope = context['scope']
         packets = self.source_packets_for(context['packet_ids'], scope=scope)
         if not packets:
-            raise ValueError('没有本轮实际读取且仍有效的来源')
+            raise SaveRejected('no_valid_source', '没有本轮实际读取且仍有效的来源')
         keep = args.get('keep', True)
         if type(keep) is not bool:
-            raise ValueError('保留决定无效')
+            raise SaveRejected('invalid_field', '保留决定无效')
         tier = args.get('value_tier', 'normal')
         if tier not in TIERS:
-            raise ValueError('价值分档无效')
-        reason = _text(args.get('reason'), 1600)
+            raise SaveRejected('invalid_field', '价值分档无效')
+        try:
+            reason = _text(args.get('reason'), 1600)
+        except ValueError as exc:
+            raise SaveRejected('invalid_field', str(exc)) from exc
         # Detailed prose belongs to the source-gated memory, not a permanent
         # dedup log that outlives source withdrawal or a decision to skip.
         audit_note = 'AI选择保留已读材料' if keep else 'AI选择跳过已读材料'
         hint = args.get('reflection_hint','ordinary')
         if hint not in {'ordinary','conflict','repeated'}:
-            raise ValueError('思辨触发理由无效')
+            raise SaveRejected('invalid_field', '思辨触发理由无效')
         sources = source_versions(packets)
-        identity = hashlib.sha256(_json([scope, purpose, sources, context.get('request_id') or context.get('user_turn_id')]).encode()).hexdigest()
+        # M03：正文指纹参与身份与复用判定——同源相同正文去重沿用，
+        # 同源不同内容走真实新增，不再被旧决策静默吞掉。
+        body_key = ''
+        if keep:
+            try:
+                title = _text(args.get('title'), 96)
+                content, uncertainty = _body_fields(args.get('content'), args.get('uncertainty'))
+            except ValueError as exc:
+                raise SaveRejected('invalid_field', str(exc)) from exc
+            body_key = hashlib.sha256(_json([title.strip(), content, uncertainty]).encode()).hexdigest()
+        identity = hashlib.sha256(_json([scope, purpose, sources,
+            context.get('request_id') or context.get('user_turn_id'), body_key]).encode()).hexdigest()
         old = self.conn.execute('SELECT * FROM learning_decisions WHERE identity=?', (identity,)).fetchone()
         if old:
             mid = old['memory_id']
             if mid is not None and not self.observation_sources(mid, scope=scope):
-                raise ValueError('旧见闻已失效，不自动复活')
-            return {'memory_id': mid, 'outcome': old['outcome'], 'reused': True}
+                raise SaveRejected('source_stale', '旧见闻已失效，不自动复活')
+            return {'memory_id': mid, 'outcome': 'reused_existing' if old['outcome'] == 'saved' else old['outcome'],
+                    'reused': True, 'content_saved': False,
+                    'notice': '本请求已就相同来源与相同正文处理过；本次未重复落盘'}
         with self.source_transaction():
             mid = None
             if keep:
-                previous = self.conn.execute("SELECT memory_id FROM learning_decisions WHERE scope=? AND source_versions=? AND outcome='saved' ORDER BY created_at DESC LIMIT 1", (scope, _json(sources))).fetchone()
+                previous = self.conn.execute(
+                    "SELECT memory_id FROM learning_decisions WHERE scope=? AND source_versions=? "
+                    "AND outcome='saved' AND content_hash=? ORDER BY created_at DESC LIMIT 1",
+                    (scope, _json(sources), body_key)).fetchone()
                 if previous:
                     mid = previous['memory_id']
                     if not self.observation_sources(mid, scope=scope):
-                        raise ValueError('旧见闻已失效，不自动复活')
+                        raise SaveRejected('source_stale', '旧见闻已失效，不自动复活')
                     self.conn.execute('UPDATE memories SET value_tier=?,value_note=?,reflection_hint=?,value_policy=1 WHERE id=?',
                                       (tier, reason, hint, mid))
-                    self.conn.execute('INSERT INTO learning_decisions VALUES(?,?,?,?,?,?,?,?)',
-                        (identity, scope, purpose, _json(sources), mid, 'saved', audit_note, time.time()))
+                    self.conn.execute('INSERT INTO learning_decisions(identity,scope,purpose,source_versions,memory_id,outcome,reason,created_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',
+                        (identity, scope, purpose, _json(sources), mid, 'saved', audit_note, time.time(), body_key))
                     context.setdefault('memory_ids', []).append(mid)
-                    return {'memory_id': mid, 'outcome':'saved', 'reused':True}
-                title = _text(args.get('title'), 96)
-                content, uncertainty = _body_fields(args.get('content'),args.get('uncertainty'))
+                    return {'memory_id': mid, 'outcome': 'reused_existing', 'reused': True, 'content_saved': False,
+                            'notice': '沿用既有见闻记录：同一来源已有相同正文的见闻，本次正文未新增落盘'}
+                from datetime import datetime
+                from .discovery_memory import DAY_ZONE
+                day = datetime.now(DAY_ZONE).strftime('%Y-%m-%d')
+                used = self.conn.execute('SELECT count FROM source_memory_writes WHERE day=?', (day,)).fetchone()
+                cap = self.source_limits()['daily_memory_writes']
+                if cap is not None and (used[0] if used else 0) >= cap:
+                    raise SaveRejected('quota_daily', '今日来源见闻写入额度已用完')
                 body = content + '\n条件与不确定：' + uncertainty
-                mid = self.save_observation(context['packet_ids'], title=title, content=body,
-                    keywords=str(args.get('keywords', ''))[:200], scope=scope, user_turn_id=context.get('user_turn_id'))
+                try:
+                    mid = self.save_observation(context['packet_ids'], title=title, content=body,
+                        keywords=str(args.get('keywords', ''))[:200], scope=scope, user_turn_id=context.get('user_turn_id'))
+                except ValueError as exc:  # 来源附件容量已满等存储层拒绝
+                    raise SaveRejected('storage', str(exc)) from exc
                 if mid is None:
-                    raise ValueError('见闻保存开关、来源资格或共享额度不允许')
+                    raise SaveRejected('not_eligible', '来源资格或共享写入额度不允许')
                 self.conn.execute('UPDATE memories SET value_tier=?,value_note=?,reflection_hint=?,value_policy=1 WHERE id=?', (tier, reason, hint, mid))
-            self.conn.execute('INSERT INTO learning_decisions VALUES(?,?,?,?,?,?,?,?)',
-                (identity, scope, purpose, _json(sources), mid, 'saved' if keep else 'skipped', audit_note, time.time()))
+            self.conn.execute('INSERT INTO learning_decisions(identity,scope,purpose,source_versions,memory_id,outcome,reason,created_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',
+                (identity, scope, purpose, _json(sources), mid, 'saved' if keep else 'skipped', audit_note, time.time(), body_key))
         if mid is not None:
             context.setdefault('memory_ids', []).append(mid)
         return {'memory_id': mid, 'outcome': 'saved' if keep else 'skipped', 'value_tier': tier}
@@ -293,8 +340,8 @@ class LearningStoreMixin:
             raise ValueError('复用依据不在本轮有效材料中')
         identity = hashlib.sha256(_json([scope,'reuse',versions,context.get('request_id') or context.get('user_turn_id'),mid]).encode()).hexdigest()
         with self.source_transaction():
-            self.conn.execute('INSERT OR IGNORE INTO learning_decisions VALUES(?,?,?,?,?,?,?,?)',
-                (identity,scope,'reuse',_json(versions),mid,'saved','复用原记录，正文和期限未改',time.time()))
+            self.conn.execute('INSERT OR IGNORE INTO learning_decisions(identity,scope,purpose,source_versions,memory_id,outcome,reason,created_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',
+                (identity,scope,'reuse',_json(versions),mid,'saved','复用原记录，正文和期限未改',time.time(),''))
         context.setdefault('memory_ids',[]).append(mid)
         return {'memory_id':mid,'outcome':'reused','new_memory':False,'content_changed':False,'retention_extended':False}
 
@@ -478,7 +525,7 @@ def learning_tools(store, cfg=None):
                   'reflection_hint':{'type':'string','enum':['ordinary','conflict','repeated']}}
         required = ['keep','title','content','value_tier','reason','uncertainty']
         detail = '' if cfg is None else '内容建议字数（可按必要条件调整，不机械截断）：'+_json(detail_targets(cfg))+'。'
-        add('learn_from_sources','对本轮实际读到的资料自主决定保留或跳过；兴趣外重要材料也可留。低价值更精练，高价值保留细节；保留条件与不确定性。价值和可信度分别判断，热度仅参考。'+detail,fields,required)
+        add('learn_from_sources','对本轮实际读到的资料自主决定保留或跳过；兴趣外重要材料也可留。低价值更精练，高价值保留细节；保留条件与不确定性。价值和可信度分别判断，热度仅参考。同一来源相同正文不会重复落盘，回执会注明沿用既有记录；同一来源的不同要点可作为新见闻保存，受每日写入额度约束。'+detail,fields,required)
         add('reflect_on_sources','可在用户当前讨论中立即形成并保存带来源的初步观点，不等待记忆数量阈值；允许没有观点时跳过。后续证据可验证或修订。'+detail,
             {**fields,'claim':{'type':'string'},'interpretation':{'type':'string'},'replaces_id':{'type':'integer'}},required+['claim','interpretation'])
         ratio = _condense_ratio(cfg.memory.observation_condense_max_ratio if cfg is not None else 0.8)

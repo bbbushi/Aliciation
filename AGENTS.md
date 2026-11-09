@@ -20,13 +20,12 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
 - **能力增减须同步宪法「存在事实」清单**（`alice/retrieval.py`：我有什么/没有什么）——自模型与实际能力的漂移本身就是认知错误源（2026-10-31 烟味事件的教训）。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
-- **分支流程（2026-11-03 当前用户更新，2026-11-05 合并后保留）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。其他改动（含 Claude 直调）在完成对应验收及共存检查后走 **PR 合入 main**；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。本机 origin 为 SSH。
+- **分支流程（2026-11-03 当前用户更新，2026-11-05 合并后保留）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。其他改动（含 Claude 直调）在完成对应验收及共存检查后走 **PR 合入 main**；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径。本机 origin 为 SSH。
 
 
 ## 当前
 
-- 2026-11-08 Codex按用户要求打包本地网络层增量：19个白名单路径（10个核心Python、4个前端、4份文档及AGENTS），推trial/windows-v0.2-20261028并新PR→main。PR27已合main b661807且与旧HEAD ea67c97提交树相同，本轮已rebase至b661807并逐字节恢复全部本地改动；快照.git/pr-delivery/20261108-192754、codex/before-delivery-20261108-192754保留，不直接push/合main。
-- 贴吧升级为宿主逐页核准的分页阅读，可选接口附带楼中楼节选；回复默认200、文字默认30000，已有明确设置保留、开关默认关，无独立楼中楼展开。新版有界讨论贯通读取/来源保存/整理，记录页数/发言者/范围和停止原因；收紧权限沿既有撤回链。搜索新增recent/relevance、UTC+8主帖日期下限及正文复核，日期/排序入缓存键，不把fetched_at或旧帖新回复当新发布。联网设置迁入设置分区，普通草稿保持、离开清未存密钥。
-- 近期来源对话在同渠道/有效期/依赖额度内恢复原文并带出处目录，模型调用前绑定全部来源，沿用流式/落库/QQ发送核准；不重联网/逐轮复制整帖/写普通记忆/重复扣分享。Row/.get错误已修；新搜索提示直接服务话题，仅必要时简短说明限制，区分来源失效与依赖超额，保留来源引用和完整诊断。最新提示尚未重启加载，用户自行审阅/重启/人工验收；此前GUI将本机chat_dependency_limit设null不是产品默认变化。
-- 本轮全alice compileall、2份变更JS语法和git diff --check通过，核心与前端/文档两路只读审查无明确阻断项，凭据模式扫描无命中；仅GET现有首页/runtime200，未启停服务/调用模型/业务机器测试/读写user/或配置。前开发记录已确认真实200条、楼中楼节选及8条历史接续/影子8→0；引用、相关性、转场、撤回、取消、额度和跨渠道边界及最新提示仍待真人，不能将有限成功视为整体验收。
-- 存在事实已同步，Alice宪法3153个LF字符/hash d015158edb29ec0dcc82303c4c9ba119ca270b18783b9e56453c8fd20afc6819；源码变化对旧未完成导入检查点哈希续跑的既有兼容限制保留。usage v2/严格先验投影/实际text计账、人格/registry待验与待办不变；82份私有资料/docs/assets、旧stash/其他worktree/备份、W6—W9/蓝图及QQ/协作边界保留，10请求正文自动停止仍未认证。远端提交和PR结果见本轮交付回执/git日志。
+- 2026-11-09 Codex审查10e419f（基线4036af2）暂不通过，9项见 `docs/设计文档/上下文组装优化/前缀宪法与双维护-代码审查-20261109.md`：R01旧同步提取/退出提取仍在，R02scoped漏主体条件保护，R03prefix早于来源接续冻结误报无来源，R04二次compact旧状态无审核原文，R05tidy模型后重读快照可误删新编辑，R06提交资格/保护复核不全，R07回退无after版本覆盖新编辑，R08停runner只等5秒资源关闭竞态，R09无聊天空闲优先判断。另观点整理/重复指引归并与界面帮助待补；原canned/e2e/冒烟不符合当前测试约定，不作真人通过证据。本轮仅读代码/文档、compileall与diff检查通过，未模型调用/行为自测/读写user/切换启用/重启/修复代码/提交推送。
+- 2026-11-09 ZCode preserve入库Codex未提交改动（4036af2）后施工前缀宪法+双维护（10e419f：prefix_policy scoped五类块/legacy双轨、maintenance compact/tidy、/api/maintenance、CLI三命令、自动触发默认关），并按上列审查完成R01–R09全项返工：R01 adds maintenance.replaces_extraction（默认关，需auto_compact；compact提交推进extract_cursor去重）+轮末/退出/close三路径统一；R02最小宪法回补改写主体段并更正记录错误声明；R03接续计算前置+prefix_plan_factory按最终计数构造+能力行非否定陈述；R04 processed_pairs带对端id+证据逐字重建交审查；R05/R06 tidy冻结快照+提交事务内全资格重核（整组跳过）；R07回退before/after版本条件更新；R08 MaintenanceStopped门控（调用前后/提交前）+runner有界等待不丢引用+让位回queued；R09 channels.activity聊天优先判断。顺带修tidy epoch比较未归一化。开发期检查（compileall/断言/双批compact证据链/冻结跳过/回退冲突/门控/起服冒烟）全过，均不构成验收；行为待真人，见实施记录§八。挂账：scoped人格使用说明归并（涉另一棒管线）、QQ帮助、维护web面板、混合来源场景。
+- 11-09 07:56备份 `/private/tmp/alice-before-interaction-20261109-075634.db`（0600），旧29213经SIGINT正常退出，当前PID38939（.venv/bin/python、显式user/config.toml、8800/no-open）仅回环。该进程仍载preserve前代码且DB已由启动维护迁移（48turn/13memory）；两设计要生效需重启（scoped还需改config）。24轮复盘与互动v1行为待验结论保留：M01独立表达/C01接续边界未打通，未启用见闻保存，不能把新文件等同运行效果通过。
+- HEAD=ytq本地未推送（4036af2 preserve + 双设计施工提交）；ytq工作/明确推送目标、main只PR；提交只暂存自己碰的路径。既有挂账不变：A05/A02、tests与deploy旧data/布局、QQ真实扫码等人工验收清单；宪法「存在事实」随能力增减同步约定保留（scoped模式同步至capability_fixed块）。

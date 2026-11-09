@@ -6,6 +6,8 @@ verdicts remain preparation evidence, not factual or style-effect certification.
 """
 from __future__ import annotations
 
+from .expression_adoption import MATERIAL_SEPARATION
+
 import copy
 import json
 import os
@@ -30,7 +32,7 @@ _BOUNDARY = (
     "不继承角色身份、身世、身体/感官、共同往事、真实关系/约定、隐秘创伤或权限。"
     "比喻和当下态度允许，事实、未知、失败与授权必须准确；用户说不告诉你/我自己来时停止追逼与行动。"
     "风格不必温和、全面或像助手；不要因为这些偏好而删除可成立的节奏、张力或完整互动动作。"
-) + expressive_policy.RULES
+) + MATERIAL_SEPARATION + expressive_policy.RULES
 _SCHEMA = """
 返回单个完整JSON包，格式如下（每个清单无任意前N项限制，仅受资源上限）：
 严格按JSON编码字符串内的双引号、反斜杠与换行；对白和括号动作都放在同一个字符串内，不能在字符串外拼接对白。
@@ -38,9 +40,10 @@ format='expression-v2'；顶层source_hash、source_ids和limits由宿主按登�
 orientation/constraints/voice/tensions/reactions/examples 均为数组。
 各项共用字段：id(唯一ASCII字母数字下划线),scope(全局/情境/例外完整条件),
 required(bool),priority(0..100),origin(source|adapted),source_ids(全部出处ID),links(关联条目ID),
+scope须忠实保留原稿适用范围。原稿全局“不说教”等不能擅加“只在低落/建议时”，全局语感也不因示例发生在某场景就缩为仅该场景；已有条件与例外同样不得删掉。
 origin只表示条目来自原稿(source)或经过适配(adapted)，不要填写去向状态retained/merged/background等。
 audience(general|private),purposes(['chat']或通用条目['chat','qq']，仅明确纯表达的voice/constraints可再含'worker_summary'),
-pure_expression(bool),anchor_role(none|voice|stop|example)。禁止把私人关系、原文故事或真实聊天投给worker。
+pure_expression(bool),anchor_role见下方宿主类型表。禁止把私人关系、原文故事或真实聊天投给worker。
 links表示投影时必须同时保留的依赖，不是普通主题关联；引用方的purposes必须是每个被引用方purposes的子集。
 例如依赖仅含chat的条目时，引用方也只能含chat；依赖样本的规则不能含worker_summary。
 检查传递依赖和循环引用。冲突时只收窄引用方用途，不得扩张被引用方用途、删除必要links或删改正文来通过。
@@ -79,6 +82,10 @@ required_scenarios为必填字符串数组（可为空），记录模型识别�
 coverage_contract、coverage_report、warnings为宿主字段，不输出；适配/补全不允许改写冻结分母。
 全局边界、必须保留的行为链source和item须required=true。
 """
+_SCHEMA += ("\n宿主anchor_role类型表（每类只允许列出的值）：" +
+            json.dumps({group: ex.anchor_roles_for(group) for group in ex.GROUPS}, ensure_ascii=False) +
+            "。reactions的stop是正文停止条件，不等于anchor_role=stop；反应条目锚角色应为none，停止正文仍完整保留。"
+            "coverage.rule_ids只能引用实际存在的非examples条目，example_ids只能引用实际存在的examples；不能凭名称猜测ID。")
 
 
 def _write(root: Path, filename: str, value) -> None:
@@ -425,6 +432,7 @@ _FACT_REVIEW_INSTRUCTION = (_BOUNDARY +
 
 _FIDELITY_REVIEW_INSTRUCTION = (_BOUNDARY +
         "\n独立对照原稿全文、源账目与成品，核对意义/范围/转折/停止条件/关联/来源类型和场景覆盖。"
+        "尤其核对全局规则被无依据收窄、默认语感被当作专题反应、表达被误标为待验证观点；这些须按实际源/成品前后变化判断，不能按关键词直接定罪。"
         "ID齐全不代表保真。按review_contract分别核对其中列出的源单元、成品和覆盖场景，每个目标返回passed或lost；其余资料仅作上下文。"
         "注意原稿不适用、用户缩范围、审查删空必须区分；若原稿存在全局边界/行为链/场景却被声明非required或不适用，判lost。"
         "保真核对可迁移的表达动作、张力和条件，不要求恢复边界明确排除的角色身份、真实经历或关系事实；"
@@ -1045,6 +1053,7 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
     def normalize_structure(receipt):
         if set(receipt) & host_fields:
             raise ValueError("结构构建回执不能声明宿主修订、源定位或审议状态")
+        ex.require_structure_references(receipt)
         candidate = copy.deepcopy(receipt)
         candidate.update(format=ex.FORMAT, limits=cap)
         candidate, ledger = _prepare_source_ledger(candidate, registry, cap)
@@ -1072,7 +1081,9 @@ def prepare_expression(client, cfg, doc: str, *, store, op_id: str, audit_dir,
             build = _call(client, cfg, _BOUNDARY + _SCHEMA +
                 "\n前次完整JSON未通过宿主结构校验。这是唯一一次结构纠错；返回修正后的完整结构包。"
                 "逐项检查全部必需字段、类型、ID、出处与关联，不只是修报错的第一项。"
-                "host_issues列出实际冲突：example_id是样本ID，example_scenario是当前值，expected是所引用coverage行的精确分类键。"
+                "host_issues列出全部已定位问题：code说明错误类别，field是字段路径；entry_id/group/value/allowed定位锚角色。"
+                "unknown_reference的value是不存在或类型不符的引用，须对照实际ID纠正，不猜别名、不补造条目。"
+                "样本问题中example_id是样本ID，example_scenario是当前值，expected是对应coverage行精确分类键。"
                 "分类键相同的前缀不够，不能写成分类名加冒号加情境；具体条件须完整放入scope，不能丢失条件或改写示范回应来修标签。"
                 "同一样本被两个不同分类引用时，对照原稿选择正确分类并纠正错误引用；其余已有规则支持的场景可不填样本，不需要补造。"
                 "这是结构纠错，保留无关条目ID、正文、来源和支持范围；不得推导原稿未提供的能力或为凑五类场景新增能力澄清话术。"
