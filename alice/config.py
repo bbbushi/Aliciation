@@ -75,6 +75,9 @@ class ExpressionConfig:
             ("max_metadata_chars", 1000, 480_000), ("max_projection_chars", 500, 24_000),
             ("max_worker_chars", 200, 6000), ("max_anchor_chars", 100, 2000),
             ("max_item_chars", 100, 9600), ("max_review_chars", 2000, 960_000),
+            ("max_core_chars", 100, 24000), ("max_registry_chars", 100, 24000),
+            ("max_registry_bundles", 1, 64), ("max_scene_expanded_chars", 64, 24000),
+            ("max_persona_load_calls", 1, 8), ("max_persona_loaded_bundles", 1, 64),
         ):
             value = getattr(self, name)
             if type(value) is not int or not low <= value <= high:

@@ -40,6 +40,94 @@ _FIELDS = {
     "reactions": ("trigger", "first", "then", "stop"),
     "examples": ("scenario", "user_input", "reply"),
 }
+ANCHOR_ROLE_GROUPS = {"voice": frozenset(("orientation", "voice")),
+                      "stop": frozenset(("constraints", "tensions")),
+                      "example": frozenset(("examples",))}
+
+
+def anchor_roles_for(group: str) -> list[str]:
+    return ["none", *(role for role, groups in ANCHOR_ROLE_GROUPS.items() if group in groups)]
+
+
+class ExpressionStructureError(ValueError):
+    """Located structural issues; audit/repair retain the full list."""
+
+    def __init__(self, issues):
+        self.issues = copy.deepcopy(issues)
+        details = [f"{row['field']}" + (f"（{row['entry_id']}）" if row.get('entry_id') else "")
+                   + f"：{row['code']}（{str(row.get('value', ''))[:120]}）"
+                   + ("，允许=" + "/".join(row["allowed"]) if "allowed" in row else "")
+                   for row in issues[:8]]
+        tail = f"；其余{len(issues) - 8}项见结构明细" if len(issues) > 8 else ""
+        super().__init__("表达结构存在" + str(len(issues)) + "处问题：" + "；".join(details) + tail)
+
+
+def require_structure_references(package):
+    """Collect independent anchor/reference defects without normalizing any value.
+
+    Invalid or ambiguous namespaces stay with the authoritative shape validator;
+    a missing target is never guessed from a similar spelling.
+    """
+    if not isinstance(package, dict):
+        return
+    rows, complete = [], True
+    for group in GROUPS:
+        values = package.get(group)
+        if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
+            complete = False
+            continue
+        rows.extend((group, index, item) for index, item in enumerate(values))
+    ids = [item.get("id") for _, _, item in rows]
+    complete = (complete and all(isinstance(i, str) and _ID.fullmatch(i) for i in ids)
+                and len(set(ids)) == len(ids))
+    known = set(ids) if complete else None
+    examples = {item["id"] for group, _, item in rows if group == "examples"} if complete else None
+    rules = known - examples if complete else None
+    by_id = {item["id"]: item for _, _, item in rows} if complete else {}
+    issues = []
+    def references(value, field, available):
+        if available is None:
+            return
+        if (not isinstance(value, list) or any(not isinstance(ref, str) or not _ID.fullmatch(ref) for ref in value)
+                or len(set(value)) != len(value)):
+            issues.append({"code": "invalid_id_list", "field": field})
+        elif not set(value) <= available:
+            issues.append({"code": "unknown_reference", "field": field,
+                           "value": sorted(set(value) - available)})
+    for group, index, item in rows:
+        path = f"{group}[{index}]"
+        role = item.get("anchor_role", "none")
+        if role not in anchor_roles_for(group):
+            issues.append({"code": "invalid_anchor_role", "field": path + ".anchor_role",
+                           "entry_id": item.get("id"), "group": group, "value": role,
+                           "allowed": anchor_roles_for(group)})
+        references(item.get("links"), path + ".links", known)
+    coverage = package.get("coverage")
+    for index, row in enumerate(coverage if isinstance(coverage, list) else []):
+        if not isinstance(row, dict):
+            continue
+        path = f"coverage[{index}]"
+        references(row.get("rule_ids", []), path + ".rule_ids", rules)
+        references(row.get("example_ids"), path + ".example_ids", examples)
+        refs = row.get("example_ids")
+        if (complete and isinstance(refs, list)
+                and (row.get("status") == "covered" or "coverage_contract" in package)):
+            for ref in refs:
+                if not isinstance(ref, str) or ref not in examples:
+                    continue
+                actual, expected = by_id[ref].get("scenario"), row.get("scenario")
+                if isinstance(actual, str) and isinstance(expected, str) and actual != expected:
+                    issues.append({"code": "coverage_scenario_mismatch", "field": path + ".example_ids",
+                                   "example_id": ref, "example_scenario": actual,
+                                   "coverage_scenario": expected, "expected": expected})
+    destinations = package.get("destinations")
+    for index, row in enumerate(destinations if isinstance(destinations, list) else []):
+        if isinstance(row, dict) and "targets" in row:
+            references(row["targets"], f"destinations[{index}].targets", known)
+    if issues:
+        raise ExpressionStructureError(issues)
+
+
 _LABELS = {"text": "内容", "layers": "层次", "precedence": "优先关系",
            "exceptions": "例外", "trigger": "触发", "initial": "初始倾向",
            "turn": "转折", "stop": "停止", "boundary": "边界", "first": "第一反应",
@@ -224,6 +312,7 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
     _ids(all_ids, "entry_ids")
     known = set(all_ids)
     by_id = {x["id"]: x for x in all_entries}
+    require_structure_references(package)
     link_count = 0
     gaps = []
     for group in GROUPS:
@@ -258,9 +347,8 @@ def validate_package(package: dict, *, registry=None, limits=None, activation=Fa
                 raise ValueError("非用户新增条目缺少来源")
             if item.get("anchor_role", "none") not in ("none", "voice", "stop", "example"):
                 raise ValueError("表达锚用途无效")
-            allowed_roles = {"voice": {"voice", "orientation"}, "stop": {"constraints", "tensions"}, "example": {"examples"}}
             role = item.get("anchor_role", "none")
-            if role != "none" and group not in allowed_roles[role]:
+            if role not in anchor_roles_for(group):
                 raise ValueError("表达锚角色与条目类型不一致")
             if (not partial_coverage and group == "examples" and not item["links"]
                     and item["origin"] != "user_config"):

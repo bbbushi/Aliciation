@@ -156,6 +156,11 @@
       usage ? `${stateLabels[last.status] || last.status} · ${last.duration_ms ?? "?"}ms` : "未知不填零"));
     kpis.append(kpi("装配块", `${(request.blocks || []).length} 块`,
       `选择决策 ${(request.selections || []).length} 条`));
+    const continued = (request.blocks || []).filter((b) => b.name === "source_continuation");
+    if (continued.length) {
+      kpis.append(kpi("历史接续来源", `${continued.length} 段`,
+        `共 ${kfmt(continued.reduce((n, b) => n + (b.chars || 0), 0))} 字 · 随近期历史恢复，非本轮主动共享`));
+    }
     kpis.append(kpi("状态", request.finished ? "已结束" : "进行中",
       request.assistant_turn_id ? `回复 #${request.assistant_turn_id}` : (request.delivery || "未落库")));
   }
@@ -344,6 +349,7 @@
     const quota = d.plugin.quota;
     status(`采集：元数据 ${state.capture.metadata ? "开" : "关"} · 正文 ${state.capture.body ? "开" : "关"}`
       + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
+      + (quota && quota.requests ? ` · 请求额度 ${quota.requests.used}/${quota.requests.limit}（剩 ${quota.requests.remaining}${quota.requests.exhausted ? "，已自动停止采集" : ""}）` : "")
       + ` · 协议 ${d.plugin.protocol_version}`);
     return true;
   }

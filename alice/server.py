@@ -806,10 +806,12 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json(svc.persona_residency(self._body()))
                 except ChannelError:
                     raise
+                except ConfigConflict as exc:
+                    self._json({"error": str(exc)}, 409)
                 except ValueError as exc:
                     self._json({"error": str(exc)}, 400)
                 except Exception:
-                    self._json({"error": "驻留分层操作未能确认；原人格保持不变，请查看状态后重试"}, 500)
+                    self._json({"error": "人格装配操作未能确认，请刷新状态核对后再重试"}, 500)
             elif path == "/api/persona/expression-update":
                 try:
                     self._json(svc.persona_expression_update(self._bounded_body(1048576)))
@@ -989,6 +991,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     nonblocking=True, on_accepted=start,
                     search_intent=search_intent, on_search_progress=lambda info: emit({"type": "search", **info}),
                     worker_target=worker_target,
+                    on_reply_saved=lambda: emit({"type": "reply_saved"}),
                 )
                 for line in result["events"]:
                     emit({"type": "meta", "text": line})

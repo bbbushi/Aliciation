@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import hashlib
 import time
 import uuid
@@ -12,6 +13,7 @@ from . import extraction, metrics, persona, persona_context, retrieval, skills, 
 from .context_memory import MemoryContext, TOOLS as MEMORY_TOOLS
 from .context_workspace import TOOLS as WORKSPACE_TOOLS
 from .config import Config
+from . import interaction_policy
 from .llm import chat, thinking_disabled
 from .store import Store
 from .steps import drive
@@ -36,7 +38,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "择要记住重要的约定或用户事实。网页见闻须引用本轮真实来源，默认普通重要度；URL本身不能证明读过。含外部资料时保存继承来源，不把作者观点记成用户事实。",
+            "description": "择要记住重要的约定或用户事实。网页见闻须引用本轮真实来源，默认普通重要度；URL本身不能证明读过。含外部资料时保存继承来源，不把作者观点记成用户事实。带来源内容走见闻保存链路，需见闻保存开关开启；用户本人的独立表达（如明确的偏好与约定）不依赖该开关，可提示用户在本机记忆界面单独确认保存。回执会区分实际新增与沿用既有记录。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -308,6 +310,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
               on_delta=None, on_tool=None, on_reasoning=None,
               usage_out: dict | None = None, on_persist=None,
               request_id=None, on_request_progress=None, on_maintenance_warning=None,
+              on_reply_saved=None,
               source_packet_ids=(), source_scope="gui", source_usage_out: dict | None = None,
               source_allow_external_recall=False, search_session=None, worker_session=None, tool_round_limit=4, working_set=None):
     ts = ts if ts is not None else time.time()
@@ -328,7 +331,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     def observe(purpose, **extra):
         basis = None
         if purpose in {"main", "main_stream", "main_fallback"}:
-            basis = {"persona": persona_basis, "history_selection": boundary,
+            if persona_registry is not None:
+                expression_meta["persona_projection"] = {
+                    "projection_strategy": "core_registry", **persona_registry.metadata()}
+            basis = {"persona": copy.deepcopy(persona_basis), "history_selection": boundary,
+                     "interaction": interaction_policy.metadata(),
                      "estimated_tokens": _ctx.messages_tokens(messages, active_tools),
                      "blocks": request_blocks(),
                      "tool_schema_count": len(active_tools),
@@ -413,29 +420,15 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     # 任何不成立都回退既有 full 投影并记录固定原因，不偷偷重分类
     persona_registry = None
     persona_fallback = None
-    if (cfg.persona.expression_mode == "registry" and source_scope == "gui"
-            and persona_snapshot is not None and persona_snapshot.get("expression_package") is not None
-            and persona_snapshot.get("assembly")):
+    if cfg.persona.expression_mode == "registry":
         from . import persona_residency
         from .context_persona import PersonaRegistryContext
-        issues = persona_residency.validate_contract(
-            persona_snapshot["assembly"], persona_snapshot["expression_package"],
-            limits={"max_core_chars": cfg.expression.max_core_chars,
-                    "max_registry_chars": cfg.expression.max_registry_chars,
-                    "max_registry_bundles": cfg.expression.max_registry_bundles,
-                    "max_scene_expanded_chars": cfg.expression.max_scene_expanded_chars})
-        if issues:
-            persona_fallback = ("invalid_contract:" +
-                                ",".join(sorted({i["code"] for i in issues})))[:160]
-        else:
-            candidate = PersonaRegistryContext(store, cfg, persona_snapshot,
-                                               persona_snapshot["assembly"],
-                                               persona_snapshot["expression_package"],
-                                               scope=source_scope)
-            if candidate.catalogue:
-                persona_registry = candidate
-            else:
-                persona_fallback = "catalogue_empty"
+        eligibility = persona_residency.activation_status(persona_snapshot, cfg, scope=source_scope)
+        persona_fallback = eligibility["reason"]
+        if eligibility["ready"]:
+            persona_registry = PersonaRegistryContext(
+                store, cfg, persona_snapshot, persona_snapshot["assembly"],
+                persona_snapshot["expression_package"], scope=source_scope)
         source_context["persona_registry"] = persona_registry
     recap_session, recap_exposed = None, False
     recap_usage, recap_calls = {}, 0
@@ -502,7 +495,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         "fallback_reason": persona_fallback,
         "projection_strategy": "core_registry" if persona_registry is not None else "complete_per_purpose",
         **(persona_registry.metadata() if persona_registry is not None else {})})
-    if cfg.persona.expression_anchor and persona_snapshot is not None:
+    if cfg.persona.expression_anchor and persona_snapshot is not None and persona_registry is None:
         _anchor_text = persona_context.render_anchor(persona_snapshot, metadata=anchor_meta,
                                                        purpose=expression_purpose, cfg=cfg)
         if _anchor_text:
@@ -539,7 +532,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         source_context["continued_ids"] = list(continued_ids)
         _record_source_usage(source_usage_out, source_context)
     persona_basis = {"request_id": request_id, "user_turn_id": user_id,
-                     "expression": expression_meta, "anchor_enabled": cfg.persona.expression_anchor,
+                     "expression": expression_meta, "anchor_requested": cfg.persona.expression_anchor,
+                     "anchor_enabled": anchor_msg is not None,
+                     "anchor_suppressed_reason": "registry_core_only" if persona_registry is not None and cfg.persona.expression_anchor else None,
                      "anchor": anchor_meta, "anchor_present": anchor_msg is not None,
                      "model_rounds_started": 0, "delivery_status": "assembled_not_sent"}
     try:
@@ -680,6 +675,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             messages = [m for m in messages
                         if not (m.get("role") == "system" and m.get("content") == anchor_msg["content"])]
             messages.append(dict(anchor_msg))
+        if persona_registry is not None and not persona_registry.valid():
+            reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
+            break
         if (cfg.context.total_budget_tokens and _ctx.messages_tokens(messages, active_tools)
                 + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
             reply = "本轮材料已超出上下文预算，请缩小问题或材料范围；未读取的内容不作猜测补全。"
@@ -711,7 +709,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         else:
             # Task-bound text waits for the post-I/O licence check; a policy
             # revocation during model generation must not publish late deltas.
-            buffered = [] if (reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
+            buffered = [] if (persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
                               or (memory_session and memory_session.exposed)) else None
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = None if buffered is not None else on_reasoning
@@ -859,6 +857,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 memory_session.remaining_tokens = (max(0, cfg.context.total_budget_tokens
                     - cfg.context.reply_reserve_tokens - _ctx.messages_tokens(messages, tools) - 256)
                     if cfg.context.total_budget_tokens else None)
+            if persona_registry is not None:
+                persona_registry.remaining_tokens = (max(0, cfg.context.total_budget_tokens
+                    - cfg.context.reply_reserve_tokens - _ctx.messages_tokens(messages, tools) - 256)
+                    if cfg.context.total_budget_tokens else None)
             try:
                 if tc.function.name == "discovery_search" and search_session is not None:
                     try:
@@ -901,6 +903,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         reply = "本轮本机记忆资料已变更或失效，需要重新取得当前资料后再谈。"
     if not growth_valid():
         reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
+    if persona_registry is not None and not persona_registry.valid():
+        reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
     reply = reply or "（沉默）"
     if on_delta is not None and reply_review_selected:
         on_delta(reply)  # Only final, post-review and post-licence-check text.
@@ -911,9 +915,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     if ctx_trace is not None:
         ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
                          rounds=persona_basis["model_rounds_started"])
+    if persona_registry is not None:
+        expression_meta["persona_projection"] = {
+            "projection_strategy": "core_registry", **persona_registry.metadata()}
     basis = {"request_id": request_id, "user_turn_id": user_id, "assistant_turn_id": assistant_id,
              "mode": cfg.context.assembly_mode, "history_selection": boundary,
-             "persona": persona_basis,
+             "persona": persona_basis, "interaction": interaction_policy.metadata(),
              "blocks": request_blocks(), "tool_schema_count": len(active_tools),
              "tool_names": [t["function"]["name"] for t in active_tools],
              "final_estimated_tokens": _ctx.messages_tokens(messages, active_tools),
@@ -938,6 +945,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         on_request_progress()
     if on_persist is not None:
         on_persist(assistant_id)
+    if on_reply_saved is not None:
+        # L01：回复已落盘、维护（提取/审核）仍在同一请求内——让界面能区分
+        # “还在生成”与“正在整理”，不再把维护耗时当作卡住。
+        on_reply_saved()
     try:
         yield from extraction.extract_pending_steps(store, client, cfg, request_id=request_id)
     except Exception as e:  # 提取失败不影响当轮对话
