@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from contextlib import nullcontext
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -215,7 +216,12 @@ class ChatService:
             if md and raw_sections is not None:
                 from . import expression
                 try:
-                    package = expression.decode_sections(raw_sections)
+                    from . import persona_material as pm
+                    material = pm.decode_sections(raw_sections)
+                    package = None if material is not None else expression.decode_sections(raw_sections)
+                    if material is not None:
+                        # Display is a read-only projection; never write source headings back.
+                        display_md = "# 原文表达资料\n\n" + material["source_text"]
                     if package:
                         display_md = persona_growth.replace_bodies(display_md, expression.editor_sections(package),
                                                                   allowed=persona_growth.EXPRESSION)
@@ -233,6 +239,12 @@ class ChatService:
                             package.get("user_revisions", {}).get("sections", {}).items()} if package else {},
                         "sections": expression.editor_sections(package) if package else
                             {title: raw_sections.get(title, "") for title in persona_growth.EXPRESSION}}
+                    if material is not None:
+                        plan = pm.projection_plan(material, self.cfg)
+                        expression_view.update(format=pm.FORMAT, sections=None,
+                            coverage_status="原文已保留；分类是导航，不是经历认证",
+                            core_text=plan["core_text"], source_sha256=material["source_sha256"],
+                            supported_modes=plan["supported_modes"], material_revision=material["revision"])
                 except ValueError:
                     expression_view = {"revision": persona_growth.digest(md),
                         "session_epoch": self.store.meta_get("session_epoch"),
@@ -457,6 +469,10 @@ class ChatService:
         return self._observer_read(observation.context_body, scope=scope,
                                    content_hash=hash, request_id=request_id)
 
+    def observer_context_call(self, *, scope=None, request_id=None, call_id=None) -> dict:
+        return self._observer_read(observation.context_call, scope=scope,
+                                   request_id=request_id, call_id=call_id)
+
     # ---- 上下文观测插件（20261107 插件设计 §6）：薄命名空间，委托同一核心投影 ----
 
     def plugin_inspector_status(self, *, scope=None) -> dict:
@@ -486,6 +502,13 @@ class ChatService:
                 return {"status": "disabled", "scope": self._observer_scope}
         return self._observer_read(observation.context_body, scope=scope,
                                    content_hash=hash, request_id=request_id)
+
+    def plugin_inspector_call(self, *, scope=None, request_id=None, call_id=None) -> dict:
+        with self._lock:
+            if not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled", "scope": self._observer_scope}
+        return self._observer_read(observation.context_call, scope=scope,
+                                   request_id=request_id, call_id=call_id)
 
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
@@ -568,6 +591,27 @@ class ChatService:
                 return maintenance.tidy_preview(self.store, self.cfg)
             if action == "rollback_tidy":
                 return maintenance.tidy_rollback(self.store, self.cfg)
+            if action in ("cancel_reflection", "retry_reflection"):
+                task_id = payload.get("task_id")
+                if type(task_id) is not int:
+                    raise ValueError("观点整理任务标识无效")
+                row = self.store.conn.execute("SELECT * FROM compact_reflections WHERE task_id=?", (task_id,)).fetchone()
+                if row is None or row["session_epoch"] != self.store.meta_get("session_epoch"):
+                    raise ChannelError(404, "not_found", "当前会话没有该观点整理任务")
+                allowed = {"queued"} if action == "cancel_reflection" else {"failed", "cancelled"}
+                if row["status"] not in allowed:
+                    raise ChannelError(409, "task_not_cancellable", "当前任务状态不支持此操作")
+                status = "cancelled" if action == "cancel_reflection" else "queued"
+                with self.store.source_transaction():
+                    self.store.conn.execute("UPDATE compact_reflections SET status=?,result='',updated_at=? WHERE task_id=?",
+                                            (status, time.time(), task_id))
+                    parent = self.store.conn.execute("SELECT result_json FROM maintenance_tasks WHERE id=?", (task_id,)).fetchone()
+                    if parent is not None:
+                        result = json.loads(parent["result_json"])
+                        result.update(opinion_processing=status, opinion_result="")
+                        self.store.conn.execute("UPDATE maintenance_tasks SET result_json=?,updated_at=? WHERE id=?",
+                                                (json.dumps(result, ensure_ascii=False), time.time(), task_id))
+                return {"task_id": task_id, "opinion_processing": status}
             if action in ("compact", "tidy"):
                 task_id = self.store.enqueue_maintenance_task(
                     action, "explicit", f"{action}:explicit:{uuid.uuid4().hex[:8]}", "gui",
@@ -679,6 +723,9 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                from . import persona_material as pm
+                if pm.MARKER_PREFIX in md_text and self._channels.enabled():
+                    raise ValueError("原文人格尚不支持QQ，请先暂停QQ渠道，再恢复这份人格")
                 if resume_op_id is not None:
                     from .persona_transaction import validate_op_id
                     validate_op_id(resume_op_id)
@@ -829,6 +876,8 @@ class ChatService:
         if any(payload[key] != current.get(key) for key in
                ("persona_revision", "expression_digest", "classification_digest")):
             raise ConfigConflict("人格或分层已变化，请刷新后核对，再切换装配模式")
+        if current.get("material") and payload["mode"] not in current.get("supported_modes", []):
+            raise ValueError("当前原文材料不支持该装配模式，请先调整原文分类或预算")
         if payload["mode"] == "registry" and not current["registry_ready"]:
             raise ValueError("当前分层尚不可启用；请先准备、核对并保存有效分层")
         if payload["mode"] != self.cfg.persona.expression_mode:
@@ -839,6 +888,89 @@ class ChatService:
         result["notice"] = ("已启用按需装配，下一条本机网页对话生效，无需重启。" if payload["mode"] == "registry" else
                             "已恢复完整装配，下一条对话生效；已保存的分层保留，无需重启。")
         return result
+
+    def material_import(self, payload) -> dict:
+        """GUI-owned source material candidates; model I/O only on explicit prepare."""
+        from . import persona_material_prepare as prep
+        if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+            raise ValueError("材料导入参数无效")
+        action = payload["action"]
+        binding = {"token", "revision", "material_digest", "session_epoch"}
+        permitted = {
+            "status": {"action"}, "detail": {"action", "token"},
+            "prepare": {"action", "source_text", "name"},
+            "edit_active": {"action", "session_epoch", "persona_revision"},
+            "resume": {"action", *binding}, "cancel": {"action", *binding},
+            "split": {"action", *binding, "block_id", "offsets"},
+            "update": {"action", *binding, "classifications", "context_updates", "core_block_ids", "bundle_ids", "bundles"},
+            "apply": {"action", *binding, "mode", "config_revision"}}
+        if action not in permitted or set(payload) - permitted[action]:
+            raise ValueError("材料导入动作或字段无效")
+
+        def decorate(result):
+            result["config_revision"] = self._config_revision
+            result["current_mode"] = self.cfg.persona.expression_mode
+            result["config_writable"] = self._config_revision is not None
+            return result
+
+        if action in {"status", "detail"}:
+            with self._lock:
+                result = (prep.material_status(self.store, self.cfg) if action == "status" else
+                          prep.material_detail(self.store, self.cfg, payload.get("token")))
+                return decorate(result)
+        # Keep admission and worker control, but never hold Store lock while joining.
+        with self._channels.control(), self._workers.control_lock:
+            with self._lock:
+                persona_reset.require_clear()
+                if action == "prepare":
+                    return decorate(prep.material_prepare(self.store, self.client, self.cfg,
+                        payload.get("source_text"), name=payload.get("name")))
+                if action == "edit_active":
+                    return decorate(prep.material_edit_active(self.store, self.cfg, payload))
+                if action == "resume":
+                    return decorate(prep.material_resume(self.store, self.cfg, payload))
+                if action == "update":
+                    return decorate(prep.material_update(self.store, self.cfg, payload))
+                if action == "split":
+                    return decorate(prep.material_split(self.store, self.cfg, payload))
+                if action == "cancel":
+                    return decorate(prep.material_cancel(self.store, payload))
+                if prep.material_replayed(self.store, payload):
+                    return {**self.state(), "material_notice": "该材料操作已提交，未重复安装或归档。"}
+                ready = prep.material_install_candidate(self.store, self.cfg, payload,
+                                                       channels_enabled=self._channels.enabled())
+                if self._config_revision is not None:
+                    self._check_config_revision_locked(payload.get("config_revision"), required=True)
+                elif payload.get("mode") != self.cfg.persona.expression_mode:
+                    raise ValueError("服务未绑定配置文件，不能修改装配模式")
+            if ready["reset"]:
+                self._workers.drain()
+                self._workers.join_worker_reports()
+            with self._lock:
+                # External edits during drain must not be overwritten or archived.
+                checked = prep.material_install_candidate(self.store, self.cfg, payload,
+                                                         channels_enabled=self._channels.enabled())
+                if checked != ready:
+                    raise ValueError("排空协作期间材料计划已变化，请重新核对")
+                if self._config_revision is not None:
+                    self._check_config_revision_locked(payload.get("config_revision"), required=True)
+                if ready["material_mode"] != self.cfg.persona.expression_mode:
+                    new_revision = replace_persona_mode(self._config_path, ready["material_mode"], self._config_revision)
+                    self.cfg.persona.expression_mode = ready["material_mode"]
+                    self._config_revision = new_revision
+                if ready["reset"]:
+                    archived = self._archive_locked(plan=ready)
+                    persona.commit_import_plan(self.store, self.cfg, ready, archived_from=archived, archived=True)
+                    persona_reset.complete()
+                else:
+                    persona.commit_import_plan(self.store, self.cfg, ready)
+                self._channels.set_ready(persona.persona_md() is not None)
+                # Successful file + DB marker remain authoritative even if UI cleanup fails.
+                try:
+                    prep.material_finish(ready)
+                except OSError:
+                    pass
+                return {**self.state(), "material_notice": ready["notice"]}
 
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
@@ -1030,6 +1162,57 @@ class ChatService:
 
     # ---------- 设置 ----------
 
+    def local_channel_settings(self) -> dict:
+        """Body/credential-free GUI switch state; reading never connects QQ."""
+        with self._lock:
+            reason = ""
+            owner = self.cfg.channels.qq_owner
+            if not (owner.provider == "qq-official" and owner.chat_type == "c2c"
+                    and all(isinstance(v, str) and v.strip() and len(v) <= 256 and v != "*"
+                            for v in (owner.app_id, owner.sender_id))
+                    and isinstance(owner.token_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", owner.token_sha256)):
+                reason = "请先扫码并确认本人身份，再启用 QQ 渠道。"
+            else:
+                try:
+                    from .persona_context import parse_snapshot
+                    md = persona.persona_md()
+                    if not md:
+                        reason = "请先完成人格初始化。"
+                    elif parse_snapshot(md).get("format_version") == "persona-material-v1":
+                        reason = "当前原文人格尚不支持 QQ，请先切换兼容人格。"
+                except ValueError:
+                    reason = "当前人格格式无法核对，请先恢复有效人格。"
+            return {"channel_enabled": self._channels.enabled(),
+                    "channel_can_enable": not reason, "channel_enable_reason": reason,
+                    "channel_config_writable": self._config_revision is not None,
+                    "channel_config_revision": self._config_revision,
+                    "session_epoch": self._channels.epoch}
+
+    def set_local_channel_enabled(self, enabled: bool, session_epoch: str, config_revision: str, *, guard=None) -> None:
+        """Toggle only the saved binding; never accept new browser credentials."""
+        if type(enabled) is not bool or not isinstance(config_revision, str):
+            raise ValueError("渠道开关参数无效，请刷新设置")
+        token = self._channels.reserve("control", wait=False)
+        try:
+            with self._lock:
+                self._channels.check_epoch(session_epoch)
+                with guard() if guard is not None else nullcontext():
+                    self._check_config_revision_locked(config_revision, required=True)
+                    if enabled:
+                        view = self.local_channel_settings()
+                        if not view["channel_can_enable"]:
+                            raise ValueError(view["channel_enable_reason"])
+                    values = asdict(self.cfg.channels)
+                    values["enabled"] = values["qq_owner"]["enabled"] = enabled
+                    candidate = appconfig._channels(values)
+                    if candidate != self.cfg.channels:
+                        new_revision = replace_channels(self._config_path, values, self._config_revision)
+                        self.cfg.channels = candidate
+                        self._config_revision = new_revision
+                        self._discovery.model_config_changed()
+        finally:
+            self._channels.release(token)
+
     def configure_local_channel(self, binding: dict, session_epoch: str, *, enabled: bool, guard=None) -> dict:
         """Trusted local connector host only; never accept browser-supplied bindings.
 
@@ -1046,6 +1229,11 @@ class ChatService:
             raise ValueError("本机连接器返回的身份无效")
         with self._channels.control(), self._lock:
             self._channels.check_epoch(session_epoch)
+            if enabled:
+                from .persona_context import load_persona_snapshot
+                active = load_persona_snapshot()
+                if active and active.get("format_version") == "persona-material-v1":
+                    raise ValueError("当前原文人格尚不支持QQ，请先切换兼容人格，再启用渠道")
             # The host's operation lock spans disk commit and publication, so a
             # cancel is ordered wholly before or after this transaction. Acquire
             # it only after the service reservation/lock; host actions never wait

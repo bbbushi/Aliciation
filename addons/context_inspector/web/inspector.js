@@ -42,10 +42,16 @@
     root.querySelectorAll("pre.ci-body").forEach((n) => n.remove());
   }
 
+  const bodyReason = reason => ({none: "当轮未采集", historical_not_captured: "历史请求未采集正文",
+    capture_disabled: "当轮正文采集已关闭", rolling_window_evicted: "已移出最近10请求窗口",
+    retention_expired: "已超过7天留存期", body_budget_exceeded: "正文库容量不足",
+    too_large: "正文超过单条采集上限", write_failed: "正文写入失败",
+    capture_index_unavailable: "正文留存索引不可用", not_retained: "正文文件未留存或已清理"})[reason] || reason || "原因未记录";
+
   function bodyButton(requestId, contentHash, bodyState) {
     if (!contentHash || bodyState === "none") return node("span", "（未留存正文）", "ci-hint");
     if (bodyState && bodyState !== "stored" && bodyState !== "head" && bodyState !== "on_disk") {
-      return node("span", `（正文：${bodyState}）`, "ci-hint");
+      return node("span", `（未留存正文：${bodyReason(bodyState)}）`, "ci-hint");
     }
     const wrap = document.createElement("span");
     const button = node("button", "正文", "ci-btn");
@@ -54,17 +60,12 @@
     pre.hidden = true;
     button.addEventListener("click", async () => {
       if (!pre.hidden) { pre.hidden = true; return; }
-      if (!state.capture.body) {
-        pre.textContent = "正文采集未开启（context.observer_body_capture）；该调用只有元数据。";
-        pre.hidden = false;
-        return;
-      }
       button.disabled = true;
       const d = await window.ContextInspectorClient.get("body", { request_id: requestId, hash: contentHash });
       button.disabled = false;
       pre.textContent = !d || d.status === "disabled" ? "插件已禁用；正文读取停止。"
         : d.stored ? (d.text || "（空）") + (d.truncated ? "\n…（已截断）" : "")
-        : `未留存正文（${d.reason || "not_retained"}）；不能用当前数据补画历史。`;
+        : `未留存正文（${bodyReason(d.reason)}）；不能用当前数据补画历史。`;
       pre.hidden = false;
     });
     wrap.append(button, pre);
@@ -329,6 +330,7 @@
     const request = requests.find((r) => r.request_id === state.requestId) || null;
     renderKPIs(request, null);
     const call = (request ? request.calls : []).find((c) => c.call_id === state.callId) || null;
+    el("ci-full-context").disabled = !request || !request.calls.length;
     renderKPIs(request, call);
     renderComposition(request, call);
     renderTrend(request);
@@ -339,6 +341,7 @@
   async function loadStatus() {
     const d = await window.ContextInspectorClient.get("status");
     if (d.status === "disabled" || (d.plugin && d.plugin.enabled === false)) {
+      window.AliceContextViewer?.close();
       state.disabled = true;
       status("插件未启用（[plugins] context_inspector_enabled）。聊天照常运行；本页不再轮询。", "warn");
       el("ci-requestbar").replaceChildren(node("p", "插件未启用。", "ci-hint"));
@@ -349,7 +352,7 @@
     const quota = d.plugin.quota;
     status(`采集：元数据 ${state.capture.metadata ? "开" : "关"} · 正文 ${state.capture.body ? "开" : "关"}`
       + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
-      + (quota && quota.requests ? ` · 请求额度 ${quota.requests.used}/${quota.requests.limit}（剩 ${quota.requests.remaining}${quota.requests.exhausted ? "，已自动停止采集" : ""}）` : "")
+      + (quota && quota.requests ? ` · 滚动保留 ${quota.requests.used ?? "?"}/${quota.requests.limit} 个请求（持续采集新请求）${quota.requests.reason ? ` · ${bodyReason(quota.requests.reason)}` : ""}` : "")
       + ` · 协议 ${d.plugin.protocol_version}`);
     return true;
   }
@@ -389,6 +392,12 @@
   }
 
   el("ci-mode-total").addEventListener("click", () => setMode("total"));
+  el("ci-full-context").addEventListener("click", () => {
+    const request = state.requests.find(r => r.request_id === state.requestId);
+    if (!request) return;
+    window.AliceContextViewer.open({requestId: request.request_id, calls: request.calls,
+      callId: state.callId, scope: window.ContextInspectorClient.getScope(), endpoint: "/api/plugins/context-inspector/call"});
+  });
   el("ci-mode-delta").addEventListener("click", () => setMode("delta"));
 
   async function init() {

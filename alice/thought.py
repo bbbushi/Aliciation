@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import json
 from uuid import uuid4
+from contextlib import nullcontext
 import time
 
 from . import config as paths
@@ -225,13 +226,19 @@ def deliberation_inputs(store, memory_ids=None):
     return bounded(fresh,48000), bounded(store.memory_rows(purpose='thought',scope='gui',kind='stance'),16000)
 
 
-def deliberate_steps(store: Store, client, cfg: Config, *, memory_ids=None, model_runner=None, request_id=None):
+def deliberate_steps(store: Store, client, cfg: Config, *, memory_ids=None, model_runner=None, request_id=None,
+                     update_persona=True, ordinary_only=False, checkpoint=None):
+    checkpoint = checkpoint or (lambda: None)
+    checkpoint()
     request_id = request_id or "thought_" + uuid4().hex
     material, current_stances = deliberation_inputs(store,memory_ids)
+    if ordinary_only:
+        material = [m for m in material if m["origin"] == "conversation"]
+        current_stances = [m for m in current_stances if m["origin"] == "conversation"]
     if not material:
         return '没有新的有效材料可消化，想法不变。'
 
-    current_md = persona_md() or ""
+    current_md = (persona_md() or "") if update_persona else ""
     if current_md:
         from .persona_context import parse_snapshot
         try:
@@ -264,6 +271,7 @@ def deliberate_steps(store: Store, client, cfg: Config, *, memory_ids=None, mode
     if external_input and reservation is None:
         return '见闻思辨暂缓：未获额外模型额度、保存许可或相同输入已有未确认尝试。'
     if model_runner is not None:
+        checkpoint()
         data = yield lambda: model_runner(prompt)
     else:
         resp = yield lambda: chat(client, cfg, [{"role": "user", "content": prompt}], json_mode=True, retry=not external_input,
@@ -272,256 +280,261 @@ def deliberate_steps(store: Store, client, cfg: Config, *, memory_ids=None, mode
             data = parse_json(resp.choices[0].message.content or "")
         except ValueError:
             return "思辨失败：模型输出无法解析（想法保持不变）。"
+    checkpoint()
     if reservation:
         with store.source_transaction():
             store.conn.execute("UPDATE learning_model_attempts SET state='completed' WHERE identity=?", (reservation,))
         if not store._observation_settings().get('remember_observations'):
             return '见闻保存许可已变化，本轮未写入观点。'
 
-    available = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui")}
-    if (persona_md() or "") != current_md or store.meta_get("session_epoch") != persona_epoch:
-        return "人格在思辨期间已变更，本次未写入观点或旧人格快照。"
-    if any(m["id"] not in available or memory_version(m) != memory_version(available[m["id"]]) for m in input_rows):
-        return "思辨材料已变化或来源失效，本次未写入观点。"
-    try:
-        views, verifications = _validate_decisions(data, supplied)
-    except ValueError:
-        return "思辨回执的观点身份、版本或字段无效，本次未写入观点。"
-
-    def live_target(ref):
-        if ref is None:
-            return None
-        row = next((m for m in store.memory_rows(purpose="thought", scope="gui", kind="stance")
-                    if m["id"] == ref["id"]), None)
-        if row is None or memory_version(row) != expected_versions.get(ref["id"]):
-            raise ValueError("观点已变化或来源资格失效")
-        return row
-
-    def live_sources(titles):
-        current = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui", kind="event")}
-        valid = [title for title in titles if title in source_rows
-                and source_rows[title]["id"] in current
-                and memory_version(source_rows[title]) == memory_version(current[source_rows[title]["id"]])]
-        return valid if len(valid) == len(titles) else []
-
-    if not views and not verifications:
-        store.mark_thought_rows(material, 'no_new_view')
-        store.meta_set("last_deliberate_at", time.time())
-        return "思辨完成：这批记忆还不足以长出新观点。"
-
-    title_pressure = {m["title"]: bool(m["pressure"]) for m in material
-                      if sum(other["title"] == m["title"] for other in material) == 1}
-    source_rows = {m["title"]: m for m in material if m["title"] in title_pressure}
-
-    def apply_verdict(ref, body, sources, verdict):
-        with store.source_transaction():
-            prior = live_target(ref)
-            if live_sources(sources) != sources:
-                raise ValueError("验证依据已经失效")
-            descendants = store.dependent_memories([prior["id"]])
-            if any(source_rows[title]["id"] in descendants for title in sources):
-                raise ValueError("观点不能用自身派生材料作为独立验证依据")
-            parents = [store.get_memory(row[0]) for row in store.conn.execute(
-                "SELECT parent_memory_id FROM memory_dependencies WHERE memory_id=?", (prior["id"],))]
-            if any(row is None for row in parents):
-                raise ValueError("观点旧依据已失效")
-            proof = "、".join(f"#{source_rows[title]['id']}@{memory_version(source_rows[title])}" for title in sources)
-            body += f"\n核对：#{prior['id']}@{ref['version']}；{verdict}；依据 {proof}"
-            store.update_memory_content(prior["id"], body)
-            store.bind_derived_memory(prior["id"], parents + [source_rows[title] for title in sources], scope="gui")
-        expected_versions[prior["id"]] = memory_version(store.get_memory(prior["id"]))
-
-    # —— 先验验证（v0.4 生命周期）：先处理裁决，再消化新观点 ——
-    verified = falsified = 0
-    pending_falsified: dict[int, str] = {}  # 标记证伪但暂不退役：给同批的后继修订（replaces）接脉络的机会
-    for w in verifications:
-        verdict = w["verdict"]
+    # Background compact reflection publishes its stance changes and consumed
+    # input marks atomically, after model I/O has finished and the lock is held.
+    with store.source_transaction() if not update_persona else nullcontext():
+        available = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui")}
+        if (update_persona and (persona_md() or "") != current_md) or store.meta_get("session_epoch") != persona_epoch:
+            return "人格在思辨期间已变更，本次未写入观点或旧人格快照。"
+        if any(m["id"] not in available or memory_version(m) != memory_version(available[m["id"]]) for m in input_rows):
+            return "思辨材料已变化或来源失效，本次未写入观点。"
         try:
-            prior = live_target(w["target"])
+            views, verifications = _validate_decisions(data, supplied)
         except ValueError:
-            continue
-        if external_input:
-            # A restricted web interpretation cannot mutate a global prior.
-            continue
-        if prior is None or prior["kind"] != "stance":
-            continue
-        if _field_of(prior["content"], "状态") != "先验":
-            continue  # 成熟观点不走轻门控——只能经 views.replaces 的重门控修订
-        vsources = live_sources(w["sources"])
-        if not vsources:
-            continue  # 裁决也要过 A01：没有真实出处的事件依据，裁决不生效
-        for s in vsources:  # 裁决引用同样计使用——依据链与观点同寿
-            src = source_rows.get(s)
-            if src is not None:
-                store.bump_use(src["id"])
-        note = str(w.get("note", "")).strip()
-        if verdict == "证实":
-            body = _set_state(prior["content"], "验证")
-            if str(w.get("honored", "")) == "未兑现" or note:
-                extra = []
-                if str(w.get("honored", "")) == "未兑现":
-                    extra.append("上次打算的回应未兑现")
-                if note:
-                    extra.append(note)
-                mark = "；".join(extra)
-                if re.search(r"^不确定：", body, flags=re.M):
-                    body = re.sub(r"^不确定：(.*)$", lambda match: "不确定：" + match.group(1) + "（" + _field_value(mark) + "）", body, count=1, flags=re.M)
-                else:
-                    body = body.rstrip("\n") + f"\n不确定：{_field_value(mark)}"
-            try:
-                apply_verdict(w["target"], body, vsources, verdict)
-            except ValueError:
-                continue
-            verified += 1
-        elif verdict == "证伪":
-            # 轻门控：先验被真实经历证伪。先标记不删——同批若有 replaces 它的后继观点，
-            # 由 views 循环接走「曾以为」脉络；无人接棒则收尾扫掉，教训留在墓碑
-            body = _set_state(prior["content"], "证伪")
-            body = re.sub(r"^下次回应：.*$",
-                          lambda match: "下次回应：（已被经历证伪：" + _field_value(note or "与经历矛盾") + "）",
-                          body, count=1, flags=re.M)
-            try:
-                apply_verdict(w["target"], body, vsources, verdict)
-            except ValueError:
-                continue
-            pending_falsified[prior["id"]] = (
-                f"先验 #{prior['id']}@{w['target']['version']} 被经历证伪："
-                f"{note or '真实经历与之矛盾'}（依据：{'、'.join(vsources)}）"
-            )
-            falsified += 1
+            return "思辨回执的观点身份、版本或字段无效，本次未写入观点。"
 
-    added = revised = rejected = dropped = 0
-    for v in views:
-        claim = v["claim"].strip()
-        sources = v["sources"]
-        valid = live_sources(sources)  # A01：出处必须逐字存在于本次材料
-        if not valid:
-            dropped += 1  # 空出处或虚构出处：整条丢弃，不给"无中生有的深刻"留门
-            continue
-        interp = v.get("interp") if isinstance(v.get("interp"), dict) else {}
-        kind = str(interp.get("kind", "经历")).strip() or "经历"
-        if external_input:
-            kind = "见闻"
-        if kind not in {"经历", "推断", "用户", "捐赠", "见闻"}:
-            kind = "经历"
-        content = (
-            f'主张：{_field_value(claim)}\n'
-            f'遭遇：{_field_value(str(v.get("encounter", "")).strip() or "（未记）")}\n'
-            f'事实：{_field_value(str(v.get("facts", "")).strip() or "（未记）")}\n'
-            f'解释：{kind}——{_field_value(str(interp.get("note", "")).strip() or "（未记）")}\n'
-            f'不确定：{_field_value(str(v.get("missing", "暂无")).strip() or "暂无")}\n'
-            f'下次回应：{_field_value(str(v.get("next_response", "暂无")).strip() or "暂无")}\n'
-            f'出处：{"、".join(valid)}\n'
-            f'状态：{"先验" if external_input else "验证"}'
-        )
-        replaces = v["replaces"]
-        try:
-            old = live_target(replaces)
-        except ValueError:
-            rejected += 1
-            continue  # A stale replacement must never become an unrelated new view.
-        if old is not None and (_field_of(old["content"], "主张") or old["title"]) == claim:
-            continue
-        if old is not None:
-            if not external_input and any(source_rows[title]["id"] in store.dependent_memories([old["id"]])
-                                          for title in valid):
-                rejected += 1
+        def live_target(ref):
+            if ref is None:
+                return None
+            row = next((m for m in store.memory_rows(purpose="thought", scope="gui", kind="stance")
+                        if m["id"] == ref["id"]), None)
+            if row is None or memory_version(row) != expected_versions.get(ref["id"]):
+                raise ValueError("观点已变化或来源资格失效")
+            return row
+
+        def live_sources(titles):
+            current = {m["id"]: m for m in store.memory_rows(purpose="thought", scope="gui", kind="event")}
+            valid = [title for title in titles if title in source_rows
+                    and source_rows[title]["id"] in current
+                    and memory_version(source_rows[title]) == memory_version(current[source_rows[title]["id"]])]
+            return valid if len(valid) == len(titles) else []
+
+        if not views and not verifications:
+            store.mark_thought_rows(material, 'no_new_view')
+            store.meta_set("last_deliberate_at", time.time())
+            return "思辨完成：这批记忆还不足以长出新观点。"
+
+        title_pressure = {m["title"]: bool(m["pressure"]) for m in material
+                          if sum(other["title"] == m["title"] for other in material) == 1}
+        source_rows = {m["title"]: m for m in material if m["title"] in title_pressure}
+
+        def apply_verdict(ref, body, sources, verdict):
+            with store.source_transaction():
+                prior = live_target(ref)
+                if live_sources(sources) != sources:
+                    raise ValueError("验证依据已经失效")
+                descendants = store.dependent_memories([prior["id"]])
+                if any(source_rows[title]["id"] in descendants for title in sources):
+                    raise ValueError("观点不能用自身派生材料作为独立验证依据")
+                parents = [store.get_memory(row[0]) for row in store.conn.execute(
+                    "SELECT parent_memory_id FROM memory_dependencies WHERE memory_id=?", (prior["id"],))]
+                if any(row is None for row in parents):
+                    raise ValueError("观点旧依据已失效")
+                proof = "、".join(f"#{source_rows[title]['id']}@{memory_version(source_rows[title])}" for title in sources)
+                body += f"\n核对：#{prior['id']}@{ref['version']}；{verdict}；依据 {proof}"
+                store.update_memory_content(prior["id"], body)
+                store.bind_derived_memory(prior["id"], parents + [source_rows[title] for title in sources], scope="gui")
+            expected_versions[prior["id"]] = memory_version(store.get_memory(prior["id"]))
+
+        # —— 先验验证（v0.4 生命周期）：先处理裁决，再消化新观点 ——
+        verified = falsified = 0
+        pending_falsified: dict[int, str] = {}  # 标记证伪但暂不退役：给同批的后继修订（replaces）接脉络的机会
+        for w in verifications:
+            verdict = w["verdict"]
+            try:
+                prior = live_target(w["target"])
+            except ValueError:
                 continue
             if external_input:
-                from .learning import source_versions
-                old_sources = store.observation_sources(old['id'], scope='gui')
-                new_sources = [p for row in material if row['origin'] != 'conversation'
-                               for p in store.observation_sources(row['id'],scope='gui')]
-                if not old_sources or not set(source_versions(new_sources))-set(source_versions(old_sources)):
-                    rejected += 1
+                # A restricted web interpretation cannot mutate a global prior.
+                continue
+            if prior is None or prior["kind"] != "stance":
+                continue
+            if _field_of(prior["content"], "状态") != "先验":
+                continue  # 成熟观点不走轻门控——只能经 views.replaces 的重门控修订
+            vsources = live_sources(w["sources"])
+            if not vsources:
+                continue  # 裁决也要过 A01：没有真实出处的事件依据，裁决不生效
+            for s in vsources:  # 裁决引用同样计使用——依据链与观点同寿
+                src = source_rows.get(s)
+                if src is not None:
+                    store.bump_use(src["id"])
+            note = str(w.get("note", "")).strip()
+            if verdict == "证实":
+                body = _set_state(prior["content"], "验证")
+                if str(w.get("honored", "")) == "未兑现" or note:
+                    extra = []
+                    if str(w.get("honored", "")) == "未兑现":
+                        extra.append("上次打算的回应未兑现")
+                    if note:
+                        extra.append(note)
+                    mark = "；".join(extra)
+                    if re.search(r"^不确定：", body, flags=re.M):
+                        body = re.sub(r"^不确定：(.*)$", lambda match: "不确定：" + match.group(1) + "（" + _field_value(mark) + "）", body, count=1, flags=re.M)
+                    else:
+                        body = body.rstrip("\n") + f"\n不确定：{_field_value(mark)}"
+                try:
+                    apply_verdict(w["target"], body, vsources, verdict)
+                except ValueError:
                     continue
-            # 有据让步门控（分层）：成熟观点的修订需新论据（校验后出处至少一个不在旧依据里）；
-            # 先验（含刚被标记证伪的）走轻门控——它本就未经验证，被现实打磨是成熟不是翻案
-            if _field_of(old["content"], "状态") not in {"先验", "证伪"}:
-                previous_basis = {(row[0], row[1]) for row in store.conn.execute(
-                    "SELECT parent_memory_id,parent_version FROM memory_dependencies WHERE memory_id=?", (old["id"],))}
-                current_basis = {(source_rows[title]["id"], memory_version(source_rows[title])) for title in valid}
-                has_new_basis = (bool(current_basis - previous_basis) if previous_basis
-                                 else bool(set(valid) - _sources_of(old["content"])))
-                if not has_new_basis:
-                    rejected += 1
+                verified += 1
+            elif verdict == "证伪":
+                # 轻门控：先验被真实经历证伪。先标记不删——同批若有 replaces 它的后继观点，
+                # 由 views 循环接走「曾以为」脉络；无人接棒则收尾扫掉，教训留在墓碑
+                body = _set_state(prior["content"], "证伪")
+                body = re.sub(r"^下次回应：.*$",
+                              lambda match: "下次回应：（已被经历证伪：" + _field_value(note or "与经历矛盾") + "）",
+                              body, count=1, flags=re.M)
+                try:
+                    apply_verdict(w["target"], body, vsources, verdict)
+                except ValueError:
                     continue
-            former = _field_of(old["content"], "主张") or old["title"]
-            content = f'曾以为：{_field_value(former)}\n修订自：{old["id"]}@{replaces["version"]}\n{content}'
-        # A01：压力沿派生链保留——出处含压力记忆的观点自身带压力标记，
-        # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
-        src_pressure = any(title_pressure[s] for s in valid)
-        for s in valid:  # 思辨引用计使用（bump_use）——被消化成观点的见闻/事件与观点同寿
-            src = source_rows.get(s)
-            if src is not None:
-                store.bump_use(src["id"])
-        try:
-            with store.source_transaction():
-                if live_sources(valid) != valid:
-                    raise ValueError("提交前依据失效")
-                if external_input:
-                    current_inputs = {row["id"]: row for row in store.memory_rows(purpose="thought", scope="gui")}
-                    if any(row["id"] not in current_inputs or memory_version(row) != memory_version(current_inputs[row["id"]])
-                           for row in input_rows):
-                        raise ValueError("提交前完整见闻输入失效")
-                    store._check_source_space(len((claim + content + " ".join(valid)).encode("utf-8")))
-                mid = store.insert_memory(
-                    title=claim[:24], content=content, keywords="观点 " + " ".join(valid),
-                    layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
+                pending_falsified[prior["id"]] = (
+                    f"先验 #{prior['id']}@{w['target']['version']} 被经历证伪："
+                    f"{note or '真实经历与之矛盾'}（依据：{'、'.join(vsources)}）"
                 )
-                store.bind_derived_memory(mid, input_rows if external_input else [source_rows[s] for s in valid], scope="gui")
-                if old is not None:
-                    live_target(replaces)  # Immediately before writing the ID-bound retirement.
-                    store.conn.execute('INSERT OR IGNORE INTO view_revisions VALUES(?,?,?,?)',
-                        (old['id'], mid, '新证据修订；输入版本 ' + replaces['version']
-                         + '；提交版本 ' + memory_version(old), time.time()))
-                    if not external_input:
-                        store.expire_memory(old["id"], reason=f"观点被新证据修订：#{old['id']} → #{mid}")
-                        pending_falsified.pop(old["id"], None)
-        except ValueError:
-            dropped += 1
-            continue
-        if old is not None and not external_input:
-            revised += 1
-        else:
-            added += 1
+                falsified += 1
 
-    # 收尾扫除：被证伪但同批无人接棒（无 replaces 后继）的先验——退役，教训留在墓碑
-    for mid, falsify_reason in pending_falsified.items():
-        try:
-            target = live_target({"id": mid})
-        except ValueError:
-            continue
-        if _field_of(target["content"], "状态") == "证伪":
-            store.expire_memory(mid, falsify_reason)
+        added = revised = rejected = dropped = 0
+        for v in views:
+            claim = v["claim"].strip()
+            sources = v["sources"]
+            valid = live_sources(sources)  # A01：出处必须逐字存在于本次材料
+            if not valid:
+                dropped += 1  # 空出处或虚构出处：整条丢弃，不给"无中生有的深刻"留门
+                continue
+            interp = v.get("interp") if isinstance(v.get("interp"), dict) else {}
+            kind = str(interp.get("kind", "经历")).strip() or "经历"
+            if external_input:
+                kind = "见闻"
+            if kind not in {"经历", "推断", "用户", "捐赠", "见闻"}:
+                kind = "经历"
+            content = (
+                f'主张：{_field_value(claim)}\n'
+                f'遭遇：{_field_value(str(v.get("encounter", "")).strip() or "（未记）")}\n'
+                f'事实：{_field_value(str(v.get("facts", "")).strip() or "（未记）")}\n'
+                f'解释：{kind}——{_field_value(str(interp.get("note", "")).strip() or "（未记）")}\n'
+                f'不确定：{_field_value(str(v.get("missing", "暂无")).strip() or "暂无")}\n'
+                f'下次回应：{_field_value(str(v.get("next_response", "暂无")).strip() or "暂无")}\n'
+                f'出处：{"、".join(valid)}\n'
+                f'状态：{"先验" if external_input else "验证"}'
+            )
+            replaces = v["replaces"]
+            try:
+                old = live_target(replaces)
+            except ValueError:
+                rejected += 1
+                continue  # A stale replacement must never become an unrelated new view.
+            if old is not None and (_field_of(old["content"], "主张") or old["title"]) == claim:
+                continue
+            if old is not None:
+                if not external_input and any(source_rows[title]["id"] in store.dependent_memories([old["id"]])
+                                              for title in valid):
+                    rejected += 1
+                    continue
+                if external_input:
+                    from .learning import source_versions
+                    old_sources = store.observation_sources(old['id'], scope='gui')
+                    new_sources = [p for row in material if row['origin'] != 'conversation'
+                                   for p in store.observation_sources(row['id'],scope='gui')]
+                    if not old_sources or not set(source_versions(new_sources))-set(source_versions(old_sources)):
+                        rejected += 1
+                        continue
+                # 有据让步门控（分层）：成熟观点的修订需新论据（校验后出处至少一个不在旧依据里）；
+                # 先验（含刚被标记证伪的）走轻门控——它本就未经验证，被现实打磨是成熟不是翻案
+                if _field_of(old["content"], "状态") not in {"先验", "证伪"}:
+                    previous_basis = {(row[0], row[1]) for row in store.conn.execute(
+                        "SELECT parent_memory_id,parent_version FROM memory_dependencies WHERE memory_id=?", (old["id"],))}
+                    current_basis = {(source_rows[title]["id"], memory_version(source_rows[title])) for title in valid}
+                    has_new_basis = (bool(current_basis - previous_basis) if previous_basis
+                                     else bool(set(valid) - _sources_of(old["content"])))
+                    if not has_new_basis:
+                        rejected += 1
+                        continue
+                former = _field_of(old["content"], "主张") or old["title"]
+                content = f'曾以为：{_field_value(former)}\n修订自：{old["id"]}@{replaces["version"]}\n{content}'
+            # A01：压力沿派生链保留——出处含压力记忆的观点自身带压力标记，
+            # 后续演化与晋升闸门按压力材料对待，不回流为普通人格依据
+            src_pressure = any(title_pressure[s] for s in valid)
+            for s in valid:  # 思辨引用计使用（bump_use）——被消化成观点的见闻/事件与观点同寿
+                src = source_rows.get(s)
+                if src is not None:
+                    store.bump_use(src["id"])
+            try:
+                with store.source_transaction():
+                    if live_sources(valid) != valid:
+                        raise ValueError("提交前依据失效")
+                    if external_input:
+                        current_inputs = {row["id"]: row for row in store.memory_rows(purpose="thought", scope="gui")}
+                        if any(row["id"] not in current_inputs or memory_version(row) != memory_version(current_inputs[row["id"]])
+                               for row in input_rows):
+                            raise ValueError("提交前完整见闻输入失效")
+                        store._check_source_space(len((claim + content + " ".join(valid)).encode("utf-8")))
+                    mid = store.insert_memory(
+                        title=claim[:24], content=content, keywords="观点 " + " ".join(valid),
+                        layer="longterm", kind="stance", pressure=1 if src_pressure else 0,
+                    )
+                    store.bind_derived_memory(mid, input_rows if external_input else [source_rows[s] for s in valid], scope="gui")
+                    if old is not None:
+                        live_target(replaces)  # Immediately before writing the ID-bound retirement.
+                        store.conn.execute('INSERT OR IGNORE INTO view_revisions VALUES(?,?,?,?)',
+                            (old['id'], mid, '新证据修订；输入版本 ' + replaces['version']
+                             + '；提交版本 ' + memory_version(old), time.time()))
+                        if not external_input:
+                            store.expire_memory(old["id"], reason=f"观点被新证据修订：#{old['id']} → #{mid}")
+                            pending_falsified.pop(old["id"], None)
+            except ValueError:
+                dropped += 1
+                continue
+            if old is not None and not external_input:
+                revised += 1
+            else:
+                added += 1
 
-    parts = [f"新增 {added} 条观点"]
-    if revised:
-        parts.append(f"修订 {revised} 条")
-    if verified:
-        parts.append(f"验证先验 {verified} 条")
-    if falsified:
-        parts.append(f"证伪先验 {falsified} 条")
-    if rejected:
-        parts.append(f"拒绝无据修订 {rejected} 条")
-    if dropped:
-        parts.append(f"丢弃无实据观点 {dropped} 条")
-    summary = "、".join(parts)
+        # 收尾扫除：被证伪但同批无人接棒（无 replaces 后继）的先验——退役，教训留在墓碑
+        for mid, falsify_reason in pending_falsified.items():
+            try:
+                target = live_target({"id": mid})
+            except ValueError:
+                continue
+            if _field_of(target["content"], "状态") == "证伪":
+                store.expire_memory(mid, falsify_reason)
 
-    changed = added or revised or verified or falsified
-    if changed and current_md:
-        # 「我现在的想法」恒由库内已接纳观点确定性重建（A01 推广：模型叙事弃用——
-        # 信任模型的全文重写会漏掉库内已有观点与元先验）
-        narrative = _render_stances(store) or "（暂无当前可用观点）"
-        from .persona_transaction import atomic_text
-        new_md = _write_section(current_md, narrative)
-        atomic_text(paths.PERSONA_FILE, new_md)
-    elif changed:
-        summary += "；当前未安装人格，观点保留在记忆库，未创建缺少底色的人格文件"
-    store.mark_thought_rows(material)
-    _append_changelog(f"思辨：{summary}")
-    store.meta_set("last_deliberate_at", time.time())
-    return f"思辨完成：{summary}。" if changed else f"思辨完成：{summary}，想法不变。"
+        parts = [f"新增 {added} 条观点"]
+        if revised:
+            parts.append(f"修订 {revised} 条")
+        if verified:
+            parts.append(f"验证先验 {verified} 条")
+        if falsified:
+            parts.append(f"证伪先验 {falsified} 条")
+        if rejected:
+            parts.append(f"拒绝无据修订 {rejected} 条")
+        if dropped:
+            parts.append(f"丢弃无实据观点 {dropped} 条")
+        summary = "、".join(parts)
+
+        changed = added or revised or verified or falsified
+        if changed and current_md and update_persona:
+            # 「我现在的想法」恒由库内已接纳观点确定性重建（A01 推广：模型叙事弃用——
+            # 信任模型的全文重写会漏掉库内已有观点与元先验）
+            narrative = _render_stances(store) or "（暂无当前可用观点）"
+            from .persona_transaction import atomic_text
+            new_md = _write_section(current_md, narrative)
+            atomic_text(paths.PERSONA_FILE, new_md)
+        elif changed and update_persona:
+            summary += "；当前未安装人格，观点保留在记忆库，未创建缺少底色的人格文件"
+        store.mark_thought_rows(material)
+        if update_persona:
+            _append_changelog(f"思辨：{summary}")
+        store.meta_set("last_deliberate_at", time.time())
+        return f"思辨完成：{summary}。" if changed else f"思辨完成：{summary}，想法不变。"
 
 
 def deliberate_if_due(store: Store, client, cfg: Config, *, request_id=None) -> str | None:

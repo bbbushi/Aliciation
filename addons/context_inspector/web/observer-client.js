@@ -10,11 +10,14 @@
       headers: { "X-Alice-Intent": "observer" }, cache: "no-store",
     });
     const d = await r.json().catch(() => ({}));
-    if (d.scope) scope = d.scope;
+    if (d.scope) {
+      if (scope && d.scope !== scope) window.dispatchEvent(new Event("alice-observer-scope-changed"));
+      scope = d.scope;
+    }
     return d;
   }
 
   function resetScope() { scope = null; }
 
-  window.ContextInspectorClient = { get, resetScope };
+  window.ContextInspectorClient = { get, resetScope, getScope: () => scope };
 })();

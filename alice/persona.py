@@ -249,6 +249,11 @@ def validate_import_plan(plan: dict) -> None:
             or not isinstance(plan.get("adopted"), list)
             or plan.get("audit_dir") is not None and not isinstance(plan["audit_dir"], str)):
         raise ValueError("人格安装计划字段损坏")
+    if "material_mode" in plan:
+        if (plan["material_mode"] not in ("full", "registry") or plan["adopted"]
+                or type(plan.get("reset")) is not bool or not isinstance(plan.get("material_token"), str)
+                or not re.fullmatch(r"mat_[0-9a-f]{32}", plan["material_token"])):
+            raise ValueError("原文材料安装计划字段无效")
     for item in plan["adopted"]:
         if (not isinstance(item, dict) or any(not isinstance(item.get(key), str) for key in
                 ("id", "claim", "original_claim", "from_donor", "note", "decision"))
@@ -763,7 +768,12 @@ def _commit_import(store: Store, cfg: Config, op_id: str, candidate_md: str,
                         f"出处：底色文档·《{donor_field}》；候选 {a['id']}；导入 {op_id}\n"
                         f"状态：先验"),
             "keywords": "观点 来历 收养 未验证先验", "layer": "longterm", "kind": "stance"})
-    install(store, op_id, candidate_md, current_md, priors, META_PRIORS)
+    if snapshot.get("format_version") == "persona-material-v1":
+        if adopted:
+            raise ValueError("原文表达安装不能携带认知收养候选")
+        install(store, op_id, candidate_md, current_md, [], ())
+    else:
+        install(store, op_id, candidate_md, current_md, priors, META_PRIORS)
     # The journal is the authoritative audit; a changelog failure must not turn a
     # committed installation into an apparent retryable model operation.
     try:
@@ -994,6 +1004,8 @@ def commit_import_plan(store: Store, cfg: Config, plan: dict, *,
         raise ValueError("导入计划所属会话已变化")
     if not reset and "before_version" in plan and plan["before_version"] != store.meta_get("persona_version"):
         raise ValueError("导入计划所属人格版本已变化")
+    if plan.get("material_mode") is not None and cfg.persona.expression_mode != plan["material_mode"]:
+        raise ValueError("材料安装计划的装配模式与当前配置不符，请核对恢复记录，未覆盖数据")
     current_md = None if reset else plan["current_md"]
     audit_dir = PERSONA_IMPORT_DIR / plan["op_id"]
     if plan.get("audit_dir") and archived_from is not None:
@@ -1056,11 +1068,11 @@ def _set_growth_meta(store: Store, version: int, watermark: float) -> None:
 
 
 def _commit_section_changes(store: Store, current: str, md: str, changes: list[dict],
-                            watermark: float, mode: str) -> int:
+                            watermark: float, mode: str, *, cfg=None) -> int:
     from .persona_growth import digest
     from .persona_context import parse_snapshot, validate_expression
     import os
-    validate_expression(parse_snapshot(md))
+    validate_expression(parse_snapshot(md), cfg=cfg)
     if store.conn.in_transaction:
         raise ValueError("人格修改不能嵌入未完成的数据库事务")
     if persona_md() != current:
@@ -1203,7 +1215,7 @@ def evolve_steps(store: Store, client, cfg: Config, *, request_id=None):
     if not changes:
         store.meta_set("last_evolve_at", watermark)
         return "新依据未形成小节修改，人格不变。"
-    version = _commit_section_changes(store, current, md, changes, watermark, "ordinary_growth")
+    version = _commit_section_changes(store, current, md, changes, watermark, "ordinary_growth", cfg=cfg)
     titles = "、".join(change["title"] for change in changes)
     return f"人格已分节演化至 v{version}：{titles}。"
 

@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>上下文观测 · Context Insights</title>
 <link rel="stylesheet" href="inspector.css">
+<link rel="stylesheet" href="/context-viewer.css">
 </head>
 <body>
 <header class="ci-top">
   <div class="ci-head-row">
     <h1>上下文观测</h1>
+    <button id="ci-full-context" class="ci-btn" type="button" disabled>查看完整上下文</button>
     <p id="ci-status" class="ci-status" role="status">正在读取插件状态…</p>
   </div>
   <div id="ci-requestbar" class="ci-requestbar"></div>
@@ -43,6 +45,7 @@
   </section>
 </main>
 <script src="observer-client.js"></script>
+<script src="/context-viewer.js"></script>
 <script src="inspector.js"></script>
 </body>
 </html>

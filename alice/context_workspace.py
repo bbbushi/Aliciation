@@ -13,12 +13,9 @@ from .context import estimate_tokens
 from .context_memory import dump, tool, version, prior_notice
 from .memory_projection import conversation_content
 
-TOOLS = [
-    tool('context_keep', '提议跨轮保留本轮memory_load返回且已随模型请求发送的普通记忆；宿主决定容量与期限，不是永久记忆。',
-         {'refs': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 4}}, ['refs']),
-    tool('context_release', '用本轮给出的精确引用移出工作集，只影响后续轮次；不删记忆、历史或本轮工具回执，不解除已暴露依赖。',
-         {'refs': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 8}}, ['refs']),
-]
+from .capability_registry import sdk_group
+
+TOOLS = sdk_group("workspace")
 
 
 class WorkingSet:

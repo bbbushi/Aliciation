@@ -29,7 +29,8 @@ GUI_READ_PATHS = {"/api/state", "/api/history", "/api/persona", "/api/settings",
                   "/api/metrics", "/api/chat/activity"}
 GUI_WRITE_PATHS = {"/api/persona", "/api/seed", "/api/reset", "/api/settings",
                    "/api/metrics/toggle", "/api/persona/expression",
-                   "/api/persona/expression-update", "/api/persona/residency"}
+                   "/api/persona/expression-update", "/api/persona/residency",
+                   "/api/persona/material"}
 
 
 def _strict_object(pairs):
@@ -308,20 +309,25 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             if connectors is None:
                 self._json({"error": "连接入口尚未准备好，请重新启动 Alice", "code": "connector_unavailable"}, 503)
                 return
+            switch = False
             try:
                 if not posting:
                     self._json(connectors.status())
                     return
                 body = self._bounded_body()
-                if (set(body) - {"action", "operation_id"}
-                        or body.get("action") not in {"scan", "cancel", "pair", "confirm", "run", "stop", "install", "recheck"}
+                switch = body.get("action") == "set_channel_enabled"
+                fields = {"action", "operation_id", "enabled", "session_epoch", "config_revision"} if switch else {"action", "operation_id"}
+                if (set(body) - fields
+                        or body.get("action") not in {"scan", "cancel", "pair", "confirm", "run", "stop", "install", "recheck", "set_channel_enabled"}
                         or ("operation_id" in body and not isinstance(body["operation_id"], str))):
                     raise ChannelError(400, "invalid_request", "连接操作无效，请刷新页面")
                 self._json(connectors.action(body), 202)
             except ChannelError as exc:
                 self._channel_error(exc)
-            except ValueError:
-                self._json({"error": "连接操作无效，请刷新页面", "code": "invalid_request"}, 400)
+            except ConfigConflict as exc:
+                self._json({"error": str(exc), "code": "config_conflict"}, 409)
+            except ValueError as exc:
+                self._json({"error": str(exc) if switch else "连接操作无效，请刷新页面", "code": "invalid_request"}, 400)
             except Exception:
                 self._json({"error": "连接状态暂时无法确认，请刷新后查看", "code": "connector_unavailable"}, 503)
 
@@ -518,6 +524,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("app.js", "application/javascript; charset=utf-8")
             elif path == "/observer.js":
                 self._file("observer.js", "application/javascript; charset=utf-8")
+            elif path == "/context-viewer.js":
+                self._file("context-viewer.js", "application/javascript; charset=utf-8")
+            elif path == "/context-viewer.css":
+                self._file("context-viewer.css", "text/css; charset=utf-8")
             elif path == "/evaluations.js":
                 self._file("evaluations.js", "application/javascript; charset=utf-8")
             elif path == "/qq.js":
@@ -566,9 +576,9 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             elif path == "/addons/context-inspector" or path.startswith("/addons/context-inspector/"):
                 self._addon_static(path)
             elif path in ("/api/plugins/context-inspector/status", "/api/plugins/context-inspector/requests",
-                          "/api/plugins/context-inspector/request", "/api/plugins/context-inspector/body"):
+                          "/api/plugins/context-inspector/request", "/api/plugins/context-inspector/body", "/api/plugins/context-inspector/call"):
                 self._plugin_get(path)
-            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body"):
+            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body", "/api/observer/call"):
                 self._observer_get(path)
             elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
                 self._evaluation_route(path)
@@ -610,6 +620,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/observer/persona-operations": {"scope", "limit"},
                 "/api/observer/requests": {"scope", "limit", "request_id"},
                 "/api/observer/body": {"scope", "hash", "request_id"},
+                "/api/observer/call": {"scope", "request_id", "call_id"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -632,7 +643,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                       "/api/observer/calls": svc.observer_llm_calls,
                       "/api/observer/persona-operations": svc.observer_persona_operations,
                       "/api/observer/requests": svc.observer_context_requests,
-                      "/api/observer/body": svc.observer_context_body}[path]
+                      "/api/observer/body": svc.observer_context_body,
+                      "/api/observer/call": svc.observer_context_call}[path]
             self._json(reader(**params))
 
         # ---- 上下文观测插件（20261107 插件设计 §4/§6）：固定静态托管 + 薄查询命名空间 ----
@@ -694,6 +706,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 "/api/plugins/context-inspector/requests": {"scope", "limit"},
                 "/api/plugins/context-inspector/request": {"scope", "request_id"},
                 "/api/plugins/context-inspector/body": {"scope", "request_id", "hash"},
+                "/api/plugins/context-inspector/call": {"scope", "request_id", "call_id"},
             }[path]
             try:
                 query = urlparse(self.path).query
@@ -715,7 +728,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             reader = {"/api/plugins/context-inspector/status": svc.plugin_inspector_status,
                       "/api/plugins/context-inspector/requests": svc.plugin_inspector_requests,
                       "/api/plugins/context-inspector/request": svc.plugin_inspector_request,
-                      "/api/plugins/context-inspector/body": svc.plugin_inspector_body}[path]
+                      "/api/plugins/context-inspector/body": svc.plugin_inspector_body,
+                      "/api/plugins/context-inspector/call": svc.plugin_inspector_call}[path]
             self._json(reader(**params))
 
         def _evaluation_route(self, path: str) -> None:
@@ -843,6 +857,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": str(exc)}, 400)
                 except Exception:
                     self._json({"error": "人格装配操作未能确认，请刷新状态核对后再重试"}, 500)
+            elif path == "/api/persona/material":
+                try:
+                    self._json(svc.material_import(self._bounded_body(262144)))
+                except ChannelError:
+                    raise
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+                except Exception:
+                    self._json({"error": "原文材料导入操作未能确认，请刷新状态核对后再重试"}, 500)
             elif path == "/api/persona/expression-update":
                 try:
                     self._json(svc.persona_expression_update(self._bounded_body(1048576)))

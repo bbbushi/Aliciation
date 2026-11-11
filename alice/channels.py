@@ -136,6 +136,10 @@ class ChannelCoordinator:
     def authorize(self, channel_id):
         if channel_id != "qq-owner" or not self.enabled():
             raise ChannelError(403, "channel_disabled", "QQ 渠道未启用或无权访问")
+        from .persona_context import load_persona_snapshot
+        snapshot = load_persona_snapshot()
+        if snapshot and snapshot.get("format_version") == "persona-material-v1":
+            raise ChannelError(409, "persona_channel_unsupported", "当前原文人格不支持QQ，请先在本机切换兼容人格")
 
     def set_ready(self, ready):
         with self.condition:
@@ -370,6 +374,8 @@ class ChannelCoordinator:
 
     def accept_locked(self, request):
         self.check_epoch(request["session_epoch"])
+        if request["channel_id"] != "gui":
+            self.authorize(request["channel_id"])  # Recheck after the switch's shared admission slot.
         now = time.time()
         with self.service.store.conn:
             self.service.store.conn.execute(

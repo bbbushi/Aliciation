@@ -12,32 +12,13 @@ STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
 ANCHOR_BUDGET_CHARS = 500
 EXPRESSION_POLICY_VERSION = 5
-USAGE_POLICY_VERSION = 4
+USAGE_POLICY_VERSION = 5
 _USAGE_INSTRUCTION = (
-    ADOPTION_GUIDANCE + "\n【表达使用方式：用户选定的长期说话习惯】\n"
-    "日常对话默认用下方同用途表达材料中适用的措辞、句子节奏和反应方式组织回答。"
-    "当前明确任务决定内容、格式和详略；正式改写或结果汇报也遵守任务要求，不强加口癖或玩笑。\n"
-    "按情境的触发、初始回应、后续转折与停止条件使用规则。"
-    "条目若要求被认真追问后才转折，就等待相应追问；无需为展示人格层次自行制造沉重话题。"
-    "包内的长度与展开限制也作用于自我介绍、关怀和事实澄清。\n"
-    "样本示范整段接话方式，包括反应顺序、节奏和收放，可以自然变奏；"
-    "其中的话题、关怀建议、反问和收尾不是每轮必做动作，按当前话题和用户意愿选择；"
-    "不能用样例中的反问抵消用户明确的互动反馈。"
-    "其中不成立的现实前提不照搬。张力是互动倾向，不证明你有对应心理经历，"
-    "无需把张力表复述成自我介绍，也不为人物厚度补写过去的心路或共同往事。\n"
-    "可以直接提出此刻的想法、玩笑和可做的事。能力或事实需要澄清时简短准确地回答，"
-    "随后回到话题，除非仍有误解或用户追问，不重复身份或身体限制清单。"
-    "延续真实对话内容时，无需沿用旧回复中偏离这些习惯的表达。\n"
-    "原稿和样本中的角色身份、身世、身体、关系与行动不因此成为事实或授权；"
-    "事实、未知、失败、许可和用户停止要求仍按宿主规则处理。"
+    "【人格表达材料】以下材料决定日常措辞、语气、篇幅、主动性和接话方式。"
+    "按当前情境采用适用的表达与反应顺序，结合完整示例体会节奏和转折。"
+    "用户对当前回应有明确要求时，据此调整本次表达。"
 )
-_USAGE_REMINDER = (
-    "【表达使用提醒：沿用同用途长期习惯】\n"
-    "按本轮话题采用前部表达材料中适用的语感与反应方式；"
-    "区分初始回应和后续转折的条件，无需每轮呈现所有人格层次。"
-    "延续事实与话题时，无需沿用旧回复中偏离这些习惯的措辞。"
-    "当前明确任务决定内容、格式与详略；事实、能力、失败、许可和停止边界照常适用。"
-)
+_USAGE_REMINDER = "【表达提醒】沿用本轮人格材料的语感与反应习惯，结合当前情境和用户要求回应。"
 _SAMPLE_LINE = re.compile(r"^- 【(?P<kind>[^·】]+)·(?P<sid>[A-Za-z0-9_-]+)】(?P<body>.*)$")
 
 
@@ -159,6 +140,15 @@ def parse_snapshot(raw: str) -> dict:
     from . import expression
     if expression.MARKER in raw and not any(expression.MARKER in body for body in sections.values()):
         raise ValueError("表达版本标记移出了人格小节，不能作为 v1 运行")
+    from . import persona_material
+    material = persona_material.decode_sections(sections)
+    if material is not None:
+        # persona-material-v1（原文保留与轻分类导入 §4.3）：封套内是原文与导航
+        # 元数据；运行投影只渲染选中片段，外层小节解析不进入模型。
+        return {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
+                "sections": sections, "sample_ids": [], "samples": [],
+                "expression_package": None, "format_version": "persona-material-v1",
+                "assembly": None, "material": material}
     package, assembly = expression.decode_sections_with_assembly(sections)
     if package is not None:
         return {"raw": raw, "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
@@ -251,7 +241,8 @@ def _metadata(snapshot, text, ids, reasons, **extra):
             "policy_version": EXPRESSION_POLICY_VERSION, "sample_ids": ids,
             "chars": len(text), "estimated_tokens": estimate_tokens(text),
             "format_version": snapshot.get("format_version", "expression-v1") if snapshot else None,
-            "coverage_status": "v2_package" if snapshot and snapshot.get("expression_package") else "v1_not_reviewed",
+            "coverage_status": ("source_material" if snapshot and snapshot.get("format_version") == "persona-material-v1"
+                                else "v2_package" if snapshot and snapshot.get("expression_package") else "v1_not_reviewed"),
             "degradation": reasons,
             **expression_coverage_metadata(snapshot.get("expression_package") if snapshot else None), **extra}
 
@@ -274,6 +265,32 @@ def render_expression_reference(snapshot: dict | None, purpose: str = "chat", *,
         if metadata is not None:
             metadata.update(_metadata(None, "", [], ["no_persona"]))
         return ""
+    if snapshot.get("format_version") == "persona-material-v1":
+        # §6.1：full 指当前用途全部已确认可用的表达块与必要上下文，不是整个
+        # 源文件；超预算整体报错，不截断。首版只接通 GUI 主聊天（§10）。
+        from . import persona_material
+        if purpose != "chat":
+            raise ValueError("persona-material-v1 首版只支持 GUI 主聊天；QQ/协作者用途投影未接通（设计 §10）")
+        material = snapshot["material"]
+        plan = persona_material.projection_plan(material, cfg)
+        if "full" not in plan["supported_modes"]:
+            raise ValueError("原文完整装配不可用：" + "；".join(plan["mode_issues"]["full"]))
+        text = plan["full_text"]
+        if metadata is not None:
+            confirmed = [bid for bid, row in material["classifications"].items()
+                         if isinstance(row, dict) and row.get("status") == "accepted"]
+            metadata.update(_metadata(snapshot, text, [], []))
+            metadata.update({"format_version": "persona-material-v1",
+                             "material_revision": material.get("revision"),
+                             "source_sha256": material.get("source_sha256"),
+                             "block_count": len(material["blocks"]),
+                             "confirmed_block_ids": confirmed,
+                             "injected_block_ids": persona_material.full_ids(material)[0],
+                             "excluded_blocks": plan["full_exclusions"],
+                             "effective_limits": plan["limits"],
+                             "core_block_ids": list(material["core_block_ids"]),
+                             "bundle_count": len(material["bundles"])})
+        return text
     if snapshot.get("expression_package") is not None:
         from . import expression
         selected = {}
@@ -313,7 +330,14 @@ def render_expression_reference(snapshot: dict | None, purpose: str = "chat", *,
 
 
 def validate_expression(snapshot: dict, *, cfg=None) -> None:
-    """All production purposes must accept an explicitly saved snapshot."""
+    """Validate declared purposes and the active projection, without widening channels."""
+    if snapshot.get("format_version") == "persona-material-v1":
+        from . import persona_material as pm
+        plan = pm.projection_plan(snapshot["material"], cfg)
+        mode = getattr(getattr(cfg, "persona", None), "expression_mode", None)
+        if (mode is not None and mode not in plan["supported_modes"]) or not plan["supported_modes"]:
+            raise ValueError("原文人格没有适用于当前配置的有效投影，请核对核心、分类与预算")
+        return
     render_full(snapshot, cfg=cfg)
     render_expression_reference(snapshot, purpose="qq", cfg=cfg)
     render_expression_reference(snapshot, purpose="worker_summary", cfg=cfg)
@@ -332,11 +356,12 @@ def render_full(snapshot: dict | None, *, metadata: dict | None = None, purpose=
     out = [f"# {head.group(1).strip() if head else 'Alice'}"]
     # Runtime guidance lives outside the admitted expression package. Do not
     # rewrite its source, review contract, per-purpose selection or frozen cap.
-    usage = _USAGE_INSTRUCTION if reference and purpose in {"chat", "qq"} else ""
+    material_format = snapshot.get("format_version") == "persona-material-v1"
+    usage = _USAGE_INSTRUCTION if reference and not material_format and purpose in {"chat", "qq"} else ""
     if reference:
         if usage:
             out.append("## 表达使用\n\n" + usage)
-        out.append("## 底色 · 气质与风格\n\n" + reference)
+        out.append(reference if material_format else "## 底色 · 气质与风格\n\n" + reference)
     out.extend(f"## {key}\n\n{body}" for key, body in sections.items() if body)
     text = "\n\n".join(out) + "\n"
     if metadata is not None:
@@ -397,17 +422,10 @@ def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参�
 
 # ---- 注册表模式（人格注册表与模型按需装配-架构设计 v1 §2/§6） ----
 
-REGISTRY_USAGE_POLICY_VERSION = 5
+REGISTRY_USAGE_POLICY_VERSION = 6
 _REGISTRY_USAGE = (
-    ADOPTION_GUIDANCE + "\n核心是默认语感和相处方式，自然用于这次回答。场景索引只作路由，未读不等于已知正文。"
-    "当前对话明确命中索引线索时，先用persona_load展开，再按完整反应、例外和样本组织回应；"
-    "无关闲聊不展开场景，不为展示人格制造话题，也不向用户汇报读取流程。"
-    "读取受限或失败时凭核心回答，不猜场景正文。表达资料不是经历、身份、关系或操作授权；"
-    "事实与能力照实，当前任务和用户停止要求优先。样本用来体会语感，不机械复述。"
-    "条目未载入只表示本轮未展开，不表示人格被遗忘、否定或永久舍弃；"
-    "样本的话题、关怀建议、反问和收尾不是每轮必做动作，按当前话题和用户意愿选择；"
-    "不能用样本中的反问抵消用户明确的互动反馈。"
-    "正式任务不强加口癖或玩笑。"
+    _USAGE_INSTRUCTION + "核心提供日常表达；场景目录用于选择与当前情境相关的材料，"
+    "需要具体反应和示例时用persona_load读取，再结合完整条件回应。"
 )
 
 
@@ -447,5 +465,47 @@ def render_registry_persona(snapshot: dict, contract: dict, package: dict, *,
             "classification_digest": persona_residency.classification_digest(contract),
             "classification_revision": contract.get("classification_revision"),
             "catalogue_bundle_ids": [b["id"] for b in contract["bundles"]],
+        })
+    return text
+
+
+# ---- 原文保留模式（人格原文保留与轻分类导入-优化设计 v1 §6） ----
+
+MATERIAL_USAGE_POLICY_VERSION = 3
+
+
+def render_material_registry_persona(snapshot: dict, registry, *,
+                                     metadata: dict | None = None, purpose: str = "chat") -> str:
+    """原文保留路径 registry 投影（设计 §6.1）：常驻原文片段 + 使用说明。
+
+    目录由 registry.catalogue_block() 单独注入（loop 既有接线）；本函数只渲染
+    核心。正文一律取自原文区间，不做字段化改写。
+    """
+    from . import persona_material
+    if not snapshot or snapshot.get("format_version") != "persona-material-v1":
+        raise ValueError("render_material_registry_persona 只接受 persona-material-v1 快照")
+    material = snapshot["material"]
+    core_text = registry.plan["core_text"]
+    sections = dict(snapshot["sections"])
+    for key in ("底色 · 气质与风格", "底色 · 情境反应", "底色 · 表达样本"):
+        sections.pop(key, None)
+    head = re.search(r"^#\s+(.+)$", snapshot["raw"].strip(), re.M)
+    out = [f"# {head.group(1).strip() if head else 'Alice'}"]
+    out.append(core_text)
+    out.extend(f"## {key}\n\n{body}" for key, body in sections.items() if body)
+    text = "\n\n".join(out) + "\n"
+    if metadata is not None:
+        metadata.update({
+            "projection_strategy": "material_core_registry",
+            "material_usage_policy_version": MATERIAL_USAGE_POLICY_VERSION,
+            "expression_adoption_policy_version": ADOPTION_POLICY_VERSION,
+            "format_version": "persona-material-v1",
+            "material_revision": material.get("revision"),
+            "registry_chars": len(text),
+            "registry_estimated_tokens": estimate_tokens(text),
+            "core_chars": len(core_text),
+            "core_block_ids": list(registry.plan["core_ids"]),
+            "assembly_version": registry.plan["assembly_version"],
+            "source_sha256": material.get("source_sha256"),
         })
     return text
