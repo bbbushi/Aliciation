@@ -1,12 +1,18 @@
 """Conversation-only views of memory bodies; stored evidence stays untouched.
 
-Only the exact prior template emitted by persona._commit_import is recognized.
+The usage notice is shared by direct/indexed conversation memory areas.
+Only the exact prior template emitted by persona._commit_import is rewritten.
 This is not a permission check or a generic field scrubber: unknown/changed
 formats remain verbatim, and all callers retain their existing access checks.
 """
 from __future__ import annotations
 
 import re
+
+RECORD_USAGE_GUIDANCE = (
+    "按记录的说话者与来源取用资料；旧AI自述即使已保存，也只证明说过，"
+    "不是该事件发生或身体体验的依据。"
+)
 
 
 _FIELDS = ("遭遇", "事实", "主张", "解释", "原候选", "不确定", "下次回应", "出处", "状态")

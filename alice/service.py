@@ -704,6 +704,10 @@ class ChatService:
 
     def install_persona(self, md_text: str, source: str = "用户导入", reset: bool = False,
                         *, resume_op_id: str | None = None) -> dict:
+        if not isinstance(md_text, str) or "## 底色" not in md_text:
+            raise ValueError("新原稿请使用原文保留＋六层理解导入；结构化生成已退出，此入口仅恢复 Alice 文件")
+        if resume_op_id is not None:
+            raise ValueError("旧结构化生成不再续跑；请用原稿新建六层导入，或恢复已生成的 Alice 文件")
         def installation_result():
             # Both first completion and read-only replay expose the same
             # installed coverage, captured while the operation lock is held.
@@ -726,28 +730,15 @@ class ChatService:
                 from . import persona_material as pm
                 if pm.MARKER_PREFIX in md_text and self._channels.enabled():
                     raise ValueError("原文人格尚不支持QQ，请先暂停QQ渠道，再恢复这份人格")
-                if resume_op_id is not None:
-                    from .persona_transaction import validate_op_id
-                    validate_op_id(resume_op_id)
-                    if "## 底色" in md_text:
-                        raise ValueError("直装人格没有可续跑的模型准备阶段")
-                    persona.recover_imports(self.store)
-                    if persona.resumed_import_committed(self.store, md_text, source, reset, resume_op_id):
-                        # Completed duplicate requests are read-only: in
-                        # particular reset must not archive a second time.
-                        self._channels.set_ready(persona.persona_md() is not None)
-                        return installation_result()
+                # Validate recovery before draining workers or archiving anything.
+                persona.prepare_direct_install(self.store, self.cfg, md_text, source)
             if reset:
                 self._workers.drain()
                 self._workers.join_worker_reports()
             with self._lock:
-                # Both install modes share the same checkpointed external-card
-                # preparation. Reset archives only after every stage succeeds.
+                # Existing formats recover without model preparation.
                 plan = None
                 archived = None
-                if "## 底色" not in md_text:
-                    plan = persona.prepare_import(self.client, self.cfg, md_text, source, False,
-                                                  store=self.store, resume_op_id=resume_op_id, reset=reset)
                 if reset:
                     if plan is None:
                         plan = persona.prepare_direct_install(self.store, self.cfg, md_text, source)
@@ -900,9 +891,10 @@ class ChatService:
             "status": {"action"}, "detail": {"action", "token"},
             "prepare": {"action", "source_text", "name"},
             "edit_active": {"action", "session_epoch", "persona_revision"},
+            "reinterpret_active": {"action", "session_epoch", "persona_revision"},
             "resume": {"action", *binding}, "cancel": {"action", *binding},
             "split": {"action", *binding, "block_id", "offsets"},
-            "update": {"action", *binding, "classifications", "context_updates", "core_block_ids", "bundle_ids", "bundles"},
+            "update": {"action", *binding, "classifications", "interpretation_updates", "context_updates", "core_block_ids", "bundle_ids", "bundles"},
             "apply": {"action", *binding, "mode", "config_revision"}}
         if action not in permitted or set(payload) - permitted[action]:
             raise ValueError("材料导入动作或字段无效")
@@ -927,6 +919,8 @@ class ChatService:
                         payload.get("source_text"), name=payload.get("name")))
                 if action == "edit_active":
                     return decorate(prep.material_edit_active(self.store, self.cfg, payload))
+                if action == "reinterpret_active":
+                    return decorate(prep.material_reinterpret_active(self.store, self.client, self.cfg, payload))
                 if action == "resume":
                     return decorate(prep.material_resume(self.store, self.cfg, payload))
                 if action == "update":

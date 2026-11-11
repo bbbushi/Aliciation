@@ -12,13 +12,13 @@ STYLE_BUDGET_CHARS = 1200
 SAMPLES_BUDGET_CHARS = 1200
 ANCHOR_BUDGET_CHARS = 500
 EXPRESSION_POLICY_VERSION = 5
-USAGE_POLICY_VERSION = 5
+USAGE_POLICY_VERSION = 6
 _USAGE_INSTRUCTION = (
-    "【人格表达材料】以下材料决定日常措辞、语气、篇幅、主动性和接话方式。"
-    "按当前情境采用适用的表达与反应顺序，结合完整示例体会节奏和转折。"
+    "【人格表达材料】" + ADOPTION_GUIDANCE
+    + "按当前情境采用适用的表达与反应顺序，结合完整示例体会节奏和转折。"
     "用户对当前回应有明确要求时，据此调整本次表达。"
 )
-_USAGE_REMINDER = "【表达提醒】沿用本轮人格材料的语感与反应习惯，结合当前情境和用户要求回应。"
+_USAGE_REMINDER = "【表达提醒】沿用本轮人格材料的语感与反应习惯，围绕当前交流取材，结合用户要求回应。"
 _SAMPLE_LINE = re.compile(r"^- 【(?P<kind>[^·】]+)·(?P<sid>[A-Za-z0-9_-]+)】(?P<body>.*)$")
 
 
@@ -281,11 +281,12 @@ def render_expression_reference(snapshot: dict | None, purpose: str = "chat", *,
                          if isinstance(row, dict) and row.get("status") == "accepted"]
             metadata.update(_metadata(snapshot, text, [], []))
             metadata.update({"format_version": "persona-material-v1",
+                             "interpretation": plan["interpretation"], "core_demotions": plan["core_demotions"],
                              "material_revision": material.get("revision"),
                              "source_sha256": material.get("source_sha256"),
                              "block_count": len(material["blocks"]),
                              "confirmed_block_ids": confirmed,
-                             "injected_block_ids": persona_material.full_ids(material)[0],
+                             "injected_block_ids": persona_material.full_ids(plan["material"])[0],
                              "excluded_blocks": plan["full_exclusions"],
                              "effective_limits": plan["limits"],
                              "core_block_ids": list(material["core_block_ids"]),
@@ -422,7 +423,7 @@ def render_anchor(snapshot: dict | None, *, boundary: str = "样本是虚构参�
 
 # ---- 注册表模式（人格注册表与模型按需装配-架构设计 v1 §2/§6） ----
 
-REGISTRY_USAGE_POLICY_VERSION = 6
+REGISTRY_USAGE_POLICY_VERSION = 7
 _REGISTRY_USAGE = (
     _USAGE_INSTRUCTION + "核心提供日常表达；场景目录用于选择与当前情境相关的材料，"
     "需要具体反应和示例时用persona_load读取，再结合完整条件回应。"
@@ -471,7 +472,7 @@ def render_registry_persona(snapshot: dict, contract: dict, package: dict, *,
 
 # ---- 原文保留模式（人格原文保留与轻分类导入-优化设计 v1 §6） ----
 
-MATERIAL_USAGE_POLICY_VERSION = 3
+MATERIAL_USAGE_POLICY_VERSION = 5
 
 
 def render_material_registry_persona(snapshot: dict, registry, *,

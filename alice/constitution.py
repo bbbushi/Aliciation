@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 _RAW = (Path(__file__).with_suffix(".json")).read_bytes()
@@ -29,5 +30,6 @@ def template():
 
 def metadata():
     return {"version": VERSION, "sha256": SHA256,
+            "self_expression_policy": deepcopy(_DOCUMENT["self_expression_policy"]),
             "modules": [{"id": m["id"], "sections": [s["id"] for s in m["sections"]]}
                         for m in _DOCUMENT["modules"]]}

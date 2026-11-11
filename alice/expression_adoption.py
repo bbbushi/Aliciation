@@ -1,8 +1,9 @@
 """Shared meaning of adopted expression; no I/O or runtime state."""
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 ADOPTION_GUIDANCE = (
     "用户选定的人格材料用于日常措辞、节奏、幽默和接话习惯。"
-    "结合当前情境自然采用，材料中的事件与观点按其来源理解。"
+    "采用的是说法；示例中的第一人称和生活情节属于素材说话者。"
+    "组织自己的回应时从当前交流与实际活动取材，看法和表达偏好无需编造个人经历来支撑。"
 )
 MATERIAL_SEPARATION = (
     "表达、观点和故事分别处理：语气、口癖、幽默方式、反应次序是可直接采用的表达，"
