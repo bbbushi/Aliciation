@@ -13,13 +13,9 @@ from . import persona_residency
 from .context_memory import dump, tool
 from .context import estimate_tokens
 
-PERSONA_LOAD_TOOLS = [
-    tool("persona_load", "按本轮人格场景目录的引用读取完整场景包（反应顺序、转折、样本）。"
-         "当前对话明确命中场景线索时，先读取再按完整条件组织回应；无关闲聊靠核心回答。"
-         "只接受本轮目录给出的引用；读取结果只是表达方式补充，不是经历、关系或授权。",
-         {"refs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 2}},
-         ["refs"]),
-]
+from .capability_registry import sdk_group
+
+PERSONA_LOAD_TOOLS = sdk_group("persona")
 
 _REF_PREFIX = "persona:"
 
@@ -197,3 +193,118 @@ class PersonaRegistryContext:
             "effective_limits": dict(self.limits),
             "events": list(self.events)[-40:],
         }
+
+
+class MaterialRegistryContext:
+    """Source-backed registry using the same planner as admission and preview."""
+
+    def __init__(self, store, cfg, snapshot, *, scope):
+        from . import persona_material as pm
+        if scope != "gui":
+            raise ValueError("原文注册表只用于本机网页聊天")
+        self.store, self.cfg, self.snapshot = store, cfg, snapshot
+        self.material, self.scope = snapshot["material"], scope
+        self.epoch = store.meta_get("session_epoch")
+        self.nonce = secrets.token_hex(8)
+        self.plan = pm.projection_plan(self.material, cfg, nonce=self.nonce)
+        if "registry" not in self.plan["supported_modes"]:
+            raise ValueError("原文按需装配不可用：" + "；".join(self.plan["mode_issues"]["registry"]))
+        self.limits, self.digest = self.plan["limits"], pm.material_digest(self.material)
+        self.material = self.plan["material"]
+        self.revision = self.material["revision"]
+        self.catalogue = self.plan["catalogue"]
+        self._catalogue_block, self.refs = pm.catalogue_block(self.catalogue, self.nonce) if self.catalogue else ("", {})
+        self.core_ids = set(self.plan["core_ids"])
+        self.loaded, self.loaded_block_ids = {}, set()
+        self.receipt_chars = self.loaded_chars = self.calls = 0
+        self.remaining_tokens = None
+        self.requested_refs, self.sent, self.events = [], set(), []
+
+    def catalogue_block(self):
+        return self._catalogue_block
+
+    def reserved_chars(self):
+        return len(self._catalogue_block) + (self.limits["max_scene_expanded_chars"]
+               + 1024 * self.limits["max_persona_load_calls"] if self.refs else 0)
+
+    def valid(self):
+        from .persona_context import load_persona_snapshot
+        from . import persona_material as pm
+        if self.store.meta_get("session_epoch") != self.epoch:
+            return False
+        try:
+            current = load_persona_snapshot()
+            return bool(current and current.get("format_version") == pm.FORMAT
+                        and pm.material_digest(current["material"]) == self.digest
+                        and pm.effective_limits(self.material, self.cfg) == self.limits)
+        except (ValueError, OSError, TypeError):
+            return False
+
+    def execute(self, name, args):
+        from . import persona_material as pm
+        if (name != "persona_load" or not isinstance(args, dict) or set(args) != {"refs"}
+                or not isinstance(args["refs"], list) or not 1 <= len(args["refs"]) <= 2
+                or any(not isinstance(r, str) or not 1 <= len(r) <= 200 for r in args["refs"])):
+            return dump({"error": "invalid_arguments"})
+        if self.calls >= self.limits["max_persona_load_calls"]:
+            return dump({"error": "call_limit"})
+        self.calls += 1
+        items, pending, loaded = [], dict(self.loaded), set(self.loaded_block_ids)
+        present = self.core_ids | loaded
+        known = {b["bundle_id"]: b for b in self.catalogue}
+        valid = self.valid()
+        for index, ref in enumerate(args["refs"]):
+            self.requested_refs.append(ref)
+            bid = self.refs.get(ref)
+            item = {"ref": ref, "status": "unknown_ref"}
+            if bid is not None:
+                if not valid:
+                    item["status"] = "stale_ref"
+                elif bid in pending:
+                    item["status"] = "already_loaded"
+                elif len(pending) >= self.limits["max_persona_loaded_bundles"]:
+                    item["status"] = "budget_exceeded"
+                elif bid not in known:
+                    item["status"] = "unavailable"
+                else:
+                    candidate = pm.load_item(self.material, known[bid], ref, present)
+                    tail = [{"ref": r, "status": "budget_exceeded"} for r in args["refs"][index + 1:]]
+                    receipt = pm.load_reply([*items, candidate, *tail])
+                    chars = self.receipt_chars + len(receipt)
+                    fits = (chars <= self.limits["max_scene_expanded_chars"]
+                            and len(self.plan["core_text"]) + len(self._catalogue_block) + chars <= self.limits["max_projection_chars"]
+                            and (self.remaining_tokens is None or estimate_tokens(receipt) <= self.remaining_tokens))
+                    if fits:
+                        item = candidate
+                        pending[bid] = True
+                        loaded.update(set(candidate["block_ids"]) - self.core_ids)
+                        present.update(candidate["block_ids"])
+                    else:
+                        item["status"] = "budget_exceeded"
+            items.append(item)
+        result = pm.load_reply(items)
+        self.loaded, self.loaded_block_ids = pending, loaded
+        self.receipt_chars += len(result)
+        self.loaded_chars = len(pm.ordered_text(self.material, loaded))
+        self.events.extend({"action": "persona_load", "status": i["status"], "bundle": self.refs.get(i["ref"]),
+                            "deduplicated_count": len(i.get("already_present_ids", []))} for i in items)
+        return result
+
+    def note_sent(self):
+        self.sent |= {ref for ref, bid in self.refs.items() if bid in self.loaded}
+
+    def metadata(self):
+        return {"mode_requested": self.cfg.persona.expression_mode, "mode_effective": "registry",
+                "fallback_reason": None, "format_version": "persona-material-v1", "material_digest": self.digest,
+                "material_revision": self.revision, "source_sha256": self.material["source_sha256"],
+                "projection_strategy": "material_core_registry", "core_chars": self.plan["core_chars"],
+                "assembly_version": self.plan["assembly_version"],
+                "coverage": self.plan["coverage"], "unreachable_block_ids": self.plan["unreachable_block_ids"],
+                "core_block_ids": sorted(self.core_ids), "catalogue_chars": len(self._catalogue_block),
+                "catalogue_bundle_ids": [b["bundle_id"] for b in self.catalogue],
+                "excluded_bundles": self.plan["excluded_bundles"], "ref_bindings": dict(self.refs),
+                "cold_bundle_ids": [b["bundle_id"] for b in self.catalogue if b["bundle_id"] not in self.loaded],
+                "issued_count": len(self.refs), "requested_refs": self.requested_refs[:20],
+                "loaded_bundles": list(self.loaded), "loaded_block_ids": sorted(self.loaded_block_ids),
+                "sent_refs": sorted(self.sent), "calls": self.calls, "loaded_chars": self.loaded_chars,
+                "receipt_chars": self.receipt_chars, "effective_limits": dict(self.limits), "events": self.events[-40:]}

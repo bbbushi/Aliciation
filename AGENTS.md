@@ -18,14 +18,15 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 服务只监听回环地址。
 - 不碰 `.zcodeignore`、`~/.zcode/`。
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
-- **能力增减须同步宪法「存在事实」清单**（`alice/retrieval.py`：我有什么/没有什么）——自模型与实际能力的漂移本身就是认知错误源（2026-10-31 烟味事件的教训）。
+- **能力增减须同步能力层JSON注册表与必要自我事实**（`alice/capabilities/commands.json`、`alice/constitution.json`）；注册表与SDK工具同源，宪法不重复工具目录或用户操作教程——自模型与实际能力须一致（2026-11-11用户确认的新组织方式）。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
 - **分支流程（2026-11-03 当前用户更新，2026-11-05 合并后保留）**：当前用户在 `ytq` 上工作，后续改动以 `ytq` 为工作分支及用户明确要求推送时的目标；此前 `trial/windows-v0.2-20261028` 的归属说明不适用于当前用户。其他改动（含 Claude 直调）在完成对应验收及共存检查后走 **PR 合入 main**；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径。本机 origin 为 SSH。
 
 
 ## 当前
 
-- 2026-11-09 Codex审查10e419f（基线4036af2）暂不通过，9项见 `docs/设计文档/上下文组装优化/前缀宪法与双维护-代码审查-20261109.md`：R01旧同步提取/退出提取仍在，R02scoped漏主体条件保护，R03prefix早于来源接续冻结误报无来源，R04二次compact旧状态无审核原文，R05tidy模型后重读快照可误删新编辑，R06提交资格/保护复核不全，R07回退无after版本覆盖新编辑，R08停runner只等5秒资源关闭竞态，R09无聊天空闲优先判断。另观点整理/重复指引归并与界面帮助待补；原canned/e2e/冒烟不符合当前测试约定，不作真人通过证据。本轮仅读代码/文档、compileall与diff检查通过，未模型调用/行为自测/读写user/切换启用/重启/修复代码/提交推送。
-- 2026-11-09 ZCode preserve入库Codex未提交改动（4036af2）后施工前缀宪法+双维护（10e419f：prefix_policy scoped五类块/legacy双轨、maintenance compact/tidy、/api/maintenance、CLI三命令、自动触发默认关），并按上列审查完成R01–R09全项返工：R01 adds maintenance.replaces_extraction（默认关，需auto_compact；compact提交推进extract_cursor去重）+轮末/退出/close三路径统一；R02最小宪法回补改写主体段并更正记录错误声明；R03接续计算前置+prefix_plan_factory按最终计数构造+能力行非否定陈述；R04 processed_pairs带对端id+证据逐字重建交审查；R05/R06 tidy冻结快照+提交事务内全资格重核（整组跳过）；R07回退before/after版本条件更新；R08 MaintenanceStopped门控（调用前后/提交前）+runner有界等待不丢引用+让位回queued；R09 channels.activity聊天优先判断。顺带修tidy epoch比较未归一化。开发期检查（compileall/断言/双批compact证据链/冻结跳过/回退冲突/门控/起服冒烟）全过，均不构成验收；行为待真人，见实施记录§八。挂账：scoped人格使用说明归并（涉另一棒管线）、QQ帮助、维护web面板、混合来源场景。
-- 11-09 07:56备份 `/private/tmp/alice-before-interaction-20261109-075634.db`（0600），旧29213经SIGINT正常退出，当前PID38939（.venv/bin/python、显式user/config.toml、8800/no-open）仅回环。该进程仍载preserve前代码且DB已由启动维护迁移（48turn/13memory）；两设计要生效需重启（scoped还需改config）。24轮复盘与互动v1行为待验结论保留：M01独立表达/C01接续边界未打通，未启用见闻保存，不能把新文件等同运行效果通过。
-- HEAD=ytq本地未推送（4036af2 preserve + 双设计施工提交）；ytq工作/明确推送目标、main只PR；提交只暂存自己碰的路径。既有挂账不变：A05/A02、tests与deploy旧data/布局、QQ真实扫码等人工验收清单；宪法「存在事实」随能力增减同步约定保留（scoped模式同步至capability_fixed块）。
+- 原文人格轻分类、双入口、自动线索与反馈、QQ渠道开关及装配合同v3已施工；原文QQ投影仍不支持，门禁保留。阶段5派生审议/独立观点入口/四格对照及真人验收未完成；人格复盘指出的虚构自述、b0001身份误分类等内容问题仍待处理，详见上下文组装优化目录。
+- 11-11宪法五模块/21能力JSON、compact观点队列已施工；legacy/scoped均使用modular前缀。能力定义同源不等于严格三层重构：loop仍直接依赖Store/LLM/执行器，上下文直接读库、权限分散；架构评估报告仅供后续设计参考，不代表已重构。
+- 观测器持续采集，滚动最近10个采集请求+7天/50MiB；captures留实际采集证据、逐请求检查归属。完整上下文窗口双入口已部署，SDK新采集保留消息/工具/参数完整结构，旧记录明确缺口；真人窗口点击、新请求采集与滚动边界待回收。详见滚动留存/完整窗口设计实施文档。
+- 当前最近一次启动16:25：备份/private/tmp/alice-before-launch-20261111-162554，PID97508、原虚拟环境/配置、127.0.0.1:8800/no-open，日志/private/tmp/alice-launch-20261111-162554.log，已打开页面。此前启动部署涉及user读取/备份/正常建表及观测留存写入；未重导/改模型配置/新增验收模型调用。
+- 本轮按用户要求整理累计施工向origin/ytq交付，具体提交与远端结果以git log为准；Python编译/导入、JSON结构、6份JS语法、diff空白检查通过，现有服务首页200；未机器行为测试或发送聊天。仅纳入核心/web/addon及对应设计实施文档；三处用户删除和未跟踪人格资料保留，本轮无user访问/重启/模型调用；main仅PR。

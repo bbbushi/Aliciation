@@ -82,6 +82,8 @@ def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
     steps = (maintenance.compact_task_steps(store, client, cfg, task_id) if kind == "compact"
              else maintenance.tidy_task_steps(store, client, cfg, task_id))
     result = drive(steps)
+    if kind == "compact" and result and result.get("opinion_processing") == "queued":
+        result["opinions"] = drive(maintenance.compact_reflection_steps(store, client, cfg, task_id))
     print("结果：" + (json.dumps(result, ensure_ascii=False) if result else "未执行（任务已被认领或失效）"))
 
 

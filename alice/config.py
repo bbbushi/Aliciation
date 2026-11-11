@@ -112,9 +112,7 @@ class ContextConfig:
     # 上下文观测 SDK（20261107 补充设计）：元数据默认开；正文快照默认关（本机调试用）
     observer_enabled: bool = True
     observer_body_capture: bool = False
-    # 前缀宪法精简与规则作用域（20261109 设计 §13）：legacy=改造前宪法+互动v1；
-    # scoped=prefix_policy 五类块。首发默认 legacy；切换经配置文件，重启进程加载
-    # （前缀代码不承诺热切换；运行行为以实际加载代码为准）
+    # legacy/scoped 兼容配置值；均装配同源五模块宪法，观测记录 effective=modular。
     prefix_policy_mode: str = "legacy"
     # C0 总预算（保守 token 估算，工程起点而非效果结论；0=关闭预算守卫）
     total_budget_tokens: int = 100_000

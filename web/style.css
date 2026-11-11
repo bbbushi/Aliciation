@@ -585,3 +585,29 @@ html:not([data-motion=on]) *, html:not([data-motion=on]) *::before, html:not([da
 .claude-gate-btn:hover { border-color: #A8579B; }
 .claude-gate-deny:hover { border-color: #C44E52; color: #C44E52; }
 .claude-gate-note { color: #889; font-size: 12px; margin-top: 6px; min-height: 1em; }
+
+/* ---------- 保留原文并分类导入（persona-material-v1 预览） ---------- */
+.material-blocks { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto;
+  border: 1px solid var(--line, #444); border-radius: 8px; padding: 8px; margin: 6px 0 12px; }
+.material-block, .material-bundle { display: flex; gap: 8px; align-items: flex-start; padding: 2px 0; cursor: pointer; }
+.material-block:has(input:disabled), .material-bundle:has(input:disabled) { opacity: .5; cursor: default; }
+.material-block span, .material-bundle span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.material-block small { color: var(--muted, #9a9a9a); font-size: 12px; }
+#mat-src { width: 100%; margin: 6px 0; }
+#mat-name { width: 100%; margin: 0 0 8px; }
+.persona-import-method { display: block; margin-bottom: 8px; }
+.persona-import-method select { display: block; width: 100%; margin-top: 6px; }
+.material-cues { min-width: 0; margin: 8px 0; padding: 8px; border: 1px solid var(--line); }
+.material-cues textarea { display: block; width: 100%; margin: 5px 0; resize: vertical; }
+.material-action-feedback { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.material-action-feedback:empty { display: none; }
+.qq-channel-control { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; }
+.qq-channel-control > label { display: flex; align-items: center; gap: 8px; }
+
+/* 原文详情与人工分类不截断正文；所有内容由本机GUI读取。 */
+.material-block-editor, .material-bundle-editor { border: 1px solid var(--line, #444); border-radius: 8px; padding: 8px; margin: 8px 0; }
+.material-block-editor label, .material-bundle-editor label { display: block; margin: 7px 0; }
+.material-block-editor input:not([type=checkbox]), .material-bundle-editor input:not([type=checkbox]) { width: 100%; }
+.material-source { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow-y: auto; font-size: 13px; }
+#material-history { display: flex; flex-direction: column; gap: 6px; }
+#material-preview select { max-width: 100%; }

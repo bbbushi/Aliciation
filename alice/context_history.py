@@ -13,12 +13,9 @@ from .context import estimate_tokens
 from .context_memory import dump, tool
 from .store import text_score
 
-TOOLS = [
-    tool('history_search', '查当前库、当前渠道的旧对话索引，只给原文片段线索；不是记忆或已核实事实。不读归档、来源附件或协作正文。',
-         {'query': {'type': 'string', 'maxLength': 500}, 'cursor': {'type': ['string', 'null']}}, ['query']),
-    tool('history_load', '按本轮历史索引引用读取完整用户/AI往返；旧AI回应可能说错，引用不证明事实或当前授权。',
-         {'refs': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 2}}, ['refs']),
-]
+from .capability_registry import sdk_group
+
+TOOLS = sdk_group("history")
 
 
 def _version(row):

@@ -275,6 +275,13 @@ def catalogue(contract: dict, package: dict, *, purpose: str, limits: dict) -> l
 def activation_status(snapshot, cfg, *, scope="gui") -> dict:
     """GUI 状态与真实装配共用的资格检查；只预测下一请求，不代表已发给模型。"""
     reason, issues = None, []
+    if snapshot and snapshot.get("format_version") == "persona-material-v1":
+        from . import persona_material as pm
+        if scope != "gui":
+            return {"ready": False, "reason": "purpose_not_supported", "issues": []}
+        plan = pm.projection_plan(snapshot["material"], cfg)
+        issues = [{"code": "material_registry_unavailable", "detail": r} for r in plan["mode_issues"]["registry"]]
+        return {"ready": not issues, "reason": "material_registry_unavailable" if issues else None, "issues": issues}
     if scope != "gui":
         reason = "purpose_not_supported"
     elif snapshot is None:

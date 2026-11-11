@@ -89,7 +89,26 @@ def context_requests(store, *, limit="20", request_id=None):
         dropped = store._ctx_obs_dropped
     if request_id is not None:
         events = [event for event in events if event.get("request_id") == request_id]
-    return {"requests": _aggregate_requests(events, count), "pending_dropped": dropped,
+    from .context_observation import body_reason
+    requests = _aggregate_requests(events, count)
+    for request in requests:
+        retained = {"stored", "head", "on_disk"}
+        captured = (any(m.get("body") in retained for call in request["calls"] for m in call["messages"]["order"])
+                    or any((call.get("input") or {}).get("body") in retained for call in request["calls"])
+                    or any(b.get("body_state") in retained for b in request["blocks"]))
+        reason = body_reason(request["request_id"], captured=captured, ts=request.get("first_event_at"))
+        if not captured and request.get("body_capture_reason") not in (None, "rolling_capture"):
+            reason = request["body_capture_reason"]
+        for block in request["blocks"]:
+            if reason or not block.get("body_state"):
+                block["body_state"] = reason or "historical_not_captured"
+        for call in request["calls"]:
+            if call.get("input") and (reason or call["input"].get("body") == "none"):
+                call["input"]["body"] = reason or "historical_not_captured"
+            for message in call["messages"]["order"]:
+                if reason or message.get("body") == "none":
+                    message["body"] = reason or "historical_not_captured"
+    return {"requests": requests, "pending_dropped": dropped,
             "notice": "快照为应用提交给模型客户端的参数投影，不是 HTTP 原始字节或供应商内部上下文；"
                       "无正文处如实显示未留存。"}
 
@@ -112,7 +131,9 @@ def _aggregate_requests(events, count: int) -> list[dict]:
         bucket["last_event_at"] = max(bucket["last_event_at"] or 0, event.get("ts") or 0)
         bucket["event_count"] += 1
         etype, data = event.get("type"), event.get("data") or {}
-        if etype == "block_registered":
+        if etype == "request_started":
+            bucket["body_capture_reason"] = data.get("body_capture_reason")
+        elif etype == "block_registered":
             bucket["blocks"].append({k: data.get(k) for k in
                 ("seq", "kind", "name", "chars", "content_hash", "estimated_tokens", "body_state")})
         elif etype == "selection_decided":
@@ -122,9 +143,12 @@ def _aggregate_requests(events, count: int) -> list[dict]:
                     "tool_round": data.get("tool_round"),
                     "messages": {"count": (data.get("messages") or {}).get("count"),
                                  "total_chars": (data.get("messages") or {}).get("total_chars"),
-                                 "order": [(entry if not isinstance(entry.get("content"), str)
-                                            else {k: v for k, v in entry.items() if k != "content"})
+                                 "order": [{**{k: v for k, v in entry.items() if k != "content"},
+                                            "body": (data.get(f"messages.order.{entry['seq']}.body") or {}).get("state", entry.get("body"))}
                                            for entry in (data.get("messages") or {}).get("order", [])]},
+                    "input": ({**{k: v for k, v in data["input"].items() if k != "content"},
+                               "body": (data.get("input.body") or {}).get("state", data["input"].get("body"))}
+                              if isinstance(data.get("input"), dict) else None),
                     "tools": [t.get("name") for t in (data.get("tools") or {}).get("items", [])],
                     "parameters": data.get("parameters"),
                     "bindings": data.get("bindings"), "messages_hash": data.get("messages_hash"),
@@ -157,13 +181,13 @@ def _aggregate_requests(events, count: int) -> list[dict]:
         elif etype == "observation_gap":
             bucket["gaps"].append(data)
     items = []
-    for bucket in sorted(order.values(), key=lambda b: b["request_seq"] or 0, reverse=True)[:count]:
+    for bucket in sorted(order.values(), key=lambda b: (b["first_event_at"] or 0, b["request_seq"] or 0), reverse=True)[:count]:
         bucket["calls"] = [bucket["calls"][cid] for cid in bucket.pop("call_order")]
         items.append(bucket)
     return items
 
 
-def context_body(store, *, content_hash=None, request_id=None):
+def context_body(store, *, content_hash=None, request_id=None, max_chars=64000):
     """按 hash 读正文；核心校验（插件设计 §6）：须绑定请求归属，裸 hash 不开放。"""
     from .context_observation import read_body, request_hashes
     if request_id is None:
@@ -173,7 +197,66 @@ def context_body(store, *, content_hash=None, request_id=None):
         return {"stored": False, "reason": "request_unknown"}
     if content_hash not in hashes:
         return {"stored": False, "reason": "hash_not_in_request"}
-    return read_body(content_hash)
+    # Metadata ownership is necessary but not sufficient: require captured evidence.
+    request = next((r for r in context_requests(store, request_id=request_id)["requests"]
+                    if r["request_id"] == request_id), None)
+    if request is None:
+        return {"stored": False, "reason": "request_unknown"}
+    states = [b["body_state"] for b in request["blocks"] if b.get("content_hash") == content_hash]
+    states += [m.get("body") for call in request["calls"] for m in call["messages"]["order"]
+               if m.get("content_hash") == content_hash]
+    states += [call["input"].get("body") for call in request["calls"]
+               if call.get("input") and call["input"].get("content_hash") == content_hash]
+    if not any(s in ("stored", "head", "on_disk") for s in states):
+        return {"stored": False, "reason": states[0] if states else "historical_not_captured"}
+    return read_body(content_hash, request_id=request_id, limit=max_chars)
+
+
+def context_call(store, *, request_id=None, call_id=None):
+    """Read one real frozen call, without assembling from current user state."""
+    if (not isinstance(request_id, str) or not 1 <= len(request_id) <= 160
+            or not isinstance(call_id, str) or not 1 <= len(call_id) <= 160):
+        raise ObservationError("请选择请求与调用")
+    projection = context_requests(store, request_id=request_id)
+    request = next((r for r in projection["requests"] if r["request_id"] == request_id), None)
+    call = next((c for c in request["calls"] if c["call_id"] == call_id), None) if request else None
+    if call is None:
+        raise ObservationError("调用记录不存在或已离开观测窗口")
+    from .context_observation import read_body
+    def retained_body(entry, limit=200000):
+        # Entry belongs to this exact call in the already checked projection;
+        # read_body additionally verifies durable request/hash capture evidence.
+        if entry.get("body") not in {"stored", "head", "on_disk"}:
+            return {"stored": False, "reason": entry.get("body", "historical_not_captured")}
+        return read_body(entry.get("content_hash"), request_id=request_id, limit=limit)
+    snapshot = call.get("input") or {}
+    loaded = retained_body(snapshot) if snapshot else {}
+    if loaded.get("stored") and not loaded.get("truncated"):
+        try:
+            value = json.loads(loaded["text"])
+            if value.get("format") == "ctx-input/1" and isinstance(value.get("messages"), list):
+                return {"request_id": request_id, "call_id": call_id, "complete": True,
+                        "coverage": "snapshot", "purpose": call["purpose"], "tool_round": call["tool_round"],
+                        "input": value, "call": call, "notice": projection["notice"]}
+        except (ValueError, TypeError, AttributeError):
+            loaded = {"reason": "snapshot_unreadable"}
+    # Older captures only froze content strings; retain their original order
+    # and placeholders, not a speculative complete message envelope.
+    messages, remaining = [], 2_000_000
+    for entry in call["messages"]["order"]:
+        record = {k: v for k, v in entry.items() if k != "content"}
+        body = (retained_body(entry, min(200000, remaining))
+                if remaining > 0 else {"stored": False, "reason": "view_budget_exceeded"})
+        if body.get("stored"):
+            record.update(content=body["text"], retained=True, truncated=body.get("truncated", False))
+            remaining -= len(body["text"])
+        else:
+            record.update(retained=False, reason=body.get("reason", entry.get("body")))
+        messages.append(record)
+    return {"request_id": request_id, "call_id": call_id, "complete": False,
+            "coverage": "messages_only", "purpose": call["purpose"], "tool_round": call["tool_round"],
+            "snapshot_reason": loaded.get("reason", snapshot.get("body", "historical_not_captured")),
+            "messages": messages, "call": call, "notice": projection["notice"]}
 
 
 def persona_operations(store, *, limit="20"):

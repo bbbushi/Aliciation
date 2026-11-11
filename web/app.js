@@ -911,8 +911,10 @@ function showWelcome(s, reseting = false) {
   };
 
   /* 导入 */
+  $("#import-method").innerHTML = personaImportMethodHTML("w-import-method");
   wireImport(
     {
+      method: $("#w-import-method"),
       drop: $("#drop"),
       pick: $("#pick-file"),
       file: $("#import-file"),
@@ -925,7 +927,11 @@ function showWelcome(s, reseting = false) {
       reset: true,
       back: () => closeModal(),
     },
-    async (md, src, resumeOpId, installed) => {
+    async (md, src, resumeOpId, installed, method) => {
+      if (method === "material") {
+        await openMaterialImport(null, false, {sourceText: md, sourceName: src});
+        return;
+      }
       if (!await confirmQQReset()) {
         const error = new Error("已取消初始化；请先处理 QQ 桥的待发送回复。");
         error.importCancelled = true;
@@ -976,6 +982,19 @@ function showWelcome(s, reseting = false) {
 
 /* ---------- 人格文档导入（初始化页与弹层共用） ---------- */
 
+function personaImportMethodHTML(id, selected = "") {
+  return `<label class="persona-import-method" for="${id}">人格文档处理方式
+    <select id="${id}">
+      <option value="" ${!selected ? "selected" : ""}>请选择处理方式</option>
+      <option value="material" ${selected === "material" ? "selected" : ""}>原文保留＋轻分类</option>
+      <option value="structured" ${selected === "structured" ? "selected" : ""}>结构化适配／Alice 文件恢复（兼容）</option>
+    </select></label>
+    <p class="hint">原文保留＋轻分类：保留原句，分类只作导航；先预览再安装，不收养观点或经历。安装新原稿会归档旧会话。<br>
+    兼容方式：外部文档走旧提取与审查管线；Alice 导出文件直接校验恢复。<br>
+    full／registry 是聊天装配模式，不会转换人格材料格式。</p>
+    <button type="button" class="btn ghost" id="${id}-resume">查看／继续原文准备（不调用模型）</button>`;
+}
+
 function validateMd(md) {
   const text = md.trim();
   if (!text) return { ok: false, msg: "" };
@@ -1004,19 +1023,35 @@ function wireImport(els, install) {
   let source = els.box.dataset.importSource || "";
   let pending = false;
   let fileReadVersion = 0;
-  const binding = () => JSON.stringify([md.trim(), source.trim().slice(0, 60) || "用户导入", !!els.reset]);
+  const materialResume = els.method ? document.getElementById(`${els.method.id}-resume`) : null;
+  const method = () => els.method?.value || "";
+  const validation = () => {
+    if (!method()) return {ok: false, msg: "请先选择人格文档处理方式。"};
+    if (method() === "material") {
+      if (!md.trim()) return {ok: false, msg: ""};
+      if (/<!--\s*alice-expression-/.test(md)) return {ok: false, warn: true,
+        msg: "这是含表达封套的 Alice 导出文件，请选择兼容恢复；轻分类需要人格原稿。"};
+      return {ok: true, msg: "将保留原文并轻分类；下一步先准备和预览，尚不安装、不改变当前会话。"};
+    }
+    return validateMd(md);
+  };
+  const binding = () => JSON.stringify([md.trim(), source.trim().slice(0, 60) || "用户导入", !!els.reset, method()]);
   const attempt = () => personaImportAttempt?.binding === binding() ? personaImportAttempt : null;
   const paint = () => {
-    const v = validateMd(md);
+    const v = validation();
     const current = attempt();
     els.check.textContent = current?.message || (!md.trim() ? "" : (v.ok ? "✓ " : "✗ ") + v.msg);
     els.check.className = "check" + (current ? " warn" : (v.ok && !v.warn ? " ok" : "") + (v.warn ? " warn" : "") + (v.note ? " note" : ""));
     els.go.disabled = pending || !v.ok || current?.blocked === true;
-    els.go.textContent = pending ? els.busy : current?.resumeOpId ? "继续安装" : current?.installed ? "已安装" : els.idle;
+    els.go.textContent = pending ? (method() === "material" ? "打开轻分类…" : els.busy)
+      : !method() ? "先选择处理方式" : method() === "material" ? "准备轻分类（先预览）"
+      : current?.resumeOpId ? "继续安装" : current?.installed ? "已安装" : els.idle;
     els.preview.disabled = pending || !md.trim();
     els.box.disabled = pending;
     els.pick.disabled = pending;
     els.file.disabled = pending;
+    if (els.method) els.method.disabled = pending;
+    if (materialResume) materialResume.disabled = pending;
   };
   const refresh = (text) => {
     fileReadVersion += 1;
@@ -1045,6 +1080,13 @@ function wireImport(els, install) {
     await readFile(f);
   };
   els.box.oninput = () => { source = ""; refresh(els.box.value); };
+  if (els.method) els.method.onchange = () => paint();
+  if (materialResume) materialResume.onclick = async () => {
+    if (personaImportPending) return toast("已有一次人格操作正在处理，请先等待结果。", 4000);
+    materialResume.disabled = true;
+    try { await openMaterialImport(null); }
+    finally { if (materialResume.isConnected) materialResume.disabled = false; }
+  };
 
   /* 拖放 */
   els.drop.ondragover = (e) => {
@@ -1067,13 +1109,13 @@ function wireImport(els, install) {
 
   els.preview.onclick = () => {
     openModal("人格预览", `${md.trim().length} 字`, `<div class="md">${renderMd(md)}</div>`, [
-      { label: "返回编辑", onClick: () => (els.back ? els.back(md, source) : closeModal()) },
+      { label: "返回编辑", onClick: () => (els.back ? els.back(md, source, method()) : closeModal()) },
       { label: "关闭", onClick: closeModal },
     ]);
   };
 
   els.go.onclick = async () => {
-    if (pending || attempt()?.blocked || !validateMd(md).ok) return;
+    if (pending || attempt()?.blocked || !validation().ok) return;
     if (personaImportPending) { toast("已有一次人格安装正在处理，请先等它返回结果。", 4000); return; }
     const submittedBinding = binding();
     const resumeOpId = attempt()?.resumeOpId;
@@ -1085,7 +1127,7 @@ function wireImport(els, install) {
         // Installation already succeeded even if a later view refresh fails.
         personaImportAttempt = {binding: submittedBinding, installed: true, blocked: true,
           message: "人格已安装。请查看当前人格，不要重复安装。"};
-      });
+      }, method());
     } catch (e) {
       if (attempt()?.installed) {
         toast(`人格已安装，但界面刷新未完成：${e.message}。请查看当前人格。`, 6000);
@@ -1124,6 +1166,7 @@ function openModal(title, meta, bodyHtml, buttons) {
     const el = document.createElement("button");
     el.className = b.cls || "btn ghost";
     el.textContent = b.label;
+    if (b.disabled) el.disabled = true;
     el.onclick = b.onClick;
     foot.appendChild(el);
   });
@@ -1131,6 +1174,7 @@ function openModal(title, meta, bodyHtml, buttons) {
 }
 
 function closeModal() {
+  materialViewGeneration++;
   $("#modal").classList.add("hidden");
 }
 
@@ -1153,7 +1197,9 @@ async function openPersonaView() {
   }
   const meta = p.installed ? `${personaMeta(p)}${p.turns ? ` · 聊过 ${p.turns} 轮` : ""}` : "还没有人格";
   const body = p.installed
-    ? (p.growth_note ? `<p class="hint">${esc(p.growth_note)}</p>` : "") +
+    ? `<p class="hint">当前材料格式：${esc(({"persona-material-v1": "原文保留＋轻分类（persona-material-v1）",
+        "expression-v2": "结构化表达包（expression-v2）", v1: "旧版底色（v1）", invalid: "无法识别或已损坏"})[p.expression?.format] || "未识别")}</p>` +
+      (p.growth_note ? `<p class="hint">${esc(p.growth_note)}</p>` : "") +
       (p.expression?.coverage_status ? `<p class="hint">${esc(p.expression.coverage_status)}</p>` : "") +
       expressionCoverage(p.expression) +
       `<div class="md">${renderMd(p.display_md ?? p.md)}</div>` +
@@ -1166,7 +1212,8 @@ async function openPersonaView() {
   openModal("当前人格", meta, body, [
     ...(p.expression?.sections && p.expression.format !== "invalid" ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
     ...(p.installed ? [{ label: "人格装配", onClick: openResidencyView }] : []),
-    ...(p.expression ? [{ label: "从原稿更新表达", onClick: () => openExpressionUpdate(p.expression) }] : []),
+    ...(p.expression?.format === "persona-material-v1" ? [{ label: "编辑原文分类（不调用模型）", onClick: () => openMaterialImport(p, true) }] :
+      p.expression ? [{ label: "从原稿更新表达", onClick: () => openExpressionUpdate(p.expression) }] : []),
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
     {
@@ -1189,6 +1236,285 @@ async function openPersonaView() {
     },
     { label: "关闭", onClick: closeModal },
   ]);
+}
+
+/* ---------- 原文材料：人工续处理与版本绑定 ---------- */
+let materialViewGeneration = 0;
+const materialBinding = pv => ({token: pv.token, revision: pv.revision,
+  material_digest: pv.material_digest, session_epoch: pv.session_epoch});
+
+function materialCuesHTML(cues = []) {
+  return `<fieldset class="material-cues" data-field="cues"><legend>触发线索（每格一条，最多3条；每条最多72字）</legend>
+    ${Array.from({length: 3}, (_, i) => `<textarea data-material-cue rows="1" aria-label="第${i + 1}条触发线索" placeholder="第${i + 1}条（可留空）">${esc(cues[i] ?? "")}</textarea>`).join("")}
+    <small>逗号、分号和换行都保留在线索内部，不作拆分。</small></fieldset>`;
+}
+
+function materialCuesValue(host) {
+  return [...host.querySelectorAll("[data-material-cue]")].map(node => node.value).filter(value => value.trim());
+}
+
+function materialPreviewBody(pv) {
+  const options = (values, selected) => values.map(v => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(v)}</option>`).join("");
+  const blocks = (pv.blocks || []).map(b => `
+    <details class="material-block-editor" data-material-block="${esc(b.block_id)}">
+      <summary>${esc(b.block_id)} · ${esc(b.heading_path || "无标题")} · ${b.chars}字符${b.needs_split ? " · 需要拆分" : ""}</summary>
+      <pre class="material-source">${esc(b.body)}</pre>
+      <label>类别 <select data-field="kind">${options(["待分类","表达习惯","反应模式","示例","观点候选","角色背景","混合"], b.kind)}</select></label>
+      <label>用途 <select data-field="placement">${options(["待确认","常驻","按需","仅存档"], b.placement)}</select></label>
+      <label>状态 <select data-field="status">${options(["pending","accepted","paused","isolated"], b.status)}</select>（pending待确认 / accepted已确认 / paused暂停）</label>
+      ${materialCuesHTML(b.cues)}
+      <label>必需共同上下文ID（逗号分隔）<input data-field="contexts" value="${esc((b.context_ids || []).join(","))}"></label>
+      <p class="hint">实际去向：${esc(b.route?.reason || "请保存并刷新预览")}${b.in_core ? "；已进入核心" : ""}。用途选择“常驻”即常驻，无需另行勾选。</p>
+      <label>人工分块位置（Unicode字符计数，emoji计一个；逗号分隔）<input data-field="split" placeholder="例如 120,240"></label>
+      <button class="btn" type="button" data-material-split="${esc(b.block_id)}">按以上位置拆分（先保存其他修改）</button>
+    </details>`).join("");
+  const c = pv.counts || {};
+  return `<div id="material-preview">
+    <p class="hint">本次只安装或调整表达材料，不收养观点或经历。类别是导航，不证明事实。尚未确认、暂停和仅存档的材料不进入聊天；共同上下文也须确认。</p>
+    ${pv.notice ? `<p class="hint">${esc(pv.notice)}</p>` : ""}
+    <p>确认 ${c.confirmed || 0} · 待分类 ${c.pending || 0} · 背景 ${c.archived || 0} · 暂停 ${c.paused || 0} · 共 ${pv.block_count} 块</p>
+    <p>核心及使用说明 ${pv.core_chars} / ${pv.core_budget} 字符。支持模式：${esc((pv.supported_modes || []).join("、") || "尚无，请调整下方分类或选择")}</p>
+    <p class="hint">其中人格原文 ${pv.core_source_chars ?? "待核对"} 字符，其余为宿主使用说明和标题。${pv.unreachable_block_ids?.length ? `有 ${pv.unreachable_block_ids.length} 个可用块未发布到按需路径，请查看各块去向与场景排除原因；不代表全部可用。` : "已确认可用表达均有路径；明确停用项另列。"}</p>
+    <p id="material-feedback" class="hint" role="status"></p>
+    <details><summary>完整原稿（只读）</summary><pre class="material-source">${esc(pv.source_text)}</pre></details>
+    <h4>原文块：分类、常驻选择和共同上下文</h4>${blocks}
+    <h4>场景目录</h4><p class="hint">关闭场景会将它移出目录；仅属于已关闭场景的正文也不作为full入口。若需禁止某块作为任何场景的共同上下文，请将该块状态设为paused。预算超限的场景会留在候选中，但暂不发布到活动目录。</p>
+    <div id="material-bundles"></div><button type="button" class="btn" id="material-add-bundle">新增场景</button>
+    <details><summary>实际常驻正文</summary><pre class="material-source">${esc(pv.core_text || "")}</pre></details>
+    <details><summary>实际目录</summary><pre class="material-source">${esc(pv.catalogue_text || "无活动场景，按需模式只提供核心")}</pre></details>
+    <details><summary>full完整投影</summary><pre class="material-source">${esc(pv.full_text || "当前不可用")}</pre></details>
+    <p class="hint">${esc(Object.entries(pv.mode_issues || {}).map(([mode, items]) => `${mode}：${items.length ? items.join("；") : "可用"}`).join(" / "))}</p>
+    <label>应用后的装配模式 <select id="material-mode"></select></label>
+    <p class="hint">修改后先保存并核对新预览，再应用；拆分后的块需要重新人工分类。独立观点整理、派生生成和四格对照尚未开放。</p>
+  </div>`;
+}
+
+function materialBundleHTML(b) {
+  return `<details class="material-bundle-editor" data-material-bundle="${esc(b.bundle_id || "")}">
+    <summary>${esc(b.label || "新场景")}${b.automatic ? " · 自动补充入口" : ""}${b.issue ? ` · ${esc(b.issue)}` : ""}</summary>
+    <label><input data-field="enabled" type="checkbox" ${b.enabled !== false ? "checked" : ""}>保留此场景</label>
+    <label>标签 <input data-field="label" maxlength="24" value="${esc(b.label || "")}"></label>
+    ${materialCuesHTML(b.cues)}
+    <label>正文块ID（逗号分隔）<input data-field="members" value="${esc((b.block_ids || []).join(","))}"></label>
+    <details><summary>完整场景及共同上下文</summary><pre class="material-source">${esc(b.body || "当前未发布此场景；请根据上方完整原文块核对成员、共同上下文和预算，保存后再查看实际展开")}</pre></details>
+    <details><summary>首次加载的实际回执（已扣除核心）</summary><pre class="material-source">${esc(b.first_expansion ? JSON.stringify(b.first_expansion, null, 2) : "尚未进入活动目录")}</pre></details>
+  </details>`;
+}
+
+async function openMaterialImport(p, editActive = false, draft = null) {
+  const generation = ++materialViewGeneration;
+  let settings = {}, staged = null;
+  let draftText = draft?.sourceText || "", draftName = "";
+  const sourceName = draft?.sourceName || "";
+  const current = () => materialViewGeneration === generation;
+  const parts = value => value.split(/[,，;；]/).map(v => v.trim()).filter(Boolean);
+  const request = async payload => {
+    const result = await postJSON("/api/persona/material", payload);
+    settings = {...settings, ...result};
+    return result;
+  };
+  const renderPreview = (pv, readOnly = false) => {
+    if (!current()) return;
+    let dirty = false, pending = false;
+    const canEdit = pv.matches_current !== false && !readOnly;
+    const feedback = message => {
+      if (!current()) return;
+      for (const selector of ["#material-feedback", "#material-action-feedback"]) {
+        const node = $(selector);
+        if (node) node.textContent = message;
+      }
+    };
+    const setDirty = () => {
+      dirty = true;
+      feedback("有未保存修改。请先保存，核对新预览后再应用。");
+      const apply = $("#modal-foot [data-material-apply]");
+      if (apply) apply.disabled = true;
+    };
+    const perform = async payload => {
+      if (pending) return;
+      pending = true;
+      const nodes = [...document.querySelectorAll("#material-preview input,#material-preview textarea,#material-preview select,#material-preview button,#modal-foot button")];
+      const previous = nodes.map(n => n.disabled);
+      nodes.forEach(n => n.disabled = true);
+      const apply = $("#modal-foot [data-material-apply]");
+      const applyLabel = apply?.textContent;
+      if (payload.action === "apply" && apply) apply.textContent = pv.reset ? "正在安装并归档…" : "正在应用…";
+      feedback(payload.action === "apply" ? "安装请求已发送，正在等待服务确认。" : "正在保存或处理，请稍候…");
+      try {
+        const result = await request(payload);
+        if (current() && result.preview) renderPreview(result.preview);
+        return result;
+      } catch (e) {
+        if (current()) {
+          const message = `未保存或应用：${e.message}。请核对后再操作。`;
+          feedback(message);
+          toast(message, 8000);
+        }
+      } finally {
+        pending = false;
+        nodes.forEach((n, i) => { if (n.isConnected) n.disabled = previous[i]; });
+        if (apply?.isConnected) apply.textContent = applyLabel;
+      }
+    };
+    const gather = () => {
+      const rows = [], contexts = [];
+      for (const node of document.querySelectorAll("[data-material-block]")) {
+        const get = field => node.querySelector(`[data-field="${field}"]`);
+        const bid = node.dataset.materialBlock;
+        rows.push({block_id: bid, kind: get("kind").value, placement: get("placement").value,
+          status: get("status").value, cues: materialCuesValue(get("cues"))});
+        contexts.push({block_id: bid, context_ids: parts(get("contexts").value)});
+      }
+      const bundles = [...document.querySelectorAll("[data-material-bundle]")].map(node => ({
+        bundle_id: node.dataset.materialBundle,
+        label: node.querySelector('[data-field="label"]').value.trim(),
+        cues: materialCuesValue(node.querySelector('[data-field="cues"]')),
+        block_ids: parts(node.querySelector('[data-field="members"]').value),
+        enabled: node.querySelector('[data-field="enabled"]').checked}));
+      return {classifications: rows, context_updates: contexts, bundles};
+    };
+    const actions = [
+      ...(canEdit ? [{label: "保存修改并预览", onClick: () => perform({action: "update", ...materialBinding(pv), ...gather()})}] : []),
+      ...(readOnly && pv.matches_current !== false ? [{label: "继续此准备（不调用模型）", onClick: () => perform({action: "resume", ...materialBinding(pv)})}] : []),
+      {label: pv.reset ? "安装并归档旧会话" : "应用分类（保留对话）", cls: "btn primary", disabled: !canEdit || !pv.installable,
+        onClick: async () => {
+          if (pending) return;
+          if (dirty || !canEdit || !pv.installable) {
+            const message = dirty ? "请先保存修改并核对预览，再安装。" : "当前候选不能安装，请核对上方分类、预算或版本提示。";
+            feedback(message); toast(message, 6000); return;
+          }
+          const mode = $("#material-mode").value;
+          if (!mode) { feedback("没有可应用的装配模式，请核对支持模式及配置状态。"); return; }
+          const description = pv.reset ? `安装会归档当前 ${p?.turns || 0} 轮对话及记忆。` : "本次只更新表达分类，保留现有对话、记忆和生长内容。";
+          if (!window.confirm(`${description}\n装配模式：${mode}。未收养观点或经历。确定应用已预览的版本吗？`)) return;
+          const result = await perform({action: "apply", ...materialBinding(pv), mode, config_revision: settings.config_revision});
+          if (result && current()) { toast(result.material_notice || "已应用", 5000); closeModal(); location.reload(); }
+        }},
+      ...(canEdit ? [{label: "取消候选（保留档案）", onClick: async () => {
+        const result = await perform({action: "cancel", ...materialBinding(pv)});
+        if (result && current()) await renderEditor();
+      }}] : []),
+      {label: "刷新状态", onClick: async () => {
+        try { const r = await request({action: "status"}); if (r.staged) renderPreview(r.staged); else await renderEditor(); }
+        catch (e) { toast(e.message, 5000); }
+      }},
+      ...(draft ? [{label: "返回新原稿", onClick: () => renderEditor()}] : []),
+      {label: "关闭", onClick: () => { materialViewGeneration++; closeModal(); }},
+    ];
+    openModal("原文材料候选", `第 ${pv.revision} 版 · ${pv.reset ? "新导入" : "编辑已安装材料"}`, materialPreviewBody(pv), actions);
+    const actionFeedback = document.createElement("p");
+    actionFeedback.id = "material-action-feedback";
+    actionFeedback.className = "hint material-action-feedback";
+    actionFeedback.setAttribute("role", "status");
+    $("#modal-foot").prepend(actionFeedback);
+    const applyButton = $("#modal-foot .btn.primary");
+    if (applyButton) applyButton.dataset.materialApply = "true";
+    const mode = $("#material-mode");
+    for (const value of pv.supported_modes || []) {
+      if (!settings.config_writable && value !== settings.current_mode) continue;
+      const opt = document.createElement("option"); opt.value = value; opt.textContent = value === "full" ? "完整投影" : "核心＋按需"; mode.append(opt);
+    }
+    if ([...mode.options].some(o => o.value === settings.current_mode)) mode.value = settings.current_mode;
+    if (!mode.options.length && applyButton) applyButton.disabled = true;
+    const bundleHost = $("#material-bundles");
+    bundleHost.innerHTML = (pv.bundles || []).map(materialBundleHTML).join("");
+    $("#material-add-bundle").onclick = () => {
+      bundleHost.insertAdjacentHTML("beforeend", materialBundleHTML({bundle_id: "", enabled: true, label: "", cues: [], block_ids: []}));
+      setDirty();
+    };
+    const preview = $("#material-preview");
+    preview.addEventListener("input", e => { if (e.target.id !== "material-mode" && e.target.dataset.field !== "split") setDirty(); });
+    preview.addEventListener("change", e => { if (e.target.id !== "material-mode" && e.target.dataset.field !== "split") setDirty(); });
+    for (const node of preview.querySelectorAll("[data-material-block]")) {
+      const kind = node.querySelector('[data-field="kind"]');
+      kind.addEventListener("change", () => {
+        const placement = node.querySelector('[data-field="placement"]');
+        const status = node.querySelector('[data-field="status"]');
+        if (kind.value === "待分类") { placement.value = "待确认"; status.value = "pending"; }
+        else { if (["角色背景","观点候选"].includes(kind.value)) placement.value = "仅存档";
+          else if (placement.value === "待确认") placement.value = "按需"; status.value = "accepted"; }
+      });
+    }
+    for (const button of preview.querySelectorAll("[data-material-split]")) button.onclick = () => {
+      if (dirty) { toast("请先保存其他修改，核对后再拆分", 5000); return; }
+      const host = button.closest("[data-material-block]");
+      const offsets = parts(host.querySelector('[data-field="split"]').value).map(Number);
+      if (!offsets.length || offsets.some(v => !Number.isInteger(v))) { toast("请输入有效的字符位置"); return; }
+      perform({action: "split", ...materialBinding(pv), block_id: button.dataset.materialSplit, offsets});
+    };
+    if (!canEdit) preview.querySelectorAll("input,textarea,select,button").forEach(n => n.disabled = true);
+  };
+  const renderEditor = async () => {
+    if (!current()) return;
+    let preparing = false;
+    openModal("原文保留与轻分类", "准备不改变现有人格；网络或格式失败后可直接人工继续。",
+      `<div id="material-editor"><p class="hint">${sourceName ? `来源文件：${esc(sourceName)}` : "来自导入编辑框"} · 请核对原文后开始。</p><textarea id="mat-src" rows="10" placeholder="粘贴人格原稿全文"></textarea><input id="mat-name" maxlength="24" placeholder="人格名称（可选）"><p class="hint">开始轻分类最多两次模型请求。安装新原稿会归档旧会话；本次不收养观点、经历。</p><div id="material-history"></div></div>`, [
+      {label: "开始轻分类", cls: "btn primary", disabled: true, onClick: async () => {
+        if (preparing) return;
+        const text = $("#mat-src").value;
+        if (!text.trim()) return toast("请先粘贴原稿");
+        if (/<!--\s*alice-expression-/.test(text)) return toast("Alice 导出文件请返回选择兼容恢复；这里需要人格原稿。", 5000);
+        if (staged && !window.confirm("已有一份材料候选。准备新原稿会替换当前候选槽；旧候选仍保存在准备档案中。继续吗？")) return;
+        preparing = true;
+        const nodes = [...document.querySelectorAll("#material-editor input,#material-editor textarea,#material-editor button,#modal-foot button")];
+        const previous = nodes.map(n => n.disabled);
+        nodes.forEach(n => n.disabled = true);
+        const button = $("#modal-foot .btn.primary"); button.disabled = true; button.textContent = "正在准备…";
+        try { const r = await request({action: "prepare", source_text: text, name: $("#mat-name").value.trim() || undefined});
+          if (current() && r.preview) renderPreview(r.preview); }
+        catch (e) { if (current()) toast(`准备中断：${e.message}。原文若已登记，可在准备档案继续。`, 7000); }
+        finally {
+          preparing = false;
+          nodes.forEach((n, i) => { if (n.isConnected) n.disabled = previous[i]; });
+          if (button.isConnected) button.textContent = "开始轻分类";
+        }
+      }},
+      {label: "刷新准备状态", onClick: () => renderEditor()},
+      {label: "返回选择方式", onClick: () => {
+        materialViewGeneration++; openPersonaImport(draftText, sourceName, "material");
+      }},
+      {label: "返回人格", onClick: () => { materialViewGeneration++; openPersonaView(); }},
+      {label: "关闭", onClick: () => { materialViewGeneration++; closeModal(); }},
+    ]);
+    $("#mat-src").value = draftText;
+    $("#mat-name").value = draftName;
+    $("#mat-src").oninput = e => { draftText = e.target.value; };
+    $("#mat-name").oninput = e => { draftName = e.target.value; };
+    const editor = $("#material-editor");
+    try {
+      const r = await request({action: "status"});
+      if (!current() || !editor.isConnected) return;
+      staged = r.staged;
+      const holder = $("#material-history");
+      if (staged) {
+        const existing = document.createElement("button"); existing.className = "btn";
+        existing.textContent = "查看已有候选（不会处理上方新原稿）";
+        existing.onclick = () => renderPreview(staged);
+        holder.append(existing);
+      }
+      const title = document.createElement("h4"); title.textContent = "最近准备档案（查看和继续不调用模型）"; holder.append(title);
+      for (const row of r.preparations || []) {
+        const button = document.createElement("button"); button.className = "btn";
+        button.textContent = `${new Date(row.created_at * 1000).toLocaleString()} · ${row.outcome} · 查看`;
+        button.onclick = async () => { try { const d = await request({action: "detail", token: row.token});
+          if (current() && editor.isConnected) renderPreview(d.preview, true); }
+          catch (e) { toast(e.message, 6000); } };
+        holder.append(button);
+      }
+      $("#modal-foot .btn.primary").disabled = false;
+    } catch (e) { if (current()) toast(`档案读取失败：${e.message}`, 5000); }
+  };
+  try {
+    if (!p) p = await api("/api/persona");
+    if (!current()) return;
+    if (editActive) {
+      const r = await request({action: "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision});
+      renderPreview(r.preview);
+      return;
+    }
+    const result = await request({action: "status"}); staged = result.staged;
+    if (staged && !draft) renderPreview(staged); else await renderEditor();
+  } catch (e) { toast(e.message, 6000); }
 }
 
 function openExpressionEditor(expression) {
@@ -1492,7 +1818,7 @@ function residencyReason(reason) {
   const labels = {no_persona: "尚未安装人格", legacy_persona: "当前人格没有结构化表达包，需要先更新表达",
     missing_assembly: "尚未保存分层；先准备候选，核对后保存，再启用按需装配",
     catalogue_empty: "分层没有可用于网页聊天的场景，需要重新准备分层",
-    purpose_not_supported: "当前渠道继续使用原用途的完整投影"};
+    purpose_not_supported: "当前渠道不支持这种表达投影", material_registry_unavailable: "原文核心或预算尚未满足按需装配，请编辑原文分类"};
   if (reason?.startsWith("invalid_contract:")) return "已保存分层未通过当前校验，需要重新准备；问题见下方";
   return labels[reason] || reason || "";
 }
@@ -1553,14 +1879,19 @@ async function renderResidency(view) {
   if (reason) body.append(node("p", `原因：${residencyReason(reason)}`, "hint"));
   else if (ready && d.mode === "full") body.append(node("p", "分层已保存，按需装配尚未启用。", "hint"));
   if (d.config_issue) body.append(node("p", `暂不能切换模式：${d.config_issue}`, "hint"));
-  body.append(node("p", "按需启用后，核心与场景目录常驻，AI 可用 persona_load 展开场景；没有读取工具调用也可能正常。QQ 与协作仍按原用途投影。这里显示下一轮预期，实际每轮是否启用、读取了什么请到上下文观测器核对。", "hint"));
+  body.append(node("p", d.material ? "原文模式只用于本机网页；有活动场景时才提供persona_load。QQ暂不支持，协作通知使用普通状态表达。这里显示下一轮预期，实际输入请到观测器核对。" : "按需启用后，核心与场景目录常驻，AI可用persona_load展开场景。QQ与协作仍按原用途投影；实际输入请到观测器核对。", "hint"));
+  if (d.material_preview) {
+    body.append(node("h4", "原文常驻核心"), node("pre", d.material_preview.core_text || ""));
+    body.append(node("h4", "实际活动目录"), node("pre", d.material_preview.catalogue || "无场景，只使用核心"));
+    for (const item of d.material_preview.excluded || []) body.append(node("p", `${item.bundle_id}：${item.reason}`, "hint"));
+  }
   const observerLink = document.createElement("a");
   observerLink.href = "/addons/context-inspector/";
   observerLink.target = "_blank";
   observerLink.rel = "noopener";
   observerLink.textContent = "查看上下文观测器";
   body.append(observerLink);
-  body.append(node("p", "操作顺序：准备分层（会调用模型） → 核对原文归属并保存分层 → 启用按需装配。切换与恢复模式不调用模型，无需重启。", "hint"));
+  body.append(node("p", d.material ? "原文分类已在导入时保存；可直接切换支持的装配模式，无需再准备旧式分层。调整核心和场景请返回人格，选择编辑原文分类。" : "操作顺序：准备分层 → 核对并保存 → 启用按需。切换模式不调用模型，无需重启。", "hint"));
   body.append(node("p", "新版准备区分默认语感与专题反应；已有分层不会自动变化。旧表达的全局规则若被收窄，请先从原稿更新表达，再准备分层。", "hint"));
   body.append(node("p", "每次准备最多初次分类加一次修订；失败明细会保留，刷新可查看。原稿与表达条目不因分层改写。", "hint"));
   if (d.last_preparation) {
@@ -1683,7 +2014,7 @@ async function renderResidency(view) {
   }
   button(d.mode === "registry" && ready ? "按需装配已启用" : "启用按需装配", () => setMode("registry"),
     !ready || !d.config_writable || d.mode === "registry", true);
-  button("恢复完整装配", () => setMode("full"), !d.config_writable || d.mode === "full");
+  button("恢复完整装配", () => setMode("full"), !d.config_writable || d.mode === "full" || (d.material && !d.supported_modes.includes("full")));
   button("刷新状态", () => renderResidency(view));
   head.append(body, actions, feedback);
   holder.replaceChildren(head);
@@ -1765,21 +2096,22 @@ function showExpressionCandidate(result) {
     ]);
 }
 
-function openPersonaImport(prefill = "", prefillSource = "") {
+function openPersonaImport(prefill = "", prefillSource = "", selectedMethod = "") {
   $("#modal-title").textContent = "导入人格文档";
-  $("#modal-meta").textContent = "会替换当前人格；旧版自动存进 history，可回滚。";
+  $("#modal-meta").textContent = "先选择处理方式；准备轻分类与正式安装是两个步骤。";
   $("#modal-body").innerHTML = `
+    ${personaImportMethodHTML("m-import-method", selectedMethod)}
     <div class="drop" id="m-drop">
       <div class="drop-icon">↓</div>
       <div class="drop-main">把文档拖到这里，或 <button class="link" id="m-pick" type="button">选择文件</button></div>
-      <div class="hint">须含一行「## 底色」；生长小节缺失会自动补齐</div>
+      <div class="hint">.md / .markdown / .txt；人格原稿不要求「## 底色」小节，也可以粘贴</div>
       <input type="file" id="m-file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
     </div>
     <textarea id="m-md" rows="10" spellcheck="false" placeholder="# Alice 的人格&#10;&#10;## 底色 · 气质与风格&#10;&#10;- …"></textarea>
     <div id="m-check" class="check"></div>
     <div class="row">
       <button id="m-preview" class="btn ghost" disabled>预览</button>
-      <button id="m-go" class="btn primary" disabled>替换并保存</button>
+      <button id="m-go" class="btn primary" disabled>先选择处理方式</button>
     </div>`;
   const foot = $("#modal-foot");
   foot.textContent = "";
@@ -1792,6 +2124,7 @@ function openPersonaImport(prefill = "", prefillSource = "") {
 
   const setImportText = wireImport(
     {
+      method: $("#m-import-method"),
       drop: $("#m-drop"),
       pick: $("#m-pick"),
       file: $("#m-file"),
@@ -1802,9 +2135,13 @@ function openPersonaImport(prefill = "", prefillSource = "") {
       idle: "替换并保存",
       busy: "替换中…",
       reset: false,
-      back: (text, name) => openPersonaImport(text, name),
+      back: (text, name, method) => openPersonaImport(text, name, method),
     },
-    async (md, src, resumeOpId, markInstalled) => {
+    async (md, src, resumeOpId, markInstalled, method) => {
+      if (method === "material") {
+        await openMaterialImport(null, false, {sourceText: md, sourceName: src});
+        return;
+      }
       const installed = await postJSON("/api/persona", { persona_md: md, source: src,
         ...(resumeOpId ? {resume_op_id: resumeOpId} : {}) });
       markInstalled();

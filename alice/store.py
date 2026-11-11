@@ -129,7 +129,6 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         self._llm_events = deque(maxlen=2000)
         self._llm_events_dropped = 0
         from . import context_observation
-        context_observation.install(self)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -141,6 +140,7 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
                 with sqlite3.connect(backup) as destination:
                     self.conn.backup(destination)
         self.conn.executescript(SCHEMA)
+        context_observation.install(self)  # Migration reads turn_metrics; connection/schema must exist.
         self._migrate()
         self.conn.executescript(SOURCE_SCHEMA)
         self.init_observation_memory()

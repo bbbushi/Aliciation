@@ -61,6 +61,7 @@
     el("obs-detail-next").disabled = true;
   }
   function clearData() {
+    window.AliceContextViewer?.close();
     snapshot = null; personaChange = null; changes = []; firstTime = null; interrupted = false;
     before = null; ceiling = null; nextBefore = null; listSignature = ""; listRevision++;
     clearDetail();
@@ -225,6 +226,12 @@
       + (request.assistant_turn_id ? ` · 回复 #${request.assistant_turn_id}` : "")
       + (request.gaps && request.gaps.length ? ` · 观测缺口 ${request.gaps.length}` : "");
     card.append(meta);
+    const full = node("button", "查看完整上下文", "btn ghost");
+    full.type = "button";
+    full.disabled = !request.calls.length;
+    full.onclick = () => window.AliceContextViewer.open({requestId: request.request_id,
+      calls: request.calls, scope, endpoint: "/api/observer/call"});
+    card.append(full);
     for (const call of request.calls) renderTraceCall(card, request, call);
     if (request.blocks && request.blocks.length) {
       const blocks = document.createElement("details");
@@ -255,6 +262,11 @@
         + (last.duration_ms != null ? ` · ${last.duration_ms}ms` : "")
         + (last.usage ? ` · 入${last.usage.prompt ?? "?"}/出${last.usage.completion ?? "?"}tok` : ""), "obs-hint"));
     wrap.append(head);
+    const full = node("button", "查看本次完整上下文", "btn ghost");
+    full.type = "button";
+    full.onclick = () => window.AliceContextViewer.open({requestId: request.request_id,
+      calls: request.calls, callId: call.call_id, scope, endpoint: "/api/observer/call"});
+    wrap.append(full);
     const params = call.parameters || {};
     const covered = Object.entries(params.covered || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" · ");
     wrap.append(node("p", `参数：${covered || "未记录"}`
@@ -279,10 +291,16 @@
     card.append(wrap);
   }
 
+  const bodyReason = reason => ({none: "当轮未采集", historical_not_captured: "历史请求未采集正文",
+    capture_disabled: "当轮正文采集已关闭", rolling_window_evicted: "已移出最近10请求窗口",
+    retention_expired: "已超过7天留存期", body_budget_exceeded: "正文库容量不足",
+    too_large: "正文超过单条采集上限", write_failed: "正文写入失败",
+    capture_index_unavailable: "正文留存索引不可用", not_retained: "正文文件未留存或已清理"})[reason] || reason || "原因未记录";
+
   function bodyButton(contentHash, bodyState, requestId) {
     if (!contentHash || bodyState === "none") return node("span", "（未留存正文）", "obs-hint");
     if (bodyState && bodyState !== "stored" && bodyState !== "head" && bodyState !== "on_disk") {
-      return node("span", `（正文：${bodyState}）`, "obs-hint");
+      return node("span", `（未留存正文：${bodyReason(bodyState)}）`, "obs-hint");
     }
     const wrap = document.createElement("span");
     const button = node("button", "看留存正文", "btn ghost");
@@ -296,7 +314,7 @@
       button.disabled = false;
       pre.textContent = !d ? "读取失败；稍后重试。"
         : d.stored ? (d.text || "（空）") + (d.truncated ? "\n…（已截断）" : "")
-        : `未留存正文（${d.reason || "not_retained"}）；不能用当前数据补画历史。`;
+        : `未留存正文（${bodyReason(d.reason)}）；不能用当前数据补画历史。`;
       pre.hidden = false;
     });
     wrap.append(button, pre);

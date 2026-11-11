@@ -43,6 +43,27 @@ def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def normalize_protocol_defaults(response, required, defaults):
+    """§5.3：补全事先声明、无歧义的协议默认值（如空 additions 清单）。
+
+    回执经 strict_json 解析（重复键已在解析层拒绝）。仅当键集合恰好等于
+    required 全在场、且缺席键都在 defaults 中事先声明时补入默认值；记录
+    原始回执摘要与补入字段供审计。不补写来源、类别、权限、通过结论、正文
+    或事实前提；未知键或缺失必填键原样返回，由调用方的既有校验拒绝。
+    """
+    if not isinstance(response, dict) or any(key not in response for key in required):
+        return response, None
+    if any(key not in required and key not in defaults for key in response):
+        return response, None
+    missing = [key for key in defaults if key not in response]
+    if not missing:
+        return response, None
+    filled = {key: copy.deepcopy(defaults[key]) for key in missing}
+    record = {"policy": "protocol_default_v1", "filled": filled,
+              "original_keys": sorted(response), "original_digest": ex.digest(_canonical(response))}
+    return {**response, **filled}, record
+
+
 def _supported_scenarios(package):
     contract = package.get("coverage_contract", {})
     if contract.get("policy") != "source_coverage_v1":
@@ -346,8 +367,13 @@ def _apply_review_patch(package, response, registry, cap, scope, *, contract, pr
         if not row["source_ids"]:
             raise ValueError("内容修复场景缺少原稿支持来源")
         scenario_sources[scenario] = set(row["source_ids"])
+    # §5.3：模型自然省略空 additions 数组时按协议默认补全，并记入审计；
+    # 补全后仍走下方全部内容检查，不据此宣布人格通过。
+    response, normalization = normalize_protocol_defaults(
+        response, required=("checks", "patches"), defaults={"additions": []})
     if not isinstance(response, dict) or set(response) != {"checks", "patches", "additions"}:
-        raise ValueError("内容修复回执必须且只能包含 checks、patches 和 additions")
+        present = sorted(response) if isinstance(response, dict) else type(response).__name__
+        raise ValueError(f"内容修复回执必须且只能包含 checks、patches 和 additions；实际键：{present}")
     if protected_samples is not None and response["additions"] != []:
         raise ValueError("受保护样本修复不能新增条目")
     if len(json.dumps(response, ensure_ascii=False)) > cap["max_review_chars"]:
@@ -381,7 +407,8 @@ def _apply_review_patch(package, response, registry, cap, scope, *, contract, pr
     current = {item["id"]: item for item in ex.entries(candidate)}
     audit = {"policy": POLICY, "scope": copy.deepcopy(scope), "contract_digest": contract["contract_digest"],
              "checks": copy.deepcopy(checks),
-             "patches": [], "updates": [], "additions": [], "destinations": [], "coverage": [], "changed": False}
+             "patches": [], "updates": [], "additions": [], "destinations": [], "coverage": [], "changed": False,
+             "normalizations": [normalization] if normalization is not None else []}
     changed = set()
     by_field = {}
     for row in response["patches"]:

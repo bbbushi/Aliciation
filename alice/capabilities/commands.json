@@ -1,0 +1,721 @@
+{
+  "version": 1,
+  "units": [
+    {
+      "command": "recall",
+      "summary": "检索并读取获准使用的本机记忆。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "检索关键词或短语"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "ordinary",
+        "operation": "recall"
+      }
+    },
+    {
+      "command": "remember",
+      "summary": "择要保存用户事实或约定，带来源内容按见闻保存。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "短标题，≤12字"
+          },
+          "content": {
+            "type": "string",
+            "description": "要记住的完整内容。来自网页时用你自己的话转写并标明来源（如「维基百科条目说：…」），不要照抄原文"
+          },
+          "keywords": {
+            "type": "string",
+            "description": "可选，检索关键词，空格分隔"
+          },
+          "source_url": {
+            "type": "string",
+            "description": "可选。内容来源的网页链接；提供则保存为带出处的见闻记忆（走普通记忆管线）"
+          },
+          "source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本轮真实来源的packet_id；填写子集不能解除其他可见来源依赖"
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "ordinary",
+        "operation": "remember"
+      }
+    },
+    {
+      "command": "discovery_search",
+      "summary": "查找并读取开放平台的公开资料。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "主题名加少量关键实体；不要堆叠最新/近期等泛词。无合适结果时可缩短或调整关键词"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "tieba",
+              "bilibili",
+              "zhihu",
+              "wikipedia"
+            ]
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "用户指定单篇条目时用1，避免引入不需要的其他页面"
+          },
+          "fresh": {
+            "type": "boolean",
+            "description": "true仅表示重新联网、不复用本地搜索缓存，不保证帖子新；近期信息同时使用published_after与recent排序"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "recent",
+              "relevance"
+            ],
+            "description": "贴吧默认recent按发帖时间优先；查历史背景可用relevance。其他平台保持自身排序"
+          },
+          "published_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "贴吧主帖发布日期下限（含当天，YYYY-MM-DD，UTC+8）。近期话题按实际时间范围填写；不限定为null。日期未知不充作新帖；auto带日期时只查贴吧"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "search",
+        "operation": "discovery_search"
+      }
+    },
+    {
+      "command": "memory_search",
+      "summary": "搜索本机普通记忆索引。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "memory",
+        "operation": "memory_search"
+      }
+    },
+    {
+      "command": "memory_load",
+      "summary": "读取本轮记忆索引引用的正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "memory",
+        "operation": "memory_load"
+      }
+    },
+    {
+      "command": "history_search",
+      "summary": "搜索当前渠道获准访问的旧对话索引。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "history",
+        "operation": "history_search"
+      }
+    },
+    {
+      "command": "history_load",
+      "summary": "读取本轮历史引用的完整往返。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 2
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "history",
+        "operation": "history_load"
+      }
+    },
+    {
+      "command": "context_keep",
+      "summary": "提议跨轮保留本轮已读取的普通记忆。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "workspace",
+        "operation": "context_keep"
+      }
+    },
+    {
+      "command": "context_release",
+      "summary": "移出跨轮工作集中的指定条目。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "workspace",
+        "operation": "context_release"
+      }
+    },
+    {
+      "command": "persona_load",
+      "summary": "读取与当前情境相关的人格场景材料。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 2
+          }
+        },
+        "required": [
+          "refs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "persona",
+        "operation": "persona_load"
+      }
+    },
+    {
+      "command": "dispatch_worker",
+      "summary": "向已授权协作者派发有界任务。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "dsh-agent",
+              "claude-agent"
+            ]
+          },
+          "brief": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "具体任务、约束及完成标准；最多 10000 UTF-8 字节。文件用 GUI 授权目录中的相对路径说明。"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "input_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 0,
+            "description": "本阶段只能传空数组；使用 GUI 中已授权的任务目录，不支持导入文件。"
+          },
+          "requested_outputs": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "期望文件名或产物描述；只转述给协作者，不保证文件已收取或验证。"
+          }
+        },
+        "required": [
+          "name",
+          "brief",
+          "input_ids",
+          "requested_outputs"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "worker",
+        "operation": "dispatch_worker"
+      }
+    },
+    {
+      "command": "worker_task_status",
+      "summary": "查询协作任务的实际状态。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_ids": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "description": "宿主返回的 task_id，不得猜测或使用协作者的原生会话 ID。"
+            },
+            "description": "可选；省略或空数组时列出当前 GUI 的任务状态。"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "worker",
+        "operation": "worker_task_status"
+      }
+    },
+    {
+      "command": "worker_task_read",
+      "summary": "读取指定协作任务的公开回复。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "宿主返回的 task_id，不得猜测或使用协作者的原生会话 ID。"
+          },
+          "after_message_id": {
+            "type": "string",
+            "description": "可选；从上次返回的消息 ID 之后继续读取。"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "worker",
+        "operation": "worker_task_read"
+      }
+    },
+    {
+      "command": "send_worker_message",
+      "summary": "向原DSH任务发送补充或追问。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "宿主返回的 task_id，不得猜测或使用协作者的原生会话 ID。"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "补充说明，最多 10000 UTF-8 字节；文件用已授权目录中的相对路径。"
+          },
+          "input_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 0,
+            "description": "本阶段只能传空数组；使用 GUI 中已授权的任务目录，不支持导入文件。"
+          }
+        },
+        "required": [
+          "task_id",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "worker",
+        "operation": "send_worker_message"
+      }
+    },
+    {
+      "command": "cancel_worker_task",
+      "summary": "请求停止指定协作任务。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "宿主返回的 task_id，不得猜测或使用协作者的原生会话 ID。"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "worker",
+        "operation": "cancel_worker_task"
+      }
+    },
+    {
+      "command": "recall_sources",
+      "summary": "检索并读取当前许可内的既有见闻与观点。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "检索关键词或短语",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "source_recall",
+        "operation": "recall_sources"
+      }
+    },
+    {
+      "command": "observe_interest",
+      "summary": "依据用户原话记录可公开检索的兴趣线索。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string"
+          },
+          "user_quote": {
+            "type": "string"
+          },
+          "attitude": {
+            "type": "string",
+            "enum": [
+              "concerned",
+              "curious",
+              "dislikes",
+              "interested",
+              "likes",
+              "neutral"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "user_quote",
+          "attitude",
+          "confidence",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "learning",
+        "operation": "observe_interest"
+      }
+    },
+    {
+      "command": "reuse_observation",
+      "summary": "确认复用已存在且仍有效的见闻记录。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "memory_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "memory_id"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "learning",
+        "operation": "reuse_observation"
+      }
+    },
+    {
+      "command": "learn_from_sources",
+      "summary": "择要保存本轮真实读到的见闻。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "keep": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "仅正文，不含见闻包装头或条件与不确定标签；条件、范围和不确定性另填uncertainty"
+          },
+          "keywords": {
+            "type": "string"
+          },
+          "value_tier": {
+            "type": "string",
+            "enum": [
+              "high",
+              "low",
+              "normal"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "uncertainty": {
+            "type": "string",
+            "description": "独立写关键条件、实际阅读范围及不确定性，不附加字段标签，不遗漏原条件"
+          },
+          "reflection_hint": {
+            "type": "string",
+            "enum": [
+              "ordinary",
+              "conflict",
+              "repeated"
+            ]
+          }
+        },
+        "required": [
+          "keep",
+          "title",
+          "content",
+          "value_tier",
+          "reason",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "learning",
+        "operation": "learn_from_sources"
+      }
+    },
+    {
+      "command": "reflect_on_sources",
+      "summary": "依据本轮来源保存或修订初步观点。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "keep": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "仅正文，不含见闻包装头或条件与不确定标签；条件、范围和不确定性另填uncertainty"
+          },
+          "keywords": {
+            "type": "string"
+          },
+          "value_tier": {
+            "type": "string",
+            "enum": [
+              "high",
+              "low",
+              "normal"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "uncertainty": {
+            "type": "string",
+            "description": "独立写关键条件、实际阅读范围及不确定性，不附加字段标签，不遗漏原条件"
+          },
+          "reflection_hint": {
+            "type": "string",
+            "enum": [
+              "ordinary",
+              "conflict",
+              "repeated"
+            ]
+          },
+          "claim": {
+            "type": "string"
+          },
+          "interpretation": {
+            "type": "string"
+          },
+          "replaces_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keep",
+          "title",
+          "content",
+          "value_tier",
+          "reason",
+          "uncertainty",
+          "claim",
+          "interpretation"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "learning",
+        "operation": "reflect_on_sources"
+      }
+    },
+    {
+      "command": "condense_observation",
+      "summary": "浓缩本轮读取的低价值见闻并保留必要条件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "memory_id": {
+            "type": "integer"
+          },
+          "content": {
+            "type": "string",
+            "description": "仅正文，不含见闻包装头或条件与不确定标签；条件、范围和不确定性另填uncertainty"
+          },
+          "uncertainty": {
+            "type": "string",
+            "description": "独立写关键条件、实际阅读范围及不确定性，不附加字段标签，不遗漏原条件"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "memory_id",
+          "content",
+          "uncertainty",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "learning",
+        "operation": "condense_observation"
+      }
+    }
+  ]
+}

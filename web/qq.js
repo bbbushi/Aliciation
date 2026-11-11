@@ -116,6 +116,15 @@
   function render() {
     if (!visible) return;
     const d = snapshot;
+    const toggle = $("qq-channel-enabled");
+    toggle.checked = d?.channel_enabled === true;
+    toggle.disabled = busy || !d?.channel_config_writable || (!d.channel_enabled && (!d.channel_can_enable
+      || ["scanning", "pairing", "awaiting_confirmation", "starting", "stopping"].includes(d.state)));
+    $("qq-channel-note").textContent = !d ? "渠道开关状态待确认，请刷新。"
+      : typeof d.channel_config_writable !== "boolean" ? "当前服务尚未加载渠道开关，请重启 Alice 后刷新。"
+      : !d.channel_config_writable ? "服务未绑定可写配置文件，暂不能从页面切换渠道。"
+      : d.channel_enabled ? "渠道已启用。暂停下方连接不会关闭这个开关。"
+      : `渠道已停用。${d.channel_enable_reason || "已保存的身份仍保留，可重新开启。"}`;
     Object.values(actionButtons).forEach(button => {
       button.classList.add("hidden");
       button.disabled = busy;
@@ -208,9 +217,11 @@
     const validId = typeof d.operation_id === "string" && /^[0-9a-f]{32}$/.test(d.operation_id);
     actions.forEach(action => {
       actionButtons[action].classList.remove("hidden");
-      actionButtons[action].disabled = busy || !validId || (action === "confirm" && !$("qq-owner-confirmed").checked);
+      actionButtons[action].disabled = busy || !validId || (action === "confirm" && !$("qq-owner-confirmed").checked)
+        || (action === "run" && d.channel_can_enable === false);
     });
-    actionButtons.run.textContent = state === "idle" || state === "error" ? "已有连接，继续聊天" : "开始 QQ 聊天";
+    actionButtons.run.textContent = !d.channel_enabled && d.channel_can_enable === true ? "启用渠道并开始 QQ 聊天"
+      : state === "idle" || state === "error" ? "已有连接，继续聊天" : "开始 QQ 聊天";
     actionButtons.run.classList.toggle("primary", !["idle", "error"].includes(state));
     actionButtons.run.classList.toggle("ghost", ["idle", "error"].includes(state));
     actionButtons.stop.textContent = state === "error" ? "停止本页连接" : "暂停 QQ 聊天";
@@ -265,9 +276,13 @@
     }
   }
 
-  async function act(action) {
-    if (busy || !visible || !snapshot || actionButtons[action].disabled) return;
+  async function act(action, enabled) {
+    const switching = action === "set_channel_enabled";
+    const button = switching ? $("qq-channel-enabled") : actionButtons[action];
+    if (busy || !visible || !snapshot || button.disabled) return;
     const operationId = snapshot.operation_id;
+    const payload = {action, operation_id: operationId,
+      ...(switching ? {enabled, session_epoch: snapshot.session_epoch, config_revision: snapshot.channel_config_revision} : {})};
     if (action === "confirm" && !$("qq-owner-confirmed").checked) return;
     busy = true;
     const ticket = ++generation;
@@ -275,11 +290,11 @@
     reader = null;
     clearTimeout(timer);
     render();
-    setStatus(action === "install" ? "正在开始安装，请稍候…" : action === "recheck" ? "正在检查这台电脑的准备情况…" : "正在提交操作，请稍候…");
+    setStatus(switching ? "正在保存渠道开关，请稍候…" : action === "install" ? "正在开始安装，请稍候…" : action === "recheck" ? "正在检查这台电脑的准备情况…" : "正在提交操作，请稍候…");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const data = await request("POST", { action, operation_id: operationId }, controller.signal);
+      const data = await request("POST", payload, controller.signal);
       if (visible && ticket === generation) { snapshot = data; render(); }
     } catch (error) {
       if (visible && ticket === generation) {
@@ -301,6 +316,7 @@
   }
 
   Object.entries(actionButtons).forEach(([action, button]) => { button.onclick = () => act(action); });
+  $("qq-channel-enabled").onchange = event => act("set_channel_enabled", event.target.checked);
   $("qq-owner-confirmed").onchange = render;
   $("qq-refresh").onclick = refresh;
   document.addEventListener("visibilitychange", () => {

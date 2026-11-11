@@ -38,6 +38,10 @@ def _style_excerpt(cfg=None, *, metadata=None):
     """P1a：共用表达解析（purpose=worker_summary）——仅风格/情境，不读样本正文与关系。"""
     from . import persona_context
     snapshot = persona_context.load_persona_snapshot()
+    if snapshot and snapshot.get("format_version") == "persona-material-v1":
+        if metadata is not None:
+            metadata.update(format_version="persona-material-v1", degradation=["worker_summary_not_supported"])
+        return ""  # Generic status/reporting stays available; never forward raw persona.
     return persona_context.render_expression_reference(snapshot, purpose="worker_summary", cfg=cfg, metadata=metadata)
 
 

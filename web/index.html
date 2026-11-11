@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/discovery.css">
 <link rel="stylesheet" href="/worker-tasks.css">
+<link rel="stylesheet" href="/context-viewer.css">
 </head>
 <body>
 <a class="skip-link" href="#input">跳到输入框</a>
@@ -47,18 +48,19 @@
     </section>
 
     <section id="tab-import" class="tab-pane hidden">
+      <div id="import-method"></div>
       <div id="drop" class="drop">
         <div class="drop-icon">↓</div>
         <div class="drop-main">把人格文档拖到这里，或 <button id="pick-file" class="link" type="button">选择文件</button></div>
         <div class="hint">.md / .markdown / .txt；也可以直接粘贴到下面</div>
         <input type="file" id="import-file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
       </div>
-      <div class="hint" style="margin:6px 2px">导入的不是那个人本身：她会继承文档里的说话风格、收养她认可的认知，但不会把文档里的经历当成自己的——那些只是捐赠人留下的故事。她不扮演任何人。</div>
+      <div class="hint" style="margin:6px 2px">说话习惯可以来自人格文档；文档里的经历不直接成为她的亲历。先选择处理方式，再准备或安装。</div>
       <textarea id="import-md" rows="8" spellcheck="false" placeholder="# Alice 的人格&#10;&#10;## 底色 · 气质与风格&#10;&#10;- 说话轻声，短句&#10;- 不急着给建议&#10;- 不确定时就说不知道"></textarea>
       <div id="import-check" class="check"></div>
       <div class="row">
         <button id="import-preview" class="btn ghost" disabled>预览</button>
-        <button id="import-go" class="btn primary" disabled>安装并开始</button>
+        <button id="import-go" class="btn primary" disabled>先选择处理方式</button>
       </div>
     </section>
   </div>
@@ -430,6 +432,11 @@
         <ol class="qq-flow" aria-label="连接步骤"><li>首次准备</li><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
         <p class="settings-hint">用手机 QQ 扫码，把 Alice 接到你的私聊。与这里共用对话和记忆，仅接收已确认的本人文字消息。</p>
         <p id="qq-status" class="qq-status" role="status" aria-live="polite">打开后读取当前连接状态。</p>
+        <div class="qq-channel-control">
+          <label><input id="qq-channel-enabled" type="checkbox" role="switch" disabled> 启用 QQ 渠道</label>
+          <p id="qq-channel-note" class="settings-hint" role="status">正在读取渠道开关。</p>
+          <p class="settings-hint">关闭会保存设置并停止接收新 QQ 消息，保留已绑定身份，同时停止本页启动的连接。开启后仍需点击“开始 QQ 聊天”。</p>
+        </div>
         <div id="qq-setup" class="qq-step qq-setup hidden" aria-labelledby="qq-setup-title">
           <h3 id="qq-setup-title">首次使用，先准备 QQ 组件</h3>
           <p id="qq-setup-hint" class="settings-hint"></p>
@@ -528,6 +535,7 @@
 
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
+<script src="/context-viewer.js"></script>
 <script src="/observer.js"></script>
 <script src="/evaluations.js"></script>
 <script src="/worker-tasks.js"></script>

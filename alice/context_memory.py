@@ -40,15 +40,9 @@ def tool(name, description, properties, required):
                        "required": required, "additionalProperties": False}}}
 
 
-TOOLS = [
-    tool("memory_search", "只搜索本机普通记忆候选索引，不返回正文，不联网。索引未列出不等于遗忘。",
-         {"query": {"type": "string", "maxLength": 500},
-          "limit": {"type": "integer", "minimum": 1, "maximum": 12},
-          "cursor": {"type": ["string", "null"]}}, ["query"]),
-    tool("memory_load", "批量展开本轮索引给出的引用；先读正文再复述往事。逐项返回状态，不读取文件或网页。",
-         {"refs": {"type": "array", "items": {"type": "string"},
-                   "minItems": 1, "maxItems": 4}}, ["refs"]),
-]
+from .capability_registry import sdk_group
+
+TOOLS = sdk_group("memory")
 
 
 class MemoryContext:

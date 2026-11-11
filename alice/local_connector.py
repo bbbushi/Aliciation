@@ -100,7 +100,7 @@ class LocalConnectorManager:
                        "operation_id": uuid.uuid4().hex}
 
     def status(self) -> dict:
-        activity = self.service.chat_activity()
+        channel = self.service.local_channel_settings()
         with self._lock:
             result = copy.deepcopy(self._state)
             setup = copy.deepcopy(self._setup)
@@ -115,7 +115,7 @@ class LocalConnectorManager:
             result["setup"] = setup
             if result["state"] == "unavailable":
                 result["message"] = setup["message"]
-        result["channel_enabled"] = activity["channels_enabled"]
+        result.update(channel)
         return result
 
     def _apply_environment(self, environment: Environment) -> None:
@@ -306,6 +306,8 @@ class LocalConnectorManager:
                                    **({"error_code": "stopped_forced"} if forced else {})}
 
     def action(self, payload: dict) -> dict:
+        if isinstance(payload, dict) and payload.get("action") == "set_channel_enabled":
+            return self._set_channel_enabled(payload)
         if (not isinstance(payload, dict) or set(payload) - {"action", "operation_id"}
                 or payload.get("action") not in {"scan", "pair", "confirm", "run", "cancel", "stop", "install", "recheck"}):
             raise ChannelError(400, "invalid_request", "连接操作无效")
@@ -362,6 +364,38 @@ class LocalConnectorManager:
                     raise ChannelError(409, "operation_changed", "当前没有由本页面启动的连接")
                 if state != "stopping":
                     self._request_stop_locked(op)
+        return self.status()
+
+    def _set_channel_enabled(self, payload: dict) -> dict:
+        if (set(payload) != {"action", "operation_id", "enabled", "session_epoch", "config_revision"}
+                or type(payload["enabled"]) is not bool):
+            raise ChannelError(400, "invalid_request", "渠道开关参数无效，请刷新设置")
+
+        @contextmanager
+        def commit_guard():
+            # Follow the existing binding order: service reservation/lock before host lock.
+            with self._lock:
+                if self._closed:
+                    raise ChannelError(503, "draining", "QQ 入口正在关闭")
+                if payload["operation_id"] != self._state["operation_id"]:
+                    raise ChannelError(409, "operation_changed", "连接状态已变化，请刷新后再切换渠道")
+                if payload["enabled"] and self._state["state"] in {
+                        "scanning", "pairing", "awaiting_confirmation", "starting", "stopping"}:
+                    raise ChannelError(409, "connector_busy", "请先完成或取消当前连接操作")
+                yield
+                if not payload["enabled"]:
+                    self._pending_action = None  # Prevent late binding receipts from re-enabling QQ.
+                    if self._process is not None and self._process.poll() is None:
+                        self._request_stop_locked(self._state["operation_id"])
+                    else:
+                        # No owned process: do not claim an external bridge was stopped.
+                        state = self._state["state"]
+                        self._state = {**self._state, "operation_id": uuid.uuid4().hex}
+                        if state not in {"idle", "stopped", "unavailable", "error"}:
+                            self._state = {"state": "stopped", "operation_id": self._state["operation_id"]}
+
+        self.service.set_local_channel_enabled(payload["enabled"], payload["session_epoch"],
+                                               payload["config_revision"], guard=commit_guard)
         return self.status()
 
     @staticmethod

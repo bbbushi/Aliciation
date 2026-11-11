@@ -7,6 +7,10 @@
 from __future__ import annotations
 
 import json
+import math
+import os
+import re
+import tempfile
 import threading
 import time
 from collections import deque
@@ -21,7 +25,8 @@ BODY_DIR_LIMIT_BYTES = 50 * 1024 * 1024   # 基础设计 §原文与存储：首
 BODY_RETENTION_SECONDS = 7 * 86400        # 7 天
 BODY_MAX_CHARS = 200000
 _SWEEP_EVERY = 64
-BODY_REQUEST_LIMIT = 10  # O01：正文采集按用户请求计数的上限（与 7 天/50MiB 并列）
+BODY_REQUEST_LIMIT = 10  # Rolling retained requests, not a lifetime capture quota.
+_body_lock = threading.RLock()
 
 _global_lock = threading.Lock()
 _global_observer: ContextObserver | NullObserver | None = None
@@ -54,22 +59,93 @@ def observer_for(cfg, body_capture=None) -> ContextObserver | NullObserver:
         return _global_observer
 
 
-def _body_capture_allowed(store, cfg) -> bool:
-    """按用户请求计数并返回本请求是否仍可采集正文。
+def _index_path():
+    return _body_dir().parent / "captures.json"
 
-    计数持久化于 meta，重启不清零；开关处于关闭期时计数归零，
-    重新开启后从零重新计满十个用户请求。达到上限后第 11 个请求起
-    只记元数据，聊天与观测本体不受影响。
-    """
-    used = int(store.meta_get("ctx_obs_body_used") or 0)
-    if not getattr(cfg.context, "observer_body_capture", False):
-        if used:
-            store.meta_set("ctx_obs_body_used", "0")
-        return False
-    if used >= BODY_REQUEST_LIMIT:
-        return False
-    store.meta_set("ctx_obs_body_used", str(used + 1))
-    return True
+
+def _read_index():
+    path = _index_path()
+    if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
+        raise ValueError("invalid capture index")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(value, dict) or value.get("version") != 2
+            or not isinstance(value.get("requests"), list) or len(value["requests"]) > BODY_REQUEST_LIMIT):
+        raise ValueError("invalid capture index")
+    seen = set()
+    for row in value["requests"]:
+        if (not isinstance(row, dict) or not isinstance(row.get("request_id"), str)
+                or not 1 <= len(row["request_id"]) <= 160 or row["request_id"] in seen
+                or type(row.get("ts")) not in (int, float) or not math.isfinite(row["ts"])
+                or not isinstance(row.get("hashes"), dict)
+                or any(not re.fullmatch(r"[a-f0-9]{64}", h) or state not in
+                       {"on_disk", "write_failed", "body_budget_exceeded", "not_retained"}
+                       for h, state in row["hashes"].items())):
+            raise ValueError("invalid capture index")
+        seen.add(row["request_id"])
+    return value
+
+
+def _write_index(value):
+    path = _index_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix="captures-", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            os.chmod(temporary, 0o600)
+            json.dump(value, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def _migrate_index(store):
+    """Adopt only real historical captures; never reconstruct body=none messages."""
+    if _index_path().exists():
+        _read_index()
+        return
+    requests = {}
+    for row in store.conn.execute("SELECT detail FROM turn_metrics WHERE module='ctx_obs' ORDER BY id DESC LIMIT 8000"):
+        try:
+            event = json.loads(row["detail"])
+            rid, ts, data = event["request_id"], event["ts"], event.get("data", {})
+            if time.time() - ts > BODY_RETENTION_SECONDS:
+                continue
+            entries = ([(data, data.get("block.body"))] if data.get("body_state") == "stored" else []) + [
+                (m, data.get(f"messages.order.{m['seq']}.body"))
+                for m in (data.get("messages") or {}).get("order", []) if m.get("body") == "stored"]
+            if isinstance(data.get("input"), dict) and data["input"].get("body") == "stored":
+                entries.append((data["input"], data.get("input.body")))
+            for entry, receipt in entries:
+                h = entry.get("content_hash", "").removeprefix("sha256:")
+                if not re.fullmatch(r"[a-f0-9]{64}", h):
+                    continue
+                recorded = receipt.get("state") if isinstance(receipt, dict) else None
+                if recorded not in {"on_disk", "write_failed", "body_budget_exceeded"}:
+                    continue
+                rec = requests.setdefault(rid, {"request_id": rid, "ts": ts, "hashes": {}})
+                rec["ts"] = min(rec["ts"], ts)
+                if rec["hashes"].get(h) == "on_disk":
+                    continue
+                rec["hashes"][h] = (recorded if recorded in {"write_failed", "body_budget_exceeded"} else
+                    "on_disk" if (_body_dir() / h[:2] / (h + ".txt")).is_file() else "not_retained")
+        except (ValueError, KeyError, TypeError):
+            continue
+    _write_index({"version": 2, "requests": sorted(requests.values(), key=lambda r: r["ts"])[-BODY_REQUEST_LIMIT:]})
+
+
+def _admit_body_request(request_id):
+    with _body_lock:
+        value = _read_index()
+        if not any(r["request_id"] == request_id for r in value["requests"]):
+            value["requests"].append({"request_id": request_id, "ts": time.time(), "hashes": {}})
+            value["requests"] = value["requests"][-BODY_REQUEST_LIMIT:]
+            _write_index(value)
+            sweep_bodies()
 
 
 def begin_request(store, cfg, *, request_id, scope, session_epoch=None,
@@ -78,9 +154,17 @@ def begin_request(store, cfg, *, request_id, scope, session_epoch=None,
     try:
         if not getattr(cfg.context, "observer_enabled", True):
             return NullObserver().begin_request(request_id=request_id)
-        allowed = True
-        if getattr(cfg.context, "observer_body_capture", False):
-            allowed = _body_capture_allowed(store, cfg)
+        allowed = bool(getattr(cfg.context, "observer_body_capture", False))
+        if allowed:
+            try:
+                _admit_body_request(request_id)
+            except (OSError, ValueError, TypeError):
+                allowed = False  # Metadata must survive an unavailable body index.
+                with _body_lock:
+                    failures = _global_state.setdefault("capture_failures", {})
+                    failures[request_id] = "capture_index_unavailable"
+                    while len(failures) > BODY_REQUEST_LIMIT:
+                        failures.pop(next(iter(failures)))
         observer = observer_for(cfg, body_capture=allowed)
         if session_epoch is None:
             session_epoch = store.meta_get("session_epoch")
@@ -101,7 +185,21 @@ class AliceSink:
         store = _global_state.get("store")
         if store is None:
             return
-        body_state = self._store_bodies(event)
+        with _body_lock:
+            try:
+                index = _read_index()
+                record = next((r for r in index["requests"] if r["request_id"] == event.get("request_id")), None)
+            except (OSError, ValueError, TypeError):
+                index, record = None, {"disabled_reason": "capture_index_unavailable"}
+            failure = _global_state.get("capture_failures", {}).get(event.get("request_id"))
+            if failure:
+                record = {"disabled_reason": failure}
+            if event.get("type") == "request_started":
+                event = {**event, "data": {**event.get("data", {}),
+                         "body_capture_reason": record.get("disabled_reason", "rolling_capture") if record else "capture_disabled"}}
+            body_state = self._store_bodies(event, record)
+            if body_state is not None and index is not None:
+                _write_index(index)
         if body_state is not None:
             event = {**event, "data": {**event.get("data", {}), **body_state}}
         with store._ctx_obs_lock:
@@ -112,44 +210,57 @@ class AliceSink:
         if self._sweep_counter % _SWEEP_EVERY == 0:
             sweep_bodies()
 
-    def _store_bodies(self, event: dict) -> dict | None:
+    def _store_bodies(self, event: dict, record) -> dict | None:
         """正文按 hash 复用落盘；超额/失败不截断冒充完整，改记状态。"""
         data = event.get("data") or {}
-        if _global_policy is None or _global_policy.text_capture == "none":
-            return None
         states: dict[str, dict] = {}
         changed = False
         if data.get("body_state") == "stored" and isinstance(data.get("content"), str):
             # 块登记事件：正文在 data 顶层
-            states["block.body"] = self._write_body(data)
+            states["block.body"] = self._write_body(data, record)
             data.pop("content", None)
             changed = True
         for key, item in list(data.items()):
             if key == "messages" and isinstance(item, dict):
                 for entry in item.get("order", []):
                     if entry.get("body") == "stored" and isinstance(entry.get("content"), str):
-                        states[f"messages.order.{entry['seq']}.body"] = self._write_body(entry)
+                        states[f"messages.order.{entry['seq']}.body"] = self._write_body(entry, record)
                         entry.pop("content", None)
                         changed = True
             elif isinstance(item, dict) and item.get("body") == "stored" and isinstance(item.get("content"), str):
-                states[f"{key}.body"] = self._write_body(item)
+                states[f"{key}.body"] = self._write_body(item, record)
                 item.pop("content", None)
                 changed = True
         return states if changed else None
 
-    def _write_body(self, entry: dict) -> dict:
+    def _write_body(self, entry: dict, record) -> dict:
+        if record is None:
+            return {"state": "rolling_window_evicted"}
+        if record.get("disabled_reason"):
+            return {"state": record["disabled_reason"]}
+        result = self._write_file(entry)
+        digest = (entry.get("content_hash") or "").removeprefix("sha256:")
+        if re.fullmatch(r"[a-f0-9]{64}", digest):
+            record["hashes"][digest] = result["state"]
+        return result
+
+    def _write_file(self, entry: dict) -> dict:
         digest = (entry.get("content_hash") or "").split(":", 1)[-1]
         if not digest or len(digest) < 16:
             return {"state": "hash_unavailable"}
         try:
             directory = _body_dir()
-            directory.mkdir(parents=True, exist_ok=True)
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             path = directory / digest[:2] / (digest + ".txt")
+            if path.is_symlink():
+                return {"state": "write_failed"}
             if not path.exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if _dir_size(directory) + len(entry["content"]) > BODY_DIR_LIMIT_BYTES:
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if _dir_size(directory) + len(entry["content"].encode("utf-8")) > BODY_DIR_LIMIT_BYTES:
                     return {"state": "body_budget_exceeded"}
                 path.write_text(entry["content"], encoding="utf-8")
+                path.chmod(0o600)
+            os.utime(path, None)  # Shared bytes are still live for this new capture.
             return {"state": "on_disk", "ref": digest}
         except OSError:
             return {"state": "write_failed"}
@@ -175,19 +286,28 @@ def _dir_size(directory: Path) -> int:
 
 
 def sweep_bodies(now: float | None = None) -> dict:
+    with _body_lock:
+        return _sweep_bodies_locked(now)
+
+
+def _sweep_bodies_locked(now: float | None = None) -> dict:
     """期限与容量维护：只在写入路径偶发触发；返回清理摘要（供测试）。"""
     now = now if now is not None else time.time()
     removed = expired = 0
     directory = _body_dir()
     if not directory.is_dir():
         return {"removed": 0, "expired": 0}
+    with _body_lock:
+        index = _read_index()  # Corrupt index: no destructive guessing.
+        live = {h for r in index["requests"] if now - r["ts"] <= BODY_RETENTION_SECONDS
+                for h, state in r["hashes"].items() if state == "on_disk"}
     victims = []
     for path in directory.rglob("*.txt"):
         try:
             stat = path.stat()
         except OSError:
             continue
-        if now - stat.st_mtime > BODY_RETENTION_SECONDS:
+        if path.stem not in live or now - stat.st_mtime > BODY_RETENTION_SECONDS:
             victims.append((stat.st_mtime, path))
     for _, path in sorted(victims):
         try:
@@ -210,20 +330,57 @@ def sweep_bodies(now: float | None = None) -> dict:
     return {"removed": removed, "expired": expired}
 
 
-def read_body(content_hash: str, *, limit: int = 64000) -> dict:
+def body_reason(request_id, *, captured=True, ts=None):
+    """Read-only per-request eligibility; hash reuse never extends an old request."""
+    try:
+        with _body_lock:
+            value = _read_index()
+    except (OSError, ValueError, TypeError):
+        return "capture_index_unavailable"
+    row = next((r for r in value["requests"] if r["request_id"] == request_id), None)
+    if row is not None:
+        return "retention_expired" if time.time() - row["ts"] > BODY_RETENTION_SECONDS else None
+    if not captured:
+        return "historical_not_captured"
+    if ts is not None and time.time() - ts > BODY_RETENTION_SECONDS:
+        return "retention_expired"
+    return "rolling_window_evicted"
+
+
+def read_body(content_hash: str, *, request_id=None, limit: int = 64000) -> dict:
     """按 hash 读正文；无正文明确“未留存”，不用今天的数据补画历史。"""
     if not isinstance(content_hash, str) or not content_hash.startswith("sha256:"):
         return {"stored": False, "reason": "invalid_hash"}
     digest = content_hash.split(":", 1)[-1]
     if len(digest) < 16 or any(ch not in "0123456789abcdef" for ch in digest):
         return {"stored": False, "reason": "invalid_hash"}
+    if request_id is None:
+        return {"stored": False, "reason": "binding_required"}
+    reason = body_reason(request_id)
+    if reason:
+        return {"stored": False, "reason": reason}
+    with _body_lock:
+        try:
+            rec = next(r for r in _read_index()["requests"] if r["request_id"] == request_id)
+            state = rec["hashes"].get(digest)
+        except StopIteration:
+            return {"stored": False, "reason": "rolling_window_evicted"}
+        except (OSError, ValueError, TypeError):
+            return {"stored": False, "reason": "capture_index_unavailable"}
+    if state != "on_disk":
+        return {"stored": False, "reason": state or "historical_not_captured"}
     path = _body_dir() / digest[:2] / (digest + ".txt")
     try:
         if path.is_symlink() or not path.is_file():
             return {"stored": False, "reason": "not_retained"}
+        if time.time() - path.stat().st_mtime > BODY_RETENTION_SECONDS:
+            return {"stored": False, "reason": "retention_expired"}
         text = path.read_text(encoding="utf-8")
     except OSError:
         return {"stored": False, "reason": "unreadable"}
+    from .context_observer.contract import content_hash as frozen_hash
+    if frozen_hash(text) != content_hash:
+        return {"stored": False, "reason": "hash_mismatch"}
     return {"stored": True, "hash": content_hash, "text": text[:limit],
             "truncated": len(text) > limit, "chars": len(text)}
 
@@ -250,6 +407,9 @@ def request_hashes(store, request_id) -> set[str] | None:
         for entry in (data.get("messages") or {}).get("order", []):
             if isinstance(entry, dict) and isinstance(entry.get("content_hash"), str):
                 hashes.add(entry["content_hash"])
+        snapshot = data.get("input")
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("content_hash"), str):
+            hashes.add(snapshot["content_hash"])
 
     try:
         for row in store.conn.execute(
@@ -273,13 +433,16 @@ def body_quota(store=None) -> dict:
     out = {"body_dir_bytes": _dir_size(_body_dir()),
            "limit_bytes": BODY_DIR_LIMIT_BYTES,
            "retention_days": BODY_RETENTION_SECONDS // 86400,
-           "policy": "10个用户请求 · 7天 · 50MiB，以先到者为界；达到上限不截断后冒充完整"}
+           "policy": "滚动保留最近10个采集请求 · 7天 · 50MiB；持续采集新请求，不截断后冒充完整"}
     if store is not None:
-        used = int(store.meta_get("ctx_obs_body_used") or 0)
-        out["requests"] = {"used": used, "limit": BODY_REQUEST_LIMIT,
-                           "remaining": max(0, BODY_REQUEST_LIMIT - used),
-                           "exhausted": used >= BODY_REQUEST_LIMIT,
-                           "reset": "关闭 observer_body_capture 开关即重置计数；重新开启后重新计满10个用户请求"}
+        try:
+            with _body_lock:
+                used = sum(time.time() - r["ts"] <= BODY_RETENTION_SECONDS for r in _read_index()["requests"])
+            out["requests"] = {"used": used, "limit": BODY_REQUEST_LIMIT,
+                               "rolling": True, "exhausted": False}
+        except (OSError, ValueError, TypeError):
+            out["requests"] = {"used": None, "limit": BODY_REQUEST_LIMIT, "rolling": True,
+                               "reason": "capture_index_unavailable"}
     return out
 
 
@@ -322,3 +485,8 @@ def install(store) -> None:
     store._ctx_obs_events = deque(maxlen=EVENTS_MAXLEN)
     store._ctx_obs_dropped = 0
     _global_state["store"] = store
+    try:
+        with _body_lock:
+            _migrate_index(store)
+    except (OSError, ValueError, TypeError):
+        pass  # Body failures do not prevent opening Alice or collecting metadata.

@@ -505,31 +505,11 @@ class LearningStoreMixin:
 
 
 def learning_tools(store, cfg=None):
+    from .capability_registry import sdk_group
     settings = store._observation_settings()
-    tools = []
-    def add(name, description, properties, required):
-        tools.append({'type':'function','function':{'name':name,'description':description,
-            'parameters':{'type':'object','properties':properties,'required':required,'additionalProperties':False}}})
+    allowed = set()
     if settings.get('allow_chat_interests'):
-        add('observe_interest', '从本轮用户自然表达自主识别兴趣，无需固定口令。topic须为可公开检索的主题，不含私人经历或身份；user_quote与reason仅在本地保存。区分转述、临时话题和持续关注、喜欢与反对。仅引用用户原话作为依据，不能用自己搜索或网页内容证明用户兴趣。',
-            {'topic':{'type':'string'},'user_quote':{'type':'string'},'attitude':{'type':'string','enum':sorted(ATTITUDES)},
-             'confidence':{'type':'number','minimum':0,'maximum':1},'reason':{'type':'string'}},
-            ['topic','user_quote','attitude','confidence','reason'])
+        allowed.add('observe_interest')
     if settings.get('remember_observations'):
-        add('reuse_observation','重新阅读相同内容时，若检索回执existing_observations或recall给出仍有效的原见闻，可直接复用其memory_id，无需反复recall或另写摘要。此工具只确认复用，不修改正文、价值理由或期限；需要新观点或确有新增材料时另行择要保存。',
-            {'memory_id':{'type':'integer'}},['memory_id'])
-        fields = {'keep':{'type':'boolean'},'title':{'type':'string'},
-                  'content':{'type':'string','description':'仅正文，不含见闻包装头或条件与不确定标签；条件、范围和不确定性另填uncertainty'},'keywords':{'type':'string'},
-                  'value_tier':{'type':'string','enum':sorted(TIERS)},'reason':{'type':'string'},
-                  'uncertainty':{'type':'string','description':'独立写关键条件、实际阅读范围及不确定性，不附加字段标签，不遗漏原条件'},
-                  'reflection_hint':{'type':'string','enum':['ordinary','conflict','repeated']}}
-        required = ['keep','title','content','value_tier','reason','uncertainty']
-        detail = '' if cfg is None else '内容建议字数（可按必要条件调整，不机械截断）：'+_json(detail_targets(cfg))+'。'
-        add('learn_from_sources','对本轮实际读到的资料自主决定保留或跳过；兴趣外重要材料也可留。低价值更精练，高价值保留细节；保留条件与不确定性。价值和可信度分别判断，热度仅参考。同一来源相同正文不会重复落盘，回执会注明沿用既有记录；同一来源的不同要点可作为新见闻保存，受每日写入额度约束。'+detail,fields,required)
-        add('reflect_on_sources','可在用户当前讨论中立即形成并保存带来源的初步观点，不等待记忆数量阈值；允许没有观点时跳过。后续证据可验证或修订。'+detail,
-            {**fields,'claim':{'type':'string'},'interpretation':{'type':'string'},'replaces_id':{'type':'integer'}},required+['claim','interpretation'])
-        ratio = _condense_ratio(cfg.memory.observation_condense_max_ratio if cfg is not None else 0.8)
-        add('condense_observation',f'对本轮recall读到的低价值见闻，依据同轮有效来源浓缩。计入宿主包装和独立条件后，UTF-8字节数至少缩减{(1-ratio)*100:g}%，不是略删几个字；无法保留关键事实和条件时不要强行改写。正文不含包装头或条件标签，条件与范围仅填uncertainty。保留出处和不确定性；受影响派生观点待复核。',
-            {'memory_id':{'type':'integer'},'content':fields['content'],'uncertainty':fields['uncertainty'],'reason':{'type':'string'}},
-            ['memory_id','content','uncertainty','reason'])
-    return tools
+        allowed.update({'reuse_observation', 'learn_from_sources', 'reflect_on_sources', 'condense_observation'})
+    return [tool for tool in sdk_group('learning') if tool['function']['name'] in allowed]

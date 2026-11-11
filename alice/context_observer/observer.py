@@ -214,12 +214,23 @@ class PreparedCall:
             if self._emitted:
                 return
             self._final = dict(kwargs or {})
+            self._messages = self._final.get("messages", self._messages)
+            self._tools = self._final.get("tools", self._tools)
             capture = self._policy.text_capture
             self._frozen_messages = freeze.freeze_messages(
                 self._messages, capture=capture, head_chars=self._policy.head_chars,
                 body_max_chars=self._policy.body_max_chars)
             self._frozen_tools = freeze.freeze_tools(self._tools)
             self._frozen_parameters = freeze.freeze_parameters(self._final)
+            # Preserve the original message envelopes (including tool_calls),
+            # tools and covered parameters. Same capture/retention limits apply.
+            input_snapshot = {"body": "none"}
+            if capture != "none":
+                input_text = freeze.canonical_json({"format": "ctx-input/1",
+                    "messages": self._messages, "tools": self._tools,
+                    "parameters": self._frozen_parameters})
+                input_snapshot = freeze.freeze_text(input_text, capture=capture,
+                    head_chars=self._policy.head_chars, body_max_chars=self._policy.body_max_chars)
             self._bindings, match_gaps = freeze.match_bindings(self._messages, self._trace._blocks)
             binding_gaps = freeze.validate_bindings(self._bindings, self._frozen_messages["order"])
             self._trace._emit(EVENT_CALL_PREPARED, {
@@ -227,6 +238,7 @@ class PreparedCall:
                 "tool_round": self.tool_round,
                 "messages": {k: v for k, v in self._frozen_messages.items()},
                 "tools": self._frozen_tools,
+                "input": input_snapshot,
                 "parameters": self._frozen_parameters,
                 "bindings": self._bindings,
                 "messages_hash": _messages_hash(self._frozen_messages)}, parent={

@@ -443,7 +443,12 @@ def validate_budget(candidate, cfg):
     validate_expression(snapshot, cfg=cfg)
     # The exact static request includes constitution/persona; optional memory
     # and current user input are checked by the existing per-request guard.
-    rendered = render_full(snapshot, cfg=cfg)
+    if snapshot.get("format_version") == "persona-material-v1" and cfg.persona.expression_mode == "registry":
+        from . import persona_material as pm
+        plan = pm.projection_plan(snapshot["material"], cfg)
+        rendered = plan["core_text"] + "\n" + plan["catalogue_text"]
+    else:
+        rendered = render_full(snapshot, cfg=cfg)
     static = build_system_prompt(None, cfg, rendered, memory_area="")
     total = cfg.context.total_budget_tokens
     if total and messages_tokens([{"role": "system", "content": static}]) + cfg.context.reply_reserve_tokens >= total:
@@ -740,6 +745,22 @@ def residency_status(store, cfg) -> dict:
               "expression_digest": None}
     snapshot = load_persona_snapshot()
     eligibility = residency.activation_status(snapshot, cfg)
+    if snapshot and snapshot.get("format_version") == "persona-material-v1":
+        from . import persona_material as pm
+        plan = pm.projection_plan(snapshot["material"], cfg)
+        ready = eligibility["ready"]
+        result.update(format_version=pm.FORMAT, material=True, has_assembly=True,
+                      registry_ready=ready, expression_digest=pm.material_digest(snapshot["material"]),
+                      classification_digest=pm.material_digest(snapshot["material"]),
+                      persona_revision=digest(snapshot["raw"]), supported_modes=plan["supported_modes"],
+                      issues=eligibility["issues"],
+                      activation={"mode_requested": cfg.persona.expression_mode,
+                                  "mode_effective": "registry" if cfg.persona.expression_mode == "registry" and ready else "full",
+                                  "fallback_reason": eligibility["reason"] if cfg.persona.expression_mode == "registry" else None,
+                                  "not_ready_reason": eligibility["reason"]},
+                      material_preview={"core_text": plan["core_text"], "catalogue": plan["catalogue_text"],
+                                        "excluded": plan["excluded_bundles"]})
+        return result
     result["last_preparation"] = _last_residency_preparation(store, snapshot)
     result.update({"registry_ready": eligibility["ready"],
                    "persona_revision": digest(snapshot["raw"] if snapshot else ""),
