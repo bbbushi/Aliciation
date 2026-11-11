@@ -859,7 +859,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "人格装配操作未能确认，请刷新状态核对后再重试"}, 500)
             elif path == "/api/persona/material":
                 try:
-                    self._json(svc.material_import(self._bounded_body(262144)))
+                    self._json(svc.material_import(self._bounded_body(2097152)))
                 except ChannelError:
                     raise
                 except ValueError as exc:

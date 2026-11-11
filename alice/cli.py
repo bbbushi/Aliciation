@@ -170,7 +170,7 @@ def main() -> None:
             print(thought.deliberate(store, make_client(cfg), cfg))
         elif args.cmd == "seed":
             md = Path(args.file).read_text(encoding="utf-8")
-            print(f"人格已安装：{persona.install_persona(store, cfg, md, client=make_client(cfg))}")
+            print(f"人格已安装：{persona.install_persona(store, cfg, md)}")
         elif args.cmd == "distill":
             print(skills.distill(store, make_client(cfg), cfg))
         else:

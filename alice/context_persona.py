@@ -299,6 +299,7 @@ class MaterialRegistryContext:
                 "material_revision": self.revision, "source_sha256": self.material["source_sha256"],
                 "projection_strategy": "material_core_registry", "core_chars": self.plan["core_chars"],
                 "assembly_version": self.plan["assembly_version"],
+                "interpretation": self.plan["interpretation"], "core_demotions": self.plan["core_demotions"],
                 "coverage": self.plan["coverage"], "unreachable_block_ids": self.plan["unreachable_block_ids"],
                 "core_block_ids": sorted(self.core_ids), "catalogue_chars": len(self._catalogue_block),
                 "catalogue_bundle_ids": [b["bundle_id"] for b in self.catalogue],

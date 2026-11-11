@@ -11,6 +11,7 @@ import json
 import re
 
 from .expression_adoption import ADOPTION_GUIDANCE
+from . import persona_interpretation as interpretation
 
 FORMAT = "persona-material-v1"
 POLICY_VERSION = 2
@@ -232,7 +233,8 @@ def valid_classification(row):
 
 def validate_material(material):
     """Structural integrity only; local admission issues belong to projection_plan."""
-    if not isinstance(material, dict) or set(material) != MATERIAL_KEYS or material.get("format") != FORMAT:
+    if (not isinstance(material, dict) or set(material) not in (MATERIAL_KEYS, MATERIAL_KEYS | {"interpretation"})
+            or material.get("format") != FORMAT):
         return [{"code": "material_shape_invalid"}]
     text, limits = material["source_text"], material["limits"]
     if (not isinstance(text, str) or not text.strip() or len(text) > MAX_SOURCE_CHARS
@@ -298,7 +300,7 @@ def validate_material(material):
                     or type(row["version"]) is not int or row["version"] < 1):
                 return issues + [{"code": "derivative_row_invalid"}]
             seen.add(row["derivative_id"])
-    return issues
+    return issues + interpretation.validate(material)
 
 
 def require_material(material):
@@ -310,7 +312,8 @@ def require_material(material):
 def usable(material, bid):
     row = material["classifications"].get(bid)
     return bool(valid_classification(row) and row["status"] == "accepted"
-                and row["placement"] in ("常驻", "按需") and row["kind"] in EXPRESSION_KINDS)
+                and row["placement"] in ("常驻", "按需") and row["kind"] in EXPRESSION_KINDS
+                and interpretation.effective_text(material, bid).strip())
 
 
 def closure(material, roots):
@@ -325,7 +328,7 @@ def closure(material, roots):
             return
         if bid not in known or not usable(material, bid):
             raise ValueError("原文块尚未确认可用或已暂停/存档：" + str(bid))
-        if known[bid]["end"] - known[bid]["start"] > MAX_BLOCK_CHARS:
+        if len(interpretation.effective_text(material, bid)) > MAX_BLOCK_CHARS:
             raise ValueError("原文块过长，需要人工拆分：" + bid)
         visiting.add(bid)
         for cid in known[bid]["context_ids"]:
@@ -354,8 +357,8 @@ def block_text(material, block_id):
 
 def ordered_text(material, ids):
     selected = set(ids)
-    return "\n\n".join((f"[{b['heading_path']}]\n" if b["heading_path"] else "")
-                       + block_text(material, b["block_id"]) for b in material["blocks"]
+    return "\n\n".join((f"[{b['heading_path']}]\n" if b["heading_path"] and "interpretation" not in material else "")
+                       + interpretation.effective_text(material, b["block_id"]) for b in material["blocks"]
                        if b["block_id"] in selected)
 
 
@@ -364,7 +367,7 @@ def core_text(material):
 
 
 def core_reference(material):
-    return "## 底色 · 核心（常驻原文）\n\n" + REGISTRY_USAGE + "\n\n" + core_text(material)
+    return "## 底色 · 核心（表达参考）\n\n" + REGISTRY_USAGE + "\n\n" + core_text(material)
 
 
 def bundle_closure(material, bundle):
@@ -424,7 +427,9 @@ def project_full(material, *, purpose="chat", budget=None):
     require_material(material)
     ids, _ = full_ids(material)
     body = "## 底色 · 气质与风格\n\n" + USAGE + "\n\n" + ordered_text(material, ids)
-    if not ids or (budget is not None and len(body) > budget):
+    if not ids and "interpretation" in material:
+        body += "（当前没有已采用的表达参考。）"
+    if (not ids and "interpretation" not in material) or (budget is not None and len(body) > budget):
         raise ValueError("原文完整投影为空或超过预算，请调整范围或使用可用的按需模式")
     return body
 
@@ -438,11 +443,24 @@ def projection_plan(material, configured=None, *, nonce="0000000000000000"):
     require_material(material)
     material = assembly_material(material)
     cap = effective_limits(material, configured)
+    demotions = []
+    if "interpretation" in material:
+        selected = []
+        for bid in list(material["core_block_ids"]):
+            try:
+                candidate = "## 底色 · 核心（表达参考）\n\n" + REGISTRY_USAGE + "\n\n" + ordered_text(material, closure(material, selected + [bid]))
+                if len(candidate) > cap["max_core_chars"]:
+                    raise ValueError("常驻核心超过预算，改为按需")
+                selected.append(bid)
+            except ValueError as exc:
+                material["classifications"][bid]["placement"] = "按需"
+                demotions.append({"block_id": bid, "reason": str(exc)})
+        material["core_block_ids"] = selected
     core_ids, core_body, core_issues = [], "", []
     try:
         core_ids = core_closure(material)
         core_body = core_reference(material)
-        if not core_ids:
+        if not core_ids and "interpretation" not in material:
             core_issues.append("核心为空")
         if len(core_body) > cap["max_core_chars"]:
             core_issues.append("核心及使用说明超过预算")
@@ -462,7 +480,8 @@ def projection_plan(material, configured=None, *, nonce="0000000000000000"):
         if bid in assigned or bid in core_ids or not usable(material, bid):
             continue
         row = material["classifications"][bid]
-        label = (row["cues"][0] if row["cues"] else block["heading_path"] or block_text(material, bid).strip().splitlines()[0])[:MAX_LABEL_CHARS]
+        heading = block["heading_path"] if "interpretation" not in material else ""
+        label = (row["cues"][0] if row["cues"] else heading or interpretation.effective_text(material, bid).strip().splitlines()[0])[:MAX_LABEL_CHARS]
         auto_id = "auto_" + _sha256(bid)[:16]
         while auto_id in used_bundle_ids:
             auto_id += "_"
@@ -495,7 +514,7 @@ def projection_plan(material, configured=None, *, nonce="0000000000000000"):
     registry_issues = list(core_issues)
     if len(core_body) + len(cat) > cap["max_projection_chars"]:
         registry_issues.append("核心与目录合计超过表达额度")
-    full, full_issues = "", list(core_issues)
+    full, full_issues = "", [] if "interpretation" in material else list(core_issues)
     try:
         full = project_full(material, budget=cap["max_projection_chars"])
     except ValueError as exc:
@@ -517,7 +536,8 @@ def projection_plan(material, configured=None, *, nonce="0000000000000000"):
                         if b["bundle_id"] == e["bundle_id"] and bid in (bundle_closure(material, b) or b["block_ids"])]
             state, reason = "excluded", "；".join(dict.fromkeys(failures)) or "无可发布路径，请核对共同上下文与预算"
         coverage.append({"block_id": bid, "state": state, "reason": reason})
-    return {"material": material, "assembly_version": 3, "coverage": coverage,
+    return {"material": material, "assembly_version": 4, "interpretation": interpretation.summary(material),
+            "core_demotions": demotions, "coverage": coverage,
             "unreachable_block_ids": [r["block_id"] for r in coverage if r["state"] == "excluded"],
             "candidate_bundles": candidates,
             "limits": cap, "core_ids": core_ids, "core_text": core_body,
@@ -591,6 +611,9 @@ def split_block(material, bid, offsets):
     result["blocks"] = [c for b in result["blocks"] for c in (children if b["block_id"] == bid else [b])]
     result["classifications"].pop(bid)
     result["classifications"].update({b["block_id"]: pending_row() for b in children})
+    if "interpretation" in result:
+        result["interpretation"]["blocks"].pop(bid)
+        result["interpretation"]["blocks"].update({b["block_id"]: interpretation.pending() for b in children})
     result["core_block_ids"] = [b for b in result["core_block_ids"] if b != bid]
     for b in result["blocks"]:
         b["context_ids"] = [c for cid in b["context_ids"] for c in ([n["block_id"] for n in children] if cid == bid else [cid])]

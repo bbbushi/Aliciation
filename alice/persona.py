@@ -298,9 +298,7 @@ def install_persona(store: Store, cfg: Config, md_text: str, source: str = "用�
     if "## 底色" in md_text:
         plan = prepare_direct_install(store, cfg, md_text, source)
     else:
-        if not md_text.strip() or client is None:
-            raise ValueError("外部角色卡导入需要非空文档及模型服务")
-        plan = prepare_import(client, cfg, md_text, source, False, store=store)
+        raise ValueError("新原稿请从网页使用原文保留＋六层理解导入；此安装入口仅恢复 Alice 文件")
     commit_import_plan(store, cfg, plan)
     return paths.PERSONA_FILE
 

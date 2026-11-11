@@ -986,11 +986,11 @@ function personaImportMethodHTML(id, selected = "") {
   return `<label class="persona-import-method" for="${id}">人格文档处理方式
     <select id="${id}">
       <option value="" ${!selected ? "selected" : ""}>请选择处理方式</option>
-      <option value="material" ${selected === "material" ? "selected" : ""}>原文保留＋轻分类</option>
-      <option value="structured" ${selected === "structured" ? "selected" : ""}>结构化适配／Alice 文件恢复（兼容）</option>
+      <option value="material" ${selected === "material" ? "selected" : ""}>原文保留＋六层理解＋轻分类</option>
+      <option value="structured" ${selected === "structured" ? "selected" : ""}>恢复 Alice 文件（兼容已有格式）</option>
     </select></label>
-    <p class="hint">原文保留＋轻分类：保留原句，分类只作导航；先预览再安装，不收养观点或经历。安装新原稿会归档旧会话。<br>
-    兼容方式：外部文档走旧提取与审查管线；Alice 导出文件直接校验恢复。<br>
+    <p class="hint">原文保留：先按六层理解材料，剔除生效内容中的身份接管指令，从设定和背景提炼表达倾向，再轻分类；先预览再安装，不收养身份、观点或经历。安装新原稿会归档旧会话。<br>
+    恢复方式：已有 Alice 文件直接校验恢复，不再对新原稿执行结构化生成。<br>
     full／registry 是聊天装配模式，不会转换人格材料格式。</p>
     <button type="button" class="btn ghost" id="${id}-resume">查看／继续原文准备（不调用模型）</button>`;
 }
@@ -998,14 +998,11 @@ function personaImportMethodHTML(id, selected = "") {
 function validateMd(md) {
   const text = md.trim();
   if (!text) return { ok: false, msg: "" };
-  /* Alice 格式直接安装；外部角色文档走提取、样本适配与认知审查。 */
+  /* Recovery only. New source material uses the six-layer preparation path. */
   const aliceShape = /^##\s*底色/m.test(text);
   const words = text.length;
   if (!aliceShape) {
-    const msg = words > 12000
-      ? `原始角色文档：先提取风格、情境和样本，再审查认知；原文不会直接常驻。${words} 字偏长，导入处理可能较慢。`
-      : "原始角色文档：先提取风格、情境和样本，再审查认知；准备成功后才安装，原文不会直接常驻。";
-    return { ok: true, note: !words || words <= 12000, warn: words > 12000, msg };
+    return {ok: false, msg: "这是新原稿，请选择原文保留＋六层理解；此入口只恢复已有 Alice 文件。"};
   }
   if (words > 12000) {
     return { ok: true, warn: true, msg: `含「## 底色」小节，但 ${words} 字偏长——太长会挤压每轮上下文，建议压到 2000 字内。` };
@@ -1213,7 +1210,8 @@ async function openPersonaView() {
     ...(p.expression?.sections && p.expression.format !== "invalid" ? [{ label: "编辑说话习惯", onClick: () => openExpressionEditor(p.expression) }] : []),
     ...(p.installed ? [{ label: "人格装配", onClick: openResidencyView }] : []),
     ...(p.expression?.format === "persona-material-v1" ? [{ label: "编辑原文分类（不调用模型）", onClick: () => openMaterialImport(p, true) }] :
-      p.expression ? [{ label: "从原稿更新表达", onClick: () => openExpressionUpdate(p.expression) }] : []),
+      p.expression ? [{ label: "用原稿重新导入", onClick: () => openPersonaImport("", "", "material") }] : []),
+    ...(p.expression?.format === "persona-material-v1" ? [{label: "按六层重新理解（调用模型）", onClick: () => openMaterialImport(p, true, null, true)}] : []),
     { label: "导入新的人格", cls: "btn primary", onClick: () => openPersonaImport() },
     ...(p.installed ? [{ label: "下载 .md", onClick: () => downloadMd(p.md) }] : []),
     {
@@ -1240,6 +1238,7 @@ async function openPersonaView() {
 
 /* ---------- 原文材料：人工续处理与版本绑定 ---------- */
 let materialViewGeneration = 0;
+let materialPreparationPending = false;
 const materialBinding = pv => ({token: pv.token, revision: pv.revision,
   material_digest: pv.material_digest, session_epoch: pv.session_epoch});
 
@@ -1253,12 +1252,35 @@ function materialCuesValue(host) {
   return [...host.querySelectorAll("[data-material-cue]")].map(node => node.value).filter(value => value.trim());
 }
 
+function materialExclusionHTML(row = {}) {
+  return `<div data-material-exclusion><label>从生效正文剔除的原句（清空即撤销此项）<textarea data-exclusion-quote rows="2">${esc(row.quote || "")}</textarea></label>
+    <label>理由<input data-exclusion-reason maxlength="200" value="${esc(row.reason || "")}"></label></div>`;
+}
+
+function materialInterpretationHTML(row, layers) {
+  if (!row) return `<p class="hint">旧版原文材料尚未做六层理解；可返回人格页显式重新理解，保留当前对话。</p>`;
+  const names = {pending: "待处理", expression: "直接表达参考", reference: "仅理解参考", derived: "采用提炼倾向", disabled: "不启用"};
+  const evidence = row.derivation?.evidence_quotes || [];
+  return `<fieldset data-material-interpretation><legend>六层理解与表达采用</legend>
+    <div class="material-layers">${layers.map(layer => `<label><input type="checkbox" data-material-layer value="${esc(layer)}" ${row.layers.includes(layer) ? "checked" : ""}>${esc(layer)}</label>`).join("")}</div>
+    <label>采用方式<select data-field="use">${Object.entries(names).map(([value, label]) => `<option value="${value}" ${row.use === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <p class="hint">设定和背景原文只作理解参考；需要采用时选择提炼倾向。爱好中的现实经历不成为 Alice 的亲历。</p>
+    <label>提炼的表达与反应倾向（可空，最多600字）<textarea data-field="derived-text" maxlength="600" rows="3">${esc(row.derivation?.text || "")}</textarea></label>
+    <div data-material-evidence>${evidence.map(q => `<label>原文依据（逐字引用，清空即移除）<textarea data-evidence-quote rows="2">${esc(q)}</textarea></label>`).join("")}</div>
+    <button type="button" class="btn ghost" data-add-evidence>添加原文依据</button>
+    <div data-material-exclusions>${row.exclusions.map(materialExclusionHTML).join("")}</div>
+    <button type="button" class="btn ghost" data-add-exclusion>添加剔除片段</button>
+  </fieldset>`;
+}
+
 function materialPreviewBody(pv) {
   const options = (values, selected) => values.map(v => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(v)}</option>`).join("");
   const blocks = (pv.blocks || []).map(b => `
     <details class="material-block-editor" data-material-block="${esc(b.block_id)}">
       <summary>${esc(b.block_id)} · ${esc(b.heading_path || "无标题")} · ${b.chars}字符${b.needs_split ? " · 需要拆分" : ""}</summary>
       <pre class="material-source">${esc(b.body)}</pre>
+      ${materialInterpretationHTML(b.interpretation, pv.layers || [])}
+      <details><summary>理解处理后的有效表达</summary><pre class="material-source">${esc(b.effective_text || "本块仅参考、未采用或待处理")}</pre></details>
       <label>类别 <select data-field="kind">${options(["待分类","表达习惯","反应模式","示例","观点候选","角色背景","混合"], b.kind)}</select></label>
       <label>用途 <select data-field="placement">${options(["待确认","常驻","按需","仅存档"], b.placement)}</select></label>
       <label>状态 <select data-field="status">${options(["pending","accepted","paused","isolated"], b.status)}</select>（pending待确认 / accepted已确认 / paused暂停）</label>
@@ -1273,11 +1295,15 @@ function materialPreviewBody(pv) {
     <p class="hint">本次只安装或调整表达材料，不收养观点或经历。类别是导航，不证明事实。尚未确认、暂停和仅存档的材料不进入聊天；共同上下文也须确认。</p>
     ${pv.notice ? `<p class="hint">${esc(pv.notice)}</p>` : ""}
     <p>确认 ${c.confirmed || 0} · 待分类 ${c.pending || 0} · 背景 ${c.archived || 0} · 暂停 ${c.paused || 0} · 共 ${pv.block_count} 块</p>
+    <p>${esc(pv.interpretation?.version ? Object.entries(pv.interpretation.layer_counts || {}).map(([layer, count]) => `${layer} ${count}`).join(" · ") : "旧材料：未执行六层理解")}</p>
+    ${(pv.core_demotions || []).length ? `<p class="hint">${esc(pv.core_demotions.map(r => `${r.block_id}：${r.reason}`).join("；"))}</p>` : ""}
+    ${(pv.issues || []).length ? `<details><summary>准备阶段提示（${pv.issues.length}项）</summary><pre class="material-source">${esc(pv.issues.map(i => `${i.block || ""} ${i.code}：${i.reason || "请核对对应块"}`).join("\n"))}</pre></details>` : ""}
+    ${(pv.attempts || []).length ? `<p class="hint">${esc(pv.attempts.map(a => `${a.stage}：${a.status}，${(a.duration_ms / 1000).toFixed(1)}秒`).join("；"))}</p>` : ""}
     <p>核心及使用说明 ${pv.core_chars} / ${pv.core_budget} 字符。支持模式：${esc((pv.supported_modes || []).join("、") || "尚无，请调整下方分类或选择")}</p>
-    <p class="hint">其中人格原文 ${pv.core_source_chars ?? "待核对"} 字符，其余为宿主使用说明和标题。${pv.unreachable_block_ids?.length ? `有 ${pv.unreachable_block_ids.length} 个可用块未发布到按需路径，请查看各块去向与场景排除原因；不代表全部可用。` : "已确认可用表达均有路径；明确停用项另列。"}</p>
+    <p class="hint">其中有效表达（含已选提炼倾向）${pv.core_source_chars ?? "待核对"} 字符，其余为宿主使用说明和标题。${pv.unreachable_block_ids?.length ? `有 ${pv.unreachable_block_ids.length} 个可用块未发布到按需路径，请查看各块去向与场景排除原因；不代表全部可用。` : "已确认可用表达均有路径；明确停用项另列。"}</p>
     <p id="material-feedback" class="hint" role="status"></p>
     <details><summary>完整原稿（只读）</summary><pre class="material-source">${esc(pv.source_text)}</pre></details>
-    <h4>原文块：分类、常驻选择和共同上下文</h4>${blocks}
+    <h4>原文块：六层理解、表达采用与装配导航</h4>${blocks}
     <h4>场景目录</h4><p class="hint">关闭场景会将它移出目录；仅属于已关闭场景的正文也不作为full入口。若需禁止某块作为任何场景的共同上下文，请将该块状态设为paused。预算超限的场景会留在候选中，但暂不发布到活动目录。</p>
     <div id="material-bundles"></div><button type="button" class="btn" id="material-add-bundle">新增场景</button>
     <details><summary>实际常驻正文</summary><pre class="material-source">${esc(pv.core_text || "")}</pre></details>
@@ -1285,7 +1311,7 @@ function materialPreviewBody(pv) {
     <details><summary>full完整投影</summary><pre class="material-source">${esc(pv.full_text || "当前不可用")}</pre></details>
     <p class="hint">${esc(Object.entries(pv.mode_issues || {}).map(([mode, items]) => `${mode}：${items.length ? items.join("；") : "可用"}`).join(" / "))}</p>
     <label>应用后的装配模式 <select id="material-mode"></select></label>
-    <p class="hint">修改后先保存并核对新预览，再应用；拆分后的块需要重新人工分类。独立观点整理、派生生成和四格对照尚未开放。</p>
+    <p class="hint">修改后先保存并核对新预览，再应用；拆分后的块需要重新理解和分类。提炼句以独立表达倾向使用，不认领背景经历；独立观点收养和四格对照尚未开放。</p>
   </div>`;
 }
 
@@ -1301,7 +1327,7 @@ function materialBundleHTML(b) {
   </details>`;
 }
 
-async function openMaterialImport(p, editActive = false, draft = null) {
+async function openMaterialImport(p, editActive = false, draft = null, reinterpret = false) {
   const generation = ++materialViewGeneration;
   let settings = {}, staged = null;
   let draftText = draft?.sourceText || "", draftName = "";
@@ -1309,9 +1335,14 @@ async function openMaterialImport(p, editActive = false, draft = null) {
   const current = () => materialViewGeneration === generation;
   const parts = value => value.split(/[,，;；]/).map(v => v.trim()).filter(Boolean);
   const request = async payload => {
-    const result = await postJSON("/api/persona/material", payload);
-    settings = {...settings, ...result};
-    return result;
+    const paid = ["prepare", "reinterpret_active"].includes(payload.action);
+    if (paid && materialPreparationPending) throw new Error("已有原文准备请求正在处理，请等待或刷新状态核对");
+    if (paid) materialPreparationPending = true;
+    try {
+      const result = await postJSON("/api/persona/material", payload);
+      settings = {...settings, ...result};
+      return result;
+    } finally { if (paid) materialPreparationPending = false; }
   };
   const renderPreview = (pv, readOnly = false) => {
     if (!current()) return;
@@ -1357,13 +1388,23 @@ async function openMaterialImport(p, editActive = false, draft = null) {
       }
     };
     const gather = () => {
-      const rows = [], contexts = [];
+      const rows = [], contexts = [], interpretation_updates = [];
       for (const node of document.querySelectorAll("[data-material-block]")) {
         const get = field => node.querySelector(`[data-field="${field}"]`);
         const bid = node.dataset.materialBlock;
         rows.push({block_id: bid, kind: get("kind").value, placement: get("placement").value,
           status: get("status").value, cues: materialCuesValue(get("cues"))});
         contexts.push({block_id: bid, context_ids: parts(get("contexts").value)});
+        const understanding = node.querySelector("[data-material-interpretation]");
+        if (understanding) {
+          const text = get("derived-text").value;
+          const evidence_quotes = [...understanding.querySelectorAll("[data-evidence-quote]")].map(n => n.value).filter(q => q.trim());
+          interpretation_updates.push({block_id: bid, layers: [...understanding.querySelectorAll("[data-material-layer]:checked")].map(n => n.value),
+            use: get("use").value, derivation: text.trim() || evidence_quotes.length ? {text, evidence_quotes} : null,
+            exclusions: [...understanding.querySelectorAll("[data-material-exclusion]")].map(n => ({
+              quote: n.querySelector("[data-exclusion-quote]").value, reason: n.querySelector("[data-exclusion-reason]").value
+            })).filter(r => r.quote.trim() || r.reason.trim())});
+        }
       }
       const bundles = [...document.querySelectorAll("[data-material-bundle]")].map(node => ({
         bundle_id: node.dataset.materialBundle,
@@ -1371,7 +1412,7 @@ async function openMaterialImport(p, editActive = false, draft = null) {
         cues: materialCuesValue(node.querySelector('[data-field="cues"]')),
         block_ids: parts(node.querySelector('[data-field="members"]').value),
         enabled: node.querySelector('[data-field="enabled"]').checked}));
-      return {classifications: rows, context_updates: contexts, bundles};
+      return {classifications: rows, interpretation_updates, context_updates: contexts, bundles};
     };
     const actions = [
       ...(canEdit ? [{label: "保存修改并预览", onClick: () => perform({action: "update", ...materialBinding(pv), ...gather()})}] : []),
@@ -1386,7 +1427,7 @@ async function openMaterialImport(p, editActive = false, draft = null) {
           const mode = $("#material-mode").value;
           if (!mode) { feedback("没有可应用的装配模式，请核对支持模式及配置状态。"); return; }
           const description = pv.reset ? `安装会归档当前 ${p?.turns || 0} 轮对话及记忆。` : "本次只更新表达分类，保留现有对话、记忆和生长内容。";
-          if (!window.confirm(`${description}\n装配模式：${mode}。未收养观点或经历。确定应用已预览的版本吗？`)) return;
+          if (!window.confirm(`${description}\n装配模式：${mode}。将采用预览中的表达与所选提炼倾向；角色身份、观点和经历未收养。确定应用已预览的版本吗？`)) return;
           const result = await perform({action: "apply", ...materialBinding(pv), mode, config_revision: settings.config_revision});
           if (result && current()) { toast(result.material_notice || "已应用", 5000); closeModal(); location.reload(); }
         }},
@@ -1423,9 +1464,31 @@ async function openMaterialImport(p, editActive = false, draft = null) {
       setDirty();
     };
     const preview = $("#material-preview");
+    preview.addEventListener("click", e => {
+      const understanding = e.target.closest("[data-material-interpretation]");
+      if (!understanding || !canEdit) return;
+      if (e.target.matches("[data-add-exclusion]")) {
+        if (understanding.querySelectorAll("[data-material-exclusion]").length >= 24) return toast("每块最多24个剔除片段");
+        understanding.querySelector("[data-material-exclusions]").insertAdjacentHTML("beforeend", materialExclusionHTML());
+        setDirty();
+      }
+      if (e.target.matches("[data-add-evidence]")) {
+        if (understanding.querySelectorAll("[data-evidence-quote]").length >= 6) return toast("每块最多6条原文依据");
+        understanding.querySelector("[data-material-evidence]").insertAdjacentHTML("beforeend", '<label>原文依据（逐字引用，清空即移除）<textarea data-evidence-quote rows="2"></textarea></label>');
+        setDirty();
+      }
+    });
     preview.addEventListener("input", e => { if (e.target.id !== "material-mode" && e.target.dataset.field !== "split") setDirty(); });
     preview.addEventListener("change", e => { if (e.target.id !== "material-mode" && e.target.dataset.field !== "split") setDirty(); });
     for (const node of preview.querySelectorAll("[data-material-block]")) {
+      node.querySelector('[data-field="use"]')?.addEventListener("change", e => {
+        if (!["expression", "derived"].includes(e.target.value)) return;
+        const kind = node.querySelector('[data-field="kind"]');
+        if (["待分类", "角色背景", "观点候选"].includes(kind.value)) kind.value = "表达习惯";
+        const placement = node.querySelector('[data-field="placement"]');
+        if (["待确认", "仅存档"].includes(placement.value)) placement.value = "按需";
+        node.querySelector('[data-field="status"]').value = "accepted";
+      });
       const kind = node.querySelector('[data-field="kind"]');
       kind.addEventListener("change", () => {
         const placement = node.querySelector('[data-field="placement"]');
@@ -1448,7 +1511,7 @@ async function openMaterialImport(p, editActive = false, draft = null) {
     if (!current()) return;
     let preparing = false;
     openModal("原文保留与轻分类", "准备不改变现有人格；网络或格式失败后可直接人工继续。",
-      `<div id="material-editor"><p class="hint">${sourceName ? `来源文件：${esc(sourceName)}` : "来自导入编辑框"} · 请核对原文后开始。</p><textarea id="mat-src" rows="10" placeholder="粘贴人格原稿全文"></textarea><input id="mat-name" maxlength="24" placeholder="人格名称（可选）"><p class="hint">开始轻分类最多两次模型请求。安装新原稿会归档旧会话；本次不收养观点、经历。</p><div id="material-history"></div></div>`, [
+      `<div id="material-editor"><p class="hint">${sourceName ? `来源文件：${esc(sourceName)}` : "来自导入编辑框"} · 请核对原文后开始。</p><textarea id="mat-src" rows="10" placeholder="粘贴人格原稿全文"></textarea><input id="mat-name" maxlength="24" placeholder="人格名称（可选）"><p class="hint">先六层理解，再对有效表达轻分类；通常两次模型请求，每阶段至多一次协议修订，总计最多四次，网络失败不重发。安装新原稿会归档旧会话；本次不收养身份、观点、经历。</p><div id="material-history"></div></div>`, [
       {label: "开始轻分类", cls: "btn primary", disabled: true, onClick: async () => {
         if (preparing) return;
         const text = $("#mat-src").value;
@@ -1508,7 +1571,9 @@ async function openMaterialImport(p, editActive = false, draft = null) {
     if (!p) p = await api("/api/persona");
     if (!current()) return;
     if (editActive) {
-      const r = await request({action: "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision});
+      if (reinterpret && !window.confirm("将对已安装原稿重新进行六层理解和轻分类，通常两次模型请求（最多四次）。生成编辑候选后先预览；应用时保留当前对话与记忆。继续吗？")) return;
+      if (reinterpret) toast("正在重新理解原稿并轻分类，请稍候…", 12000);
+      const r = await request({action: reinterpret ? "reinterpret_active" : "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision});
       renderPreview(r.preview);
       return;
     }

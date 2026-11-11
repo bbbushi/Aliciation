@@ -12,7 +12,7 @@ from datetime import datetime
 
 from .config import Config
 from .discovery_memory import source_block
-from .memory_projection import conversation_content
+from .memory_projection import conversation_content, RECORD_USAGE_GUIDANCE
 from .store import Store, memory_score
 
 from .constitution import template as _constitution_template
@@ -66,7 +66,7 @@ def active_block(store: Store, cfg: Config) -> str:
 def default_memory_area(store: Store, cfg: Config, now: float) -> str:
     return (
         "## 记忆区\n"
-        "以下为已载入记忆正文与仓库索引；索引条目需要时读取正文。\n\n"
+        f"以下为已载入记忆正文与仓库索引；索引条目需要时读取正文。{RECORD_USAGE_GUIDANCE}\n\n"
         f"### 长期记忆（幸存的重要记忆）\n{longterm_block(store, cfg, now)}\n\n"
         f"### 仓库索引（更早的记忆，仅标题；需要时用 recall 查全文）\n{warehouse_index(store, cfg)}\n\n"
         f"### 近期记忆（最近两天的提炼）\n{active_block(store, cfg)}"
