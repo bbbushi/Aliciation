@@ -90,12 +90,16 @@ html[data-texture=soft] #app::after { opacity: .25; }
 #chat-refresh { margin-left: auto; }
 .chat-notice { margin: 0 24px 8px; padding: 10px 14px; border-radius: 5px; border: 2px solid #6b5633; background: var(--warning-bg); color: var(--warning); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 #msgs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 30px max(28px, calc((100% - 880px) / 2)) 28px; display: flex; flex-direction: column; gap: 28px; width: 100%; scroll-padding: 24px; }
-.msg { display: flex; flex-direction: column; align-items: flex-start; flex-shrink: 0; min-width: 0; }
+.msg { display: flex; flex-direction: column; align-items: flex-start; flex-shrink: 0; min-width: 0; gap: 10px; }
+/* 一句一气泡：同一 turn 的后续句子气泡共享说话人标签（::before 只出现一次） */
 .msg::before { content: 'Alice'; font: 600 12px/1.6 var(--mono); letter-spacing: .7px; color: var(--accent); margin: 0 0 8px 1px; }
 .msg.user { align-items: flex-end; }
 .msg.user::before { content: '你'; color: var(--muted); margin-right: 12px; }
 .msg .txt { max-width: 100%; font-size: 16px; font-weight: 600; line-height: 1.95; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.user .txt { max-width: 88%; background: var(--user); border: 2px solid #293b64; border-radius: 15px 15px 4px 15px; padding: 11px 17px; line-height: 1.8; }
+html[data-theme=room] .msg.assistant .txt { max-width: 88%; background: #101b2ecc; border: 2px solid #294066; border-radius: 15px 15px 15px 4px; padding: 11px 17px; line-height: 1.8; box-shadow: 0 2px 12px #04091a99; }
+.msg .think summary { cursor: pointer; user-select: none; }
+.msg .think .r-txt { max-height: 180px; overflow-y: auto; margin-top: 6px; }
 .msg.assistant .txt:empty::after { content: '…'; color: var(--muted); }
 .msg .think { font-size: 13px; font-weight: 500; color: var(--muted); border-left: 2px solid #405783; padding: 4px 12px; margin: 0 0 10px; max-width: 100%; overflow-wrap: anywhere; }
 .think summary { user-select: none; font-weight: 600; }
@@ -356,8 +360,15 @@ html[data-texture=soft] #app::after { opacity: .25; }
 * { scrollbar-color: #354663 #090f1a; scrollbar-width: thin; }
 /* A separate, clipped background under the conversation, never over its text.
    Keep .chat itself unclipped so its title and memory popover can extend outward. */
+/* 主题：经典=此前的轻雾背景与无边框正文；房间=伪3D网格房间+神经球+更暗底色+气泡。
+   基线写经典值，房间视图只做覆盖（html[data-theme]，由设置「界面主题」切换）。 */
 .chat-atmosphere { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; user-select: none; background: radial-gradient(ellipse 90% 85% at 50% 48%, #2a4d786b, #1c355533 75%, transparent); mask-image: linear-gradient(180deg, transparent, #000 17%, #000 83%, transparent); }
+html[data-theme=room] .chat-atmosphere { background: radial-gradient(ellipse 90% 85% at 50% 48%, #1d355552, #101c302e 75%, transparent); }
+/* 网格房间 + 神经球画布（room.js 驱动）：最底层，跟随鼠标轻微视差；经典视图整层隐藏 */
+.atmosphere-room { position: absolute; inset: 0; width: 100%; height: 100%; transform: translate3d(calc(var(--look-x, 0px) * .4), calc(var(--look-y, 0px) * .4), 0); }
+html[data-theme=legacy] .atmosphere-room { display: none; }
 .atmosphere-haze { position: absolute; inset: -14%; background: radial-gradient(ellipse 58% 60% at 50% 48%, #38699e52, transparent 95%), radial-gradient(ellipse 40% 48% at 12% 45%, #2358a83d, transparent 90%), radial-gradient(ellipse 40% 42% at 88% 68%, #244c9642, transparent 90%); }
+html[data-theme=room] .atmosphere-haze { background: radial-gradient(ellipse 58% 60% at 50% 48%, #274a7238, transparent 95%), radial-gradient(ellipse 40% 48% at 12% 45%, #1c44822a, transparent 90%), radial-gradient(ellipse 40% 42% at 88% 68%, #1d3c7430, transparent 90%); }
 .atmosphere-plane { position: absolute; inset: -6%; transform-origin: 50% 45%; }
 .atmosphere-far { transform: perspective(1200px) translate3d(calc(var(--look-x, 0px) * .28), calc(var(--look-y, 0px) * .28), 0) rotateX(calc(8deg + var(--view-pitch, 0deg) * .45)) rotateY(calc(var(--view-yaw, 0deg) * .45)) scale(1.1); }
 .atmosphere-middle { transform: perspective(1000px) translate3d(calc(var(--look-x, 0px) * .58), calc(var(--look-y, 0px) * .58), 0) rotateX(calc(var(--view-pitch, 0deg) * .75)) rotateY(calc(var(--view-yaw, 0deg) * .75)); }
@@ -517,6 +528,7 @@ html[data-texture=soft] #app::after { opacity: .25; }
 .msg.user { --message-entry-x: 6px; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   html[data-motion=on] .atmosphere-haze { animation: atmosphere-breathe 24s ease-in-out infinite; }
+  html[data-motion=on] .atmosphere-room { transition: transform 600ms cubic-bezier(.18, .72, .2, 1); }
   html[data-motion=on] .atmosphere-grid::before { animation: atmosphere-grid-drift 36s linear infinite; }
   html[data-motion=on] .atmosphere-dust span { animation: atmosphere-dust-drift var(--drift) linear var(--phase) infinite; }
   html[data-motion=on] .atmosphere-mote { animation: mote-wander var(--mote-cycle) ease-in-out var(--mote-phase) infinite; }
