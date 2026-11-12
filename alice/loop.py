@@ -727,8 +727,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             # revocation during model generation must not publish late deltas.
             buffered = [] if (persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
                               or (memory_session and memory_session.exposed)) else None
+            buffered_reasoning = [] if buffered is not None else None
             delta_callback = buffered.append if buffered is not None else on_delta
-            reasoning_callback = None if buffered is not None else on_reasoning
+            reasoning_callback = buffered_reasoning.append if buffered_reasoning is not None else on_reasoning
             try:
                 msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback,
                                                   usage_out, active_tools, observation=observe("main_stream"))
@@ -740,6 +741,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     break
                 if buffered is not None:
                     buffered.clear()
+                    buffered_reasoning.clear()
                 if not growth_valid():
                     reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
                     break
@@ -759,7 +761,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
                 if (r and on_reasoning and not reply_review_selected and not source_context["worker_refs"] and not growth_refs and not recap_exposed
                         and not (memory_session and memory_session.exposed)):
-                    on_reasoning(r)
+                    if buffered_reasoning is not None:
+                        buffered_reasoning.append(r)  # 回退路径同样不越过许可检查提前发布
+                    else:
+                        on_reasoning(r)
         if memory_session is not None:
             memory_session.sent.update(memory_session.loaded)
             if memory_session.history is not None:
@@ -782,6 +787,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             reply = "本轮本机记忆资料已变更或失效，需要重新取得当前资料后再谈。"
             break
         if on_delta is not None and buffered is not None and not reply_review_selected:
+            # 思考先于正文发布：前端揭示节奏据此保持“先想后说”的顺序。
+            if on_reasoning is not None:
+                for piece in buffered_reasoning:
+                    on_reasoning(piece)
             for piece in buffered:
                 on_delta(piece)
         if not msg.tool_calls:

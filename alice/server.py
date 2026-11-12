@@ -522,6 +522,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("index.html", "text/html; charset=utf-8")
             elif path == "/app.js":
                 self._file("app.js", "application/javascript; charset=utf-8")
+            elif path == "/room.js":
+                self._file("room.js", "application/javascript; charset=utf-8")
             elif path == "/observer.js":
                 self._file("observer.js", "application/javascript; charset=utf-8")
             elif path == "/context-viewer.js":

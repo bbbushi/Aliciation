@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-motion="off" data-texture="scanlines">
+<html lang="zh-CN" data-motion="off" data-texture="scanlines" data-theme="room">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -95,6 +95,7 @@
   </nav>
   <div id="chat" class="chat">
     <div class="chat-atmosphere" aria-hidden="true">
+      <canvas class="atmosphere-room" aria-hidden="true"></canvas>
       <div class="atmosphere-haze"></div>
       <div class="atmosphere-plane atmosphere-far"><div class="atmosphere-grid"></div></div>
       <div class="atmosphere-plane atmosphere-middle">
@@ -369,6 +370,13 @@
         <div class="discovery-settings-sources"><p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p><button id="discovery-settings-preferences" class="link" type="button" disabled>选择平台与兴趣</button></div>
       </section>
       <section class="settings-section hidden" data-settings-section="appearance">
+        <label class="panel-title" for="ui-theme">界面主题</label>
+        <select id="ui-theme" aria-describedby="ui-theme-hint ui-theme-state">
+          <option value="room">房间 · 网格房间与神经球</option>
+          <option value="legacy">经典 · 此前的轻雾背景</option>
+        </select>
+        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文。选择立即生效，仅保存在此浏览器。</div>
+        <div id="ui-theme-state" class="settings-result" role="status"></div>
         <label class="panel-title" for="ui-texture">屏幕纹理</label>
         <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">
           <option value="scanlines">标准扫描线</option>
@@ -382,7 +390,7 @@
           <option value="system">自动（跟随系统）</option>
           <option value="off">关闭</option>
         </select>
-        <div id="ui-motion-hint" class="settings-hint">细噪点随机浮动、淡入淡出，分层背景随鼠标轻微位移与倾斜；细光在节点间传递，收到回复时稍微活跃。选择立即生效，仅保存在此浏览器；系统的“减少动态效果”设置优先。</div>
+        <div id="ui-motion-hint" class="settings-hint">网格房间与中央神经球常驻缓慢自旋、轻微呼吸波动，球面不时有太阳风暴式的喷流、磁环与闪光掠过；回复生成时喷发更多更强、信号脉冲变密。细噪点随机浮动、淡入淡出，分层背景随鼠标轻微位移与倾斜；细光在节点间传递。选择立即生效，仅保存在此浏览器；系统的“减少动态效果”设置优先。</div>
         <div id="ui-motion-state" class="settings-result" role="status"></div>
       </section>
       <section id="workers-config" class="settings-section worker-config hidden" data-settings-section="workers" aria-labelledby="workers-settings-title">
@@ -545,6 +553,7 @@
 <link rel="stylesheet" href="/chat-search.css">
 <script src="/chat-search.js"></script>
 <script src="/claude-settings.js"></script>
+<script src="/room.js"></script>
 <script src="/app.js"></script>
 <script src="/discovery.js"></script>
 </body>

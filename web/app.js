@@ -225,6 +225,49 @@ function setBubbleText(txt, raw) {
   if (msg) msg.classList.toggle("silence", !(raw || "").trim());
 }
 
+/* ---------- 一句一气泡：一个 turn 渲染为多个独立气泡 ---------- */
+/* 切句复用 revealNextSentence（句末标点+括号保护+换行）；raw 存容器 dataset；
+   think/meta 等非气泡子元素不受影响；差分更新——流式每 tick 只动变化的气泡。 */
+function turnSentences(raw) {
+  const text = raw || "";
+  const out = [];
+  let rest = text;
+  let guard = 0;
+  while (rest.trim() && guard++ < 400) {
+    const next = revealNextSentence(rest);
+    if (!next) {  // 剩余不足一句（无句界）
+      const piece = rest.trim();
+      if (piece) out.push(piece);
+      break;
+    }
+    const [seg, tail] = next;
+    const piece = seg.trim();
+    if (piece) out.push(piece);
+    if (tail === rest) break;
+    rest = tail;
+  }
+  if (!out.length) out.push(text);  // 全空白：保一个空气泡（"…"占位）
+  return out;
+}
+
+function renderTurnBubbles(node, raw) {
+  node.dataset.raw = raw || "";
+  const parts = turnSentences(raw);
+  const meta = node.querySelector(":scope > .message-meta");
+  let existing = [...node.querySelectorAll(":scope > .txt")];
+  while (existing.length > parts.length) existing.pop().remove();
+  parts.forEach((piece, i) => {
+    let el = existing[i];
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "txt";
+      node.insertBefore(el, meta ?? null);
+    }
+    if (el.textContent !== piece) el.textContent = piece;
+  });
+  node.classList.toggle("silence", !(raw || "").trim());
+}
+
 function bubble(role, text, { animate = false } = {}) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
@@ -232,10 +275,12 @@ function bubble(role, text, { animate = false } = {}) {
   if (animate && followingLatest && !document.hidden && document.documentElement.dataset.motion === "on") {
     div.classList.add("message-arriving");
   }
-  const txt = document.createElement("div");
-  txt.className = "txt";
-  if (text) setBubbleText(txt, text);
-  div.appendChild(txt);
+  if (text) renderTurnBubbles(div, text);
+  else {
+    const txt = document.createElement("div");
+    txt.className = "txt";
+    div.appendChild(txt);
+  }
   $("#msgs").appendChild(div);
   updateChatEmpty();
   scrollBottom();
@@ -469,8 +514,7 @@ function noteInspectorLink(node) {
 }
 
 function redactSourceNode(node, pending = false) {
-  const txt = node.querySelector(".txt");
-  if (txt) setBubbleText(txt, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
+  renderTurnBubbles(node, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
   // Streamed reasoning can contain the same source material as the final text.
   node.querySelector("details.think")?.remove();
   node.dataset.sourceAvailable = pending ? "unknown" : "false";
@@ -532,8 +576,7 @@ function applySourceUpdates(updates) {
     const node = turnNodes.get(update.id);
     if (!node?.isConnected || typeof update.source_bound !== "boolean") continue;
     markUserWorkerTarget(node, update);
-    const txt = node.querySelector(".txt");
-    if (txt && typeof update.content === "string") setBubbleText(txt, historyDisplayContent(node, update));
+    if (typeof update.content === "string") renderTurnBubbles(node, historyDisplayContent(node, update));
     markSourceProjection(node, update);
   }
   scheduleSourceExpiry();
@@ -602,9 +645,8 @@ function mergeTurn(turn) {
   const key = requestKey(turn.request_id, turn.role);
   let node = turnNodes.get(turn.id) || (key && requestNodes.get(key));
   if (!node || !node.isConnected) node = bubble(turn.role, "");
-  const txt = node.querySelector(".txt");
-  if (turn.role === "assistant") setBubbleText(txt, historyDisplayContent(node, turn, "（沉默）"));
-  else txt.textContent = turn.content || "";
+  if (turn.role === "assistant") renderTurnBubbles(node, historyDisplayContent(node, turn, "（沉默）"));
+  else renderTurnBubbles(node, turn.content || "");
   markTurn(node, turn);
   const later = [...$("#msgs").querySelectorAll(".msg[data-turn-id]")]
     .find((other) => Number(other.dataset.turnId) > turn.id);
@@ -2505,13 +2547,99 @@ function ensureThinking(node) {
   return d.querySelector(".r-txt");
 }
 
+/* ---------- 句级揭示：增量到达后按句子节奏显示（先思考后正文） ---------- */
+/* 后端在许可检查后一次性发布缓冲；这里负责把发布拆成一句一句的节奏。
+   切句不越过未闭合的括号/标记；done/error 时冲刷兜底，保证最终正文与存储一致。 */
+const revealStates = new WeakMap();
+const REVEAL_ENDS = new Set(["。", "！", "？", "?", "!", "…", "；", ";", "\n"]);
+const REVEAL_OPENERS = "【（(「『“《";
+const REVEAL_CLOSERS = "】）)」』”》";
+
+function revealState(txt, render) {
+  let st = revealStates.get(txt);
+  if (!st) {
+    st = { pending: "", shown: "", timer: 0, render: render || ((el, s) => setBubbleText(el, s)) };
+    revealStates.set(txt, st);
+  } else if (render) st.render = render;
+  return st;
+}
+
+function revealNextSentence(text) {
+  let open = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (REVEAL_OPENERS.includes(ch)) open++;
+    else if (REVEAL_CLOSERS.includes(ch)) open = Math.max(0, open - 1);
+    if (open === 0 && REVEAL_ENDS.has(ch)) {
+      let end = i;
+      while (end + 1 < text.length && REVEAL_CLOSERS.includes(text[end + 1])) end++;
+      return [text.slice(0, end + 1), text.slice(end + 1)];
+    }
+  }
+  if (text.length > 60) {  // 迟迟无句界：推进到最后一个安全点，避免长句卡住
+    open = 0;
+    let safe = -1;
+    for (let i = 0; i < 60; i++) {
+      const ch = text[i];
+      if (REVEAL_OPENERS.includes(ch)) open++;
+      else if (REVEAL_CLOSERS.includes(ch)) open = Math.max(0, open - 1);
+      if (open === 0) safe = i;
+    }
+    if (safe >= 0) return [text.slice(0, safe + 1), text.slice(safe + 1)];
+  }
+  return null;
+}
+
+function revealDelay(sentence) {
+  const n = sentence.replace(/\s/g, "").length;
+  return Math.min(520, 170 + n * 14);
+}
+
+function revealStep(txt) {
+  const st = revealStates.get(txt);
+  if (!st) return;
+  st.timer = 0;
+  const next = revealNextSentence(st.pending);
+  if (!next) return;  // 句界未到，等下一段增量；done/error 冲刷兜底
+  const [sentence, rest] = next;
+  st.pending = rest;
+  st.shown += sentence;
+  st.render(txt, st.shown);
+  if (st.pending) st.timer = setTimeout(() => revealStep(txt), revealDelay(sentence));
+}
+
+function revealPush(txt, piece, render) {
+  const st = revealState(txt, render);
+  st.pending += piece;
+  if (!st.timer) st.timer = setTimeout(() => revealStep(txt), 0);  // 首句立即可见
+}
+
+function revealComplete(txt) {  // 立即显示全部剩余（思考块兜底：不能丢字）
+  const st = revealStates.get(txt);
+  if (!st) return;
+  if (st.timer) { clearTimeout(st.timer); st.timer = 0; }
+  if (st.pending) {
+    st.shown += st.pending;
+    st.pending = "";
+    st.render(txt, st.shown);
+  }
+  revealStates.delete(txt);
+}
+
+function revealFlush(txt) {  // 丢弃未揭示尾部（正文由 done 的完整回复覆盖）
+  const st = revealStates.get(txt);
+  if (!st) return;
+  if (st.timer) { clearTimeout(st.timer); st.timer = 0; }
+  st.pending = "";
+  revealStates.delete(txt);
+}
+
 function handleEvent(ev, node, userNode, requestId) {
   if (ev.type === "done" || ev.type === "error") {
     replyMotion(node, false);
     window.AliceWorkers?.refreshAfterTurn();
   }
-  const txt = node.querySelector(".txt");
-  const raw = () => txt.dataset.raw || "";
+  const raw = () => node.dataset.raw || "";
   if (ev.type === "start" || ev.type === "accepted") {
     if (ev.session_epoch) {
       sessionEpoch = ev.session_epoch;
@@ -2521,10 +2649,15 @@ function handleEvent(ev, node, userNode, requestId) {
     noteRequestNode(node, ev.request_id || requestId, "assistant");
     markUserWorkerTarget(userNode, { channel: "gui", ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
   } else if (ev.type === "reasoning") {
-    ensureThinking(node).textContent += ev.text;
+    revealPush(ensureThinking(node), ev.text, (el, s) => { el.textContent = s; });
     scrollBottom();
   } else if (ev.type === "delta") {
-    setBubbleText(txt, raw() + ev.text);
+    const think = node.querySelector("details.think");
+    if (think && !node.dataset.thinkCollapsed) {  // 正文开始揭示时收起思考块，可再展开
+      think.open = false;
+      node.dataset.thinkCollapsed = "1";
+    }
+    revealPush(node, ev.text, (container, shown) => renderTurnBubbles(container, shown));
     scrollBottom();
   } else if (ev.type === "tool") {
     window.AliceWorkers?.noteTool(ev.name);
@@ -2545,8 +2678,10 @@ function handleEvent(ev, node, userNode, requestId) {
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {
-    if (ev.reply && ev.reply !== raw()) setBubbleText(txt, ev.reply);
-    if (!raw().trim()) txt.textContent = "（沉默）";
+    revealFlush(node);  // 未揭示尾部由完整回复覆盖
+    revealComplete(node.querySelector("details.think .r-txt"));  // 思考不能丢字
+    if (ev.reply && ev.reply !== raw()) renderTurnBubbles(node, ev.reply);
+    if (!raw().trim()) renderTurnBubbles(node, "（沉默）");
     renderMemory(ev.memory);
     if (ev.session_epoch) sessionEpoch = ev.session_epoch;
     const id = ev.request_id || requestId;
@@ -2559,7 +2694,10 @@ function handleEvent(ev, node, userNode, requestId) {
     scrollBottom();
     window.AliceObserver?.refreshAfterTurn();
   } else if (ev.type === "error") {
-    if (!raw().trim() && !txt.textContent.trim()) node.remove();
+    revealComplete(node.querySelector("details.think .r-txt"));
+    revealFlush(node);
+    const hasVisibleText = [...node.querySelectorAll(":scope > .txt")].some(t => t.textContent.trim());
+    if (!raw().trim() && !hasVisibleText) node.remove();
     sysline(ev.message);
     setChatNotice("本次处理未能完成确认；请先同步历史记录。再次发送相同文字会沿用原请求，不自动重新生成。");
     window.AliceObserver?.refreshAfterTurn();
@@ -2976,6 +3114,37 @@ boot().catch(showStartupError);
     apply();
   });
   forcedColors.addEventListener("change", apply);
+  apply();
+})();
+
+/* ---------- 界面主题（房间/经典）：纯外观偏好，不接触会话与配置 ---------- */
+(() => {
+  const key = "alice.ui.theme";
+  const root = document.documentElement;
+  const control = document.getElementById("ui-theme");
+  const state = document.getElementById("ui-theme-state");
+  const normalize = (value) => value === "legacy" ? "legacy" : "room";
+  let preference = "room", canSave = true;
+  try { preference = normalize(localStorage.getItem(key)); }
+  catch { canSave = false; }
+  function apply() {
+    root.dataset.theme = preference;
+    control.value = preference;
+    state.textContent = preference === "legacy" ? "已切换到经典视图（轻雾背景，无边框正文）。"
+      : "已使用房间视图（网格房间、神经球与消息气泡）。";
+    if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+  }
+  control.addEventListener("change", () => {
+    preference = normalize(control.value);
+    try { localStorage.setItem(key, preference); canSave = true; }
+    catch { canSave = false; }
+    apply();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== key && event.key !== null) return;
+    preference = normalize(event.newValue);
+    apply();
+  });
   apply();
 })();
 
