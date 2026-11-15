@@ -99,6 +99,9 @@ def _model_json(model: object, system: str, data: dict, *, usage: sources.Usage,
         "temperature": 0.6, "max_tokens": max_tokens, "stream": False,
         "response_format": {"type": "json_object"},
     }
+    if model_host == "api.openai.com":
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+        payload.pop("temperature", None)
     # This extension is not part of the general OpenAI-compatible contract.
     # Never discover support by spending another model call after rejection.
     if model_host in {"api.deepseek.com", "open.bigmodel.cn"}:
@@ -299,10 +302,10 @@ def run_operation(payload: dict, usage: sources.Usage) -> dict:
                         tieba_text_limit=payload.get("tieba_text_limit", 30000))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-bytes", type=int, default=MAX_INPUT_BYTES)
-    input_limit = parser.parse_args().input_bytes
+    input_limit = parser.parse_args(argv).input_bytes
     if input_limit <= 0:
         parser.error("input-bytes must be positive")
     usage = sources.Usage()

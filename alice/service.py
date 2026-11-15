@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 import uuid
+import hashlib
 from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime
@@ -38,12 +39,8 @@ def _iso(ts) -> str | None:
 
 
 def _model_provider(base_url: str) -> str:
-    url = base_url.rstrip("/").lower()
-    if url == "https://open.bigmodel.cn/api/paas/v4":
-        return "zhipu"
-    if url == "https://api.deepseek.com":
-        return "deepseek"
-    return "custom"
+    from .model_catalog import provider_for
+    return provider_for(base_url)
 
 
 def _close_client(client) -> None:
@@ -70,23 +67,61 @@ def _model_config_data(llm, file_revision: str) -> dict:
         "key_present": key_source != "missing",
         "key_source": key_source,
         "revision": file_revision,
+        "configured": bool(llm.base_url and llm.chat_model and llm.cheap_model and key_source != "missing"),
     }
+
+
+class _SetupClient:
+    """Allows desktop configuration before credentials exist; never calls a model."""
+
+    @property
+    def chat(self):
+        raise ValueError("请先在设置中配置模型接口")
+
+    def close(self):
+        pass
 
 
 class ChatService:
     """拥有 Store 与 client 的生命周期；所有写操作经 _lock 串行（单一永久会话语义）。"""
 
-    def __init__(self, cfg: Config | None = None, db_path=None, client=None, *, config_path=None):
+    def __init__(self, cfg: Config | None = None, db_path=None, client=None, *, config_path=None,
+                 allow_unconfigured: bool = False, _maintenance_activation: bool = False):
+        from .instance_lock import InstanceLock
+
+        self._instance_lock = InstanceLock((Path(db_path) if db_path is not None else appconfig.DB_PATH).parent,
+                                           maintenance=_maintenance_activation)
+        self._instance_lock.acquire()
+        try:
+            self._initialize(cfg, db_path, client, config_path=config_path,
+                             allow_unconfigured=allow_unconfigured)
+        except BaseException:
+            # Failed shutdown must not admit a replacement writer over live jobs.
+            if not hasattr(self, "store") or getattr(self, "_startup_cleanup_complete", False):
+                self._instance_lock.release()
+            raise
+
+    def _initialize(self, cfg, db_path, client, *, config_path, allow_unconfigured):
         self._config_path = Path(config_path).resolve() if config_path is not None else appconfig.USER_DIR / "config.toml"
         # 三参数注入模式不碰本机配置；只有 GUI/自主加载模式绑定写回路径（user/config.toml）。
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
         reset_record = persona_reset.before_open() if db_path is None else None
-        self.store = Store(db_path or appconfig.DB_PATH)
+        self.store = Store(Path(db_path) if db_path is not None else appconfig.DB_PATH)
         self._client_owned = client is None
         try:
+            if client is None and allow_unconfigured:
+                from .config import validate_llm
+                try:
+                    validate_llm(self.cfg)
+                except SystemExit:
+                    client = _SetupClient()
             self.client = client if client is not None else make_client(self.cfg)
             self._lock = threading.RLock()  # 单一永久会话语义：所有读写串行
+            self._model_catalogs = {}
+            from .background_runtime import BackgroundRuntime
+            self._background = BackgroundRuntime()
+            self.store._background_admit = self._admit_background_model
             persona_reset.after_open(self.store, self.cfg, reset_record)
             if not self.store.meta_get("session_epoch"):
                 self.store.meta_set("session_epoch", uuid.uuid4().hex)
@@ -113,17 +148,25 @@ class ChatService:
             # 双维护空闲执行器（设计草案 §6）：聊天优先；启动时清点上一进程遗留任务
             self._maintenance = maintenance.MaintenanceRunner(self)
             self._maintenance.start()
+            from .autonomy import AutonomyCoordinator
+            self._autonomy = AutonomyCoordinator(self)
+            self._autonomy.start()
         except BaseException:
+            self._shutting_down = True
+            discovery = getattr(self, "_discovery", None)
+            if discovery is not None:
+                discovery.shutdown()
+            autonomy = getattr(self, "_autonomy", None)
+            if autonomy is not None:
+                autonomy.shutdown()
             runner = getattr(self, "_maintenance", None)
             if runner is not None:
-                try:
-                    runner.stop()
-                except Exception:
-                    pass
+                runner.shutdown()
             try:
                 self.store.close()
             except Exception:
-                pass
+                pass  # Store.close always closes SQLite even if metrics flush fails.
+            self._startup_cleanup_complete = True
             if self._client_owned and hasattr(self, "client"):
                 _close_client(self.client)
             raise
@@ -177,6 +220,7 @@ class ChatService:
             return {
                 "name": self.cfg.persona.name,
                 "needs_seed": persona.persona_md() is None,
+                "model_ready": _model_config_data(self.cfg.llm, self._config_revision)["configured"],
                 "tags": list(persona.TAGS),
                 "continuity": loop._continuity(self.store),
                 "memory": self._memory_stats(),
@@ -373,11 +417,13 @@ class ChatService:
                     delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
                                     "platform_confirmed" if states else "pending")
                 source_fields = self._history_source_fields_locked(row["id"])
+                proactive = self.store.conn.execute("SELECT contact_id FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone()
                 report = source_fields.get("worker_report")
                 turns.append({"id": row["id"], "role": row["role"], "content": self._history_turn_display_locked(row["id"]), "ts": row["ts"],
                               "request_id": None if report else row["request_id"],
-                              "channel": "gui" if report else row["channel_id"] or "local",
+                              "channel": "gui" if report or proactive else row["channel_id"] or "local",
                               "sender_label": (self.cfg.persona.name if report.get("kind") == "alice_summary" else "协作状态") if report else "所有者", "delivery": None if report else delivery,
+                              "proactive": proactive is not None, "contact_id": proactive[0] if proactive else None,
                               **source_fields})
             source_updates = []
             if source_turn_ids:
@@ -518,6 +564,19 @@ class ChatService:
         """Local GUI discovery controls; channel credentials do not grant this API."""
         return self._discovery.access(action, payload)
 
+    def thoughts(self, action: str = "status", payload=None) -> dict:
+        """Public questions/exploration controls; status reads have no side effects."""
+        return self._autonomy.access(action, payload)
+
+    def _admit_background_model(self, store):
+        from .background_runtime import in_background, reserve_model
+        if not in_background():
+            return
+        with self._lock:
+            if store is not self.store:
+                raise ValueError("session_changed")
+            reserve_model(store)
+
     def collaborators(self, payload=None) -> dict:
         """Local GUI registration/policy; never grants channel credentials access."""
         if payload is None:
@@ -650,6 +709,9 @@ class ChatService:
 
     def begin_shutdown(self) -> None:
         self._shutting_down = True
+        autonomy = getattr(self, "_autonomy", None)
+        if autonomy is not None:
+            autonomy.stop()
         runner = getattr(self, "_maintenance", None)
         if runner is not None:
             runner.stop()
@@ -883,12 +945,15 @@ class ChatService:
     def material_import(self, payload) -> dict:
         """GUI-owned source material candidates; model I/O only on explicit prepare."""
         from . import persona_material_prepare as prep
+        from . import persona_material_archives as archives
         if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
             raise ValueError("材料导入参数无效")
         action = payload["action"]
         binding = {"token", "revision", "material_digest", "session_epoch"}
         permitted = {
             "status": {"action"}, "detail": {"action", "token"},
+            "delete_preparation": {"action", "token", "archive_revision"},
+            "restore_preparation": {"action", "token", "archive_revision"},
             "prepare": {"action", "source_text", "name"},
             "edit_active": {"action", "session_epoch", "persona_revision"},
             "reinterpret_active": {"action", "session_epoch", "persona_revision"},
@@ -909,11 +974,16 @@ class ChatService:
             with self._lock:
                 result = (prep.material_status(self.store, self.cfg) if action == "status" else
                           prep.material_detail(self.store, self.cfg, payload.get("token")))
+                if action == "status":
+                    result = archives.status(result, prep.root(), prep._staged_path())
                 return decorate(result)
         # Keep admission and worker control, but never hold Store lock while joining.
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                if action in {"delete_preparation", "restore_preparation"}:
+                    return decorate(archives.move(payload, prep.root(), prep._staged_path(),
+                                                  restore=action == "restore_preparation"))
                 if action == "prepare":
                     return decorate(prep.material_prepare(self.store, self.client, self.cfg,
                         payload.get("source_text"), name=payload.get("name")))
@@ -977,6 +1047,7 @@ class ChatService:
         self._evaluations.before_reset()
         self._discovery.before_reset()
         self._workers.before_reset()
+        self._autonomy.before_reset()
         turns = self._turn_count()
         mem = self._memory_stats()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1007,11 +1078,13 @@ class ChatService:
         reset_record["phase"] = "archived"
         persona_reset.write(reset_record)
         self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
+        self.store._background_admit = self._admit_background_model
         self.store.meta_set("session_epoch", reset_record["new_epoch"])
         self._evaluations.bind_store()
         self._channels.bind_store()
         self._discovery.bind_store()
         self._workers.bind_store()
+        self._autonomy.bind_store()
         if plan is None:
             persona_reset.complete()
         return dest
@@ -1266,13 +1339,16 @@ class ChatService:
         with self._lock:
             return self._model_config_view_locked()
 
-    def _candidate_config_locked(self, payload: dict, *, require_revision: bool) -> tuple[Config, dict[str, str]]:
+    def _candidate_config_locked(self, payload: dict, *, require_revision: bool, catalog_only=False) -> tuple[Config, dict[str, str]]:
+        from .model_catalog import PROVIDERS
         if not isinstance(payload, dict):
             raise ValueError("配置内容无效")
         self._check_config_revision_locked(payload.get("revision"), required=require_revision)
         provider = payload.get("provider", "custom")
-        if provider not in ("zhipu", "deepseek", "custom"):
+        if not isinstance(provider, str) or provider not in PROVIDERS:
             raise ValueError("供应商选项无效")
+        if not isinstance(payload.get("base_url"), str) or payload["base_url"].rstrip("/") != PROVIDERS[provider][0].rstrip("/"):
+            raise ValueError("当前仅支持所选供应商的官方 API 地址")
         changes: dict[str, str] = {}
         for key, label, limit in (
             ("base_url", "接口地址", 2048),
@@ -1280,7 +1356,9 @@ class ChatService:
             ("cheap_model", "廉价模型", 256),
         ):
             value = payload.get(key)
-            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+            if catalog_only and key in ("chat_model", "cheap_model"):
+                value = ""
+            if not isinstance(value, str) or (not value.strip() and not catalog_only) or len(value) > limit:
                 raise ValueError(f"请填写有效的{label}")
             value = value.strip()
             if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
@@ -1316,6 +1394,8 @@ class ChatService:
             changes["api_key"] = new_key
         elif new_key:
             raise ValueError("请先选择“替换密钥”，再填写新 API Key")
+        elif self.cfg.llm.resolved_key() and provider != _model_provider(self.cfg.llm.base_url):
+            raise ValueError("更换供应商时请重新输入对应 API Key，旧密钥不会发送给新供应商")
 
         candidate = copy.deepcopy(self.cfg)
         candidate.llm.base_url = changes["base_url"]
@@ -1325,7 +1405,35 @@ class ChatService:
             candidate.llm.api_key = changes["api_key"]
         if not candidate.llm.resolved_key():
             raise ValueError("尚未设置 API Key，请选择“替换密钥”并填写新密钥")
+        if not catalog_only:
+            token = payload.get("catalog_id")
+            receipt = self._model_catalogs.get(token) if isinstance(token, str) else None
+            fingerprint = hashlib.sha256(candidate.llm.resolved_key().encode()).hexdigest()
+            if (receipt is None or receipt[0] != provider or receipt[1] != fingerprint
+                    or receipt[2] < time.monotonic() or receipt[4] != self._config_revision):
+                raise ValueError("请先用当前供应商和密钥重新获取模型列表")
+            if any(changes[k] not in receipt[3] for k in ("chat_model", "cheap_model")):
+                raise ValueError("请从刚获取的模型列表中选择模型")
         return candidate, changes
+
+    def list_model_config_models(self, payload: dict) -> dict:
+        """Explicit directory GET, no inference, no credential persistence or conversation access."""
+        from .model_catalog import fetch_models
+        with self._lock:
+            candidate, _ = self._candidate_config_locked(payload, require_revision=True, catalog_only=True)
+            file_revision = self._config_revision
+        models = fetch_models(payload["provider"], candidate.llm.resolved_key())
+        with self._lock:
+            self._check_config_revision_locked(file_revision, required=True)
+            now = time.monotonic()
+            self._model_catalogs = {k: v for k, v in self._model_catalogs.items() if v[2] > now}
+            if len(self._model_catalogs) >= 16:
+                self._model_catalogs.pop(next(iter(self._model_catalogs)))
+            token = uuid.uuid4().hex
+            self._model_catalogs[token] = (payload["provider"], hashlib.sha256(candidate.llm.resolved_key().encode()).hexdigest(),
+                                           now + 600, frozenset(models), file_revision)
+        return {"models": models, "catalog_id": token, "expires_in": 600,
+                "message": "已获取模型目录；实际调用权限和兼容性将在保存时验证。"}
 
     @staticmethod
     def _probe_model_config(candidate: Config) -> tuple[object, list[str]]:
@@ -1345,7 +1453,7 @@ class ChatService:
                     response = client.chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": "ping"}],
-                        max_tokens=8,
+                        **({"max_completion_tokens": 32} if _model_provider(candidate.llm.base_url) == "openai" else {"max_tokens": 8}),
                         stream=False,
                         timeout=30.0,
                     )
@@ -1456,6 +1564,8 @@ class ChatService:
         self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
         self._discovery.shutdown()
         self._workers.shutdown()
+        self._autonomy.shutdown()
+        self._maintenance.shutdown()
         with self._lock:
             warning = None
             try:
@@ -1472,9 +1582,10 @@ class ChatService:
                 print(f"（退出前记忆提取失败：{type(e).__name__}）")
                 warning = "服务已关闭，但退出前记忆提取失败；原始对话保存在本机，下次启动可重试"
             finally:
+                self.store.close()
                 try:
-                    self.store.close()
-                finally:
                     if self._client_owned:
                         _close_client(self.client)
+                finally:
+                    self._instance_lock.release()
             return warning

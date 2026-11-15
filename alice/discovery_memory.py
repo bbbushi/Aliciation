@@ -370,6 +370,13 @@ class SourceStoreMixin:
                 "FROM discovery_cards"
             ).fetchone()[0]
         total += self.conn.execute("SELECT COALESCE(SUM(length(CAST(payload_json AS BLOB))),0) FROM retained_evidence").fetchone()[0]
+        import json
+        for table, fields in (("thought_questions", "question||reason||progress||next_step"),
+                              ("thought_contacts", "message"), ("exploration_runs", "checkpoint")):
+            if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                for row in self.conn.execute(f"SELECT basis,length(CAST({fields} AS BLOB)) FROM {table}"):
+                    if json.loads(row[0]).get("packets"):
+                        total += row[1] or 0
         return total
 
     def _check_source_space(self, additional: int) -> None:
@@ -584,7 +591,7 @@ class SourceStoreMixin:
         admitted = set(known_ids)
         groups = []
         for row in rows[:-1]:
-            if row["role"] == "user":
+            if row["role"] == "user" or dict(row).get("proactive"):
                 groups.append([])
             if groups:
                 groups[-1].append(row)

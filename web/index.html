@@ -8,14 +8,35 @@
 <link rel="stylesheet" href="/discovery.css">
 <link rel="stylesheet" href="/worker-tasks.css">
 <link rel="stylesheet" href="/context-viewer.css">
+<link rel="stylesheet" href="/thoughts.css">
 </head>
 <body>
+<dialog id="action-confirm" class="action-confirm" aria-labelledby="action-confirm-title" aria-describedby="action-confirm-message">
+  <h2 id="action-confirm-title">确认操作</h2>
+  <p id="action-confirm-message"></p>
+  <div class="action-confirm-buttons">
+    <button id="action-confirm-cancel" type="button" class="btn ghost" autofocus>取消</button>
+    <button id="action-confirm-ok" type="button" class="btn primary">确认继续</button>
+  </div>
+</dialog>
 <a class="skip-link" href="#input">跳到输入框</a>
 <div id="boot-status" class="boot-status" role="status">正在连接 Alice…</div>
 
 <!-- 初始化：第一次打开（还没有任何对话）时出现 -->
+<div id="onboarding" class="screen hidden">
+  <div class="welcome-card onboarding-card">
+    <p class="eyebrow">开始使用 ALICE</p>
+    <ol class="onboarding-steps"><li aria-current="step">1 · 配置模型 API</li><li>2 · 导入人格文档</li></ol>
+    <h1>先连接一个模型</h1>
+    <p class="hint">Alice 需要模型来理解人格文档、形成记忆和与你交流。选择供应商，输入其 API Key，获取模型列表后选择模型。</p>
+    <div id="onboarding-model-host"></div>
+    <button id="onboarding-return" class="btn ghost hidden" type="button">保留原配置，返回人格导入</button>
+  </div>
+</div>
 <div id="welcome" class="screen hidden">
   <div class="welcome-card">
+    <ol class="onboarding-steps"><li>✓ 模型 API 已配置</li><li aria-current="step">2 · 导入人格文档</li></ol>
+    <button id="onboarding-back" class="link" type="button">← 返回模型配置</button>
     <div class="welcome-tools"><button id="welcome-qq-btn" class="btn ghost" type="button">连接 QQ</button><button id="welcome-settings-btn" class="btn ghost" type="button">设置</button></div>
     <div class="w-head">
       <span class="brand-mark welcome-mark" aria-hidden="true">a_</span>
@@ -37,17 +58,17 @@
     </div>
 
     <div class="tabs" role="tablist">
-      <button class="tab on" data-tab="tags" role="tab">选气质标签</button>
-      <button class="tab" data-tab="import" role="tab">导入人格文档</button>
+      <button class="tab" data-tab="tags" role="tab">没有文档？选气质标签</button>
+      <button class="tab on" data-tab="import" role="tab">导入人格文档</button>
     </div>
 
-    <section id="tab-tags" class="tab-pane">
+    <section id="tab-tags" class="tab-pane hidden">
       <p class="hint">选 2~4 个气质标签当底色。剩下的性格，由你们的经历慢慢长。</p>
       <div id="tag-list" class="tags"></div>
       <button id="seed-go" class="btn primary wide" disabled>生成底色并开始</button>
     </section>
 
-    <section id="tab-import" class="tab-pane hidden">
+    <section id="tab-import" class="tab-pane">
       <div id="import-method"></div>
       <div id="drop" class="drop">
         <div class="drop-icon">↓</div>
@@ -90,6 +111,7 @@
     <div class="nav-bottom">
       <button id="qq-btn" class="nav-item" type="button" aria-controls="qq-settings"><span class="nav-symbol" aria-hidden="true">↗</span>连接 QQ</button>
       <button id="settings-btn" class="nav-item" type="button"><span class="nav-symbol" aria-hidden="true">⚙</span>设置</button>
+      <button id="exit-btn" class="nav-item nav-exit" type="button" aria-label="退出 Alice" title="退出 Alice"><svg class="nav-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9M6.3 5.7a8 8 0 1 0 11.4 0"/></svg></button>
       <span class="nav-caption">LOCAL / ALICE</span>
     </div>
   </nav>
@@ -361,8 +383,9 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button><button type="button" data-settings="service" aria-pressed="false">服务</button></nav>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button></nav>
     <div class="modal-body settings-body">
+      <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
         <div class="discovery-settings-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
         <p class="settings-hint">管理自动寻找、聊天查找、额度与资料保存。普通草稿在切换分区或关闭设置后保留，未保存的密钥会清空。</p>
@@ -374,8 +397,10 @@
         <select id="ui-theme" aria-describedby="ui-theme-hint ui-theme-state">
           <option value="room">房间 · 网格房间与神经球</option>
           <option value="legacy">经典 · 此前的轻雾背景</option>
+          <option value="endfield">终末地 · 工业记录风</option>
+          <option value="minimal">简洁 · 专注对话</option>
         </select>
-        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文。选择立即生效，仅保存在此浏览器。</div>
+        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文；终末地视图为暖色工业记录风——琥珀强调色、直角细线、编号标注，动效收敛。简洁视图减少装饰，详细信息与高级设置通过按钮打开独立窗口。选择立即生效，仅保存在此浏览器。</div>
         <div id="ui-theme-state" class="settings-result" role="status"></div>
         <label class="panel-title" for="ui-texture">屏幕纹理</label>
         <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">
@@ -492,21 +517,24 @@
         </select>
         <div class="settings-hint">关：跳过对话的思考过程，回复更快；随时可切回。</div>
       </section>
+      <div id="model-settings-anchor"></div>
       <section id="model-settings" class="settings-section" data-settings-section="general">
         <div class="panel-title">模型接口</div>
-        <div class="settings-hint">预设只填入可编辑的建议值；打开设置不会改变当前配置。保存时会验证候选配置，可能产生少量模型费用。</div>
+        <div class="settings-hint">获取列表只查询模型目录，不发送聊天。验证并保存会发送简短验证请求，可能产生少量 API 费用。ChatGPT 订阅不等于 API 额度。</div>
         <label for="model-provider">供应商</label>
         <select id="model-provider" disabled>
-          <option value="zhipu">智谱</option>
           <option value="deepseek">DeepSeek</option>
-          <option value="custom">自定义 OpenAI 兼容</option>
+          <option value="zhipu">智谱 GLM</option>
+          <option value="openai">OpenAI GPT</option>
+          <option value="" hidden>请选择供应商</option>
         </select>
         <label for="model-base-url">Base URL</label>
-        <input id="model-base-url" type="url" spellcheck="false" autocomplete="off" disabled>
+        <input id="model-base-url" type="url" spellcheck="false" autocomplete="off" readonly aria-readonly="true">
         <label for="model-chat">对话模型</label>
-        <input id="model-chat" type="text" spellcheck="false" autocomplete="off" disabled>
-        <label for="model-cheap">廉价模型</label>
-        <input id="model-cheap" type="text" spellcheck="false" autocomplete="off" disabled>
+        <select id="model-chat" disabled><option value="">先获取模型列表</option></select>
+        <label for="model-cheap">记忆与整理模型</label>
+        <select id="model-cheap" disabled><option value="">先获取模型列表</option></select>
+        <p class="settings-hint">可与对话使用同一模型，也可选择更适合日常整理成本的模型。列表不保证工具、流式和所有任务均兼容。</p>
         <div id="model-key-status" class="settings-hint"></div>
         <label for="model-key-mode">API Key</label>
         <select id="model-key-mode" disabled>
@@ -516,15 +544,11 @@
         <input id="model-key" type="password" placeholder="选择“替换密钥”后输入新 Key" autocomplete="new-password" disabled>
         <div class="settings-hint">密钥不回显；保留时空白框不会写入掩码或空值。候选连接探测仅验证当前网络、凭据和两个模型的普通非流式调用，不保证工具、流式或未来可用。</div>
         <div class="settings-actions">
+          <button id="model-fetch" class="btn ghost" type="button" disabled>获取模型列表</button>
           <button id="model-test" class="btn ghost" type="button" disabled>测试候选连接</button>
           <button id="model-save" class="btn primary" type="button" disabled>验证并保存</button>
         </div>
         <div id="model-result" class="settings-result" role="status"></div>
-      </section>
-      <section id="shutdown-settings" class="settings-section hidden" data-settings-section="service">
-        <div class="panel-title">关闭服务</div>
-        <div class="settings-hint">关闭浏览器标签页不会结束服务。点击关闭后，会等待正在进行的回复与记忆整理完成。</div>
-        <button id="shutdown-btn" class="btn danger" type="button">关闭 Alice 服务…</button>
       </section>
     </div>
   </div>
@@ -532,12 +556,11 @@
 
 <div id="shutdown-screen" class="screen shutdown-screen hidden" role="dialog" aria-modal="true" aria-labelledby="shutdown-title" aria-describedby="shutdown-state" tabindex="-1">
   <div class="seed-card shutdown-card">
-    <h1 id="shutdown-title">正在关闭 Alice</h1>
+    <h1 id="shutdown-title">正在退出 Alice</h1>
     <p id="shutdown-state" role="status" aria-live="polite">正在等待当前回复完成，并整理本机记忆…</p>
-    <p>对话和记忆保存在这台电脑的 Alice 项目目录中。</p>
-    <p>需要重新启动时，在 PowerShell 执行以下命令：</p>
-    <code id="restart-command">正在读取本次启动命令…</code>
-    <button id="shutdown-return" class="btn ghost hidden" type="button">服务仍在时重新打开界面</button>
+    <p>对话、人格和记忆保存在本机，下次打开可以继续。</p>
+    <details id="restart-instructions"><summary>源码运行的重新启动命令</summary><code id="restart-command">正在读取本次启动命令…</code></details>
+    <button id="shutdown-return" class="btn ghost hidden" type="button">重新连接仍在运行的 Alice</button>
   </div>
 </div>
 
@@ -556,5 +579,6 @@
 <script src="/room.js"></script>
 <script src="/app.js"></script>
 <script src="/discovery.js"></script>
+<script src="/thoughts.js"></script>
 </body>
 </html>

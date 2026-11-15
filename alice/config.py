@@ -10,8 +10,10 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-USER_DIR = PROJECT_ROOT / "user"
+from .runtime_paths import RESOURCE_ROOT, user_root
+
+PROJECT_ROOT = RESOURCE_ROOT  # Compatibility name: immutable resources, never user state.
+USER_DIR = user_root()
 DATA_DIR = USER_DIR / "data"
 DB_PATH = DATA_DIR / "alice.db"
 PERSONA_DIR = DATA_DIR / "persona"

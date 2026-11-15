@@ -85,6 +85,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
         activity = self._worker_activity_locked('claude-agent')
         enabled = bool(policy['enabled'])
         ready = self._claude_policy_admitted()
+        from .runtime_process import addon_available
+        component_ready = addon_available('claude-agent')
         if self.closing or self.paused or self.stop.is_set():
             state, reason = 'draining', '正在停止协作执行。'
         elif 'unknown' in activity:
@@ -93,6 +95,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             state, reason = 'waiting_permission', 'Claude 正在等待你确认本次操作权限。'
         elif activity or self.claude_threads:
             state, reason = 'running', 'Claude 正在执行；新任务进入自己的待办队列。'
+        elif not component_ready:
+            state, reason = 'unavailable', '当前运行包缺少 Claude 执行组件，授权设置仍保留。'
         elif ready:
             state, reason = 'ready', '授权已就绪；派工时启动 Claude CLI。'
         else:
@@ -362,6 +366,8 @@ class WorkerCoordinator(WorkerManagementMixin, WorkerRuntime):
             return None
         policies = {name: self._worker_policy_locked(name) for name in ('dsh-agent', 'claude-agent')}
         enabled = {name: bool(policy['enabled']) for name, policy in policies.items()}
+        from .runtime_process import addon_available
+        enabled = {name: value and addon_available(name) for name, value in enabled.items()}
         if not any(enabled.values()):
             return None
         from .worker_tools import WorkerChatSession

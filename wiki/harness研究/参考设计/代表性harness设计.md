@@ -91,6 +91,7 @@
 - **dsh-im**（DSH 插件）：十余个 IM 平台的**渠道接入层**完整工程样本（协议适配层/共享语义层/双通道 HarnessClient/排队插话/稳定寻址主动投递），深析见 [参考-dsh-im.md](./参考-dsh-im.md)；Alice 渠道方向的分层参考
 - **dsh-bili-scroll**（DSH 插件）：**无人值守值日生**样本——最小权限 headless 轮次跑章程、判重表、风格闸门、谷时定时与省钱纪律，深析见 [参考-dsh-bili-scroll.md](./参考-dsh-bili-scroll.md)；活动周期"自主时段"的纪律参考
 - **dsh-heartbeat**（DSH 插件）：**活动周期的先行实现**——七相心跳循环、零 token 分寸闸门、心事匣（没说完的话带过下一拍）、素材池双仓四淘汰、画像 journal，深析见 [参考-dsh-heartbeat.md](./参考-dsh-heartbeat.md)；与蓝图重合度最高的样本
+- **endfield-ui-skill**（Agent Skill）：非 harness——**"设计系统做成 Agent Skill"的范本**（SKILL.md 公理层/渐进披露/变体系统/证据等级标注/反例对照页/交付清单），深析见 [参考-endfield-ui-skill.md](./参考-endfield-ui-skill.md)；Alice 设计哲学文档化与 GUI 迭代的组织方式参考
 
 ## 来源
 

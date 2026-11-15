@@ -43,7 +43,7 @@ EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型
 def _fmt_turns(rows) -> str:
     lines = []
     for r in rows:
-        who = "用户" if r["role"] == "user" else "AI"
+        who = "用户" if r["role"] == "user" else "AI主动发言（不是用户要求或承诺）" if dict(r).get("proactive") else "AI"
         t = datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M")
         lines.append(f"[turn:{r['id']} {t}] {who}: {r['content']}")
     return "\n".join(lines)

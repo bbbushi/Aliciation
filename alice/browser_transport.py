@@ -16,7 +16,9 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-ROOT = Path(__file__).resolve().parent.parent
+from .runtime_paths import RESOURCE_ROOT
+
+ROOT = RESOURCE_ROOT
 ADDON = ROOT / "addons" / "browser_reader"
 PLATFORMS = ("bilibili", "zhihu")
 
@@ -37,6 +39,9 @@ def edge_path():
 
 
 def availability():
+    import sys
+    if getattr(sys, "frozen", False):
+        return False, "此桌面包尚未适配独立浏览器读取组件"
     if os.name != "nt":
         return False, "浏览器读取组件目前支持 Windows Edge"
     if not edge_path():
@@ -247,10 +252,15 @@ def main():
     parser.add_argument("--response-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--timeout", type=float, default=45)
     parser.add_argument("--show-window", action="store_true", help="Use a normal Edge window for this manual diagnosis")
+    parser.add_argument("--user-dir", help="独立用户根目录（绝对路径）")
     args = parser.parse_args()
     if min(args.limit, args.requests, args.response_bytes, args.timeout) <= 0:
         parser.error("limits must be positive")
-    user_dir = ROOT / "user"
+    from .runtime_paths import configure_user_root
+    try:
+        user_dir = configure_user_root(args.user_dir)
+    except (ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
     if args.operation == "open":
         open_browser(user_dir, args.platform)
         print("Opened dedicated browser. Log in yourself if needed, then close its window.")

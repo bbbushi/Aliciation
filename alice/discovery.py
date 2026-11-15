@@ -14,13 +14,14 @@ import math
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from urllib.parse import urlsplit
+
+from .runtime_paths import RESOURCE_ROOT, user_root
+from .runtime_process import addon_available, discovery_command
 
 from .channels import ChannelError
 from .store import text_score
@@ -582,7 +583,7 @@ class DiscoveryCoordinator:
         if platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser":
             from .browser_transport import availability
             return availability()
-        if platform == "bilibili" and settings["bilibili_access"] == "native" and not (Path(__file__).resolve().parent.parent / "addons" / "bilibili" / "worker.py").is_file():
+        if platform == "bilibili" and settings["bilibili_access"] == "native" and not addon_available("bilibili"):
             return False, "B站只读组件缺失，请保留仓库中的addons/bilibili目录"
         if not _third_party(platform, settings):
             return True, ""
@@ -783,7 +784,7 @@ class DiscoveryCoordinator:
                 if self._worker and self._worker.is_alive():
                     raise ChannelError(409, "busy", "请先停止当前寻找，再打开独立浏览器")
                 try:
-                    open_browser(self.service._config_path.parent, payload.get("platform"))
+                    open_browser(user_root(), payload.get("platform"))
                 except (BrowserError, OSError):
                     raise ChannelError(409, "browser_missing", "无法打开该平台的独立 Edge 窗口") from None
             elif action == "cancel":
@@ -1215,7 +1216,7 @@ class DiscoveryCoordinator:
                'revision':revision, 'generation':self._generation, 'day':_day(),
                'state':'queued','phase':'queued','started_at':now,'cards':0}
         cancel = threading.Event()
-        worker = threading.Thread(target=self._run_thought, args=(job,copy.deepcopy(settings),model,cancel),
+        worker = threading.Thread(target=self._background_run, args=(self._run_thought, (job,copy.deepcopy(settings),model,cancel)),
                                   name='alice-thought',daemon=False)
         with self.service._channels.condition:
             if self.service._channels.slot is not None or self.service._channels.closing:
@@ -1266,6 +1267,18 @@ class DiscoveryCoordinator:
                 self._store_step(job,cancel,finish,settle=True)
             except Exception:
                 pass
+
+    def _background_run(self, target, args):
+        with self.service._background.claim("discovery") as acquired:
+            if acquired:
+                return target(*args)
+            job = args[0]
+            self._phase(job, "finished", state="cancelled", reason="background_busy")
+            with self.service._lock:
+                if job["epoch"] == self.dataset_id:
+                    with self.service.store.source_transaction():
+                        self.service.store.conn.execute("UPDATE discovery_runs SET state='cancelled',phase='finished',"
+                            "reason='background_busy',finished_at=? WHERE id=?", (time.time(), job["id"]))
 
     def _launch_locked(self, settings, revision, *, manual, interest_id=None):
         def reject(code, message):
@@ -1331,7 +1344,7 @@ class DiscoveryCoordinator:
         cancel = threading.Event()
         worker_settings = copy.deepcopy(settings)
         worker_settings["_tieba_policy_version"] = self._tieba_policy_version_locked()
-        worker = threading.Thread(target=self._run, args=(task, worker_settings, interests, platforms, model, cancel),
+        worker = threading.Thread(target=self._background_run, args=(self._run, (task, worker_settings, interests, platforms, model, cancel)),
                                   name="alice-discovery", daemon=False)
         # Publish under the same admission condition used by foreground reserve.
         with self.service._channels.condition:
@@ -1475,6 +1488,11 @@ class DiscoveryCoordinator:
         if job.get("kind") == "chat_search":
             with self.service._channels.condition:
                 enabled = self._chat_search_allowed(job.get("scope"), settings) and self._foreground_allowed(job)
+        elif job.get("kind") == "exploration_search":
+            from .thought_workspace import settings as autonomy_settings
+            enabled = (settings["enabled"] and job.get("scope") == "gui"
+                       and autonomy_settings(self.service.store)["allow_external"]
+                       and self.service._channels.activity().get("status") == "ready")
         return revision == job["revision"] and enabled
 
     def _phase(self, job, phase, *, state="running", reason=""):
@@ -1517,6 +1535,9 @@ class DiscoveryCoordinator:
                     or _exceeds(budget["body_bytes"], maximum, _response_budget(settings))
                     or model and not settings["allow_paid"]):
                 raise _Stopped("quota_exceeded")
+            if model:
+                from .background_runtime import reserve_model
+                reserve_model(self.service.store)
             identity = uuid.uuid4().hex
             conn = self.service.store.conn
             with conn:
@@ -1601,8 +1622,8 @@ class DiscoveryCoordinator:
             env = {key: value for key, value in os.environ.items()
                    if key.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "LANG", "LC_ALL"}}
             env["PYTHONIOENCODING"] = "utf-8"
-            process = subprocess.Popen([sys.executable, "-m", "alice.discovery_worker", "--input-bytes", str(input_limit)],
-                                       cwd=str(Path(__file__).resolve().parent.parent),
+            process = subprocess.Popen(discovery_command(input_limit),
+                                       cwd=str(RESOURCE_ROOT),
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                        env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             def communicate():
@@ -1775,7 +1796,7 @@ class DiscoveryCoordinator:
             self._phase(job, "browser_" + operation)
             result = run_browser({"op": operation, "platform": platform, "limit": settings["search_results"],
                                   "response_bytes": maximum, "network_proxy": settings.get("_network_proxy", ""), **payload},
-                                 user_dir=self.service._config_path.parent, deadline=end,
+                                 user_dir=user_root(), deadline=end,
                                  admit=admit, settle=settle, check=check, unreaped=self._unreaped, authorize=authorize)
             if operation == "search":
                 job["search_summary"] = _search_summary(result.get("diagnostic"))

@@ -65,7 +65,7 @@ def complete_round_suffix(rows: list[dict], max_messages: int,
     dropped = max(0, len(rows) - max_messages) if max_messages else 0
     suffix = list(rows[dropped:])
     excluded = [{"id": r.get("id"), "reason": "message_limit"} for r in rows[:dropped]]
-    while suffix and suffix[0]["role"] != "user":
+    while suffix and suffix[0]["role"] != "user" and not suffix[0].get("proactive"):
         row = suffix.pop(0)
         excluded.append({"id": row.get("id"), "reason": "orphan_prefix"})
     def finish(kept, used=0):
@@ -84,10 +84,10 @@ def complete_round_suffix(rows: list[dict], max_messages: int,
     while i >= 0:
         # 从尾部整对回收：从 i 回扫过连续 assistant 行，落到本往返的 user 行
         start = i
-        while start > 0 and suffix[start]["role"] == "assistant":
+        while start > 0 and suffix[start]["role"] == "assistant" and not suffix[start].get("proactive"):
             start -= 1
         # start 现在指向一对往返的 user 行（或 0）
-        if suffix[start]["role"] != "user":
+        if suffix[start]["role"] != "user" and not suffix[start].get("proactive"):
             break
         pair = suffix[start:i + 1]
         cost = messages_tokens([{ "role": r["role"], "content": r["content"]} for r in pair])

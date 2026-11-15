@@ -4,10 +4,8 @@ from __future__ import annotations
 import json
 import http.client
 import os
-from pathlib import Path
 import re
 import subprocess
-import sys
 
 from .channels import ChannelError
 
@@ -105,11 +103,12 @@ def inspect_dsh_installation():
     Startup only, outside the Store lock. Browser/model input cannot select any
     command, installation path, environment, endpoint or authentication token.
     """
-    entry = Path(__file__).resolve().parent.parent / 'addons' / 'dsh_agent' / 'adapter.py'
+    from .runtime_paths import RESOURCE_ROOT
     try:
-        result = subprocess.run([sys.executable, '-I', str(entry), '--describe'],
+        from .runtime_process import addon_command
+        result = subprocess.run(addon_command('dsh-agent', '--describe'),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                timeout=5, check=False, cwd=str(entry.parent),
+                                timeout=5, check=False, cwd=str(RESOURCE_ROOT),
                                 env={key: os.environ[key] for key in ('SystemRoot', 'WINDIR') if key in os.environ},
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if result.returncode != 0 or len(result.stdout) > 8192:

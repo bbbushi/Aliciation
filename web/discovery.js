@@ -391,6 +391,7 @@
   function renderOverview() {
     const s = snapshot?.settings;
     if (!s) return;
+    document.querySelector(".discovery-overview")?.setAttribute("data-enabled", s.enabled ? "on" : "off");
     const preview = $("discovery-learning-items");
     preview.replaceChildren();
     for (const item of list(snapshot.learning_preview)) {

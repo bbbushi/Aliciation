@@ -21,7 +21,7 @@ from .channels import ChannelError
 from .local_connector import ConnectorSpec, LocalConnectorManager
 from .service import ChatService
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = PROJECT_ROOT / "web"
 DEFAULT_PORT = 8800
 REQUEST_IO_TIMEOUT = 30.0
 CHANNEL_PREFIX = "/api/channels/v1"
@@ -57,8 +57,15 @@ def _restart_command(config_path: Path, port: int) -> str:
 
     return (
         f"Set-Location -LiteralPath {literal(PROJECT_ROOT)}\n"
-        f"& {literal(sys.executable)} -m alice --config {literal(config_path)} serve --port {port}"
+        "& " + " ".join(literal(arg) for arg in _runtime_restart_args(config_path, port))
     )
+
+
+def _runtime_restart_args(config_path: Path, port: int) -> list[str]:
+    from .runtime_process import backend_command
+
+    return backend_command("--user-dir", str(USER_DIR), "--config", str(config_path),
+                           "serve", "--port", str(port))
 
 
 class _ShutdownGate:
@@ -536,6 +543,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("qq.js", "application/javascript; charset=utf-8")
             elif path == "/discovery.js":
                 self._file("discovery.js", "application/javascript; charset=utf-8")
+            elif path == "/thoughts.js":
+                self._file("thoughts.js", "application/javascript; charset=utf-8")
+            elif path == "/thoughts.css":
+                self._file("thoughts.css", "text/css; charset=utf-8")
             elif path == "/chat-search.js":
                 self._file("chat-search.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.css":
@@ -571,6 +582,11 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._worker_route(path)
             elif path == "/api/discovery":
                 self._discovery_route()
+            elif path == "/api/thoughts":
+                if not self._trusted_intent("thoughts"):
+                    self._json({"error": "请从本机GUI读取思想与探索", "code": "gui_only"}, 403)
+                    return
+                self._json(svc.thoughts())
             elif path == "/api/maintenance":
                 self._maintenance_route()
             elif path == "/api/persona":
@@ -658,7 +674,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         def _addon_static(self, path: str) -> None:
             """只读托管清单内固定资源；缺文件、禁用或版本不符时给明确状态，聊天照常。"""
-            root = Path(__file__).resolve().parent.parent / "addons" / "context_inspector"
+            root = PROJECT_ROOT / "addons" / "context_inspector"
             try:
                 manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -814,6 +830,17 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
+            if path == "/api/thoughts":
+                if not self._trusted_json("thoughts"):
+                    self._json({"error": "请从本机GUI操作思想与探索", "code": "gui_only"}, 403)
+                    return
+                body = self._bounded_body(32768)
+                action = body.pop("action", None)
+                try:
+                    self._json(svc.thoughts(action, body))
+                except ValueError as exc:
+                    self._json({"error": str(exc), "code": "invalid_request"}, 400)
+                return
             if (path in ("/api/collaborators", "/api/worker-inputs", "/api/worker-artifacts/download",
                          "/api/worker-task-settings", "/api/worker-permissions/list",
                          "/api/worker-permissions/answer", "/api/claude-policy")
@@ -964,14 +991,15 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "thinking 仅支持 on/off"}, 400)
                 else:
                     self._json({"thinking": svc.set_thinking(value)})
-            elif path in ("/api/model-config", "/api/model-config/test"):
+            elif path in ("/api/model-config", "/api/model-config/test", "/api/model-config/models"):
                 if not self._trusted_json("model-config"):
                     self._json({"error": "只能从本机 GUI 修改模型设置"}, 403)
                     return
                 try:
                     body = self._sensitive_body()
-                    result = (svc.save_model_config(body) if path == "/api/model-config"
-                              else svc.test_model_config(body))
+                    result = ({"/api/model-config": svc.save_model_config,
+                               "/api/model-config/test": svc.test_model_config,
+                               "/api/model-config/models": svc.list_model_config_models}[path])(body)
                     self._json(result)
                 except ConfigConflict as e:
                     self._json({"error": str(e)}, 409)
@@ -1072,7 +1100,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
 
 def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = True,
-        cfg: Config | None = None, config_path: Path | None = None) -> None:
+        cfg: Config | None = None, config_path: Path | None = None, host_control=None) -> None:
     if host not in ("127.0.0.1", "localhost"):
         raise ValueError("服务只能监听本机回环地址 127.0.0.1 或 localhost")
     config_path = Path(config_path).resolve() if config_path is not None else USER_DIR / "config.toml"
@@ -1082,13 +1110,18 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
     try:
         httpd = _DrainingHTTPServer((host, port), gate)
     except OSError:
+        if host_control is not None:
+            raise
         print(f"启动失败：本机端口 {port} 无法绑定，请检查是否已有 Alice 服务在运行")
         return
     svc: ChatService | None = None
     connectors = None
     try:
-        runtime_info = {"restart_command": _restart_command(config_path, httpd.server_port)}
-        svc = ChatService(cfg if cfg is not None else load(config_path), config_path=config_path)
+        runtime_info = {"restart_command": _restart_command(config_path, httpd.server_port),
+                        "desktop": host_control is not None}
+        svc = ChatService(cfg if cfg is not None else load(config_path), config_path=config_path,
+                          allow_unconfigured=host_control is not None,
+                          _maintenance_activation=bool(host_control and host_control.maintenance_activation))
         boot_events = svc.prepare()
         # Fixed public addon command; no import of addon code and no request-
         # supplied program, arguments, filesystem path or callback address.
@@ -1099,8 +1132,11 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
             "--config", str(USER_DIR / "qq" / "config.json"),
             "--alice-url", f"http://127.0.0.1:{httpd.server_port}",
         )
-        connectors = LocalConnectorManager(ConnectorSpec(command=connector_command, cwd=PROJECT_ROOT,
-                                                        setup_root=connector_root), svc)
+        frozen = getattr(sys, "frozen", False)
+        connectors = LocalConnectorManager(ConnectorSpec(
+            command=() if frozen else connector_command, cwd=PROJECT_ROOT,
+            setup_root=None if frozen else connector_root,
+            unavailable_reason="此桌面包尚未适配 QQ 组件" if frozen else ""), svc)
         httpd.RequestHandlerClass = make_handler(svc, gate, runtime_info, connectors)
         url = f"http://{host}:{httpd.server_port}"
         print(f"=== {svc.cfg.persona.name} 图形界面 ===")
@@ -1122,10 +1158,14 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         finally:
             httpd.server_close()
         if isinstance(exc, SystemExit):
+            if host_control is not None:
+                raise
             print(f"启动失败：{exc}")
             return
         raise
     try:
+        if host_control is not None:
+            host_control.ready(httpd, gate, svc)
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n再见。")
@@ -1138,7 +1178,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         # workers, even half-open or static requests, must leave before Store closes.
         gate.wait_idle()
         try:
-            warning = svc.close()
+            warning = svc.close(extract=host_control.extract_on_exit if host_control is not None else True)
             if warning:
                 code, result = 500, {"status": "closed_with_warning", "error": warning}
             else:
@@ -1153,3 +1193,5 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
             code, result = 500, {"status": "failed", "error": "监听端口关闭未能确认；请在终端检查进程"}
         result.update(runtime_info)
         gate.finish(code, result)
+        if host_control is not None:
+            host_control.closed(code, result)

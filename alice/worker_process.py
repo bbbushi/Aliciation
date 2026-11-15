@@ -7,9 +7,7 @@ sending GO. Only Job ActiveProcesses=0 proves the owned tree is stopped.
 from __future__ import annotations
 import json
 import os
-from pathlib import Path
 import subprocess
-import sys
 import threading
 import time
 
@@ -99,15 +97,16 @@ class WorkerProcessTransport:
         self.deadline = hard_deadline
 
     def start(self):
-        entry = Path(__file__).resolve().parents[1] / 'addons' / 'claude_agent' / 'adapter.py'
         if self.cancelled.is_set():
             self._finish({'frame': 'local', 'state': 'cancelled', 'code': 'cancelled_before_go'})
             return
+        from .runtime_process import addon_command
+        command = addon_command('claude-agent')
         # No task or descendant exists before GO. Assign failure closes stdin
         # and terminates only this owned waiting Popen handle, never an old PID.
         if os.name == 'nt':
             self.job = _WindowsJob()
-        self.proc = subprocess.Popen([sys.executable, '-I', str(entry)], stdin=subprocess.PIPE,
+        self.proc = subprocess.Popen(command, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         try:
