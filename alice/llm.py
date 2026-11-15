@@ -30,6 +30,18 @@ def thinking_disabled(cfg: Config) -> bool:
     return cfg.llm.thinking == "off" or cfg.llm.disable_thinking
 
 
+def apply_provider_parameters(cfg: Config, kwargs: dict) -> None:
+    """Official GPT models choose their supported defaults; no GLM thinking extension."""
+    from .model_catalog import provider_for
+    if provider_for(cfg.llm.base_url) == "openai":
+        kwargs.pop("temperature", None)
+        extra = kwargs.get("extra_body")
+        if isinstance(extra, dict):
+            extra.pop("thinking", None)
+            if not extra:
+                kwargs.pop("extra_body", None)
+
+
 def safe_provider_error(exc: Exception) -> str:
     """只返回固定分类，供应商异常正文可能含 URL、请求内容或凭据。"""
     status = getattr(exc, "status_code", None)
@@ -80,6 +92,7 @@ def chat(
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    apply_provider_parameters(cfg, kwargs)
 
     call_id = uuid.uuid4().hex
     # 调用接入（20261107 SDK 设计）：最终 SDK 参数在发送前冻结；SDK 不发送请求
@@ -91,6 +104,10 @@ def chat(
             trace_call = None
     last_err: Exception | None = None
     for attempt_no in range(3 if retry else 1):
+        store = (observation or {}).get("store")
+        admit = getattr(store, "_background_admit", None)
+        if admit is not None and not (observation or {}).get("background_reserved"):
+            admit(store)
         sdk_attempt = trace_call.begin_attempt(attempt_no + 1) if trace_call is not None else None
         started = time.monotonic()
         response, failure = None, None

@@ -222,6 +222,8 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
                              - cfg.context.reply_reserve_tokens - recap_reserve_tokens - 128)
     # Apply the audience projection BEFORE selection and before serializing rows.
     projected = []
+    if source_scope != "gui":
+        raw_rows = [r for r in raw_rows if not r.get("proactive")]
     for row in raw_rows:
         r = dict(row)
         if store.turn_worker_refs(r["id"]):
@@ -309,6 +311,9 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         content = f"（当前时间：{now_str}）\n{content}"
         turns = turns[:-1] + [{**turns[-1], "content": content}]
     history_messages = [{"role": r["role"], "content": r["content"]} for r in turns]
+    for row, message in zip(turns, history_messages):
+        if row.get("proactive"):
+            message["content"] = "（Alice此前主动发起的交流，非用户委托或用户承诺）\n" + message["content"]
     if recap_block:
         current = history_messages[-1:] if history_messages and history_messages[-1]['role'] == 'user' else []
         messages.extend(history_messages[:-1] if current else history_messages)
@@ -378,7 +383,8 @@ def tool_recall(store: Store, query: str, *, source_context: dict | None = None,
                 continue
             # Persist the boundary before the tool result is exposed to the
             # model, including when this turn later fails or is retried.
-            store.protect_source_turn(source_context["user_turn_id"], ids, scope=scope)
+            if source_context.get("user_turn_id"):
+                store.protect_source_turn(source_context["user_turn_id"], ids, scope=scope)
             source_context["packet_ids"] = ids
             source_context.setdefault("recall_queries", []).append(query[:500])
             source_context.setdefault('recalled_memory_ids', []).append(m['id'])

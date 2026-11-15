@@ -319,6 +319,9 @@ class WorkerRuntime(WorkerReportsMixin, WorkerPermissionsMixin):
 
     def _claude_policy_admitted(self):
         """claude-agent 政策三核（enabled/ack/目录）。未迁移或未启用 → False。"""
+        from .runtime_process import addon_available
+        if not addon_available('claude-agent'):
+            return False
         try:
             row = self.ledger.store.conn.execute(
                 'SELECT enabled, native_sandbox_ack, workspace_root FROM claude_policy WHERE id=1').fetchone()

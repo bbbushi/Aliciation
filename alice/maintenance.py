@@ -1117,8 +1117,8 @@ class MaintenanceRunner:
             thread.join(timeout=15)
             if thread.is_alive():
                 # 未完的模型调用不可中断；保留线程引用（R08：不假装已停止）。
-                # 调用返回后门控会让任务回到 queued；服务随后关闭 Store/client，
-                # 该路径上的重排队写库会失败并被吞掉，任务留待下次启动标 stale。
+                # 调用返回后门控会让任务回到 queued；最终 shutdown 仍会等待线程，
+                # 不在活任务下释放 Store/client 或实例锁。
                 print("（维护执行器仍在收尾最后一次模型调用；结果将被丢弃，任务回到排队。）")
             else:
                 self._thread = None
@@ -1126,6 +1126,14 @@ class MaintenanceRunner:
     def is_alive(self) -> bool:
         thread = self._thread
         return bool(thread and thread.is_alive())
+
+    def shutdown(self) -> None:
+        """Final drain: release neither Store nor instance ownership under a live job."""
+        self.stop()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+            self._thread = None
 
     def _loop(self) -> None:
         while not self._stop.wait(self._poll):
@@ -1137,6 +1145,11 @@ class MaintenanceRunner:
                 continue  # 维护失败不影响聊天；下个周期重试排队检查。
 
     def _cycle(self) -> None:
+        with self._service._background.claim("maintenance") as acquired:
+            if acquired:
+                self._cycle_owned()
+
+    def _cycle_owned(self) -> None:
         service = self._service
         if self._chat_busy():
             return  # R09：聊天请求在途，本周期不领取维护任务

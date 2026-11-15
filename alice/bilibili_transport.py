@@ -9,11 +9,9 @@ from __future__ import annotations
 import base64
 import json
 import os
-from pathlib import Path
 import queue
 import re
 import subprocess
-import sys
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -111,8 +109,9 @@ def validate_request(message, context):
 
 def run_adapter(operation, payload, *, response_bytes, deadline, perform_http, check_cancelled, unreaped):
     """Supervise parsing/signing only. perform_http supervises every actual hop."""
-    command = Path(__file__).resolve().parent.parent / "addons" / "bilibili" / "worker.py"
-    if not command.is_file():
+    from .runtime_paths import RESOURCE_ROOT
+    from .runtime_process import addon_available, addon_command
+    if not addon_available("bilibili"):
         raise TransportError("bili_missing")
     context = {"operation": operation, "response_bytes": response_bytes, **payload}
     initial = {"version": 1, "op": operation, "response_bytes": response_bytes, "text_chars": 12000, **payload}
@@ -173,7 +172,7 @@ def run_adapter(operation, payload, *, response_bytes, deadline, perform_http, c
 
     try:
         check_cancelled()
-        process = subprocess.Popen([sys.executable, str(command)], cwd=str(command.parent),
+        process = subprocess.Popen(addon_command("bilibili"), cwd=str(RESOURCE_ROOT),
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                    env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         threads = [threading.Thread(target=read_lines, daemon=True, name="alice-bili-read"),

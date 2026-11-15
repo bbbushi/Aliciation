@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "units": [
     {
       "command": "recall",
@@ -715,6 +715,273 @@
       "internal": {
         "executor": "learning",
         "operation": "condense_observation"
+      }
+    },
+    {
+      "command": "thought_search",
+      "summary": "检索思想层的疑问与当前思辨索引。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "include_closed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "thought_search"
+      }
+    },
+    {
+      "command": "thought_load",
+      "summary": "展开真实疑问或观点引用的正文、未知与出处。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "thought_load"
+      }
+    },
+    {
+      "command": "thought_record",
+      "summary": "收纳值得继续的疑问，也可以记录自主好奇。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "user_request",
+              "conversation",
+              "memory",
+              "review",
+              "interest",
+              "exploration"
+            ]
+          },
+          "parent_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "question",
+          "reason",
+          "origin"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "thought_record"
+      }
+    },
+    {
+      "command": "thought_update",
+      "summary": "更新疑问进展、等待条件，或重新打开旧问题。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "waiting_user",
+              "waiting_source",
+              "paused",
+              "closed"
+            ]
+          },
+          "progress": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "next_step": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "ref",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "thought_update"
+      }
+    },
+    {
+      "command": "thought_resolve",
+      "summary": "提交阶段结论，按价值保存思辨或见闻并关联疑问。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "conclusion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "stance",
+              "knowledge",
+              "none"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "remaining": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "uncertainty": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "next_response": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "replaces_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "ref",
+          "conclusion",
+          "kind",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "thought_resolve"
+      }
+    },
+    {
+      "command": "contact_propose",
+      "summary": "提出进展反馈、必要询问或兴趣分享的主动联系意图。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "motive": {
+            "type": "string",
+            "enum": [
+              "progress",
+              "request",
+              "share"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "motive",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "contact_propose"
+      }
+    },
+    {
+      "command": "contact_update",
+      "summary": "读取并判断联系意图是否仍适合，采用到本次回应、准备送达或取消。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "read",
+              "ready",
+              "incorporate",
+              "cancel"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "ref",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "contact_update"
       }
     }
   ]

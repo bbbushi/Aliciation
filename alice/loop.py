@@ -14,7 +14,7 @@ from .context_memory import MemoryContext, TOOLS as MEMORY_TOOLS
 from .context_workspace import TOOLS as WORKSPACE_TOOLS
 from .config import Config
 from . import interaction_policy
-from .llm import chat, thinking_disabled
+from .llm import chat, thinking_disabled, apply_provider_parameters
 from .store import Store
 from .steps import drive
 from .worker_context import merge_worker_refs
@@ -44,6 +44,9 @@ def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=Non
         return registry.execute(name, args)
     if not isinstance(args, dict):
         args = {}
+    if capability_registry.executor(name) == "thought":
+        session = source_context.get("thought_session") if source_context else None
+        return session.execute(name, args) if session is not None else json.dumps({"error": "thought_unavailable"})
     memory_session = source_context.get("memory_session") if source_context else None
     if name in {"memory_search", "memory_load"}:
         if memory_session is None:
@@ -130,6 +133,7 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     if "deepseek" in (cfg.llm.base_url or ""):
         # deepseek 支持流式携带 usage；其他平台未必支持该参数，按平台启用
         kwargs["stream_options"] = {"include_usage": True}
+    apply_provider_parameters(cfg, kwargs)
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     calls: dict[int, dict] = {}
@@ -301,11 +305,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                      "tool_names": [t["function"]["name"] for t in active_tools]}
             if extra.get("trace_call") is None and ctx_trace is not None:
                 # 调用接入：最终参数在 llm.chat/_stream_round 的 freeze_final 边界补齐
+                parameters = {"model": cfg.llm.chat_model, "temperature": 0.8,
+                              "stream": purpose == "main_stream"}
+                apply_provider_parameters(cfg, parameters)
                 extra["trace_call"] = ctx_trace.prepare_call(
                     purpose=purpose, tool_round=round_number, messages=messages,
                     tools=active_tools or None,
-                    parameters={"model": cfg.llm.chat_model, "temperature": 0.8,
-                                "stream": purpose == "main_stream"})
+                    parameters=parameters)
         return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
     def attempt_usage(detail=None):
@@ -401,7 +407,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     transform_audit = {'selected': bool(transform_inputs), 'calls': 0,
                        'status': 'pending' if transform_inputs else 'not_selected', 'usage': {}}
     def growth_valid():
-        return (persona_growth.refs_valid(store, growth_refs)
+        from .thought_workspace import valid_basis
+        return ((not source_context.get("thought_basis") or valid_basis(store, source_context["thought_basis"], scope=source_scope))
+                and (source_context.get("thought_session") is None or source_context["thought_session"].valid())
+                and persona_growth.refs_valid(store, growth_refs)
                 and (recap_session is None or recap_session.valid()))
     from .learning import learning_tools
     memory_session = (MemoryContext(store, cfg, source_scope, user_text)
@@ -426,6 +435,14 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     learning_enabled = bool(learning)
     tools = memory_tools + learning + ([SEARCH_TOOL] if search_session is not None else [])
     extra_messages = []
+    from . import thought_workspace
+    if source_scope == "gui":
+        thought_session = thought_workspace.ThoughtSession(store, source_context)
+        source_context["thought_session"] = thought_session
+        tools += thought_workspace.tools(source_scope)
+        thought_index = thought_session.initial(user_text)
+        if thought_index:
+            extra_messages.append({"role": "system", "content": thought_index})
     if transform_inputs:
         extra_messages.append({'role': 'system', 'content':
             '本轮处理下列改写素材，按素材说话者与收件人理解“我/你/您”，'
@@ -662,9 +679,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     for manifest in manifests:
         for extra in extra_messages:
             label = ("capability_registry" if extra["content"].startswith("## 能力注册表")
+                     else "thought_state_and_index" if extra["content"].startswith("本轮思想运行状态")
                      else "explicit_capability_request" if extra["content"].startswith("本轮用户显式能力请求")
                      else "request_capability")
-            manifest.add("stable", label, extra["content"])
+            manifest.add("index" if label == "thought_state_and_index" else "stable", label, extra["content"])
         if anchor_msg:
             manifest.add("stable", "expression_anchor", anchor_msg["content"])
     if ctx_trace is not None:
@@ -725,7 +743,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         else:
             # Task-bound text waits for the post-I/O licence check; a policy
             # revocation during model generation must not publish late deltas.
-            buffered = [] if (persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
+            buffered = [] if (source_context.get("thought_basis") or persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
                               or (memory_session and memory_session.exposed)) else None
             buffered_reasoning = [] if buffered is not None else None
             delta_callback = buffered.append if buffered is not None else on_delta
@@ -939,6 +957,14 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id,
                                   source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
+    with store.source_transaction():
+        for contact_id in source_context.get("contact_incorporated", []):
+            contact_valid = (growth_valid() and (memory_session is None or memory_session.valid())
+                             and (persona_registry is None or persona_registry.valid()))
+            store.conn.execute("UPDATE thought_contacts SET status=?,turn_id=?,updated_at=? WHERE id=? AND status='incorporating'",
+                ("incorporated" if contact_valid else "needs_review", assistant_id, time.time(), contact_id))
+            thought_workspace.event(store, "contact_used_in_reply" if contact_valid else "contact_reply_discarded",
+                                    contact_id, {"turn_id": assistant_id})
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     if ctx_trace is not None:
         ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
@@ -961,6 +987,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     if memory_session is not None:
         basis["memory"] = memory_session.metadata()
         basis["memory"]["valid_at_finish"] = memory_session.valid()
+    basis["thoughts"] = {"basis": source_context.get("thought_basis"),
+                         "question_versions": (source_context["thought_session"].question_versions if source_context.get("thought_session") else {}),
+                         "contacts_used": source_context.get("contact_incorporated", [])}
     basis["persona_growth"] = {"sections": growth_basis["sections"],
                                "evidence_ids": [ref["id"] for ref in growth_refs],
                                "valid_at_finish": growth_valid()}

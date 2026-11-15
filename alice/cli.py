@@ -7,11 +7,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import config as appconfig
-from . import consolidation, persona, persona_reset, retrieval, skills
-from .config import Config, load
-from .llm import make_client
-from .store import Store
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import Config
+    from .store import Store
 
 
 def _print_consolidation(summary: dict) -> None:
@@ -40,11 +40,15 @@ def cmd_memory(store: Store, layer: str | None) -> None:
 
 
 def cmd_recall(store: Store, query: str) -> None:
+    from . import retrieval
+
     print(retrieval.tool_recall(store, query))
     print("（注：命中会累计这些记忆的使用次数）")
 
 
 def _seed_wizard(store: Store, client, cfg: Config) -> None:
+    from . import persona
+
     print(f"首次运行：为你的 {cfg.persona.name} 选择人格底色（选 2~4 个，输入数字，如 1,3,5）")
     for i, t in enumerate(persona.TAGS, 1):
         print(f"{i:2d}. {t}", end="\n" if i % 5 == 0 else "   ")
@@ -68,6 +72,7 @@ def _seed_wizard(store: Store, client, cfg: Config) -> None:
 def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
     """双维护显式命令（设计草案 §5）：先预览（不改数据）再创建任务并同步执行。"""
     from . import maintenance
+    from .llm import make_client
     from .steps import drive
     preview = (maintenance.compact_preview(store, cfg) if kind == "compact"
                else maintenance.tidy_preview(store, cfg))
@@ -88,6 +93,9 @@ def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
 
 
 def cmd_chat(store: Store, cfg: Config) -> None:
+    from . import consolidation, persona, skills
+    from .llm import make_client
+
     summary = consolidation.run_if_due(store, cfg)
     if summary:
         _print_consolidation(summary)
@@ -103,12 +111,13 @@ def cmd_chat(store: Store, cfg: Config) -> None:
     run_chat(store, client, cfg)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(
         prog="alice",
         description="Alice — 陪伴型 harness（单一永久会话 + 三层记忆 + 可生长人格）",
     )
     parser.add_argument("--config", default=None, help="config.toml 路径（默认 user/config.toml）")
+    parser.add_argument("--user-dir", default=None, help="独立用户根目录（绝对路径；含配置、记忆和人格）")
     sub = parser.add_subparsers(dest="cmd")
 
     p_mem = sub.add_parser("memory", help="查看记忆库分层与统计")
@@ -127,16 +136,76 @@ def main() -> None:
     p_serve = sub.add_parser("serve", help="启动本地图形界面（浏览器）")
     p_serve.add_argument("--port", type=int, default=8800, help="监听端口（默认 8800）")
     p_serve.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    p_worker = sub.add_parser("discovery-worker", help="内容发现独立工作进程（固定 JSON 行协议）")
+    p_worker.add_argument("--input-bytes", type=int, default=192 * 1024)
+    p_desktop = sub.add_parser("desktop-host", help="桌面宿主专用私有管道入口")
+    p_desktop.add_argument("--port", type=int, default=0)
+    p_maintenance = sub.add_parser("maintenance", help="离线备份、更新准备与明确确认后的数据恢复")
+    p_maintenance.add_argument("action", choices=["status", "backup", "verify", "prepare", "restore", "rollback", "authorize"])
+    p_maintenance.add_argument("--backup-id")
+    p_maintenance.add_argument("--confirm", action="store_true", help="明确确认维护或恢复操作")
+    p_maintenance.add_argument("--launch-nonce", help="只授权此一次桌面启动的随机标识")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.cmd == "maintenance" and args.user_dir is None:
+        parser.error("离线维护必须显式提供 --user-dir 绝对用户根目录")
+    if args.cmd == "discovery-worker":
+        # Workers consume an admitted payload only, never configuration or Store.
+        from .discovery_worker import main as worker_main
+        return worker_main(["--input-bytes", str(args.input_bytes)])
+    from .runtime_paths import configure_user_root
+    try:
+        configure_user_root(args.user_dir)
+    except (ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
+    # Path selection must precede all imports which cache data/persona roots.
+    from . import config as appconfig
+    from .config import load
+    from .instance_lock import InstanceBusy, InstanceLock
+
     config_path = Path(args.config) if args.config else appconfig.USER_DIR / "config.toml"
 
-    if args.cmd == "serve":
-        from .server import run as run_server
+    if args.cmd == "maintenance":
+        from .profile_maintenance import command, public_error
+        try:
+            result = command(appconfig.USER_DIR, args.action, backup_id=args.backup_id,
+                             confirmed=args.confirm, nonce=args.launch_nonce)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except Exception as exc:
+            # Never print database contents, credentials, or provider exceptions.
+            print(json.dumps({"error": public_error(exc)}, ensure_ascii=False))
+            return 1
 
-        run_server(port=args.port, open_browser=not args.no_open,
-                   cfg=load(config_path), config_path=config_path)
-        return
+    try:
+        if args.cmd == "desktop-host":
+            if args.config and config_path.resolve() != (appconfig.USER_DIR / "config.toml").resolve():
+                parser.error("桌面模式配置必须位于选定用户根目录内")
+            from .desktop_host import main as desktop_main
+            return desktop_main(port=args.port, config_path=config_path)
+        if args.cmd == "serve":
+            from .server import run as run_server
+
+            run_server(port=args.port, open_browser=not args.no_open,
+                       cfg=load(config_path), config_path=config_path)
+            return
+        with InstanceLock(appconfig.DATA_DIR):
+            _run_command(args, config_path)
+    except InstanceBusy as exc:
+        parser.exit(1, str(exc) + "\n")
+    except RuntimeError as exc:
+        from .profile_maintenance import MaintenanceRequired
+        if isinstance(exc, MaintenanceRequired):
+            parser.exit(1, str(exc) + "\n")
+        raise
+
+
+def _run_command(args, config_path: Path) -> None:
+    from . import config as appconfig
+    from . import consolidation, persona, persona_reset, skills, thought
+    from .config import load
+    from .llm import make_client
+    from .store import Store
 
     cfg = load(config_path)
     reset_record = persona_reset.before_open()
@@ -165,8 +234,6 @@ def main() -> None:
         elif args.cmd == "evolve":
             print(persona.evolve(store, make_client(cfg), cfg))
         elif args.cmd == "deliberate":
-            from . import thought
-
             print(thought.deliberate(store, make_client(cfg), cfg))
         elif args.cmd == "seed":
             md = Path(args.file).read_text(encoding="utf-8")
@@ -180,4 +247,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

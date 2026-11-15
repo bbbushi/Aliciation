@@ -14,6 +14,7 @@ from .observation_memory import ObservationStoreMixin
 from .learning import LearningStoreMixin
 from .maintenance import SCHEMA as MAINTENANCE_SCHEMA, MaintenanceStoreMixin
 from .worker_context import SCHEMA as WORKER_CONTEXT_SCHEMA, WORKER_SHADOW, WorkerStoreMixin
+from .thought_workspace import SCHEMA as THOUGHT_SCHEMA
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -128,10 +129,18 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         self._llm_event_lock = threading.Lock()
         self._llm_events = deque(maxlen=2000)
         self._llm_events_dropped = 0
-        from . import context_observation
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # GUI 服务是多线程处理请求的；跨线程访问由上层（service 的单写者锁）串行化保证
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        try:
+            self._install(db_path)
+        except BaseException:
+            self.conn.close()
+            raise
+
+    def _install(self, db_path: Path) -> None:
+        from . import context_observation
+
         self.conn.row_factory = sqlite3.Row
         if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'").fetchone():
             columns = {row[1] for row in self.conn.execute("PRAGMA table_info(memories)")}
@@ -147,6 +156,7 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         self.init_learning()
         self.conn.executescript(WORKER_CONTEXT_SCHEMA)
         self.conn.executescript(MAINTENANCE_SCHEMA)
+        self.conn.executescript(THOUGHT_SCHEMA)
         self.purge_source_packets()
 
     def _migrate(self) -> None:
@@ -183,8 +193,10 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
 
     def close(self) -> None:
         from .metrics import flush_calls
-        flush_calls(self)
-        self.conn.close()
+        try:
+            flush_calls(self)
+        finally:
+            self.conn.close()
 
     # ---------- meta ----------
     def meta_get(self, key: str, default: str | None = None) -> str | None:
@@ -206,6 +218,26 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         return float(v) if v else 0.0
 
     # ---------- 对话轮次 ----------
+    def turn_display(self, turn_id: int, *, scope="gui"):
+        from .thought_workspace import valid_basis
+        row = self.conn.execute("SELECT c.basis FROM proactive_turns p JOIN thought_contacts c ON c.id=p.contact_id WHERE p.turn_id=?", (turn_id,)).fetchone()
+        if row is not None:
+            import json
+            if scope != "gui" or not valid_basis(self, json.loads(row[0]), scope=scope):
+                return SOURCE_SHADOW
+        return super().turn_display(turn_id, scope=scope)
+
+    def model_history_turns(self, limit):
+        rows = super().model_history_turns(limit)
+        return [{**dict(row), "proactive": self.conn.execute("SELECT 1 FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone() is not None}
+                for row in rows if self.turn_display(row["id"], scope="gui") != SOURCE_SHADOW
+                or self.turn_source_ids(row["id"])]
+
+    def ordinary_turns(self, rows):
+        return [{**dict(row), "proactive": self.conn.execute("SELECT 1 FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone() is not None}
+                for row in super().ordinary_turns(rows)
+                if self.turn_display(row["id"], scope="gui") != SOURCE_SHADOW]
+
     def add_turn(self, role: str, content: str, ts: float | None = None, *, request_id=None,
                  source_packet_ids=(), source_scope="gui", worker_refs=()) -> int:
         # A short transaction binds the actual row ID to its request before any

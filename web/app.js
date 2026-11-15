@@ -10,6 +10,7 @@ let historyCursor = 0;
 let historyVersion = 0;
 let syncingHistory = false;
 let shuttingDown = false;
+let exitPromptPending = false;
 let activity = null;
 let syncTimer = null;
 let uncertainSend = null;
@@ -24,6 +25,41 @@ let composing = false;
 const turnNodes = new Map();
 const requestNodes = new Map();
 const userWorkerTargets = new WeakMap();
+
+function confirmAction(message) {
+  const dialog = $("#action-confirm");
+  if (dialog.open) return Promise.resolve(false);
+  const previousFocus = document.activeElement;
+  $("#action-confirm-message").textContent = message;
+  dialog.returnValue = "cancel";
+  return new Promise(resolve => {
+    const finish = () => {
+      dialog.removeEventListener("close", finish);
+      previousFocus?.isConnected && previousFocus.focus();
+      resolve(dialog.returnValue === "confirm");
+    };
+    dialog.addEventListener("close", finish);
+    try { dialog.showModal(); }
+    catch (_) {
+      dialog.removeEventListener("close", finish);
+      toast("确认窗口未能打开，请刷新页面后重试。");
+      resolve(false);
+    }
+  });
+}
+$("#action-confirm-cancel").onclick = () => $("#action-confirm").close("cancel");
+$("#action-confirm-ok").onclick = () => $("#action-confirm").close("confirm");
+$("#action-confirm").addEventListener("cancel", event => {
+  event.preventDefault();
+  $("#action-confirm").close("cancel");
+});
+$("#action-confirm").addEventListener("keydown", event => {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    $("#action-confirm").close("cancel");
+  }
+});
 
 async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
@@ -462,6 +498,7 @@ function renderTurnMetadata(node) {
   delete meta.dataset.workerReportKind;
   meta.textContent = fromQQ ? (assistant ? "回复 QQ" : "QQ · 所有者")
     : channel === "local" ? "本机历史（来源未记录）" : "本机网页";
+  if (node.dataset.proactive === "true") meta.textContent += " · Alice主动发起";
   if (!fromQQ) {
     if (node.dataset.workerBound === "true") meta.textContent += unavailable ? " · 协作任务正文当前不可用" : " · 含协作任务资料";
     // GUI 回复在此提前返回；入口必须挂在本分支内（插件仅本机 GUI 通道提供）
@@ -621,6 +658,7 @@ function markTurn(node, turn) {
   noteRequestNode(node, turn.request_id, turn.role);
   const channel = turn.channel || node.dataset.channel || "gui";
   node.dataset.channel = channel;
+  node.dataset.proactive = String(turn.proactive === true);
   const fromQQ = channel.startsWith("qq");
   let meta = node.querySelector(".message-meta");
   if (!meta) {
@@ -823,9 +861,9 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => { clearInterval(syncTimer); clearTimeout(sourceExpiryTimer); });
 $("#chat-refresh").onclick = () => state ? syncHistory() : boot().catch(showStartupError);
-$("#chat-new-attempt").onclick = () => {
+$("#chat-new-attempt").onclick = async () => {
   if (busy || !uncertainSend?.canStartNew) return;
-  if (!window.confirm("原请求已经失败或中断，但用户消息或部分记忆操作可能已保存。作为新的一轮发送可能重复这些操作，并再次产生模型费用。\n确认允许新建一轮吗？")) return;
+  if (!await confirmAction("原请求已经失败或中断，但用户消息或部分记忆操作可能已保存。作为新的一轮发送可能重复这些操作，并再次产生模型费用。\n确认允许新建一轮吗？")) return;
   const text = uncertainSend.text;
   const reference = uncertainSend.workerReference;
   uncertainSend = null;
@@ -841,7 +879,7 @@ $("#chat-new-attempt").onclick = () => {
 async function confirmQQReset() {
   try { await refreshActivity(); } catch (_) { /* 后端仍检查重置与在途任务。 */ }
   if (activity?.channels_enabled) {
-    return window.confirm("已启用 QQ 接入。重置前请先暂停 QQ 桥，并核对待发送或发送结果未知的回复。\n重置后旧 QQ 队列不能进入新会话；已经提交 QQ 的消息仍可能晚到。已完成这些操作，继续吗？");
+    return confirmAction("已启用 QQ 接入。重置前请先暂停 QQ 桥，并核对待发送或发送结果未知的回复。\n重置后旧 QQ 队列不能进入新会话；已经提交 QQ 的消息仍可能晚到。已完成这些操作，继续吗？");
   }
   return true;
 }
@@ -855,7 +893,8 @@ async function boot() {
   connectionStatus("本机已连接");
   setChatNotice("");
   const forceSetup = new URLSearchParams(location.search).has("setup");  // ?setup 可主动回到初始化页
-  if (state.turns > 0 && !forceSetup) await startChat(state);
+  if (state.model_ready === false) showModelOnboarding(state);
+  else if (state.turns > 0 && !forceSetup) await startChat(state);
   else showWelcome(state, forceSetup);
 }
 
@@ -884,6 +923,8 @@ function personaMeta(p) {
 }
 
 function showWelcome(s, reseting = false) {
+  if (s.model_ready === false) { showModelOnboarding(s); return; }
+  restoreModelSettings();
   state = s;
   $("#app").classList.add("hidden");
   $("#welcome").classList.remove("hidden");
@@ -892,7 +933,7 @@ function showWelcome(s, reseting = false) {
     ? "正在重新设置人格。初始化＝从头开始，旧会话会被归档。"
     : s.persona && s.persona.installed
       ? "她已经有一个先装好的人格。也可以换一个人格再开始。"
-      : "先定下她的底色，再开始。";
+      : "模型已连接。导入人格文档，先理解和预览，再安装。";
 
   /* 初始化＝新会话：旧对话和记忆归档（data/archive/）后丢弃 */
   const mem = s.memory || {};
@@ -953,7 +994,7 @@ function showWelcome(s, reseting = false) {
   };
 
   /* 导入 */
-  $("#import-method").innerHTML = personaImportMethodHTML("w-import-method");
+  $("#import-method").innerHTML = personaImportMethodHTML("w-import-method", "material");
   wireImport(
     {
       method: $("#w-import-method"),
@@ -1260,7 +1301,7 @@ async function openPersonaView() {
       label: "重新初始化",
       cls: "btn danger",
       onClick: async () => {
-        const ok = window.confirm(
+        const ok = await confirmAction(
           `重新初始化＝丢掉这 ${p.turns || 0} 轮对话和全部记忆，从「第一次见面」重新开始。\n` +
             "旧数据会先归档到 data/archive/，之后还能找回。确定吗？",
         );
@@ -1469,7 +1510,10 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
           const mode = $("#material-mode").value;
           if (!mode) { feedback("没有可应用的装配模式，请核对支持模式及配置状态。"); return; }
           const description = pv.reset ? `安装会归档当前 ${p?.turns || 0} 轮对话及记忆。` : "本次只更新表达分类，保留现有对话、记忆和生长内容。";
-          if (!window.confirm(`${description}\n装配模式：${mode}。将采用预览中的表达与所选提炼倾向；角色身份、观点和经历未收养。确定应用已预览的版本吗？`)) return;
+          if (!await confirmAction(`${description}\n装配模式：${mode}。将采用预览中的表达与所选提炼倾向；角色身份、观点和经历未收养。确定应用已预览的版本吗？`)) {
+            feedback("安装未提交，已有候选保留。");
+            return;
+          }
           const result = await perform({action: "apply", ...materialBinding(pv), mode, config_revision: settings.config_revision});
           if (result && current()) { toast(result.material_notice || "已应用", 5000); closeModal(); location.reload(); }
         }},
@@ -1480,6 +1524,11 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
       {label: "刷新状态", onClick: async () => {
         try { const r = await request({action: "status"}); if (r.staged) renderPreview(r.staged); else await renderEditor(); }
         catch (e) { toast(e.message, 5000); }
+      }},
+      {label: "准备档案", onClick: async () => {
+        if (pending) return;
+        if (dirty && !await confirmAction("当前有未保存的候选修改。返回准备档案会放弃这些界面修改，已保存候选仍保留。继续吗？")) return;
+        await renderEditor();
       }},
       ...(draft ? [{label: "返回新原稿", onClick: () => renderEditor()}] : []),
       {label: "关闭", onClick: () => { materialViewGeneration++; closeModal(); }},
@@ -1559,7 +1608,7 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
         const text = $("#mat-src").value;
         if (!text.trim()) return toast("请先粘贴原稿");
         if (/<!--\s*alice-expression-/.test(text)) return toast("Alice 导出文件请返回选择兼容恢复；这里需要人格原稿。", 5000);
-        if (staged && !window.confirm("已有一份材料候选。准备新原稿会替换当前候选槽；旧候选仍保存在准备档案中。继续吗？")) return;
+        if (staged && !await confirmAction("已有一份材料候选。准备新原稿会替换当前候选槽；旧候选仍保存在准备档案中。继续吗？")) return;
         preparing = true;
         const nodes = [...document.querySelectorAll("#material-editor input,#material-editor textarea,#material-editor button,#modal-foot button")];
         const previous = nodes.map(n => n.disabled);
@@ -1599,12 +1648,51 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
       }
       const title = document.createElement("h4"); title.textContent = "最近准备档案（查看和继续不调用模型）"; holder.append(title);
       for (const row of r.preparations || []) {
+        const line = document.createElement("div");
+        line.className = "material-archive-row";
         const button = document.createElement("button"); button.className = "btn";
         button.textContent = `${new Date(row.created_at * 1000).toLocaleString()} · ${row.outcome} · 查看`;
         button.onclick = async () => { try { const d = await request({action: "detail", token: row.token});
           if (current() && editor.isConnected) renderPreview(d.preview, true); }
           catch (e) { toast(e.message, 6000); } };
-        holder.append(button);
+        const remove = document.createElement("button");
+        remove.className = "btn danger";
+        remove.textContent = row.can_delete === false ? (row.delete_issue || "暂不可删除") : "删除";
+        remove.disabled = row.can_delete !== true;
+        remove.title = row.delete_issue || "移到已删除档案，可恢复；不影响已安装人格或记忆";
+        remove.onclick = async () => {
+          if (preparing || materialPreparationPending || !current()) return;
+          if (!await confirmAction("删除这份准备档案？\n档案会移到“已删除档案”，可以恢复。\n已安装人格、对话和记忆不会改变。")) return;
+          if (!current()) return;
+          remove.disabled = true;
+          try {
+            const result = await request({action: "delete_preparation", token: row.token, archive_revision: row.archive_revision});
+            if (current()) { toast(result.message); await renderEditor(); }
+          } catch (e) { if (current()) { remove.disabled = false; toast(`删除失败：${e.message}`, 6000); } }
+        };
+        line.append(button, remove);
+        holder.append(line);
+      }
+      if ((r.deleted_preparations || []).length) {
+        const deleted = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = `已删除档案（${r.deleted_preparations_truncated ? "最近 " : ""}${r.deleted_preparations.length} 项）`;
+        deleted.append(summary);
+        for (const row of r.deleted_preparations) {
+          const restore = document.createElement("button");
+          restore.className = "btn ghost";
+          restore.textContent = `${new Date(row.created_at * 1000).toLocaleString()} · ${row.outcome} · 恢复`;
+          restore.onclick = async () => {
+            if (preparing || materialPreparationPending || !current()) return;
+            restore.disabled = true;
+            try {
+              const result = await request({action: "restore_preparation", token: row.token, archive_revision: row.archive_revision});
+              if (current()) { toast(result.message); await renderEditor(); }
+            } catch (e) { if (current()) { restore.disabled = false; toast(`恢复失败：${e.message}`, 6000); } }
+          };
+          deleted.append(restore);
+        }
+        holder.append(deleted);
       }
       $("#modal-foot .btn.primary").disabled = false;
     } catch (e) { if (current()) toast(`档案读取失败：${e.message}`, 5000); }
@@ -1613,7 +1701,7 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
     if (!p) p = await api("/api/persona");
     if (!current()) return;
     if (editActive) {
-      if (reinterpret && !window.confirm("将对已安装原稿重新进行六层理解和轻分类，通常两次模型请求（最多四次）。生成编辑候选后先预览；应用时保留当前对话与记忆。继续吗？")) return;
+      if (reinterpret && !await confirmAction("将对已安装原稿重新进行六层理解和轻分类，通常两次模型请求（最多四次）。生成编辑候选后先预览；应用时保留当前对话与记忆。继续吗？")) return;
       if (reinterpret) toast("正在重新理解原稿并轻分类，请稍候…", 12000);
       const r = await request({action: reinterpret ? "reinterpret_active" : "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision});
       renderPreview(r.preview);
@@ -2289,6 +2377,7 @@ async function loadRuntimeInfo() {
   try {
     const info = await api("/api/runtime", { headers: { "X-Alice-Intent": "runtime" } });
     showRestartCommand(info.restart_command);
+    $("#restart-instructions").classList.toggle("hidden", info.desktop === true);
   } catch (e) {
     showRestartCommand(null);
   }
@@ -2308,6 +2397,7 @@ async function loadSettings() {
 }
 
 function openSettings(section = "general") {
+  if (modelWizard && section === "general") { $("#model-provider").focus(); return; }
   $("#settings-modal").classList.remove("hidden");
   window.AliceUI?.selectSettings(section);
   window.AliceQQ?.open();
@@ -2357,26 +2447,26 @@ $("#thinking").onchange = async () => {
 };
 
 const MODEL_PRESETS = {
-  zhipu: {
-    base_url: "https://open.bigmodel.cn/api/paas/v4/",
-    chat_model: "glm-4.6",
-    cheap_model: "glm-4.5-flash",
-  },
-  deepseek: {
-    base_url: "https://api.deepseek.com",
-    chat_model: "deepseek-v4-pro",
-    cheap_model: "deepseek-flash",
-  },
+  deepseek: {base_url: "https://api.deepseek.com"},
+  zhipu: {base_url: "https://open.bigmodel.cn/api/paas/v4/"},
+  openai: {base_url: "https://api.openai.com/v1"},
 };
-const MODEL_IDS = ["#model-provider", "#model-base-url", "#model-chat", "#model-cheap",
-  "#model-key-mode", "#model-test", "#model-save"];
 let modelRevision = null;
 let modelWorking = false;
+let modelCatalog = null;
+let savedModelConfig = null;
+let modelWizard = false;
 
 function modelBusy(on) {
   modelWorking = on;
-  MODEL_IDS.forEach((id) => { $(id).disabled = on || !modelRevision; });
-  $("#model-key").disabled = on || !modelRevision || $("#model-key-mode").value !== "replace";
+  const loaded = !!modelRevision;
+  ["#model-provider", "#model-key-mode"].forEach(id => { $(id).disabled = on || !loaded; });
+  $("#model-key").disabled = on || !loaded || $("#model-key-mode").value !== "replace";
+  $("#model-fetch").disabled = on || !loaded || !$("#model-provider").value;
+  ["#model-chat", "#model-cheap"].forEach(id => { $(id).disabled = on || !modelCatalog; });
+  const selected = !!modelCatalog && !!$("#model-chat").value && !!$("#model-cheap").value;
+  ["#model-test", "#model-save"].forEach(id => { $(id).disabled = on || !loaded || !selected; });
+  $("#model-save").textContent = modelWizard ? "验证保存并继续" : "验证并保存";
 }
 
 function modelResult(message, kind = "") {
@@ -2385,27 +2475,42 @@ function modelResult(message, kind = "") {
   el.className = "settings-result" + (kind ? ` ${kind}` : "");
 }
 
+function modelOption(select, value, label) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  select.appendChild(option);
+}
+
+function invalidateModelCatalog() {
+  modelCatalog = null;
+  ["#model-chat", "#model-cheap"].forEach(id => {
+    $(id).replaceChildren();
+    modelOption($(id), "", "先获取模型列表");
+  });
+  modelBusy(modelWorking);
+}
+
 async function loadModelSettings() {
   if (modelWorking) return;
   modelRevision = null;
+  invalidateModelCatalog();
   modelBusy(true);
   modelResult("正在读取本机配置…");
   try {
-    const d = await api("/api/model-config", {
-      headers: { "X-Alice-Intent": "model-config" },
-    });
+    const d = await api("/api/model-config", {headers: {"X-Alice-Intent": "model-config"}});
+    savedModelConfig = d;
     modelRevision = d.revision;
-    $("#model-provider").value = d.provider || "custom";
-    $("#model-base-url").value = d.base_url || "";
-    $("#model-chat").value = d.chat_model || "";
-    $("#model-cheap").value = d.cheap_model || "";
-    $("#model-key-mode").value = "keep";
+    const provider = MODEL_PRESETS[d.provider] ? d.provider : d.base_url ? "" : "deepseek";
+    $("#model-provider").value = provider;
+    $("#model-base-url").value = MODEL_PRESETS[provider]?.base_url || d.base_url || "";
+    const canKeep = d.key_present && provider === d.provider;
+    $("#model-key-mode").value = canKeep ? "keep" : "replace";
+    $("#model-key-mode option[value=keep]").disabled = !canKeep;
     $("#model-key").value = "";
-    const source = d.key_source === "file" ? "配置文件" : d.key_source === "environment" ? "环境变量" : "";
-    $("#model-key-status").textContent = d.key_present
-      ? `当前密钥已配置（${source}），不会回显。`
-      : "当前没有可用密钥；请选择“替换密钥”。";
-    modelResult("");
+    $("#model-key-status").textContent = canKeep
+      ? "当前密钥已配置，不会回显。" : "请输入所选供应商的 API Key。";
+    modelResult(d.base_url && !provider ? "现有自定义配置继续生效；本界面目前仅支持切换到三家官方 API。" : "输入密钥后点击“获取模型列表”。");
   } catch (e) {
     modelResult(`读取失败：${e.message}`, "error");
   } finally {
@@ -2414,77 +2519,136 @@ async function loadModelSettings() {
 }
 
 $("#model-provider").onchange = () => {
-  const preset = MODEL_PRESETS[$("#model-provider").value];
-  if (!preset) return;
-  $("#model-base-url").value = preset.base_url;
-  $("#model-chat").value = preset.chat_model;
-  $("#model-cheap").value = preset.cheap_model;
-  modelResult("已填入预设建议值；保存前可继续修改。", "");
+  const provider = $("#model-provider").value;
+  $("#model-base-url").value = MODEL_PRESETS[provider]?.base_url || "";
+  const canKeep = provider === savedModelConfig?.provider && savedModelConfig?.key_present;
+  $("#model-key-mode option[value=keep]").disabled = !canKeep;
+  $("#model-key-mode").value = canKeep ? "keep" : "replace";
+  $("#model-key").value = "";
+  $("#model-key-status").textContent = canKeep ? "可使用此供应商已保存的密钥。" : "更换供应商后，请输入对应的 API Key。";
+  invalidateModelCatalog();
+  modelResult("请获取当前供应商的模型列表。");
 };
-
 $("#model-key-mode").onchange = () => {
-  $("#model-key").disabled = modelWorking || $("#model-key-mode").value !== "replace";
   if ($("#model-key-mode").value !== "replace") $("#model-key").value = "";
+  invalidateModelCatalog();
 };
+$("#model-key").oninput = () => invalidateModelCatalog();
+$("#model-chat").onchange = $("#model-cheap").onchange = () => modelBusy(false);
 
 function modelPayload() {
   return {
     provider: $("#model-provider").value,
-    base_url: $("#model-base-url").value.trim(),
-    chat_model: $("#model-chat").value.trim(),
-    cheap_model: $("#model-cheap").value.trim(),
+    base_url: $("#model-base-url").value,
+    chat_model: $("#model-chat").value,
+    cheap_model: $("#model-cheap").value === "__same__" ? $("#model-chat").value : $("#model-cheap").value,
     replace_api_key: $("#model-key-mode").value === "replace",
     api_key: $("#model-key-mode").value === "replace" ? $("#model-key").value : "",
     revision: modelRevision,
+    catalog_id: modelCatalog,
   };
 }
-
 async function postModel(path, payload) {
-  return api(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Alice-Intent": "model-config" },
-    body: JSON.stringify(payload),
-  });
+  return api(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Alice-Intent": "model-config"},
+    body: JSON.stringify(payload)});
 }
 
-$("#model-test").onclick = async () => {
+$("#model-fetch").onclick = async () => {
   if (!modelRevision || modelWorking) return;
+  invalidateModelCatalog();
   modelBusy(true);
-  modelResult("正在用候选配置测试两个模型，可能需要几十秒…");
+  modelResult("正在查询供应商模型目录…");
+  try {
+    const d = await postModel("/api/model-config/models", modelPayload());
+    modelCatalog = d.catalog_id;
+    ["#model-chat", "#model-cheap"].forEach(id => {
+      $(id).replaceChildren();
+      modelOption($(id), "", "请选择模型");
+    });
+    modelOption($("#model-cheap"), "__same__", "与对话模型相同");
+    for (const model of d.models) {
+      modelOption($("#model-chat"), model, model);
+      modelOption($("#model-cheap"), model, model);
+    }
+    if (savedModelConfig?.provider === $("#model-provider").value && d.models.includes(savedModelConfig.chat_model))
+      $("#model-chat").value = savedModelConfig.chat_model;
+    $("#model-cheap").value = savedModelConfig?.provider === $("#model-provider").value && d.models.includes(savedModelConfig.cheap_model)
+      ? savedModelConfig.cheap_model : "__same__";
+    modelResult(`已获取 ${d.models.length} 个候选模型。请选择对话模型，再验证并保存。`, "ok");
+  } catch (e) {
+    invalidateModelCatalog();
+    modelResult(`获取失败：${e.message}`, "error");
+  } finally { modelBusy(false); }
+};
+$("#model-test").onclick = async () => {
+  if (!modelCatalog || modelWorking) return;
+  modelBusy(true);
+  modelResult("正在验证所选模型，可能需要几十秒…");
   try {
     const d = await postModel("/api/model-config/test", modelPayload());
     modelResult(d.message || "候选连接可用。", "ok");
-  } catch (e) {
-    modelResult(`候选连接失败：${e.message}；当前配置未改变。`, "error");
-  } finally {
-    modelBusy(false);
-  }
+  } catch (e) { modelResult(`验证失败：${e.message}`, "error"); }
+  finally { modelBusy(false); }
 };
-
 $("#model-save").onclick = async () => {
-  if (!modelRevision || modelWorking) return;
+  if (!modelCatalog || modelWorking) return;
   modelBusy(true);
-  modelResult("正在验证候选配置并保存；当前对话轮次会先完成…");
+  modelResult("正在验证所选模型并保存…");
+  let saved = false;
   try {
     const d = await postModel("/api/model-config", modelPayload());
+    saved = true;
     modelRevision = d.revision;
+    savedModelConfig = d;
     $("#model-key-mode").value = "keep";
+    $("#model-key-mode option[value=keep]").disabled = false;
     $("#model-key").value = "";
     $("#model-key-status").textContent = "当前密钥已配置，不会回显。";
-    modelResult("已保存；随后开始的轮次立即使用新配置，无需重启。", "ok");
+    invalidateModelCatalog();
+    modelResult("配置已保存。", "ok");
+    if (modelWizard) await advanceModelOnboarding();
   } catch (e) {
-    modelResult(`保存失败：${e.message}；请关闭设置后重新打开，核对当前配置。`, "error");
-  } finally {
-    modelBusy(false);
+    modelResult(saved ? `配置已保存，但读取下一步失败：${e.message}。可刷新页面继续。` : `保存失败：${e.message}`, "error");
   }
+  finally { modelBusy(false); }
 };
 
-$("#shutdown-btn").onclick = async () => {
+function restoreModelSettings() {
+  $("#model-settings-anchor").after($("#model-settings"));
+  $("#onboarding").classList.add("hidden");
+  modelWizard = false;
+}
+function showModelOnboarding(s) {
+  state = s;
+  modelWizard = true;
+  $("#welcome").classList.add("hidden");
+  $("#app").classList.add("hidden");
+  $("#settings-modal").classList.add("hidden");
+  $("#onboarding").classList.remove("hidden");
+  $("#onboarding-model-host").appendChild($("#model-settings"));
+  $("#model-settings").classList.remove("hidden");
+  $("#onboarding-return").classList.toggle("hidden", !s.model_ready);
+  loadModelSettings();
+}
+async function advanceModelOnboarding() {
+  const s = await api("/api/state");
+  if (!s.model_ready) throw new Error("模型配置尚未完成，请先验证并保存。");
+  restoreModelSettings();
+  if (s.turns > 0 && s.persona?.installed) await startChat(s);
+  else showWelcome(s);
+}
+$("#onboarding-back").onclick = () => showModelOnboarding(state);
+$("#onboarding-return").onclick = () => advanceModelOnboarding().catch(e => modelResult(e.message, "error"));
+
+$("#exit-btn").onclick = async () => {
+  if (shuttingDown || exitPromptPending) return;
+  exitPromptPending = true;
+  await loadRuntimeInfo();
   try { await refreshActivity(); } catch (_) { /* 关闭接口会再核验生命周期。 */ }
   const qqHint = activity?.channels_enabled
     ? "\nQQ 桥会暂停提交；尚未发送或发送结果未知的回复需在桥记录中核对。建议先暂停 QQ 桥。" : "";
-  const ok = window.confirm("确定关闭 Alice 服务吗？\n正在进行的回复与记忆整理会完成，然后服务进程退出。关闭浏览器标签页本身不会退出服务。" + qqHint);
-  if (!ok) return;
+  const ok = await confirmAction("确定退出 Alice 吗？\n会等待当前回复和记忆整理完成，再退出。对话、人格和记忆会保存在本机。" + qqHint);
+  if (!ok) { exitPromptPending = false; return; }
   shuttingDown = true;
   clearInterval(syncTimer);
   $("#settings-modal").classList.add("hidden");
@@ -2494,11 +2658,11 @@ $("#shutdown-btn").onclick = async () => {
   window.AliceEvaluations?.shutdown();
   window.AliceWorkers?.shutdown();
   $("#shutdown-screen").classList.remove("hidden");
-  $("#shutdown-title").textContent = "正在关闭 Alice";
+  $("#shutdown-title").textContent = "正在退出 Alice";
   $("#shutdown-state").textContent = "正在等待当前回复完成，并整理本机记忆…";
   $("#shutdown-return").classList.add("hidden");
   showRestartCommand(restartCommand);
-  $("#shutdown-btn").disabled = true;
+  $("#exit-btn").disabled = true;
   $("#send").disabled = true;
   $("#input").disabled = true;
   try {
@@ -2510,10 +2674,10 @@ $("#shutdown-btn").onclick = async () => {
     const d = await r.json().catch(() => ({}));
     showRestartCommand(d.restart_command);
     if (r.ok && d.status === "closed") {
-      $("#shutdown-title").textContent = "Alice 服务已退出";
+      $("#shutdown-title").textContent = "Alice 已退出";
       $("#shutdown-state").textContent = "当前回复和退出前整理已完成；对话与记忆保存在本机。";
     } else if (d.status === "closed_with_warning") {
-      $("#shutdown-title").textContent = "服务已退出，记忆整理未完成";
+      $("#shutdown-title").textContent = "Alice 已停止，记忆整理未完成";
       $("#shutdown-state").textContent = d.error || "原始对话已保存在本机，重新启动后可继续整理。";
     } else {
       $("#shutdown-title").textContent = "退出失败或未能确认";
@@ -2894,13 +3058,14 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "appearance", "discovery", "qq", "workers", "claude", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "discovery", "thoughts", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
     window.AliceDiscovery?.setSettingsVisible(section === "discovery" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
+    window.AliceThoughts?.setVisible(section === "thoughts" && !byId("settings-modal").classList.contains("hidden"));
   }
   window.AliceUI = { selectSettings, openSettings, closeSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
@@ -3002,6 +3167,7 @@ boot().catch(showStartupError);
     }).observe(panel, { attributes: true, attributeFilter: ["class"] });
   }
   document.addEventListener("keydown", (e) => {
+    if (document.querySelector("dialog.ui-window[open]")) return;
     const navOpen = app.classList.contains("nav-open");
     const root = activeModal || (navOpen ? nav : null);
     if (e.key === "Escape") {
@@ -3023,6 +3189,7 @@ boot().catch(showStartupError);
     else if (!e.shiftKey && (document.activeElement === last || !items.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
   }, true);
   document.addEventListener("focusin", (e) => {
+    if (document.querySelector("dialog.ui-window[open]")) return;
     const root = activeModal || (app.classList.contains("nav-open") ? nav : null);
     if (root && !root.contains(e.target)) focus(focusable(root)[0] || root);
   });
@@ -3123,7 +3290,7 @@ boot().catch(showStartupError);
   const root = document.documentElement;
   const control = document.getElementById("ui-theme");
   const state = document.getElementById("ui-theme-state");
-  const normalize = (value) => value === "legacy" ? "legacy" : "room";
+  const normalize = (value) => ["legacy", "endfield", "minimal"].includes(value) ? value : "room";
   let preference = "room", canSave = true;
   try { preference = normalize(localStorage.getItem(key)); }
   catch { canSave = false; }
@@ -3131,6 +3298,8 @@ boot().catch(showStartupError);
     root.dataset.theme = preference;
     control.value = preference;
     state.textContent = preference === "legacy" ? "已切换到经典视图（轻雾背景，无边框正文）。"
+      : preference === "minimal" ? "已切换到简洁视图（专注对话，详细信息与高级设置按需打开）。"
+      : preference === "endfield" ? "已切换到终末地视图（暖色工业记录风，琥珀强调色，直角细线）。"
       : "已使用房间视图（网格房间、神经球与消息气泡）。";
     if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
   }
@@ -3329,4 +3498,157 @@ boot().catch(showStartupError);
   panelObserver.observe(document.getElementById("app"), { attributes: true, attributeFilter: ["class", "inert"] });
   panelObserver.observe(chat, { attributes: true, attributeFilter: ["inert"] });
   new ResizeObserver(reset).observe(chat);
+})();
+
+
+/* Progressive disclosure: existing controls keep their identity and drafts. */
+(() => {
+  const windows = new Map();
+  let serial = 0;
+  let active = false;
+  const cleanups = [];
+  function open(id) {
+    const item = windows.get(id);
+    if (!item) {
+      const original = document.getElementById(id);
+      if (original?.tagName === "DETAILS") { original.open = true; original.scrollIntoView({block:"nearest"}); }
+      return;
+    }
+    for (const other of windows.values()) if (other !== item && other.dialog.open) other.dialog.close();
+    if (item.dialog.open) return;
+    item.opener = document.activeElement;
+    item.dialog.showModal();
+    item.launcher?.setAttribute("aria-expanded", "true");
+  }
+  function mount(node, title, {statusId, follow = false, closeAction} = {}) {
+    if (!node) return;
+    const assigned = !node.id;
+    const id = node.id || (node.id = `ui-content-${++serial}`);
+    const summary = node.tagName === "DETAILS" ? node.querySelector(":scope > summary") : null;
+    const dialog = document.createElement("dialog");
+    dialog.id = `ui-window-${id}`;
+    dialog.className = "ui-window";
+    dialog.setAttribute("aria-labelledby", `${dialog.id}-title`);
+    const header = document.createElement("header"); header.className = "ui-window-head";
+    const heading = document.createElement("h2"); heading.id = `${dialog.id}-title`; heading.textContent = title;
+    const close = document.createElement("button"); close.type = "button"; close.className = "card-x ui-window-close";
+    close.textContent = "×"; close.setAttribute("aria-label", `关闭${title}`); close.autofocus = true;
+    header.append(heading, close);
+    const body = document.createElement("div"); body.className = "ui-window-body";
+    const parent = node.parentElement;
+    const marker = document.createComment("minimal-window-position");
+    parent.insertBefore(marker, node);
+    const wasOpen = node.open, wasSummaryHidden = summary?.hidden;
+    const observers = [];
+    let launcher = null;
+    if (!follow) {
+      launcher = document.createElement("button"); launcher.type = "button"; launcher.className = "ui-window-entry";
+      launcher.textContent = title; launcher.setAttribute("aria-haspopup", "dialog");
+      launcher.setAttribute("aria-controls", dialog.id); launcher.setAttribute("aria-expanded", "false");
+      parent.insertBefore(launcher, node);
+      launcher.onclick = () => open(id);
+    }
+    if (summary) { summary.hidden = true; node.open = true; }
+    node.classList.add("ui-window-content");
+    body.appendChild(node); dialog.append(header, body); parent.appendChild(dialog);
+    if (statusId) {
+      const original = document.getElementById(statusId);
+      if (original) {
+        const mirror = document.createElement("p"); mirror.className = "ui-window-status"; mirror.setAttribute("role", "status");
+        header.after(mirror);
+        const sync = () => { mirror.textContent = original.textContent; mirror.hidden = !original.textContent.trim(); };
+        const observer = new MutationObserver(sync);
+        observer.observe(original, {childList:true,subtree:true,characterData:true}); observers.push(observer); sync();
+      }
+    }
+    const item = {dialog, launcher, opener:null, destroyed:false}; windows.set(id, item);
+    close.onclick = () => dialog.close();
+    dialog.addEventListener("close", () => {
+      if (item.destroyed) return;
+      launcher?.setAttribute("aria-expanded", "false");
+      if (follow && !node.classList.contains("hidden")) closeAction?.();
+      const target = item.opener?.isConnected && item.opener.getClientRects().length ? item.opener : launcher;
+      target?.focus({preventScroll:true});
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const r = dialog.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
+    });
+    let restoreTrigger = () => {};
+    if (follow) {
+      const trigger = document.getElementById("discovery-preferences-toggle");
+      const prior = ["aria-haspopup", "aria-controls"].map((name) => [name, trigger?.getAttribute(name)]);
+      restoreTrigger = () => prior.forEach(([name, value]) => { if (value === null) trigger?.removeAttribute(name); else trigger?.setAttribute(name, value); });
+      trigger?.setAttribute("aria-haspopup", "dialog");
+      trigger?.setAttribute("aria-controls", dialog.id);
+      const observer = new MutationObserver(() => {
+        if (!node.classList.contains("hidden")) open(id);
+        else if (dialog.open) dialog.close();
+      });
+      observer.observe(node, {attributes:true,attributeFilter:["class"]}); observers.push(observer);
+    }
+    cleanups.push(() => {
+      item.destroyed = true; observers.forEach((observer) => observer.disconnect());
+      if (follow && dialog.open) closeAction?.();
+      if (dialog.open) dialog.close();
+      marker.replaceWith(node); launcher?.remove(); dialog.remove(); restoreTrigger();
+      node.classList.remove("ui-window-content");
+      if (summary) { summary.hidden = wasSummaryHidden; node.open = wasOpen; }
+      if (assigned) node.removeAttribute("id");
+    });
+    return item;
+  }
+  window.AlicePanels = {open};
+  function install() {
+    const thought = document.getElementById("thought-settings");
+    if (thought) {
+      for (const details of thought.querySelectorAll(":scope > details")) {
+        const title = details.querySelector(":scope > summary")?.textContent || "详情";
+        mount(details, title, {statusId:"thought-status"});
+      }
+      mount(document.getElementById("thought-record"), "留下疑问", {statusId:"thought-status"});
+    }
+    mount(document.querySelector(".memory-summary"), "记忆概览");
+    mount(document.getElementById("discovery-learning-preview"), "见闻维护", {statusId:"discovery-status"});
+    mount(document.querySelector("details.discovery-task"), "活动与用量", {statusId:"discovery-status"});
+    mount(document.getElementById("discovery-preferences"), "平台与兴趣", {
+      statusId:"discovery-status", follow:true,
+      closeAction:() => document.getElementById("discovery-preferences-close").click()
+    });
+    const refresh = document.getElementById("chat-refresh");
+    const refreshMarker = document.createComment("sync-button-position");
+    const refreshText = refresh.textContent;
+    refresh.before(refreshMarker);
+    document.querySelector(".chat-header-actions")?.prepend(refresh);
+    refresh.textContent = "同步";
+    cleanups.push(() => { refreshMarker.replaceWith(refresh); refresh.textContent = refreshText; });
+    function closeHidden() {
+      const activeModal = document.querySelector(".modal:not(.hidden)");
+      for (const item of windows.values()) if (item.dialog.open &&
+        (item.dialog.closest(".hidden") || activeModal && !activeModal.contains(item.dialog)
+          || !document.getElementById("shutdown-screen").classList.contains("hidden"))) item.dialog.close();
+    }
+    for (const selector of ["#settings-modal", "#thought-settings", "#app", "#discovery", "#shutdown-screen", "#modal"]) {
+      const owner = document.querySelector(selector);
+      if (owner) { const observer = new MutationObserver(closeHidden); observer.observe(owner, {attributes:true,attributeFilter:["class"]}); cleanups.push(() => observer.disconnect()); }
+    }
+  }
+  function applyTheme() {
+    const next = document.documentElement.dataset.theme === "minimal";
+    if (next === active) return;
+    active = next;
+    if (next) install();
+    else { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); windows.clear(); }
+  }
+  function ready() {
+    applyTheme();
+    new MutationObserver(applyTheme).observe(document.documentElement, {attributes:true,attributeFilter:["data-theme"]});
+    document.addEventListener("invalid", (event) => {
+      const dialog = event.target.closest("dialog.ui-window");
+      if (dialog && !dialog.open) { const entry = [...windows].find(([,item]) => item.dialog === dialog); if (entry) open(entry[0]); }
+    }, true);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, {once:true});
+  else ready();
 })();

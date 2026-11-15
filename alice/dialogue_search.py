@@ -96,11 +96,12 @@ def migrate(coordinator):
 
 
 class SearchSession:
-    def __init__(self, coordinator, request, owner_token, on_progress=None):
+    def __init__(self, coordinator, request, owner_token, on_progress=None, *, background=False):
         self.coordinator, self.service = coordinator, coordinator.service
         self.request_id = request["request_id"]
         self.epoch, self.owner_token = request["session_epoch"], owner_token
         self.scope = request["channel_id"]
+        self.background = background
         # QQ's passive reply window belongs to the original platform message.
         # All searches in this turn share one deadline, with a minute left for
         # the answer and delivery. Invalid timestamps disable search only.
@@ -183,6 +184,13 @@ class SearchSession:
         if not self.coordinator._valid_job_locked(job, self.cancel):
             raise _Stopped("source_revoked")
 
+    def allowed(self, settings):
+        if self.background:
+            from .thought_workspace import settings as autonomy_settings
+            return (settings["enabled"] and self.scope == "gui"
+                    and autonomy_settings(self.service.store)["allow_external"])
+        return self.coordinator._chat_search_allowed(self.scope, settings)
+
     def _item(self, packet, card_id=None, *, reused=False):
         from .discovery_tieba import date_label
         policy = packet.get("reading_policy") or {}
@@ -223,7 +231,7 @@ class SearchSession:
         empty = {"items": [], "counts": {}, "usage": {"queries": 0, "network": 0, "response_bytes": 0, "extra_model_calls": 0}}
         with self.service._lock:
             revision, current = c._config_locked()
-            if not c._chat_search_allowed(self.scope, current):
+            if not self.allowed(current):
                 return {**empty, "status": "blocked", "reason_code": "chat_search_disabled",
                         "message": "本渠道尚未获准搜索；请在本机设置中开启对话搜索及所需的 QQ 资料许可"}
             if self.finished or self.cancel.is_set() or self.epoch != c.dataset_id or revision != self.revision:
@@ -271,7 +279,7 @@ class SearchSession:
             with self.service._lock:
                 return self.hydrate_locked(self.results[memo])
         job = {"id": uuid.uuid4().hex, "epoch": self.epoch, "revision": self.revision, "day": _day(),
-               "generation": c._generation, "kind": "chat_search", "owner_token": self.owner_token,
+               "generation": c._generation, "kind": "exploration_search" if self.background else "chat_search", "owner_token": self.owner_token,
                "parent_request_id": self.request_id, "scope": self.scope, "phase": "queued", "cards": 0}
         result = {**empty, "run_id": job["id"], "status": "empty", "reason_code": "search_no_candidates"}
         # Bounded public keywords and selection metadata make this search
@@ -281,6 +289,8 @@ class SearchSession:
         result["counts"] = {"received": 0, "accepted": 0, "attempted": 0, "readable": 0, "reused": 0, "returned": 0,
                             "before_date": 0, "date_unknown": 0}
         deadline = time.monotonic() + settings["chat_search_timeout_seconds"]
+        if self.background:
+            deadline = min(deadline, self.background_deadline)
         if self.qq_deadline is not None:
             deadline = min(deadline, self.qq_deadline)
         created = False
@@ -289,7 +299,7 @@ class SearchSession:
                   items=[], counts=result["counts"], usage=empty["usage"])
         try:
             with self.service._lock:
-                if not c._chat_search_allowed(self.scope, settings):
+                if not self.allowed(settings):
                     raise _Stopped("chat_search_disabled")
                 self._check(job)
                 if time.monotonic() >= deadline:
@@ -487,7 +497,7 @@ class SearchSession:
             item['existing_observations'] = existing
             context['reusable_memory_ids'] = list(dict.fromkeys(context.get('reusable_memory_ids',[]) + [r['memory_id'] for r in existing]))
             accepted.append(item)
-        if ids:
+        if ids and context.get("user_turn_id"):
             self.service.store.protect_source_turn(context["user_turn_id"], ids, scope=self.scope)
             self.service.store.capture_discussion_user(context["user_turn_id"],
                 self.service.store.turn_display(context["user_turn_id"], scope=self.scope) or "", scope=self.scope, mixed=True)

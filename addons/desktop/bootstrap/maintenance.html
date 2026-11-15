@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alice — 备份与恢复</title><link rel="stylesheet" href="maintenance.css"><script src="maintenance.js" defer></script></head>
+<body><main>
+  <header><span class="eyebrow">ALICE / 本机数据</span><h1>备份与恢复</h1>
+    <p id="description">正在读取本机状态…</p></header>
+  <p id="message" role="status" aria-live="polite"></p>
+  <section class="actions" aria-label="维护操作">
+    <button id="prepare" disabled>备份并退出，准备更新</button>
+    <button id="pause" class="secondary" disabled>暂停 Alice，查看恢复点</button>
+    <button id="resume" hidden>继续启动当前版本</button>
+    <button id="rollback" class="secondary" hidden>撤销未完成的恢复</button>
+  </section>
+  <p class="hint">恢复点含模型 API 配置及其他本机凭据，仅保存在这台电脑。更新准备会等待当前任务结束，不新增退出前模型调用。</p>
+  <details id="points"><summary>恢复点 <span id="count"></span></summary>
+    <p class="hint">恢复后将回到所选时间。之后的对话不会合入恢复结果，当前数据会另行保留。</p>
+    <div id="list"></div>
+  </details>
+  <footer><button id="refresh" class="text-button">刷新状态</button><span id="version"></span></footer>
+</main>
+<dialog id="confirm"><form method="dialog"><h2 id="confirm-title">确认操作</h2>
+  <p id="confirm-message"></p><div class="dialog-actions"><button value="cancel" class="secondary">取消</button>
+  <button id="confirm-ok" value="ok">确认</button></div></form></dialog>
+</body></html>
