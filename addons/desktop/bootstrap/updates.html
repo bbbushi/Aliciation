@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alice — 检查更新</title><link rel="stylesheet" href="maintenance.css"><script src="updates.js" defer></script></head>
+<body><main><header><span class="eyebrow">ALICE / 应用更新</span><h1>检查更新</h1><p id="current">正在读取版本…</p></header>
+<p id="message" role="status" aria-live="polite">当前更新源为私有仓库，需要你的 GitHub 读取授权。</p>
+<section aria-label="GitHub 读取授权"><label for="token">GitHub 只读访问令牌</label>
+<input id="token" class="token-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+<p class="hint">创建 fine-grained token，仅选择 bbbushi/Aliciation，Contents 设为 Read-only。令牌只保留在本次运行内存中，不写入配置、日志或数据备份。</p>
+<div class="point-actions"><button id="help" class="text-button">打开 GitHub 创建令牌</button><button id="forget" class="text-button" hidden>清除本次授权</button></div></section>
+<section id="release" hidden><h2 id="version"></h2><p id="notes" class="release-notes"></p></section>
+<section class="actions"><button id="check">检查更新</button><button id="download" hidden>下载更新</button><button id="install" hidden>备份后安装并重启…</button></section>
+<p class="hint">下载后会先验签。确认安装后等待当前任务结束并保存恢复点；失败时保留数据和恢复入口。</p>
+<footer><span>发布源：GitHub · bbbushi/Aliciation · 开发通道</span></footer></main>
+<dialog id="confirm"><form method="dialog"><h2>备份后安装并重启？</h2><p>将等待当前任务完成、创建并核验恢复点，然后替换应用并重新启动。更新准备不会新增退出前模型调用。</p><div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button value="ok">确认更新</button></div></form></dialog>
+</body></html>

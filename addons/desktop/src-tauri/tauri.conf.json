@@ -1,9 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Alice",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "app.aliceharness.desktop",
-  "build": { "frontendDist": "../bootstrap" },
+  "build": {
+    "frontendDist": "../bootstrap"
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [],
@@ -14,8 +16,21 @@
   },
   "bundle": {
     "active": false,
-    "icon": ["icons/icon.png"],
-    "targets": ["app"],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "targets": [
+      "app"
+    ],
     "shortDescription": "Alice 本机陪伴应用"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENENzhGNEFEMzJFNzI4MUQKUldRZEtPY3lyZlI0elY5c2RtR1ZQOUUrRVphaFVKVDV3Zm5BOE5EZzkvaGZ3aXkzSXVaQTJaSm8K",
+      "endpoints": [
+        "https://github.com/bbbushi/Aliciation/releases/download/desktop-dev/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
   }
 }

@@ -188,6 +188,9 @@ def main():
     release.mkdir(parents=True, exist_ok=False)
     minimum = max(11, int(str(sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET")).split(".")[0]))
     info = {"schema": 1, "build_id": build_id, "version": config["version"],
+            "application_id": config["identifier"], "target": "darwin-aarch64",
+            "update_channel": "desktop-dev",
+            "updater_pubkey_sha256": hashlib.sha256((PACKAGING / "updater.pub").read_text().strip().encode()).hexdigest(),
             "source_revision": revision, "source_dirty": dirty, "channel": "local-development",
             "platform": "macos-arm64", "minimum_macos": f"{minimum}.0", "python": platform.python_version(),
             "python_dependency_lock_sha256": sha(LOCK),
@@ -228,6 +231,7 @@ def main():
         plistlib.dump(plist, stream)
     (content / "PkgInfo").write_bytes(b"APPL????")
     write_json(content / "Resources/build-info.json", info)
+    write_json(content / "Resources/release.json", info)
     licenses(content / "Resources/ThirdPartyNotices")
     binaries = inspect_app(app, info)
     run("/usr/bin/plutil", "-lint", content / "Info.plist")

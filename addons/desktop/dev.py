@@ -16,6 +16,7 @@ import tempfile
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="只编译，不启动窗口或后端")
+    parser.add_argument("--signer", action="store_true", help="只编译发布签名工具，不启动 Alice")
     args = parser.parse_args()
     desktop = Path(__file__).resolve().parent
     env = os.environ.copy()
@@ -34,7 +35,11 @@ def main() -> int:
         env["CARGO_HOME"] = str(local / "cargo")
         env["RUSTUP_HOME"] = str(local / "rustup")
         env["PATH"] = str(binary.parent) + os.pathsep + env.get("PATH", "")
-    return subprocess.call([cargo, "build" if args.build else "run", "--locked",
+    extra = []
+    if args.signer:
+        extra = ["--release", "--features", "release-tools", "--bin", "alice-update-signer"]
+        env.setdefault("CARGO_PROFILE_RELEASE_STRIP", "none")
+    return subprocess.call([cargo, "build" if args.build or args.signer else "run", "--locked", *extra,
                             "--manifest-path", str(desktop / "src-tauri/Cargo.toml")], env=env, cwd=desktop)
 
 
