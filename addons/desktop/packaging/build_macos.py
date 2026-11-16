@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import ast
+import argparse
 import hashlib
 import importlib.metadata as metadata
 import json
@@ -47,7 +48,7 @@ def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def resources(manifest):
+def resources(manifest, overrides=None):
     result = []
     seen = set()
     for item in manifest["include"]:
@@ -67,8 +68,9 @@ def resources(manifest):
             if target.is_absolute() or ".." in target.parts or target.as_posix() in seen:
                 raise ValueError(f"Invalid or duplicate resource: {target}")
             seen.add(target.as_posix())
-            result.append({"source": path.relative_to(ROOT).as_posix(),
-                           "target": target.as_posix(), "sha256": sha(path)})
+            packaged = (overrides or {}).get(path.relative_to(ROOT).as_posix(), path)
+            result.append({"source": packaged.relative_to(ROOT).as_posix(),
+                           "target": target.as_posix(), "sha256": sha(packaged)})
     return result
 
 
@@ -160,6 +162,12 @@ def inspect_app(app, info):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--freeze-chat-ui-at-head", action="store_true",
+                        help="冻结 HEAD 的 web/app.js，排除另一棒未提交的聊天界面修改；保留其原工作文件")
+    parser.add_argument("--freeze-main-ui-from-build",
+                        help="沿用指定本机包的主页 HTML/CSS 与 room.js，排除另一棒正在修改的主界面；不改工作文件")
+    args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64" or sys.version_info[:2] != (3, 14):
         raise SystemExit("This build requires macOS arm64 with the locked CPython 3.14 environment")
     expected_env = PACKAGING / ".venv"
@@ -181,6 +189,33 @@ def main():
         raise ValueError("Host and core versions must match")
     manifest = json.loads((PACKAGING / "resource-manifest.json").read_text())
     revision = capture("git", "rev-parse", "HEAD")
+    overrides = {}
+    override_origins = {}
+    if args.freeze_chat_ui_at_head:
+        snapshot = BUILD / "staging/frozen-web/app.js"
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(subprocess.check_output(["git", "show", "HEAD:web/app.js"], cwd=ROOT))
+        overrides["web/app.js"] = snapshot
+        override_origins["web/app.js"] = {"revision": revision}
+    if args.freeze_main_ui_from_build:
+        previous_id = args.freeze_main_ui_from_build
+        if not previous_id or Path(previous_id).name != previous_id or previous_id in (".", ".."):
+            raise ValueError("Expected a local release build identifier")
+        previous_app = BUILD / "releases" / previous_id / "Alice.app"
+        run("/usr/bin/codesign", "--verify", "--deep", "--strict", previous_app)
+        previous = json.loads((previous_app / "Contents/Resources/build-info.json").read_text())
+        if previous["build_id"] != previous_id:
+            raise ValueError("Previous bundle build identity mismatch")
+        digests = {item["target"]: item["sha256"] for item in previous["resources"]}
+        for name in ("web/index.html", "web/style.css", "web/room.js"):
+            source = previous_app / "Contents/Resources/backend/_internal" / name
+            if sha(source) != digests.get(name):
+                raise ValueError(f"Previous bundle resource mismatch: {name}")
+            snapshot = BUILD / "staging/frozen-main" / name
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, snapshot)
+            overrides[name] = snapshot
+            override_origins[name] = {"revision": previous["source_revision"], "build_id": previous_id}
     dirty = bool(capture("git", "status", "--porcelain"))
     now = dt.datetime.now(dt.timezone.utc)
     build_id = now.strftime("%Y%m%dT%H%M%SZ") + "-" + revision[:8] + ("-dirty" if dirty else "")
@@ -197,7 +232,8 @@ def main():
             "cargo_lock_sha256": sha(DESKTOP / "src-tauri/Cargo.lock"),
             "signing": "ad-hoc", "notarized": False, "human_acceptance": "pending",
             "maintenance_protocol": 1, "data_format": {"read": [1], "write": 1, "migration_from": []},
-            "components": manifest["components"], "resources": resources(manifest)}
+            "components": manifest["components"], "resources": resources(manifest, overrides),
+            "resource_overrides": {name: {**override_origins[name], "sha256": sha(path)} for name, path in overrides.items()}}
     staging = BUILD / "staging"
     write_json(staging / "build-info.json", info)
     env = os.environ.copy()

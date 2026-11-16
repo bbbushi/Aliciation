@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>装扮 Alice 小球</title><link rel="stylesheet" href="bubble.css"><script src="bubble-appearance.js" defer></script></head><body class="settings-page"><main>
+<span class="label">ALICE · 装扮</span><h1>选一个喜欢的样子</h1><p>只改变桌面小球的图案和颜色，保存在这台电脑上。</p>
+<div class="dress-preview"><div id="avatar-preview" data-accent="sage" aria-hidden="true">A</div><span>小球预览</span></div>
+<form id="dress-form"><fieldset><legend>图案</legend><div class="dress-options">
+<label><input type="radio" name="avatar" value="letter" checked><span>A</span>字母</label><label><input type="radio" name="avatar" value="orb"><span>●</span>小球</label><label><input type="radio" name="avatar" value="moon"><span>☾</span>月亮</label><label><input type="radio" name="avatar" value="flower"><span>✿</span>小花</label>
+</div></fieldset><fieldset><legend>配色</legend><div class="dress-options">
+<label><input type="radio" name="accent" value="sage" checked><span class="swatch" data-accent="sage"></span>苔绿</label><label><input type="radio" name="accent" value="blue"><span class="swatch" data-accent="blue"></span>雾蓝</label><label><input type="radio" name="accent" value="rose"><span class="swatch" data-accent="rose"></span>蔷薇</label><label><input type="radio" name="accent" value="amber"><span class="swatch" data-accent="amber"></span>琥珀</label>
+</div></fieldset><div class="actions"><button id="save" type="submit">保存装扮</button><button id="dress-cancel" type="button">取消</button></div><p id="status" role="status" aria-live="polite">正在读取装扮…</p></form>
+</main></body></html>

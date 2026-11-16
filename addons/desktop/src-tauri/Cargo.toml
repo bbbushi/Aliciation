@@ -1,6 +1,6 @@
 [package]
 name = "alice-desktop"
-version = "0.1.5"
+version = "0.1.9"
 edition = "2021"
 default-run = "alice-desktop"
 
@@ -8,7 +8,7 @@ default-run = "alice-desktop"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

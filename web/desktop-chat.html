@@ -1,0 +1,10 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Alice · 桌面聊天</title><link rel="stylesheet" href="/desktop-chat.css"><script src="/desktop-speech.js" defer></script><script src="/desktop-chat.js" defer></script></head><body>
+<main class="panel"><header id="chat-drag-handle" title="按住顶部空白区域拖动聊天框"><div><span class="eyebrow"><span class="drag-grip" aria-hidden="true">⠿</span> ALICE</span><span id="connection">正在连接…</span></div><nav aria-label="聊天窗口"><button id="pin" type="button" aria-label="固定展开" aria-pressed="false" title="固定展开">固定</button><button id="main" type="button" title="打开主界面">↗</button><button id="collapse" type="button" aria-label="收起聊天" title="收起">−</button></nav></header>
+<div id="messages" role="log" aria-label="近期对话" aria-live="off" tabindex="0"><p class="empty">在这里，接着聊。</p></div>
+<button id="latest" type="button" hidden>回到最新 · 继续跟随</button>
+<p id="notice" role="status" aria-live="polite"></p>
+<div id="recovery" hidden><button id="check" type="button">同步原请求</button><button id="new-request" type="button" hidden>核对后重新发送</button></div>
+<form id="composer"><label class="sr-only" for="input">给 Alice 的消息</label><textarea id="input" placeholder="跟 Alice 说句话…" rows="2" maxlength="12000"></textarea><button id="send" type="submit" disabled aria-label="发送">↑</button></form>
+<footer><span>Enter 发送 · Shift+Enter 换行</span><button id="settings" type="button" aria-label="桌面气泡设置">气泡设置</button></footer>
+<dialog id="confirm-new"><p>未找到可恢复的回复。确认已核对记录，作为新请求再次发送原消息？这可能再次调用模型。</p><div><button id="cancel-new" type="button">取消</button><button id="accept-new" type="button">确认新请求</button></div></dialog>
+</main></body></html>

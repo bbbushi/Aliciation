@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 mod maintenance;
 mod updates;
+mod bubble;
 use std::{
     collections::HashMap,
     fs,
@@ -61,6 +62,7 @@ impl Backend {
             }
             return;
         }
+        bubble::hide(app);
         if let Some(child) = self.child.lock().unwrap().as_mut() {
             if child.try_wait().ok().flatten().is_some() {
                 self.allow_exit.store(true, Ordering::SeqCst);
@@ -93,6 +95,7 @@ impl Backend {
 }
 
 fn failure(app: &tauri::AppHandle, message: &str) {
+    bubble::show_main(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title(message);
         // Fixed function + JSON string; never insert backend text as HTML or script.
@@ -202,6 +205,9 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
                     }
                     *state.identity.lock().unwrap() = Some((instance.to_owned(), nonce.clone()));
                     *state.origin.lock().unwrap() = Some(url.origin().ascii_serialization());
+                    if bubble::authorize_origin(&app,&url.origin().ascii_serialization()).is_err() {
+                        failure(&app,"Alice 桌面气泡授权失败，请退出后重试");
+                    }
                     if !state.closing.load(Ordering::SeqCst) {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.navigate(url);
@@ -291,33 +297,35 @@ fn main() {
     let state = Arc::new(Backend::new());
     let setup_state = state.clone();
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![maintenance::maintenance_action,updates::update_action])
+        .invoke_handler(tauri::generate_handler![maintenance::maintenance_action,updates::update_action,bubble::bubble_action])
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(updates::Updates::default()))
+        .manage(Arc::new(bubble::Bubble::default()))
         .menu(|app| {
             use tauri::menu::{Menu, MenuItem, Submenu};
             let menu = Menu::default(app)?;
             let item = MenuItem::with_id(app, "alice_maintenance", "备份与恢复…", true, None::<&str>)?;
             let check = MenuItem::with_id(app, "alice_updates", "检查更新…", true, None::<&str>)?;
             menu.append(&Submenu::with_items(app, "数据与更新", true, &[&check,&item])?)?;
+            let bubbles = MenuItem::with_id(app,"bubble_settings","桌面气泡设置…",cfg!(target_os="macos"),None::<&str>)?;
+            menu.append(&Submenu::with_items(app,"桌面",true,&[&bubbles])?)?;
             Ok(menu)
         })
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "alice_maintenance" { maintenance::open(app); }
             if event.id().as_ref() == "alice_updates" { updates::open(app); }
+            bubble::menu(app,event.id().as_ref());
         })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            bubble::show_main(app);
         }))
         .manage(state)
         .setup(move |app| {
+            bubble::initialize(app.handle())?;
             let navigation = setup_state.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Alice")
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
                 .inner_size(1100.0, 780.0)
                 .min_inner_size(760.0, 560.0)
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
@@ -346,12 +354,20 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(window.label(),"bubble-anchor"|"bubble-chat") {
+                if let WindowEvent::Moved(position)=event {bubble::moved(window.app_handle(),window.label(),*position);}
+            }
+            if matches!(window.label(),"bubble-anchor"|"bubble-actions"|"bubble-preview"|"bubble-chat") {
+                if let WindowEvent::CloseRequested {api,..}=event {
+                    api.prevent_close();bubble::collapse(window.app_handle());
+                }
+            }
             if window.label() != "main" { return; }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<Arc<Backend>>();
                 if !state.allow_exit.load(Ordering::SeqCst) {
                     api.prevent_close();
-                    state.quit(window.app_handle());
+                    if !bubble::close_main_to_background(window.app_handle()) {state.quit(window.app_handle());}
                 }
             }
         })

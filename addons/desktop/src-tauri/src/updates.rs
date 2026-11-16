@@ -406,7 +406,7 @@ pub async fn update_action(window: WebviewWindow, app: tauri::AppHandle, updates
     Ok(state(&app,&updates))
 }
 
-fn private_directory(path: &Path) -> Result<(),String> {
+pub(super) fn private_directory(path: &Path) -> Result<(),String> {
     if path.ancestors().any(|p| p.is_symlink()) { return Err("更新维护目录不能是符号链接".into()); }
     fs::create_dir_all(path).map_err(|_| "无法建立更新维护目录")?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; fs::set_permissions(path,fs::Permissions::from_mode(0o700)).map_err(|_| "无法保护更新维护目录")?; }
