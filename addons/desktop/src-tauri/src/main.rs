@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 mod maintenance;
+mod updates;
 use std::{
     collections::HashMap,
     fs,
@@ -28,6 +29,8 @@ struct Backend {
     suspended: AtomicBool,
     maintenance_pending: AtomicBool,
     maintenance_busy: AtomicBool,
+    update_pending: AtomicBool,
+    backup_completed: AtomicBool,
     replies: Mutex<HashMap<String, mpsc::Sender<Value>>>,
 }
 
@@ -45,6 +48,8 @@ impl Backend {
             suspended: AtomicBool::new(false),
             maintenance_pending: AtomicBool::new(false),
             maintenance_busy: AtomicBool::new(false),
+            update_pending: AtomicBool::new(false),
+            backup_completed: AtomicBool::new(false),
             replies: Mutex::new(HashMap::new()),
         }
     }
@@ -217,6 +222,7 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
                     maintenance::open(&app);
                 }
                 Some("backup_started" | "backup_complete" | "backup_failed") => {
+                    if frame["event"] == "backup_complete" { state.backup_completed.store(true,Ordering::SeqCst); }
                     if frame["event"] == "backup_failed" {
                         state.suspended.store(true, Ordering::SeqCst);
                         maintenance::open(&app);
@@ -249,7 +255,14 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
                 _ => break None,
             }
         };
-        state.maintenance_pending.store(false, Ordering::SeqCst);
+        if !state.update_pending.load(Ordering::SeqCst) { state.maintenance_pending.store(false, Ordering::SeqCst); }
+        if state.update_pending.load(Ordering::SeqCst) {
+            state.reader_done.store(true,Ordering::SeqCst);
+            let clean=exit_status.is_some_and(|status| status.success()) && state.backup_completed.load(Ordering::SeqCst)
+                && state.closing.load(Ordering::SeqCst) && !state.suspended.load(Ordering::SeqCst);
+            updates::finish(app.clone(),state.clone(),clean);
+            return;
+        }
         if state.closing.load(Ordering::SeqCst) && exit_status.is_some_and(|status| status.success()) {
             state.allow_exit.store(true, Ordering::SeqCst);
             app.exit(0);
@@ -272,19 +285,26 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let initial_nonce = args.windows(2).find(|pair| pair[0]=="--alice-update-nonce")
+        .map(|pair|pair[1].clone()).filter(|value| value.len()==32 && value.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
     let state = Arc::new(Backend::new());
     let setup_state = state.clone();
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![maintenance::maintenance_action])
+        .invoke_handler(tauri::generate_handler![maintenance::maintenance_action,updates::update_action])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(Arc::new(updates::Updates::default()))
         .menu(|app| {
             use tauri::menu::{Menu, MenuItem, Submenu};
             let menu = Menu::default(app)?;
             let item = MenuItem::with_id(app, "alice_maintenance", "备份与恢复…", true, None::<&str>)?;
-            menu.append(&Submenu::with_items(app, "数据与更新", true, &[&item])?)?;
+            let check = MenuItem::with_id(app, "alice_updates", "检查更新…", true, None::<&str>)?;
+            menu.append(&Submenu::with_items(app, "数据与更新", true, &[&check,&item])?)?;
             Ok(menu)
         })
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "alice_maintenance" { maintenance::open(app); }
+            if event.id().as_ref() == "alice_updates" { updates::open(app); }
         })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
@@ -314,7 +334,7 @@ fn main() {
             let handle = app.handle().clone();
             let backend = setup_state.clone();
             thread::spawn(move || {
-                if start(handle.clone(), backend.clone(), None).is_err() {
+                if start(handle.clone(), backend.clone(), initial_nonce).is_err() {
                     failure(&handle, "Alice 启动失败，请检查运行环境与日志后关闭窗口");
                 }
                 backend.launch_done.store(true, Ordering::SeqCst);

@@ -26,7 +26,7 @@ pub fn notify(app: &tauri::AppHandle, frame: &Value) {
     }
 }
 
-fn alive(state: &Backend) -> Result<bool, String> {
+pub(super) fn alive(state: &Backend) -> Result<bool, String> {
     let mut child = state.child.lock().unwrap();
     match child.as_mut() {
         Some(child) => child.try_wait().map(|status| status.is_none()).map_err(|_| "无法确认后端是否退出".into()),
@@ -34,7 +34,7 @@ fn alive(state: &Backend) -> Result<bool, String> {
     }
 }
 
-fn request(state: &Backend, operation: &str, reason: Option<&str>) -> Result<Value, String> {
+pub(super) fn request(state: &Backend, operation: &str, reason: Option<&str>) -> Result<Value, String> {
     let identity = state.identity.lock().unwrap().clone().ok_or("后端尚未就绪，请稍候")?;
     let request_id = uuid::Uuid::new_v4().simple().to_string();
     let mut frame = json!({"protocol":1,"instance_id":identity.0,"nonce":identity.1,"request_id":request_id,"op":operation});
@@ -53,7 +53,7 @@ fn request(state: &Backend, operation: &str, reason: Option<&str>) -> Result<Val
     result
 }
 
-fn helper(app: &tauri::AppHandle, action: &str, backup: Option<&str>, nonce: Option<&str>) -> Result<Value, String> {
+pub(super) fn helper(app: &tauri::AppHandle, action: &str, backup: Option<&str>, nonce: Option<&str>) -> Result<Value, String> {
     let root = app.path().resolve("Alice", tauri::path::BaseDirectory::LocalData).map_err(|_| "数据目录不可用")?;
     let mut command = super::backend_command(app).map_err(|_| "包内维护程序不可用")?;
     command.arg("--user-dir").arg(&root).arg("maintenance").arg(action);

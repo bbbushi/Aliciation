@@ -32,3 +32,5 @@ dialog::backdrop { background: #0009; }
 #confirm-message { white-space: pre-wrap; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 [hidden] { display: none !important; }
+.release-notes { white-space: pre-wrap; }
+.token-input { display: block; width: 100%; margin-top: 10px; padding: 11px; border: 1px solid #48556a; border-radius: 6px; background: #101720; color: #e3e7ee; font: inherit; }
