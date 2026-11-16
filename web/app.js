@@ -304,6 +304,12 @@ function renderTurnBubbles(node, raw) {
   node.classList.toggle("silence", !(raw || "").trim());
 }
 
+/* 历史同步与句级揭示共存：正在按节奏揭示的轮次，内容对齐进缓冲而不是整段覆盖打断节奏。 */
+function renderTurnText(node, text) {
+  if (revealActive(node)) revealSync(node, text, (container, shown) => { renderTurnBubbles(container, shown); scrollBottom(); });
+  else renderTurnBubbles(node, text);
+}
+
 function bubble(role, text, { animate = false } = {}) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
@@ -613,7 +619,7 @@ function applySourceUpdates(updates) {
     const node = turnNodes.get(update.id);
     if (!node?.isConnected || typeof update.source_bound !== "boolean") continue;
     markUserWorkerTarget(node, update);
-    if (typeof update.content === "string") renderTurnBubbles(node, historyDisplayContent(node, update));
+    if (typeof update.content === "string") renderTurnText(node, historyDisplayContent(node, update));
     markSourceProjection(node, update);
   }
   scheduleSourceExpiry();
@@ -683,7 +689,7 @@ function mergeTurn(turn) {
   const key = requestKey(turn.request_id, turn.role);
   let node = turnNodes.get(turn.id) || (key && requestNodes.get(key));
   if (!node || !node.isConnected) node = bubble(turn.role, "");
-  if (turn.role === "assistant") renderTurnBubbles(node, historyDisplayContent(node, turn, "（沉默）"));
+  if (turn.role === "assistant") renderTurnText(node, historyDisplayContent(node, turn, "（沉默）"));
   else renderTurnBubbles(node, turn.content || "");
   markTurn(node, turn);
   const later = [...$("#msgs").querySelectorAll(".msg[data-turn-id]")]
@@ -2713,7 +2719,8 @@ function ensureThinking(node) {
 
 /* ---------- 句级揭示：增量到达后按句子节奏显示（先思考后正文） ---------- */
 /* 后端在许可检查后一次性发布缓冲；这里负责把发布拆成一句一句的节奏。
-   切句不越过未闭合的括号/标记；done/error 时冲刷兜底，保证最终正文与存储一致。 */
+   切句不越过未闭合的括号/标记。done 时全文对齐进缓冲继续按节奏放完，余下无句界则一次收尾；
+   全文与已显示部分对不上时立即整段显示兜底；error 时冲刷，保证最终正文与存储一致。 */
 const revealStates = new WeakMap();
 const REVEAL_ENDS = new Set(["。", "！", "？", "?", "!", "…", "；", ";", "\n"]);
 const REVEAL_OPENERS = "【（(「『“《";
@@ -2764,7 +2771,15 @@ function revealStep(txt) {
   if (!st) return;
   st.timer = 0;
   const next = revealNextSentence(st.pending);
-  if (!next) return;  // 句界未到，等下一段增量；done/error 冲刷兜底
+  if (!next) {
+    if (st.final && st.pending) {  // 回复已完整且余下无句界：尾部一次收尾，不悬着
+      st.shown += st.pending;
+      st.pending = "";
+      st.render(txt, st.shown);
+      revealStates.delete(txt);
+    }
+    return;  // 句界未到，等下一段增量；done/error 冲刷兜底
+  }
   const [sentence, rest] = next;
   st.pending = rest;
   st.shown += sentence;
@@ -2775,7 +2790,32 @@ function revealStep(txt) {
 function revealPush(txt, piece, render) {
   const st = revealState(txt, render);
   st.pending += piece;
+  st.final = false;  // 新增量还在路上，未到收尾时机
   if (!st.timer) st.timer = setTimeout(() => revealStep(txt), 0);  // 首句立即可见
+}
+
+function revealActive(txt) {
+  const st = revealStates.get(txt);
+  return !!st && (!!st.timer || !!st.pending);
+}
+
+function revealSync(txt, finalText, render) {
+  // done 到达：不把全文一次性倒出，对齐进句级缓冲按原节奏放完。
+  // 全文与已显示部分对不上时立即整段显示兜底，保证最终与存储一致。
+  if (typeof finalText !== "string" || !finalText) { revealFlush(txt); return; }
+  const st = revealState(txt, render);
+  st.final = true;
+  if (st.timer) { clearTimeout(st.timer); st.timer = 0; }
+  if (st.shown && !finalText.startsWith(st.shown)) {
+    st.shown = finalText;
+    st.pending = "";
+    st.render(txt, st.shown);
+    revealStates.delete(txt);
+    return;
+  }
+  st.pending = finalText.slice(st.shown.length);
+  if (st.pending) st.timer = setTimeout(() => revealStep(txt), 0);
+  else revealStates.delete(txt);
 }
 
 function revealComplete(txt) {  // 立即显示全部剩余（思考块兜底：不能丢字）
@@ -2842,10 +2882,11 @@ function handleEvent(ev, node, userNode, requestId) {
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {
-    revealFlush(node);  // 未揭示尾部由完整回复覆盖
+    // 完整回复对齐进句级缓冲，按句子节奏放完，不一次性倒出（对不上时立即显示兜底）
+    if (ev.reply) revealSync(node, ev.reply, (container, shown) => { renderTurnBubbles(container, shown); scrollBottom(); });
+    else revealFlush(node);  // 没有完整回复：未揭示尾部不再等待
     revealComplete(node.querySelector("details.think .r-txt"));  // 思考不能丢字
-    if (ev.reply && ev.reply !== raw()) renderTurnBubbles(node, ev.reply);
-    if (!raw().trim()) renderTurnBubbles(node, "（沉默）");
+    if (!raw().trim() && !revealActive(node)) renderTurnBubbles(node, "（沉默）");
     renderMemory(ev.memory);
     if (ev.session_epoch) sessionEpoch = ev.session_epoch;
     const id = ev.request_id || requestId;
@@ -3290,7 +3331,7 @@ boot().catch(showStartupError);
   const root = document.documentElement;
   const control = document.getElementById("ui-theme");
   const state = document.getElementById("ui-theme-state");
-  const normalize = (value) => ["legacy", "endfield", "minimal"].includes(value) ? value : "room";
+  const normalize = (value) => ["legacy", "minimal"].includes(value) ? value : "room";
   let preference = "room", canSave = true;
   try { preference = normalize(localStorage.getItem(key)); }
   catch { canSave = false; }
@@ -3299,7 +3340,6 @@ boot().catch(showStartupError);
     control.value = preference;
     state.textContent = preference === "legacy" ? "已切换到经典视图（轻雾背景，无边框正文）。"
       : preference === "minimal" ? "已切换到简洁视图（专注对话，详细信息与高级设置按需打开）。"
-      : preference === "endfield" ? "已切换到终末地视图（暖色工业记录风，琥珀强调色，直角细线）。"
       : "已使用房间视图（网格房间、神经球与消息气泡）。";
     if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
   }
