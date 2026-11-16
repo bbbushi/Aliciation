@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alice 消息流 · B 舱壁 Bulkhead</title>
+<style>
+/* ============ 曲线与时长：全页唯一定义（PRINCIPLES §2.2/2.3） ============ */
+:root{
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg:#0d1114; --srf:#11171d; --panel:#141c24; --panel-user:#151f29;
+  --line:#263443; --line-user:#31424f;
+  --tx:#ccd6dd; --dim:#7d8b96; --faint:#57646e;
+  --acc:#8fb8cc; --acc-dim:#42606f; --ok:#7fa07f; --bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+.app{height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+
+/* ============ 08 演示装置 ============ */
+.demo{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px 7px}
+.demo-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.demo-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.dbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.dbtn:active{transform:scale(.97)}
+.dbtn[aria-current]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.dsep{width:1px;height:14px;background:var(--line);margin:0 5px}
+.demo-note{margin:6px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+/* 开关（罕见档：滑块 200ms · --ease-in-out，可中断） */
+.sw{display:inline-flex;align-items:center;gap:8px;background:none;border:0;border-radius:2px;
+  color:var(--dim);font:11.5px/1 var(--sans);padding:5px 4px;
+  transition:color 140ms ease,transform 160ms var(--ease-out)}
+.sw:active{transform:scale(.97)}
+.sw .knob{position:relative;width:30px;height:16px;border-radius:2px;border:1px solid var(--line);
+  background:var(--bg);transition:background-color 160ms ease,border-color 160ms ease}
+.sw .knob::after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:1px;
+  background:var(--dim);transition:transform 200ms var(--ease-in-out),background-color 160ms ease}
+.sw[aria-pressed="true"]{color:var(--acc)}
+.sw[aria-pressed="true"] .knob{background:#17262f;border-color:var(--acc-dim)}
+.sw[aria-pressed="true"] .knob::after{transform:translateX(14px);background:var(--acc)}
+@media (hover:hover) and (pointer:fine){
+  .dbtn:hover{color:#b9c6cf}
+  .sw:hover{color:#b9c6cf}
+}
+
+/* ============ 01 会话头栏 ============ */
+.head{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:11px 18px;border-bottom:1px solid var(--line)}
+.head-id{display:flex;align-items:center;gap:11px;min-width:0}
+.badge{width:27px;height:27px;flex:none;display:grid;place-items:center;
+  background:#16232c;border:1px solid var(--acc-dim);color:var(--acc);font:12px/1 var(--mono);
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)}
+.head-t{display:flex;flex-direction:column;gap:3px;min-width:0}
+.head-name{font-size:14.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.head-sub{font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.12em;white-space:nowrap}
+.head-link{margin:0;font:11px/1 var(--sans);letter-spacing:.03em;color:var(--dim);
+  border:1px solid var(--line);border-radius:2px;padding:6px 10px;white-space:nowrap;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%)}
+.head-link::before{content:'●';font-size:7px;margin-right:7px;vertical-align:1px;color:var(--ok)}
+.head[data-link="up"] .head-link[data-on="closing"],
+.head[data-link="closing"] .head-link[data-on="up"]{display:none}
+.head[data-link="closing"] .head-link{color:var(--bad);border-color:#5a3831}
+.head[data-link="closing"] .head-link::before{color:var(--bad)}
+
+/* ============ 02 消息列表容器 ============ */
+.list{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin}
+.lwrap{display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px 20px 30px}
+.loading{margin:56px auto;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim);text-align:center}
+.drow{display:flex;align-items:center;gap:14px;margin:26px 0 12px;
+  color:var(--faint);font:10.5px/1 var(--mono);letter-spacing:.14em}
+.drow::before,.drow::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* ============ 03 单条消息（双侧切角面板） ============ */
+.msg{display:flex;flex-direction:column;max-width:78%;margin-top:16px}
+.msg.assistant{align-self:flex-start;align-items:flex-start}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.cont{margin-top:6px}
+.lwrap .msg:first-child,.drow + .msg{margin-top:4px}
+.bubble{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.msg.assistant .bubble{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.msg.user .bubble{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+.st{display:none}
+.st.on{display:inline}
+.silent{color:var(--dim)}
+.wait{color:var(--faint)}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;
+  font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.meta .ch{border:1px solid var(--line);border-radius:2px;padding:2px 5px}
+.stx.bad{color:var(--bad)}
+.stx.live{color:var(--acc)}
+.msg.failed,.msg.revealing{cursor:pointer}
+.msg.failed:active .bubble,.msg.revealing:active .bubble{transform:scale(.97)}
+.msg.failed .bubble,.msg.revealing .bubble{transition:transform 160ms var(--ease-out)}
+/* 中频入场：assistant 上升 180ms；user 按压档 fade+scale 140ms（选择记录于 DIRECTIONS.md） */
+.msg.live .bubble{transition:opacity 180ms var(--ease-out),transform 180ms var(--ease-out)}
+.msg.live.user .bubble{transition-duration:140ms;transform-origin:100% 100%}
+@starting-style{.msg.live.assistant .bubble{opacity:0;transform:translateY(8px)}}
+@starting-style{.msg.live.user .bubble{opacity:0;transform:scale(.96)}}
+.msg.instant .bubble{transition:none}
+
+/* ============ 06 空状态（罕见档：一容器一入场，240ms） ============ */
+.empty{margin:14vh auto 0;max-width:430px;text-align:center;
+  transition:opacity 240ms var(--ease-out),transform 240ms var(--ease-out)}
+@starting-style{.empty.show{opacity:0;transform:translateY(8px)}}
+.empty.leaving{transition-duration:130ms;opacity:0;transform:translateY(8px)}
+.e-g{width:34px;height:34px;margin:0 auto 18px;display:grid;place-items:center;
+  border:1px solid var(--acc-dim);color:var(--acc);font:14px/1 var(--mono);
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.e-t{margin:0;font-size:17px;font-weight:600;color:#e2e9ee}
+.e-d{margin:12px 0 0;font-size:13px;color:var(--dim)}
+.e-a{margin:24px auto 0;display:block;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12.5px/1 var(--sans);letter-spacing:.06em;padding:10px 20px;border-radius:2px;
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,transform 160ms var(--ease-out)}
+.e-a:active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){.e-a:hover{background:#1b2c38;color:#b5d4e4}}
+
+/* ============ 05 composer ============ */
+.comp{border-top:1px solid var(--line);background:var(--srf);padding:10px 18px 12px}
+.hint{min-height:16px;margin:0 0 6px;font:11px/1.4 var(--sans);color:var(--acc)}
+.hint[data-k="fail"],.hint[data-k="close"]{color:var(--bad)}
+.hint[data-k=""]{color:var(--dim)}
+.hint:empty{visibility:hidden}
+.comp-row{display:flex;align-items:flex-end;gap:10px;border:1px solid var(--line);border-radius:3px;
+  background:var(--bg);padding:8px 8px 8px 12px;transition:border-color 180ms ease}
+.comp-row:focus-within{border-color:var(--acc-dim)}
+#ta{flex:1;background:transparent;border:0;outline:0;resize:none;color:var(--tx);
+  font:14px/1.7 var(--sans);max-height:132px;overflow-y:auto;padding:6px 0}
+#ta::placeholder{color:var(--faint)}
+#send{flex:none;font:12.5px/1 var(--sans);letter-spacing:.08em;color:var(--acc);background:#1b2933;
+  border:1px solid var(--acc-dim);border-radius:2px;padding:10px 16px;
+  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,transform 160ms var(--ease-out)}
+#send:disabled{color:var(--faint);background:transparent;border-color:var(--line);cursor:default}
+#send:not(:disabled):active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){#send:not(:disabled):hover{background:#22333f}}
+.keys{margin:6px 2px 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+
+/* ============ 07 回到最新 pill（切角标签：170ms 入 / 110ms 出，自底部） ============ */
+.pill{position:fixed;left:50%;bottom:122px;z-index:20;
+  transform:translate(-50%,100%) scale(.95);transform-origin:50% 100%;opacity:0;pointer-events:none;
+  font:12px/1 var(--sans);letter-spacing:.04em;color:#d5dee6;
+  background:rgba(17,23,29,.96);border:1px solid #33465a;border-radius:2px;padding:10px 16px;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+  transition:opacity 170ms var(--ease-out),transform 170ms var(--ease-out),
+    color 140ms ease,border-color 140ms ease}
+.pill[data-show]{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
+.pill:not([data-show]){transition-duration:110ms}
+.pill:active{transform:translate(-50%,0) scale(.97)}
+.pill b{color:var(--acc);font-weight:500;margin-left:7px}
+@media (hover:hover) and (pointer:fine){.pill[data-show]:hover{border-color:var(--acc-dim);color:#eaf2f7}}
+
+/* ============ reduced-motion：更少更温和（留透明度，删位移与滑块滑动） ============ */
+@media (prefers-reduced-motion:reduce){
+  .app{transition:none;transform:none}
+  .msg.live .bubble{transition:opacity 160ms var(--ease-out);transform:none}
+  .msg.failed .bubble,.msg.revealing .bubble{transition:transform 160ms var(--ease-out)}
+  .empty{transition:opacity 160ms var(--ease-out);transform:none}
+  .empty.leaving{transition:opacity 120ms var(--ease-out);transform:none}
+  .pill{transition:opacity 120ms var(--ease-out),color 140ms ease,border-color 140ms ease;transform:translate(-50%,0)}
+  .sw .knob::after{transition:background-color 160ms ease}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <section class="demo" aria-label="演示装置">
+    <div class="demo-row">
+      <span class="demo-cap">演示数据</span>
+      <button class="dbtn" data-ds="normal">日常对话</button>
+      <button class="dbtn" data-ds="worst">最坏数据</button>
+      <button class="dbtn" data-ds="empty">空会话</button>
+      <span class="dsep" aria-hidden="true"></span>
+      <button class="dbtn" id="replayBtn">重播当前档位</button>
+      <button class="dbtn" id="clearBtn">清空会话</button>
+      <span class="dsep" aria-hidden="true"></span>
+      <button class="sw tgl" id="failTgl" aria-pressed="false"><span class="knob" aria-hidden="true"></span>模拟发送失败</button>
+      <button class="sw tgl" id="closeTgl" aria-pressed="false"><span class="knob" aria-hidden="true"></span>模拟服务关闭</button>
+    </div>
+    <p class="demo-note">本页为离线演示，所有消息与状态均为虚构数据。</p>
+  </section>
+
+  <header class="head" id="head" data-link="up">
+    <div class="head-id">
+      <span class="badge" aria-hidden="true">A</span>
+      <div class="head-t">
+        <span class="head-name">Alice</span>
+        <span class="head-sub">单一会话 · 记忆持续</span>
+      </div>
+    </div>
+    <p class="head-link" data-on="up">本机已连接</p>
+    <p class="head-link" data-on="closing">服务正在关闭</p>
+  </header>
+
+  <main class="list" id="list" aria-label="消息列表"></main>
+
+  <section class="comp" aria-label="输入区">
+    <p class="hint" id="hint" role="status"></p>
+    <div class="comp-row">
+      <textarea id="ta" rows="1" placeholder="给 Alice 写点什么…" aria-label="写给 Alice 的消息"></textarea>
+      <button id="send" disabled>发送</button>
+    </div>
+    <p class="keys">Enter 发送 · Shift+Enter 换行</p>
+  </section>
+
+</div>
+
+<button class="pill" id="pill" aria-label="回到最新" aria-hidden="true" tabindex="-1">回到最新<b id="pillN"></b></button>
+
+<script>
+'use strict';
+/* ===== 变体参数：逐句节奏为内容节拍（产品既有 170–520ms/句 带宽内），非动画时长 ===== */
+const CAD={min:240,max:380};
+const THINK={min:600,max:1000};
+
+/* ===== 状态总线（PARTS §2.2 单一真源） ===== */
+const S={turns:[],link:'up',busy:false,listState:'loading',atLatest:true,unread:0,
+  dataset:'normal',userName:'阿澈',gen:0,failOnce:false,failHint:false,lock:false,uid:0};
+const $=id=>document.getElementById(id);
+const list=$('list'),ta=$('ta'),sendBtn=$('send'),hint=$('hint'),
+  pill=$('pill'),pillN=$('pillN'),head=$('head'),
+  failTgl=$('failTgl'),closeTgl=$('closeTgl'),replayBtn=$('replayBtn'),clearBtn=$('clearBtn');
+let wrap=null;
+
+const rnd=r=>r.min+Math.random()*(r.max-r.min);
+const uid=()=>'t'+(++S.uid)+'-'+Date.now().toString(36);
+const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+
+/* ===== 切句（03 切句规则） ===== */
+const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+const END='。！？…';
+function splitSentences(text){
+  if(!text||!text.trim())return[];
+  const out=[];let cur='',depth=0;
+  for(const ch of text){
+    cur+=ch;
+    if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}
+    if(PAIRS[ch]){depth++;continue;}
+    if('）」』】)]'.includes(ch)){if(depth>0)depth--;continue;}
+    if(END.includes(ch)&&depth===0){out.push(cur);cur='';}
+  }
+  if(cur)out.push(cur);
+  if(out.length>400){const head=out.slice(0,399);head.push(out.slice(399).join(''));return head;}
+  return out;
+}
+const countSent=t=>(t.text&&t.text.trim())?splitSentences(t.text).length:0;
+
+/* ===== 时间格式 ===== */
+const p2=n=>String(n).padStart(2,'0');
+const hm=ms=>{const d=new Date(ms);return p2(d.getHours())+':'+p2(d.getMinutes());};
+const dayKey=ms=>{const d=new Date(ms);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
+const dayLabel=ms=>{const d=new Date(ms),n=new Date();
+  return (d.getFullYear()!==n.getFullYear()?d.getFullYear()+'年':'')+(d.getMonth()+1)+'月'+d.getDate()+'日';};
+
+/* ===== 08 数据集 ===== */
+const T=(day,h,m)=>new Date(2026,10,day,h,m).getTime();
+const LONG=(()=>{const b='编译在凌晨完成，没有警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。';
+  let s='';while(s.length<1880)s+=b;return s+'以上，长文到此收尾。';})();
+const URLISH='https://mirror.internal.alice/pkg/'+'a'.repeat(170);
+const EMOJI='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨ 晚安。';
+const REPLY='收到，我看到了你写的内容。接下来这几句演示逐句揭示的节奏，一句一句落到页面上。【认真】顶部的演示装置里有发送失败与服务关闭的开关，可以随时拨动。揭示中点这条消息可以直接跳过。点「回到最新」也会一次补全。';
+
+const DATA={
+  normal:()=>[
+    {id:'n1',role:'user',text:'今天的部署顺利吗？',time:T(15,23,47)},
+    {id:'n2',role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。【安心】部署记录已经归档，明天可以晚点起。',time:T(15,23,49)},
+    {id:'n3',role:'assistant',channel:'qq',text:'早上好。昨夜监控没有异常，桌面 0.1.5 的自动检查十点半会跑第一次。',time:T(16,9,3)},
+    {id:'n4',role:'user',text:'好，那今天陪我把升级流程再过一遍？',time:T(16,9,12)},
+    {id:'n5',role:'assistant',reveal:true,text:'可以。上午我陪你过一遍自动检查的流程，先确认更新开关的状态，再走一次同版提示的路径。【认真】有问题随时说，我会记下每一步的卡点。过完这轮，把要点整理进桌面档案。',time:T(16,9,13)}
+  ],
+  worst:()=>[
+    {id:'w1',role:'user',text:URLISH,time:T(16,10,2)},
+    {id:'w2',role:'assistant',text:LONG,time:T(16,10,3)},
+    {id:'w3',role:'assistant',text:EMOJI,time:T(16,10,5)},
+    {id:'w4',role:'user',text:'在吗',time:T(16,10,6)},
+    {id:'w5',role:'assistant',text:'嗯',time:T(16,10,7)},
+    {id:'w6',role:'assistant',text:'',time:T(16,10,8)},
+    {id:'w7',role:'user',text:'这条会发送失败',status:'failed',time:T(16,10,9)},
+    {id:'w8',role:'assistant',text:'这一轮没有时间字段，元信息按字段隐藏。',time:null}
+  ]
+};
+
+/* ===== 03 单条消息：切角面板构建 ===== */
+function buildTurn(t,o){
+  const art=el('article','msg '+t.role+(o.instant?' instant':' live')+(o.cont?' cont':''));
+  art.dataset.role=t.role;art.dataset.id=t.id;
+  if(t.status==='failed'){art.classList.add('failed');art.tabIndex=0;art.title='点击重试';}
+  if(t.reveal||t.state==='revealing'){t.state='revealing';art.classList.add('revealing');art.title='点击可跳过逐句显示';}
+  const bub=el('div','bubble');
+  fillBody(bub,t);
+  const meta=el('div','meta');
+  if(t.time!=null)meta.append(el('span','mt',hm(t.time)));
+  if(t.channel==='qq')meta.append(el('span','ch','QQ'));
+  if(t.status==='sending')meta.append(el('span','stx send','发送中'));
+  if(t.status==='failed')meta.append(el('span','stx bad','发送失败 · 点击重试'));
+  if(t.state==='revealing')meta.append(el('span','stx live','正在回复…'));
+  art.append(bub,meta);
+  return art;
+}
+function fillBody(bd,t){
+  bd.textContent='';
+  if(!t.text||!t.text.trim()){bd.append(el('span','silent','（沉默）'));return;}
+  const parts=splitSentences(t.text);
+  if(t.role==='assistant'&&t.state==='revealing'){
+    bd.append(el('span','wait','…'));
+    parts.forEach(s=>{bd.append(el('span','st',s));});
+  }else{
+    parts.forEach(s=>{bd.append(el('span','st on',s));});
+  }
+}
+function statusHost(art){return art.querySelector('.meta');}
+function setStatus(art,cls,txt){
+  let n=art.querySelector('.stx.'+cls);
+  if(!n){n=el('span','stx '+cls,txt);statusHost(art).append(n);}else n.textContent=txt;
+}
+function clearStatus(art,cls){const n=art.querySelector('.stx.'+cls);if(n)n.remove();}
+
+/* ===== 02 列表装配 ===== */
+function buildDateRow(ms){const d=el('div','drow');d.append(el('span','',dayLabel(ms)));d.setAttribute('role','separator');return d;}
+function renderAll(){
+  S.turns.forEach((t,i)=>{
+    const prev=S.turns[i-1];
+    if(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time))wrap.append(buildDateRow(t.time));
+    const cont=!!prev&&prev.role===t.role&&!(prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+    wrap.append(buildTurn(t,{instant:true,cont}));
+  });
+}
+function append(t,live){
+  const prev=S.turns[S.turns.length-1];
+  S.turns.push(t);
+  if(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time))wrap.append(buildDateRow(t.time));
+  const cont=!!prev&&prev.role===t.role&&!(prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+  wrap.append(buildTurn(t,{instant:!live,cont}));
+  if(S.listState!=='ready')S.listState='ready';
+  if(!S.atLatest){S.unread+=countSent(t);}
+  else list.scrollTop=list.scrollHeight;
+  updatePill();
+}
+
+/* ===== 02 状态面 ===== */
+function renderFace(){
+  wrap=el('div','lwrap');
+  if(S.listState==='loading'){
+    wrap.append(el('p','loading','正在载入对话…'));
+  }else if(S.listState==='empty'){
+    const e=el('div','empty show');
+    e.append(el('div','e-g','A'));
+    e.append(el('h2','e-t',(S.userName?S.userName+'，':'')+'这里还很安静'));
+    e.append(el('p','e-d','说第一句话，Alice 会一句一句地回你。'));
+    const a=el('button','e-a','写下第一句');
+    a.addEventListener('click',()=>ta.focus());
+    e.append(a);
+    wrap.append(e);
+  }else{
+    renderAll();
+  }
+  list.replaceChildren(wrap);
+  updatePill();
+}
+
+/* ===== 04 逐句揭示（四不变量） ===== */
+function startReveal(t){
+  const g=S.gen,art=wrap.querySelector('[data-id="'+t.id+'"]');
+  if(!art)return;
+  const spans=[...art.querySelectorAll('.st')],wait=art.querySelector('.wait');
+  let i=0,done=false;
+  const finish=()=>{
+    if(done||t.state!=='revealing')return;
+    done=true;t.state='done';
+    spans.forEach(s=>s.classList.add('on'));
+    if(wait)wait.remove();
+    clearStatus(art,'live');
+    art.classList.remove('revealing');art.removeAttribute('title');
+    S.busy=false;renderHint();updateSend();
+  };
+  t._finish=finish;
+  const step=()=>{
+    if(g!==S.gen||done||t.state!=='revealing')return;
+    if(wait)wait.remove();
+    if(i<spans.length){
+      spans[i++].classList.add('on');
+      if(!S.atLatest){S.unread++;updatePill();}
+      else list.scrollTop=list.scrollHeight;
+      setTimeout(step,rnd(CAD));
+    }else finish();
+  };
+  setTimeout(step,rnd(THINK));
+}
+
+/* ===== 07 pill 与 02 滚动语义（滞回） ===== */
+function updatePill(){
+  const show=!S.atLatest&&S.turns.length>0&&S.listState==='ready';
+  if(show){
+    pill.setAttribute('data-show','');
+    pill.setAttribute('aria-hidden','false');
+    pill.tabIndex=0;
+    pillN.textContent=S.unread>0?'＋'+(S.unread>99?'99+':S.unread)+' 句':'';
+  }else{
+    pill.removeAttribute('data-show');
+    pill.setAttribute('aria-hidden','true');
+    pill.tabIndex=-1;
+    pillN.textContent='';
+  }
+}
+function setFollow(v){
+  if(S.atLatest===v)return;
+  S.atLatest=v;
+  if(v)S.unread=0;
+  updatePill();
+}
+list.addEventListener('scroll',()=>{
+  const max=list.scrollHeight-list.clientHeight;
+  if(max<=0){setFollow(true);return;}
+  const d=max-list.scrollTop;
+  if(S.atLatest&&d>140)setFollow(false);
+  else if(!S.atLatest&&d<=48)setFollow(true);
+});
+pill.addEventListener('click',()=>{ /* 单次受控回底（本变体取瞬时跳转）+ 用户主动回底触发跳过 */
+  list.scrollTop=list.scrollHeight;
+  setFollow(true);
+  S.turns.forEach(t=>{if(t.state==='revealing'&&t._finish)t._finish();});
+});
+
+/* ===== 05 composer ===== */
+function updateSend(){sendBtn.disabled=!(ta.value.trim()&&!S.busy&&S.link==='up'&&!S.lock&&S.listState!=='loading');}
+function renderHint(){
+  let k='',txt='';
+  if(S.failHint){k='fail';txt='发送失败，草稿已恢复';}
+  else if(S.link==='closing'){k='close';txt='服务正在关闭，暂停接收新消息';}
+  else if(S.busy){k='busy';txt='Alice 正在处理消息；输入会保留';}
+  hint.textContent=txt;hint.dataset.k=k;
+}
+ta.addEventListener('input',()=>{
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight,132)+'px';
+  if(S.failHint){S.failHint=false;renderHint();}
+  updateSend();
+});
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){
+    e.preventDefault();
+    submit();
+  }
+});
+sendBtn.addEventListener('click',submit);
+function submit(){
+  if(S.lock)return;
+  const v=ta.value.trim();
+  if(!v||S.busy||S.link!=='up'||S.listState==='loading')return;
+  if(S.failOnce){
+    S.failOnce=false;setTgl(failTgl,false);
+    S.failHint=true;
+    const t={id:uid(),role:'user',text:v,status:'failed',time:Date.now()};
+    afterEmptyExit(()=>{append(t,true);renderHint();});
+    ta.value=v;ta.style.height='auto';updateSend(); /* 05：失败回执逐字回填草稿 */
+    return;
+  }
+  S.busy=true;S.lock=true;renderHint();updateSend();
+  const t={id:uid(),role:'user',text:v,status:'sending',time:Date.now()};
+  const g=S.gen;
+  afterEmptyExit(()=>{
+    append(t,true);
+    ta.value='';ta.style.height='auto';updateSend();
+    setTimeout(()=>{
+      if(g!==S.gen){S.lock=false;return;}
+      t.status='ok';
+      clearStatus(wrap.querySelector('[data-id="'+t.id+'"]'),'send');
+      const a={id:uid(),role:'assistant',text:REPLY,time:Date.now(),state:'revealing'};
+      append(a,true);
+      startReveal(a);
+      S.lock=false;updateSend();
+    },420);
+  });
+}
+function afterEmptyExit(cb){
+  const emp=list.querySelector('.empty');
+  if(!emp){cb();return;}
+  const g=S.gen;
+  emp.classList.add('leaving');
+  setTimeout(()=>{if(g!==S.gen)return;emp.remove();cb();},150);
+}
+
+/* ===== 03 失败重试 ===== */
+function retry(t){
+  if(t.status!=='failed')return;
+  t.status='sending';
+  const art=wrap.querySelector('[data-id="'+t.id+'"]');
+  clearStatus(art,'bad');
+  art.classList.remove('failed');art.removeAttribute('title');art.tabIndex=-1;
+  setStatus(art,'send','发送中');
+  const g=S.gen;
+  setTimeout(()=>{
+    if(g!==S.gen)return;
+    t.status='ok';clearStatus(art,'send');
+    S.busy=true;renderHint();updateSend();
+    const a={id:uid(),role:'assistant',text:REPLY,time:Date.now(),state:'revealing'};
+    append(a,true);startReveal(a);
+  },520);
+}
+list.addEventListener('click',e=>{
+  const art=e.target.closest('.msg');if(!art)return;
+  const t=S.turns.find(x=>x.id===art.dataset.id);if(!t)return;
+  if(t.state==='revealing'&&t._finish){t._finish();return;}
+  if(t.status==='failed')retry(t);
+});
+list.addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const art=e.target.closest&&e.target.closest('.msg');if(!art)return;
+  const t=S.turns.find(x=>x.id===art.dataset.id);
+  if(t&&t.status==='failed')retry(t);
+});
+
+/* ===== 08 演示装置接线 ===== */
+const dsBtns=[...document.querySelectorAll('.dbtn[data-ds]')];
+function markCur(){dsBtns.forEach(b=>b.dataset.ds===S.dataset?b.setAttribute('aria-current','true'):b.removeAttribute('aria-current'));}
+function setDataset(name){
+  S.gen++;S.dataset=name;markCur();
+  S.busy=false;S.failHint=false;S.lock=false;
+  S.turns=[];S.listState='loading';S.atLatest=true;S.unread=0;
+  renderFace();renderHint();updateSend();
+  const g=S.gen;
+  setTimeout(()=>{
+    if(g!==S.gen)return;
+    if(name==='empty'){S.listState='empty';renderFace();updateSend();return;}
+    S.turns=DATA[name]();S.listState='ready';renderFace();updateSend();
+    if(S.atLatest)list.scrollTop=list.scrollHeight;
+    const live=S.turns.find(t=>t.reveal);
+    if(live){S.busy=true;renderHint();updateSend();startReveal(live);}
+  },420);
+}
+dsBtns.forEach(b=>b.addEventListener('click',()=>setDataset(b.dataset.ds)));
+replayBtn.addEventListener('click',()=>setDataset(S.dataset));
+clearBtn.addEventListener('click',()=>setDataset('empty'));
+function setTgl(btn,on){on?btn.setAttribute('aria-pressed','true'):btn.setAttribute('aria-pressed','false');}
+failTgl.addEventListener('click',()=>{S.failOnce=!S.failOnce;setTgl(failTgl,S.failOnce);});
+closeTgl.addEventListener('click',()=>{
+  const closing=S.link==='up';
+  S.link=closing?'closing':'up';
+  head.dataset.link=S.link;
+  setTgl(closeTgl,closing);
+  renderHint();updateSend();
+});
+
+/* ===== 启动 ===== */
+markCur();
+setDataset('normal');
+</script>
+</body>
+</html>

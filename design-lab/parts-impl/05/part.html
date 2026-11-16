@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0d1114">
+<title>部件 05 · composer 输入区 — 舱壁 Bulkhead</title>
+<style>
+/* ============ 曲线与时长 token：全页唯一定义（PRINCIPLES §2.2；组装时由页面 :root 提供） ============ */
+:root{
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg:#0d1114; --srf:#11171d; --panel:#141c24;
+  --line:#263443; --tx:#ccd6dd; --dim:#7d8b96; --faint:#57646e;
+  --acc:#8fb8cc; --acc-dim:#42606f; --ok:#7fa07f; --bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;touch-action:manipulation;
+  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* 罕见档：页面首载一次性入场（一容器一入场；重挂载不重放） */
+.app{height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+
+/* ============ 实验台外壳（演示装置，非部件本体） ============ */
+.lab{display:flex;align-items:center;gap:12px;background:var(--srf);border-bottom:1px solid var(--line);padding:10px 18px}
+.lab-b{width:30px;height:30px;flex:none;display:grid;place-items:center;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12px/1 var(--mono);clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.lab-t{margin:0;font-size:13.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em}
+.lab-d{margin:3px 0 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.06em}
+
+.rig{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px}
+.rig-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.rig-row:first-child{margin-top:0}
+.rig-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.rbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;border:1px solid var(--line);
+  border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.rbtn:active{transform:scale(.97)}
+.rbtn[aria-pressed="true"]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.rig-note{margin:7px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+
+.mat{background:var(--srf);border-bottom:1px solid var(--line)}
+.mat summary{cursor:pointer;padding:9px 18px;font:10.5px/1 var(--mono);letter-spacing:.12em;color:var(--faint)}
+.mat-x{overflow-x:auto;padding:0 18px 14px}
+.mat table{border-collapse:collapse;width:100%;min-width:640px}
+.mat th{font:10px/1 var(--mono);letter-spacing:.1em;color:var(--faint);text-align:left;padding:6px 10px;
+  border-bottom:1px solid var(--line)}
+.mat td{font:11.5px/1.5 var(--sans);color:var(--dim);padding:7px 10px;border-bottom:1px solid #1b2530;vertical-align:top}
+.mat td:first-child{color:var(--tx);white-space:nowrap}
+.mk{width:32px;height:22px;font:12px/1 var(--mono);color:var(--faint);background:none;border:1px solid var(--line);
+  border-radius:2px;transition:color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.mk:active{transform:scale(.97)}
+.mk[data-v="pass"]{color:var(--ok);border-color:#3c4f3c}
+.mk[data-v="fail"]{color:var(--bad);border-color:#5a3831}
+
+.stage{flex:1;min-height:0;display:flex;flex-direction:column}
+.log{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.log-in{max-width:780px;margin:0 auto;width:100%;padding:14px 20px 20px}
+.lg{font:11px/1.7 var(--mono);color:var(--dim);letter-spacing:.02em;white-space:pre-wrap}
+.lg.sig{color:var(--acc)}
+.lg.ok{color:var(--ok)}
+.lg.bad{color:var(--bad)}
+.turn{border:1px solid var(--line);background:var(--panel);border-radius:3px;padding:8px 10px;margin:8px 0;
+  transition:transform 160ms var(--ease-out)}
+.turn-h{display:flex;justify-content:space-between;gap:10px;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+.turn[data-st="ok"] .turn-st{color:var(--ok)}
+.turn[data-st="sending"] .turn-st{color:var(--acc)}
+.turn[data-st="failed"]{border-color:#5a3831;cursor:pointer}
+.turn[data-st="failed"] .turn-st{color:var(--bad)}
+.turn[data-st="failed"]:active{transform:scale(.97)}
+.turn-b{margin-top:6px;font:12.5px/1.6 var(--sans);color:var(--tx);white-space:pre-wrap;overflow-wrap:anywhere;
+  max-height:104px;overflow-y:auto;overscroll-behavior:contain}
+
+.readout{background:var(--srf);border-top:1px solid var(--line);padding:8px 20px}
+.ro-in{max-width:780px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;
+  font:10.5px/1.5 var(--mono);color:var(--faint);letter-spacing:.04em}
+.chip{border:1px solid transparent;border-radius:2px;padding:2px 6px;color:var(--faint);
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease}
+.chip.on{color:var(--acc);border-color:var(--acc-dim);background:#16232c;font-weight:600}
+
+/* ============ 05 composer 输入区（p05-*；此块为部件本体，见 FRAGMENT.md） ============ */
+.p05-comp{background:var(--srf);border-top:1px solid var(--line);
+  padding:10px 18px calc(12px + env(safe-area-inset-bottom,0px))}
+.p05-in{max-width:780px;margin:0 auto}
+/* 处理提示行：预留高度，三态同行切换不叠行、不跳动；文案即时、仅颜色走 140ms ease */
+.p05-hint{min-height:16px;margin:0 0 6px;font:11px/1.4 var(--sans);letter-spacing:.02em;color:var(--acc);
+  transition:color 140ms ease}
+.p05-hint[data-k="fail"],.p05-hint[data-k="close"]{color:var(--bad)}
+.p05-hint[data-k=""]{visibility:hidden}
+/* 输入舱：钢蓝暗井 + 发丝边 + 右上 12px 切角（与用户面板同构；聚焦=边框冰蓝+井内微亮，纯颜色过渡） */
+.p05-row{display:flex;align-items:flex-end;gap:10px;background:var(--bg);border:1px solid var(--line);border-radius:3px;
+  padding:8px 8px 8px 12px;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);
+  transition:border-color 180ms ease,background-color 180ms ease}
+.p05-row:focus-within{border-color:var(--acc-dim);background:#10171e}
+.p05-ta{flex:1;min-width:0;background:transparent;border:0;outline:0;resize:none;color:var(--tx);
+  caret-color:var(--acc);font:14px/1.7 var(--sans);max-height:132px;overflow-y:auto;overscroll-behavior:contain;
+  padding:6px 0}
+.p05-ta::placeholder{color:var(--faint)}
+/* 发送键：切角钢件；可发=冰蓝通电，禁用=断电幽灵态；press scale(0.97) 必做；状态色至多按压档 */
+.p05-send{flex:none;font:12.5px/1 var(--sans);letter-spacing:.08em;color:var(--acc);background:#1b2933;
+  border:1px solid var(--acc-dim);border-radius:2px;padding:10px 16px;
+  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p05-send:disabled{color:var(--faint);background:transparent;border-color:var(--line);cursor:default}
+.p05-send:not(:disabled):active{transform:scale(.97)}
+/* 键位提示常驻左，字符计数只在长草稿时出现于右（即时显隐，零动效） */
+.p05-keys{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:6px 2px 0;
+  font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+.p05-count{color:var(--dim)}
+@media (pointer:coarse){
+  .p05-ta{font-size:16px} /* mobile-native：粗指针下 ≥16px，防 iOS 聚焦缩放 */
+}
+
+/* ============ hover 门控（触屏无假 hover） ============ */
+@media (hover:hover) and (pointer:fine){
+  .rbtn:hover{color:#b9c6cf}
+  .rbtn[aria-pressed="true"]:hover{color:var(--acc)}
+  .mk:hover{border-color:var(--acc-dim)}
+  .mat summary:hover{color:var(--dim)}
+  .turn[data-st="failed"]:hover{border-color:#6d443b}
+  .p05-send:not(:disabled):hover{background:#22333f}
+}
+
+/* ============ reduced-motion：留颜色过渡，删位移 ============ */
+@media (prefers-reduced-motion:reduce){
+  .app{transition:none;transform:none}
+  .p05-send,.rbtn,.mk,.turn{transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="lab">
+    <span class="lab-b" aria-hidden="true">05</span>
+    <div>
+      <p class="lab-t">composer 输入区 · 起草与发送，草稿的终身保管者</p>
+      <p class="lab-d">方向 B 舱壁 Bulkhead · 部件实验台 · 离线演示，无网络请求，数据虚构</p>
+    </div>
+  </header>
+
+  <section class="rig" aria-label="演示装置">
+    <div class="rig-row">
+      <span class="rig-cap">信号注入</span>
+      <button type="button" class="rbtn" id="r-busy" aria-pressed="false">注入 busy</button>
+      <button type="button" class="rbtn" id="r-close" aria-pressed="false">服务关闭 closing</button>
+      <button type="button" class="rbtn" id="r-fail" aria-pressed="false">下一次发送失败</button>
+      <button type="button" class="rbtn" id="r-focus">focus:composer()</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">最坏草稿</span>
+      <button type="button" class="rbtn" id="r-f2000">填入 ≈2000 字</button>
+      <button type="button" class="rbtn" id="r-femoji">填入纯 emoji</button>
+      <button type="button" class="rbtn" id="r-fws">填入纯空白换行</button>
+      <button type="button" class="rbtn" id="r-f1">填入单字符</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">操作</span>
+      <button type="button" class="rbtn" id="r-refresh">模拟刷新（内存草稿）</button>
+      <button type="button" class="rbtn" id="r-ime">模拟 IME 组合期 Enter</button>
+      <button type="button" class="rbtn" id="r-clear">清空草稿</button>
+    </div>
+    <p class="rig-note">验收提示：IME 除模拟外请以真实中文输入法实测（组词中按 Enter 不应发送）；回车连击请按住 Enter 不放看日志。</p>
+  </section>
+
+  <details class="mat">
+    <summary>验收矩阵 · 点行末方框切换 ○ 未测 / ✓ 过 / ✗ 不过（记录仅存内存）</summary>
+    <div class="mat-x">
+      <table>
+        <thead><tr><th>场景</th><th>操作</th><th>预期</th><th>判定</th></tr></thead>
+        <tbody id="mat-b"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <main class="stage">
+    <div class="log" id="log" aria-label="信号与回执日志"><div class="log-in" id="log-in"></div></div>
+
+    <div class="readout" aria-label="部件状态读出">
+      <div class="ro-in">
+        <span>状态机</span>
+        <span class="chip" data-m="can-send">can-send</span>
+        <span class="chip" data-m="draft-empty">draft-empty</span>
+        <span class="chip" data-m="in-flight">in-flight</span>
+        <span class="chip" data-m="busy-lock">busy-lock</span>
+        <span class="chip" data-m="closing-lock">closing-lock</span>
+        <span id="flags"></span>
+        <span id="draftstat"></span>
+      </div>
+    </div>
+
+    <div id="p05-mount"></div>
+  </main>
+
+</div>
+
+<script>
+'use strict';
+/* ===== 05 部件本体：P05 控制器（组装时整块搬走，见 FRAGMENT.md） =====
+   草稿的单一真源在本模块内存，textarea 只是视图——「模拟刷新」重建视图而草稿不失。 */
+const P05=(()=>{
+  const MAXH=132;      /* 自增高上限（B 基线），其后内部滚动、永不截断 */
+  const COUNT_AT=400;  /* 字符计数出现阈值（按 Unicode 码点计） */
+  const st={draft:'',busy:false,link:'up',inflight:false,failHint:false,ime:false};
+  const on={};
+  let ta=null,send=null,hint=null,count=null;
+
+  const emit=(ev,arg)=>{(on[ev]||[]).forEach(fn=>fn(arg));};
+  const snapshot=()=>Object.assign({},st,{chars:[...st.draft].length});
+
+  function mount(host){
+    host.innerHTML=
+      '<section class="p05-comp" aria-label="输入区">'
+    +   '<div class="p05-in">'
+    +     '<p class="p05-hint" data-k="" role="status"></p>'
+    +     '<div class="p05-row">'
+    +       '<textarea class="p05-ta" rows="1" placeholder="给 Alice 写点什么…" '
+    +         'aria-label="写给 Alice 的消息" enterkeyhint="send"></textarea>'
+    +       '<button type="button" class="p05-send" disabled>发送</button>'
+    +     '</div>'
+    +     '<div class="p05-keys"><span>Enter 发送 · Shift+Enter 换行</span>'
+    +       '<span class="p05-count" aria-hidden="true" hidden></span></div>'
+    +   '</div>'
+    + '</section>';
+    ta=host.querySelector('.p05-ta');
+    send=host.querySelector('.p05-send');
+    hint=host.querySelector('.p05-hint');
+    count=host.querySelector('.p05-count');
+    ta.value=st.draft;
+    ta.addEventListener('input',onInput);
+    ta.addEventListener('compositionstart',()=>{st.ime=true;emit('state:changed',snapshot());});
+    ta.addEventListener('compositionend',()=>{st.ime=false;emit('state:changed',snapshot());});
+    ta.addEventListener('keydown',onKey);
+    send.addEventListener('click',()=>submit());
+    resize();syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function onInput(){
+    st.draft=ta.value;
+    if(st.failHint)st.failHint=false;  /* 开始编辑即确认失败提示（B 基线行为） */
+    resize();syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function onKey(ev){
+    if(ev.key!=='Enter'||ev.shiftKey)return;              /* Shift+Enter → 原生换行，绝不发送 */
+    if(ev.isComposing||ev.keyCode===229||st.ime)return;   /* IME 组合期 Enter = 组字确认，不误发 */
+    ev.preventDefault();
+    submit();
+  }
+  function submit(){
+    if(st.inflight||st.busy||st.link!=='up')return;       /* 在途锁 / busy / closing：信号不得发出 */
+    const v=st.draft.trim();
+    if(!v)return;                                          /* 仅空格换行等同空：不发信号、不动草稿 */
+    st.inflight=true;st.failHint=false;
+    st.draft='';ta.value='';resize();renderHint();updateSend();
+    emit('state:changed',snapshot());
+    emit('submit:text',v);                                 /* 已 trim 的非空草稿 */
+  }
+  function setDraft(v){
+    st.draft=String(v);st.failHint=false;
+    if(ta){ta.value=st.draft;resize();ta.scrollTop=0;}
+    syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function syncCount(){ /* 字符计数：长草稿时出现，即时显隐（数据非状态，零动效） */
+    if(!count)return;
+    const cp=[...st.draft].length;
+    if(cp>=COUNT_AT){count.hidden=false;count.textContent=cp+' 字';}
+    else count.hidden=true;
+  }
+  function renderHint(){ /* 单行三态，优先级：失败 > 关闭 > 处理中；文案即时，仅颜色过渡 */
+    let k='',txt='';
+    if(st.failHint){k='fail';txt='发送失败，草稿已恢复';}
+    else if(st.link==='closing'){k='close';txt='服务正在关闭，暂停接收新消息';}
+    else if(st.busy){k='busy';txt='Alice 正在处理消息；输入会保留';}
+    if(hint){hint.textContent=txt;hint.dataset.k=k;}
+  }
+  function updateSend(){
+    if(send)send.disabled=!(st.draft.trim()&&!st.busy&&st.link==='up'&&!st.inflight);
+  }
+  function resize(){ /* 自增高：瞬变（高频输入零动效，布局属性不挂过渡） */
+    if(!ta)return;
+    ta.style.height='auto';
+    ta.style.height=Math.min(ta.scrollHeight,MAXH)+'px';
+  }
+  function handle(sig,arg){
+    switch(sig){
+      case 'busy:change':   /* 不可发送，但仍可输入——草稿保留能力优先于锁定 */
+        st.busy=!!arg;renderHint();updateSend();emit('state:changed',snapshot());break;
+      case 'link:change':
+        st.link=arg==='closing'?'closing':'up';renderHint();updateSend();
+        emit('state:changed',snapshot());break;
+      case 'send:failed':   /* 失败回执：已 trim 原文逐字回填 + 失败提示 */
+        st.inflight=false;setDraft(String(arg));st.failHint=true;
+        renderHint();updateSend();emit('state:changed',snapshot());break;
+      case 'turn:append':   /* 回执（用户 Turn 上屏，契约既有信号）→ 释放在途锁 */
+        if(arg&&arg.role==='user'&&st.inflight){st.inflight=false;updateSend();emit('state:changed',snapshot());}break;
+      case 'focus:composer': /* 06 空态引导 */
+        if(ta)ta.focus();break;
+    }
+  }
+  window.addEventListener('resize',resize);
+  return {mount,on:(ev,fn)=>{(on[ev]||(on[ev]=[])).push(fn);},handle,setDraft,state:snapshot};
+})();
+window.P05=P05; /* 供控制台驱动验证 */
+</script>
+
+<script>
+'use strict';
+/* ===== 实验台（rig）：模拟 08 剧本后端 + 状态读出 + 验收矩阵。不属于部件本体 ===== */
+(()=>{
+  const $=s=>document.querySelector(s);
+  const mountEl=$('#p05-mount'),scroller=$('#log'),logIn=$('#log-in');
+  const chars=s=>[...s].length;
+  const hash=s=>{let h=5381;for(const ch of s)h=((h*33)^ch.codePointAt(0))>>>0;return h.toString(16).padStart(8,'0');};
+  const p2=n=>String(n).padStart(2,'0');
+  const now=()=>{const d=new Date();return p2(d.getHours())+':'+p2(d.getMinutes())+':'+p2(d.getSeconds());};
+
+  function log(msg,k){
+    const line=document.createElement('div');
+    line.className='lg'+(k?' '+k:'');
+    line.textContent=now()+'  '+msg;
+    logIn.append(line);
+    while(logIn.children.length>80)logIn.firstChild.remove();
+    scroller.scrollTop=scroller.scrollHeight;
+  }
+  function addTurn(text,status){
+    const t=document.createElement('div');t.className='turn';t.dataset.st=status;
+    const h=document.createElement('div');h.className='turn-h';
+    const meta=document.createElement('span');meta.textContent='用户 Turn · '+now();
+    const stx=document.createElement('span');stx.className='turn-st';
+    stx.textContent=status==='failed'?'发送失败 · 点击重试':status==='sending'?'发送中':'已上屏';
+    h.append(meta,stx);
+    const b=document.createElement('div');b.className='turn-b';b.textContent=text;
+    t.append(h,b);
+    if(status==='failed'){ /* 重试归 03（列表侧），05 只负责草稿回填 */
+      t.setAttribute('role','button');t.tabIndex=0;t.title='重试这条消息';
+      const retry=()=>{
+        if(t.dataset.st!=='failed')return;
+        t.dataset.st='sending';stx.textContent='发送中';
+        log('→ retry:send（列表侧重试）','sig');
+        setTimeout(()=>{t.dataset.st='ok';stx.textContent='已上屏';log('✓ 重试成功','ok');busyCycle();},600);
+      };
+      t.addEventListener('click',retry);
+      t.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();retry();}});
+    }
+    logIn.append(t);
+    scroller.scrollTop=scroller.scrollHeight;
+  }
+
+  /* 模拟 08：回执时序（350ms 回执 / 1400ms busy 是剧本参数，不是 05 的行为） */
+  const rig={failNext:false,manualBusy:false,autoBusy:false,closing:false};
+  const effBusy=()=>rig.manualBusy||rig.autoBusy;
+  const pushBusy=()=>P05.handle('busy:change',effBusy());
+  function busyCycle(){
+    rig.autoBusy=true;pushBusy();log('← busy:change true（Alice 处理）','sig');
+    setTimeout(()=>{rig.autoBusy=false;pushBusy();log('← busy:change false','sig');},1400);
+  }
+  P05.on('submit:text',v=>{
+    log('→ submit:text · '+chars(v)+' 字 · hash '+hash(v),'sig');
+    setTimeout(()=>{
+      if(rig.failNext){
+        rig.failNext=false;syncToggles();
+        addTurn(v,'failed');
+        log('✗ 回执：发送失败（Turn 以 failed 留在日志区）','bad');
+        P05.handle('send:failed',v);
+        log('← send:failed · '+chars(v)+' 字 · 草稿逐字回填','sig');
+      }else{
+        P05.handle('turn:append',{role:'user',text:v});
+        addTurn(v,'ok');
+        log('✓ 回执：用户 Turn 上屏 → 在途锁释放','ok');
+        busyCycle();
+      }
+    },350);
+  });
+
+  /* 状态读出 */
+  const chips=[...document.querySelectorAll('.chip')],flagsEl=$('#flags'),draftEl=$('#draftstat');
+  function updateReadout(s){
+    const m=s.inflight?'in-flight':s.link==='closing'?'closing-lock':s.busy?'busy-lock'
+      :s.draft.trim()?'can-send':'draft-empty';
+    chips.forEach(c=>c.classList.toggle('on',c.dataset.m===m));
+    flagsEl.textContent='busy '+(s.busy?'●':'–')+' · link '+s.link
+      +' · 在途 '+(s.inflight?'●':'–')+' · IME '+(s.ime?'●':'–');
+    draftEl.textContent='draft '+s.chars+' 字 · '+hash(s.draft);
+  }
+  P05.on('state:changed',updateReadout);
+
+  /* 演示装置接线 */
+  const busyBtn=$('#r-busy'),closeBtn=$('#r-close'),failBtn=$('#r-fail');
+  function syncToggles(){
+    busyBtn.setAttribute('aria-pressed',String(rig.manualBusy));
+    closeBtn.setAttribute('aria-pressed',String(rig.closing));
+    failBtn.setAttribute('aria-pressed',String(rig.failNext));
+  }
+  busyBtn.addEventListener('click',()=>{
+    rig.manualBusy=!rig.manualBusy;pushBusy();syncToggles();
+    log(rig.manualBusy?'手动注入 busy':'手动解除 busy','sig');
+  });
+  closeBtn.addEventListener('click',()=>{
+    rig.closing=!rig.closing;
+    P05.handle('link:change',rig.closing?'closing':'up');
+    syncToggles();
+    log('← link:change '+(rig.closing?'closing':'up'),'sig');
+  });
+  failBtn.addEventListener('click',()=>{
+    rig.failNext=!rig.failNext;syncToggles();
+    log(rig.failNext?'已预设：下一次 submit:text 将失败':'取消失败预设','sig');
+  });
+  $('#r-focus').addEventListener('click',()=>{
+    P05.handle('focus:composer');
+    log('← focus:composer（06 空态联动信号）','sig');
+  });
+  $('#r-refresh').addEventListener('click',()=>{
+    P05.mount(mountEl);
+    log('⟳ 模拟刷新：视图重建，草稿 '+chars(P05.state().draft)+' 字仍在（内存保管）','sig');
+  });
+  $('#r-clear').addEventListener('click',()=>{P05.setDraft('');log('清空草稿（手动）','sig');});
+
+  /* 最坏草稿注入 */
+  const LONG=(()=>{const b='这一段是压测文本，用来验证草稿在超长输入下的完整保管：不截断、不清空、失败回填逐字一致，计数器应当出现。';
+    let s='';while(s.length<2000)s+=b;return s+'长文到此收尾。';})();
+  const EMOJI='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨✨ 晚安。🧊 冰蓝钢色。';
+  const WS='   \n\n   \n\t  ';
+  $('#r-f2000').addEventListener('click',()=>{P05.setDraft(LONG);log('填入最坏草稿 · '+chars(LONG)+' 字','sig');});
+  $('#r-femoji').addEventListener('click',()=>{P05.setDraft(EMOJI);log('填入纯 emoji 草稿 · '+chars(EMOJI)+' 码点','sig');});
+  $('#r-fws').addEventListener('click',()=>{P05.setDraft(WS);log('填入纯空白换行草稿（等同空）','sig');});
+  $('#r-f1').addEventListener('click',()=>{P05.setDraft('嗯');log('填入单字符草稿','sig');});
+
+  /* 模拟 IME：组合期内按 Enter，断言不触发 submit */
+  $('#r-ime').addEventListener('click',()=>{
+    const t=mountEl.querySelector('.p05-ta');
+    if(!t||typeof CompositionEvent==='undefined'){log('当前浏览器不支持事件模拟，请用真实输入法','bad');return;}
+    t.focus();
+    const committed=t.value+'组合测试';
+    try{
+      t.dispatchEvent(new CompositionEvent('compositionstart'));
+      t.value=committed;
+      t.dispatchEvent(new CompositionEvent('compositionupdate',{data:'组合测试'}));
+      try{t.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'组合测试'}));}
+      catch(_){t.dispatchEvent(new Event('input',{bubbles:true}));}
+      t.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true,isComposing:true}));
+      t.dispatchEvent(new CompositionEvent('compositionend',{data:'组合测试'}));
+    }catch(e){log('事件模拟异常：'+e.message,'bad');return;}
+    const ok=!P05.state().inflight&&P05.state().draft===committed;
+    log(ok?'模拟 IME：组合期 Enter 未触发发送（正确，草稿 '+chars(committed)+' 字）'
+          :'模拟 IME：guard 失效，组合期发生了误发！',ok?'ok':'bad');
+  });
+
+  /* 验收矩阵（记录仅存内存） */
+  const MAT=[
+    ['常规发送','输入文本 → Enter','发出 submit:text（已 trim）、草稿清空、按钮回禁用、日志见回执与 busy 周期'],
+    ['空白攻击','填入纯空白换行 → Enter / 点发送','无信号、无 Turn 上屏、草稿原样'],
+    ['Shift+Enter','文本中按 Shift+Enter','插入换行且绝不发送（macOS / Windows 一致）'],
+    ['IME 组合期','中文输入法组词中按 Enter（或跑「模拟 IME」）','仅组字确认，不误发'],
+    ['回车连击','按住 Enter 不放','在途锁生效，日志中至多一条用户 Turn'],
+    ['busy 锁定','注入 busy → 输入并按 Enter','Enter 无效、输入照常、提示行 busy 文案；解除后无需刷新即可发'],
+    ['服务关闭','closing → 输入并按 Enter','不发送、输入保留、关闭文案；回 up 恢复可发'],
+    ['失败回填','预设「下一次发送失败」→ 发送','草稿逐字回填 + 失败提示；failed Turn 留在日志区可重试'],
+    ['回填保真','填 ≈2000 字 → 预设失败 → 发送','回填后字数与 hash 同发送前完全一致'],
+    ['纯 emoji / 单字符','填入 → 发送或走失败路径','与普通文本同规则（trim 只去首尾空白）'],
+    ['超长草稿','填 ≈2000 字','高度到 132px 后内部滚动、不截断、计数出现'],
+    ['失焦 + 刷新','输入后点页面空白处失焦 → 模拟刷新','视图重建后草稿仍在（内存保管）'],
+    ['提示行三态','失败 / 关闭 / busy 来回切换','同一行内切换、不叠行、不残留旧文案'],
+    ['focus 信号','点 focus:composer()','输入区实际获得焦点（光标进入、舱壁聚焦态亮起）'],
+  ];
+  const tb=$('#mat-b');
+  MAT.forEach(r=>{
+    const tr=document.createElement('tr');
+    r.forEach(c=>{const td=document.createElement('td');td.textContent=c;tr.append(td);});
+    const td=document.createElement('td');
+    const b=document.createElement('button');
+    b.type='button';b.className='mk';b.textContent='○';b.dataset.v='none';
+    b.setAttribute('aria-label','判定：'+r[0]);
+    b.addEventListener('click',()=>{
+      const nx={none:'pass',pass:'fail',fail:'none'}[b.dataset.v];
+      b.dataset.v=nx;b.textContent=nx==='pass'?'✓':nx==='fail'?'✗':'○';
+    });
+    td.append(b);tr.append(td);tb.append(tr);
+  });
+
+  /* 启动 */
+  P05.mount(mountEl);
+  syncToggles();
+  updateReadout(P05.state());
+  log('实验台就绪 · 部件 05 独立运行 · 离线，无网络请求','sig');
+})();
+</script>
+</body>
+</html>

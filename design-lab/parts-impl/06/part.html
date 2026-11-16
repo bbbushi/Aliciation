@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 · 空状态 · B 舱壁 Bulkhead · 部件演示</title>
+<style>
+/* ============ 页面 token（与全页 :root 同源；曲线出自 PRINCIPLES §2.2，不自造） ============ */
+:root{
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+  --ease-in-out:cubic-bezier(0.77,0,0.175,1);
+  --bg:#0d1114;--srf:#11171d;--panel:#141c24;--panel-user:#151f29;
+  --line:#263443;--line-user:#31424f;
+  --tx:#ccd6dd;--dim:#7d8b96;--faint:#57646e;
+  --acc:#8fb8cc;--acc-dim:#42606f;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+.app{height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+
+/* ================================================================
+   演示脚手架（装置 / 02 宿主代演 / 05 composer 模拟目标 / 信号日志）
+   —— 不属于部件 06，组装时整体丢弃
+   ================================================================ */
+.demo{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px 7px}
+.demo-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.demo-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.dbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.dbtn:active{transform:scale(.97)}
+.dbtn[aria-pressed="true"]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.dsep{width:1px;height:14px;background:var(--line);margin:0 5px}
+.dinp{font:11.5px/1 var(--sans);color:var(--tx);background:var(--bg);
+  border:1px solid var(--line);border-radius:2px;padding:6px 9px;width:13em}
+.dinp::placeholder{color:var(--faint)}
+@media (hover:hover) and (pointer:fine){.dbtn:hover{color:#b9c6cf}}
+.demo-note{margin:6px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+.demo-stat{margin:4px 0 0;font:10.5px/1 var(--mono);color:var(--dim);letter-spacing:.05em}
+
+.zone-cap{font:10px/1 var(--mono);letter-spacing:.14em;color:var(--faint);
+  background:var(--srf);border-bottom:1px solid var(--line);padding:6px 18px}
+.host{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin}
+.lwrap{display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px 20px 30px}
+.loading{margin:56px auto;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim);text-align:center}
+/* 03 代演：仅证明 0↔1 互斥与让位时序；入场归 03（本演示即时上屏） */
+.stub-msg{align-self:flex-end;max-width:78%;margin-top:16px;padding:10px 14px;
+  font-size:14px;line-height:1.75;color:var(--tx);white-space:pre-wrap;overflow-wrap:anywhere;
+  background:var(--panel-user);border:1px solid var(--line-user);border-radius:3px;
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+.stub-meta{align-self:flex-end;margin-top:5px;font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+
+/* 05 模拟目标：收到 focus:composer() 即聚焦（文案取 05 文案表） */
+.comp{border-top:1px solid var(--line);background:var(--srf);padding:8px 18px 12px}
+.comp-row{display:flex;align-items:flex-end;gap:10px;border:1px solid var(--line);border-radius:3px;
+  background:var(--bg);padding:8px 8px 8px 12px;transition:border-color 180ms ease}
+.comp-row:focus-within{border-color:var(--acc-dim)}
+#ta{flex:1;background:transparent;border:0;outline:0;resize:none;color:var(--tx);
+  font:14px/1.7 var(--sans);max-height:132px;overflow-y:auto;padding:6px 0}
+#ta::placeholder{color:var(--faint)}
+#send{flex:none;font:12.5px/1 var(--sans);letter-spacing:.08em;color:var(--acc);background:#1b2933;
+  border:1px solid var(--acc-dim);border-radius:2px;padding:10px 16px;
+  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,transform 160ms var(--ease-out)}
+#send:disabled{color:var(--faint);background:transparent;border-color:var(--line);cursor:default}
+#send:not(:disabled):active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){#send:not(:disabled):hover{background:#22333f}}
+.keys{margin:6px 2px 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+
+.siglog{border-top:1px solid var(--line);background:var(--srf);padding:7px 18px 9px;max-height:122px;overflow-y:auto}
+.siglog h2{margin:0 0 5px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.siglog ol{margin:0;padding:0;list-style:none}
+.siglog li{font:10.5px/1.7 var(--mono);color:var(--dim);letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.siglog li:first-child{color:var(--acc)}
+
+/* ================================================================
+   p06 · 空状态（B 舱壁 · 罕见档一次性入场编排）
+   精密伺服：铭牌落位 → 主句点亮 → 说明随行 → 切角开关入座
+   总跨度 275ms（≤300ms）；错峰 40/35/50ms（非均匀，均在 30–80 带）
+   ================================================================ */
+.p06{margin:14vh auto 0;max-width:430px;padding:0 20px;text-align:center;
+  transition:opacity 130ms var(--ease-out),transform 130ms var(--ease-out)}
+/* 容器不入场（一容器一入场：内容错峰，容器静止）；transition 仅服务退场 */
+.p06.is-leaving{opacity:0;transform:translateY(8px)}
+/* 退场：入场同轴反向（自下来，回下去）、单容器一次、130ms < 入场 275ms */
+
+.p06-glyph{width:34px;height:34px;margin:0 auto 18px;display:grid;place-items:center;
+  border:1px solid var(--acc-dim);color:var(--acc);font:14px/1 var(--mono);
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%);
+  animation:p06-rise 190ms var(--ease-out) both}
+.p06-title{margin:0;min-width:0;font-size:17px;font-weight:600;color:#e2e9ee;letter-spacing:.02em;
+  animation:p06-rise-lead 200ms var(--ease-out) 40ms both}
+/* 超长称呼只在名字段截断（DOM 保留全文），“，这里还很安静”始终在场 */
+.p06-name{display:inline-block;max-width:22em;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;vertical-align:bottom}
+.p06-desc{margin:12px 0 0;font-size:13px;line-height:1.75;color:var(--dim);
+  animation:p06-rise 190ms var(--ease-out) 75ms both}
+.p06-cta-slot{display:block;margin:24px auto 0;
+  animation:p06-seat 150ms var(--ease-out) 125ms both}
+/* 入场 transform 挂 slot、按压反馈挂内部按钮：避免 fill-mode both 压制 :active */
+.p06-cta{display:inline-block;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12.5px/1 var(--sans);letter-spacing:.06em;padding:10px 20px;border-radius:2px;
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p06-cta:active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){
+  .p06-cta:hover{background:#1b2c38;color:#b5d4e4}
+}
+
+@keyframes p06-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes p06-rise-lead{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes p06-seat{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+
+/* ============ reduced-motion：编排折叠为同拍 fade（删错峰与位移，静态完整） ============ */
+@keyframes p06-fade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  .app{transition:none;transform:none}
+  .p06{transition:opacity 130ms var(--ease-out)}
+  .p06.is-leaving{transform:none}
+  .p06-glyph,.p06-title,.p06-desc,.p06-cta-slot{animation:p06-fade 160ms var(--ease-out) both}
+}
+/* 演示专用镜像：页面内模拟系统 reduce（切档会重触发一次动画，演示伪影，非部件行为） */
+html.sim-reduce .app{transition:none;transform:none}
+html.sim-reduce .p06{transition:opacity 130ms var(--ease-out)}
+html.sim-reduce .p06.is-leaving{transform:none}
+html.sim-reduce .p06-glyph,html.sim-reduce .p06-title,
+html.sim-reduce .p06-desc,html.sim-reduce .p06-cta-slot{animation:p06-fade 160ms var(--ease-out) both}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <section class="demo" aria-label="演示装置">
+    <div class="demo-row">
+      <span class="demo-cap">演示装置</span>
+      <button class="dbtn" id="resetBtn">重置为空会话</button>
+      <button class="dbtn" id="injectBtn">模拟首条消息上屏</button>
+      <span class="dsep" aria-hidden="true"></span>
+      <input class="dinp" id="nameInp" value="阿澈" aria-label="userName 称呼字段">
+      <button class="dbtn" id="applyBtn">应用称呼</button>
+      <button class="dbtn" id="clearNameBtn">无称呼</button>
+      <button class="dbtn" id="longNameBtn">超长称呼 2000 字</button>
+      <span class="dsep" aria-hidden="true"></span>
+      <button class="dbtn" id="reduceBtn" aria-pressed="false">模拟 reduce</button>
+    </div>
+    <p class="demo-note">本页为离线部件演示，所有数据均为虚构。检查位：入场编排 / 首条到达时让位 / focus:composer / 称呼边界 / reduce。</p>
+    <p class="demo-stat" id="stat"></p>
+  </section>
+
+  <div class="zone-cap">02 · 列表宿主（代演）—— 06 在此挂载</div>
+  <main class="host" id="host" aria-label="消息列表宿主"></main>
+
+  <section class="comp" aria-label="输入区（05 模拟目标）">
+    <div class="zone-cap" style="border:0;padding:0 0 6px">05 · composer 模拟目标 —— 接收 focus:composer()</div>
+    <div class="comp-row">
+      <textarea id="ta" rows="1" placeholder="给 Alice 写点什么…" aria-label="写给 Alice 的消息"></textarea>
+      <button id="send" disabled>发送</button>
+    </div>
+    <p class="keys">Enter 发送 · Shift+Enter 换行</p>
+  </section>
+
+  <section class="siglog" aria-label="信号日志">
+    <h2>SIGNAL LOG</h2>
+    <ol id="logList" role="log" aria-live="polite"></ol>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+/* ===== 演示总线（真实页为 PARTS §2.3 总线，此处同语义） ===== */
+const bus={h:{},
+  on(t,f){(this.h[t]??=[]).push(f);},
+  emit(t,d){logSig(t+(d!==undefined?'('+(typeof d==='string'&&d.length>24?d.slice(0,24)+'…'+d.length+'字':JSON.stringify(d))+')':'()'));
+    (this.h[t]||[]).forEach(f=>f(d));}};
+
+/* ===== 部件 06（组装取 FRAGMENT.md 中同名块） ===== */
+const p06={
+  LEAVE_MS:130,
+  mount(name){
+    const n=el('div','p06');
+    n.setAttribute('role','group');n.setAttribute('aria-label','空会话引导');
+    const g=el('div','p06-glyph','A');g.setAttribute('aria-hidden','true');
+    n.append(g,el('h2','p06-title'),el('p','p06-desc','说第一句话，Alice 会一句一句地回你。'));
+    const slot=el('span','p06-cta-slot');
+    const b=el('button','p06-cta','写下第一句');b.type='button';
+    b.addEventListener('click',()=>bus.emit('focus:composer')); /* 唯一交互 → 唯一信号 */
+    slot.append(b);n.append(slot);
+    this.setName(n,name); /* 文案逐字出自 06 规格 §5 */
+    return n;
+  },
+  setName(n,name){ /* 原地更新：不重挂载、不重放入场（PRINCIPLES §2.5） */
+    const t=n.querySelector('.p06-title');t.textContent='';
+    if(name){
+      const s=el('span','p06-name');s.textContent=name;
+      t.append(s,'，这里还很安静');
+    }else t.textContent='这里还很安静'; /* 无称呼兜底，句子仍通顺 */
+  },
+  leave(n){n.classList.add('is-leaving');} /* 宿主在 LEAVE_MS 后移除节点并上屏首条 */
+};
+
+/* ===== 演示脚手架：宿主状态机与接线（组装时丢弃） ===== */
+const S={listState:'loading',userName:'阿澈',firstText:'',gen:0};
+const $=id=>document.getElementById(id);
+const host=$('host'),ta=$('ta'),sendBtn=$('send'),stat=$('stat'),logList=$('logList');
+function el(t,c,txt){const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;}
+const p2=n=>String(n).padStart(2,'0');
+const hm=()=>{const d=new Date();return p2(d.getHours())+':'+p2(d.getMinutes());};
+let logs=[];
+function logSig(m){logs.unshift(m);logs=logs.slice(0,9);logList.replaceChildren(...logs.map(x=>el('li','',x)));}
+function refreshStat(){
+  const nm=S.userName?(S.userName.length>10?S.userName.slice(0,10)+'…('+S.userName.length+'字)':S.userName):'""';
+  stat.textContent='listState='+S.listState+' · userName='+nm+' · turns='+(S.listState==='ready'?1:0);
+}
+function renderHost(){
+  const w=el('div','lwrap');
+  if(S.listState==='loading')w.append(el('p','loading','正在载入对话…'));
+  else if(S.listState==='empty'){const n=p06.mount(S.userName);w.append(n);logSig('p06 mount（一次性入场 275ms，错峰 40/35/50）');}
+  else{
+    w.append(el('article','stub-msg',S.firstText));
+    w.append(el('div','stub-meta',hm()+' · web'));
+  }
+  host.replaceChildren(w);
+}
+function toEmpty(){ /* 08 reset / 切回空档：真实状态变化，允许重新入场 */
+  S.gen++;const g=S.gen;S.listState='loading';S.firstText='';renderHost();refreshStat();
+  logSig('listState →loading（loading 期间 06 不存在）');
+  setTimeout(()=>{if(g!==S.gen)return;
+    S.listState='empty';renderHost();refreshStat();logSig('listState →empty');},400);
+}
+function firstTurn(text){ /* 0↔1 边界：先消失后上屏，绝不同屏 */
+  if(S.listState!=='empty'){logSig('空态不在场：忽略');return;}
+  S.listState='ready';S.firstText=text;refreshStat();
+  const emp=host.querySelector('.p06');
+  if(emp){
+    p06.leave(emp);logSig('p06.leave（130ms，同轴反向）→ 首条待上屏');
+    setTimeout(()=>{if(!emp.isConnected)return; /* 期间被重置：让位作废 */
+      renderHost();logSig('首条已上屏（空态已让位）');},p06.LEAVE_MS);
+  }else{renderHost();logSig('首条已上屏');}
+}
+/* 05 模拟目标：收 focus:composer() → 聚焦输入区（行为，非动效） */
+bus.on('focus:composer',()=>{ta.focus();logSig('→ 05 已接收：输入区聚焦，占位文案可见');});
+function updateSend(){sendBtn.disabled=!(ta.value.trim()&&S.listState!=='loading');}
+ta.addEventListener('input',updateSend);
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){
+    e.preventDefault();
+    const v=ta.value.trim();
+    if(!v){logSig('草稿为空：不发出信号');return;}
+    if(S.listState==='loading'){logSig('loading 中：不发出信号');return;}
+    bus.emit('submit:text',v);ta.value='';updateSend();firstTurn(v);
+  }
+});
+sendBtn.addEventListener('click',()=>{
+  const v=ta.value.trim();
+  if(!v)return;
+  if(S.listState==='loading')return;
+  bus.emit('submit:text',v);ta.value='';updateSend();firstTurn(v);
+});
+/* 装置按钮 */
+function applyName(v){S.userName=v;
+  const n=host.querySelector('.p06');
+  if(n){p06.setName(n,v);logSig('p06.setName 原地更新（不重放入场）');}
+  else logSig('userName 已存（下次挂载生效）');
+  refreshStat();}
+$('resetBtn').addEventListener('click',toEmpty);
+$('injectBtn').addEventListener('click',()=>firstTurn('这是注入的首条消息。'));
+$('applyBtn').addEventListener('click',()=>applyName($('nameInp').value));
+$('clearNameBtn').addEventListener('click',()=>{$('nameInp').value='';applyName('');});
+$('longNameBtn').addEventListener('click',()=>{const v='澈'.repeat(2000);$('nameInp').value=v.slice(0,1);applyName(v);});
+$('reduceBtn').addEventListener('click',e=>{
+  const on=document.documentElement.classList.toggle('sim-reduce');
+  e.currentTarget.setAttribute('aria-pressed',on?'true':'false');
+  logSig('模拟 reduce = '+on+'（编排折叠为同拍 fade）');});
+/* 启动 */
+renderHost();refreshStat();updateSend();
+toEmpty();
+</script>
+</body>
+</html>

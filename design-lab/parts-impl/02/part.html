@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>部件 02 · 消息列表容器 · B 舱壁 Bulkhead</title>
+<style>
+/* ================= P02 PAGE TOKENS（装配时由页面壳统一提供，部件只引用不重定义） =================
+   取值逐字来自 variants/B.html（方向 B 基线：色板/字体/曲线）。曲线仅两条 token（PRINCIPLES §2.2）。 */
+:root{
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg:#0d1114; --srf:#11171d; --panel:#141c24; --panel-user:#151f29;
+  --line:#263443; --line-user:#31424f;
+  --tx:#ccd6dd; --dim:#7d8b96; --faint:#57646e;
+  --acc:#8fb8cc; --acc-dim:#42606f; --ok:#7fa07f; --bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* ================= P02 PART CSS（随装配） ================= */
+
+/* 页面壳一次性入场（罕见档 #17：220ms，一容器一入场；B 基线 .app 同值。
+   装配进整页时若页面壳已有入场，则删除本条，部件不重放。） */
+.p02-root{height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.p02-root{opacity:0;transform:translateY(6px)}}
+
+/* —— 唯一滚动面 ——
+   overflow-anchor:none：关闭浏览器原生滚动锚定，读位由部件显式控制（anchorInsert/anchorGrowth），
+   避免双重补偿；position:relative 作为 offsetTop 基准。滚动本身零加工（PRINCIPLES §1 #12）。 */
+.p02-list{flex:1;min-height:0;position:relative;
+  overflow-y:auto;scrollbar-width:thin;overflow-anchor:none;overscroll-behavior-y:contain}
+
+/* 内容列（B 基线 .lwrap 同值） */
+.p02-col{display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px 20px 30px}
+
+/* 加载面（整面替换；loading 期间不算空） */
+.p02-loading{margin:56px auto;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim);text-align:center}
+
+/* 载入失败面：失败文案 + 重试（发出 retry:load） */
+.p02-fail{margin:56px auto;display:flex;flex-direction:column;align-items:center;gap:14px}
+.p02-fail-t{margin:0;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim)}
+.p02-retry{font:12px/1 var(--sans);letter-spacing:.06em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:8px 16px;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%);
+  transition:color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p02-retry:active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){.p02-retry:hover{color:#b9c6cf;border-color:#33465a}}
+
+/* 空态宿主挂载点（装配时整体替换为 06 的内容；本占位不属于产品视觉） */
+.p02-empty{margin:14vh auto 0;max-width:430px;border:1px dashed var(--line);
+  display:grid;place-items:center;gap:8px;padding:30px 22px;
+  font:11px/1.8 var(--mono);letter-spacing:.08em;color:var(--faint);text-align:center}
+
+/* 日期行（02 自有元素；B 基线 .drow 同值：双侧发丝线 + 等宽小字宽字距） */
+.p02-drow{display:flex;align-items:center;gap:14px;margin:26px 0 12px;
+  color:var(--faint);font:10.5px/1 var(--mono);letter-spacing:.14em}
+.p02-drow::before,.p02-drow::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* —— 03 占位消息块（装配时由 03 接管气泡内部与入场；02 只保留外层序列骨架） ——
+   组语义：组间 16px / 组内 6px / 贴日期行与首条 4px（B 基线同值）。无任何 transition：
+   历史回填与容器重建一律 instant，不重放入场（PRINCIPLES §2.5/§2.7）。 */
+.p02-msg{display:flex;flex-direction:column;max-width:78%;margin-top:16px}
+.p02-msg[data-role="assistant"]{align-self:flex-start;align-items:flex-start}
+.p02-msg[data-role="user"]{align-self:flex-end;align-items:flex-end}
+.p02-msg[data-cont]{margin-top:6px}
+.p02-col>.p02-msg:first-child,.p02-drow+.p02-msg{margin-top:4px}
+.p02-bub{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.p02-msg[data-role="assistant"] .p02-bub{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.p02-msg[data-role="user"] .p02-bub{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+.p02-silent{color:var(--dim)}
+.p02-wait{color:var(--faint)}
+.p02-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;
+  font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.p02-ch{border:1px solid var(--line);border-radius:2px;padding:2px 5px}
+.p02-stx-bad{color:var(--bad)}
+.p02-stx-live{color:var(--acc)}
+
+/* ================= P02 DEV CSS（演示装置与读出，不随装配） ================= */
+.p02-dev{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px 7px}
+.p02-devrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.p02-devrow+.p02-devrow{margin-top:6px}
+.p02-devcap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.p02-dbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p02-dbtn:active{transform:scale(.97)}
+.p02-dbtn[aria-current]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+@media (hover:hover) and (pointer:fine){.p02-dbtn:hover{color:#b9c6cf}}
+.p02-devnote{margin:6px 0 0;font:10.5px/1.5 var(--sans);color:var(--faint);letter-spacing:.02em}
+.p02-devstat{border-top:1px solid var(--line);background:var(--srf);padding:7px 18px 9px}
+.p02-statrow{display:flex;flex-wrap:wrap;gap:16px;font:10.5px/1 var(--mono);letter-spacing:.06em;color:var(--dim)}
+.p02-statrow b{color:var(--tx);font-weight:500;margin-left:5px}
+.p02-log{margin-top:6px;max-height:76px;overflow-y:auto;font:10px/1.7 var(--mono);color:var(--faint);scrollbar-width:thin}
+.p02-log div{white-space:pre-wrap}
+
+/* —— reduced-motion：删 root 入场位移，保留颜色过渡与按压反馈（B 基线退化策略） —— */
+@media (prefers-reduced-motion:reduce){
+  .p02-root{transition:none;transform:none}
+  .p02-retry{transition:color 140ms ease,border-color 140ms ease}
+  .p02-dbtn{transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease}
+}
+</style>
+</head>
+<body>
+<div class="p02-root">
+
+  <!-- P02 DEV（不随装配）：本地替代 08 的驱动装置 + 07 的信号源替身 -->
+  <section class="p02-dev" aria-label="部件演示装置（不随装配）">
+    <div class="p02-devrow">
+      <span class="p02-devcap">演示档位</span>
+      <button type="button" class="p02-dbtn" data-ds="normal">日常对话</button>
+      <button type="button" class="p02-dbtn" data-ds="worst">最坏数据</button>
+      <button type="button" class="p02-dbtn" data-ds="single">单条</button>
+      <button type="button" class="p02-dbtn" data-ds="empty">空会话</button>
+      <button type="button" class="p02-dbtn" data-ds="flood">洪流 50 条</button>
+    </div>
+    <div class="p02-devrow">
+      <span class="p02-devcap">注入与信号</span>
+      <button type="button" class="p02-dbtn" id="p02-act-user">＋用户消息</button>
+      <button type="button" class="p02-dbtn" id="p02-act-mid">乱序中插</button>
+      <button type="button" class="p02-dbtn" id="p02-act-sameid">同id重注入</button>
+      <button type="button" class="p02-dbtn" id="p02-act-bad">非法role</button>
+      <button type="button" class="p02-dbtn" id="p02-act-reply">Alice回复·揭示</button>
+      <button type="button" class="p02-dbtn" id="p02-act-fail">载入失败·一次</button>
+      <button type="button" class="p02-dbtn" id="p02-act-jump">模拟jump:latest</button>
+      <button type="button" class="p02-dbtn" id="p02-act-midscroll">滚到中部</button>
+    </div>
+    <p class="p02-devnote">部件 02 独立演示：顺序/日期行/分组/滚动语义/空载宿主为真实现，气泡与逐句渲染为占位（03/04 负责）。信号日志 ← 部件收到 · → 部件发出；滞回阈值 离底 140px / 回底 48px。本页为离线演示，所有数据均为虚构。</p>
+  </section>
+
+  <!-- P02 PART（随装配）：部件唯一挂载点 -->
+  <main id="p02-list" class="p02-list" aria-label="消息列表"></main>
+
+  <!-- P02 DEV（不随装配）：状态读出 + 总线信号日志 -->
+  <footer class="p02-devstat" aria-label="部件状态读出（不随装配）">
+    <div class="p02-statrow">
+      <span>atLatest<b id="p02-s-atl">–</b></span>
+      <span>unread<b id="p02-s-un">–</b></span>
+      <span>listState<b id="p02-s-ls">–</b></span>
+      <span>Turn<b id="p02-s-tn">–</b></span>
+      <span>日期行<b id="p02-s-dr">–</b></span>
+      <span>组<b id="p02-s-g">–</b></span>
+    </div>
+    <div class="p02-log" id="p02-log" aria-label="总线信号日志"></div>
+  </footer>
+
+</div>
+
+<script>
+'use strict';
+/* ================= P02 PART JS（随装配：window.P02） =================
+   部件 02 · 消息列表容器（方向 B 舱壁）。对外仅依赖：挂载点元素 + 总线 {on,emit}。
+   容器零 deliberate 内容动效：滚动是系统行为（PRINCIPLES §1 #12），历史回填与重建
+   全量 instant（§2.5/§2.7 禁逐条 stagger、禁重放）；跟随滚动是内容义务，直接赋值。 */
+window.P02=(function(){
+  const LEAVE=140, BACK=48;   /* 离底/回底滞回阈值 px（方向 B 基线值；判定点不同，防边缘翻转） */
+  const st={turns:[],byId:new Map(),listState:'loading',fail:false,atLatest:true,unread:0,gen:0};
+  let root=null,bus=null,col=null,tick=false,hook=null;
+
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+  const cssEsc=v=>(window.CSS&&CSS.escape)?CSS.escape(String(v)):String(v).replace(/"/g,'\\"');
+  function devHook(){if(hook)hook(api.state());}
+
+  /* —— 切句（与 03 规则同源：句末标点断、配对内不断、换行强断、上限 400 收尾）。
+     02 仅用于 unread 句计数；装配时若 03 暴露公共实现应共用，防两份漂移。 —— */
+  const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+  const END='。！？…';
+  function splitSent(text){
+    if(!text||!text.trim())return[];
+    const out=[];let cur='',depth=0;
+    for(const ch of text){
+      cur+=ch;
+      if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}
+      if(PAIRS[ch]){depth++;continue;}
+      if('）」』】)]'.includes(ch)){if(depth>0)depth--;continue;}
+      if(END.includes(ch)&&depth===0){out.push(cur);cur='';}
+    }
+    if(cur)out.push(cur);
+    if(out.length>400){const h=out.slice(0,399);h.push(out.slice(399).join(''));return h;}
+    return out;
+  }
+  /* 新可见句数：整条到达按全文切句数；揭示中的轮按 shownText（初值空 → 0，后续由 progress 逐句计） */
+  const sentCount=t=>{
+    const s=t.state==='revealing'?(t.shownText||''):
+      (t.shownText!==undefined&&t.shownText!==''?t.shownText:t.text);
+    return (s&&s.trim())?splitSent(s).length:0;
+  };
+
+  /* —— 时间格式（日期行文案：02 规格 §5；跨年带年份，当年省略） —— */
+  const p2=n=>String(n).padStart(2,'0');
+  const hm=ms=>{const d=new Date(ms);return p2(d.getHours())+':'+p2(d.getMinutes());};
+  const dayKey=ms=>{const d=new Date(ms);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
+  const dayLabel=ms=>{const d=new Date(ms),n=new Date();
+    return (d.getFullYear()!==n.getFullYear()?d.getFullYear()+'年':'')+(d.getMonth()+1)+'月'+d.getDate()+'日';};
+
+  /* —— Turn 校验（02 规格 §3：非法 role 单条丢弃，列表其余部分完好。
+     拒绝仅以返回值/console 呈现——不新增总线信号（PARTS §5：新增信号须先改总纲）。 —— */
+  function sanitize(raw){
+    if(!raw||typeof raw!=='object')return null;
+    if(typeof raw.id!=='string'||!raw.id)return null;
+    if(raw.role!=='user'&&raw.role!=='assistant')return null;
+    if(typeof raw.text!=='string')return null;
+    return{
+      id:raw.id,role:raw.role,text:raw.text,
+      shownText:typeof raw.shownText==='string'?raw.shownText:undefined,
+      channel:raw.channel==='qq'?'qq':'web',
+      status:['ok','sending','failed','silent'].includes(raw.status)?raw.status:'ok',
+      time:(typeof raw.time==='number'&&isFinite(raw.time))?raw.time:null,
+      state:raw.state==='revealing'?'revealing':undefined
+    };
+  }
+
+  /* —— 节点构建（03 占位：气泡内部与 meta 字段渲染装配时归 03） —— */
+  function fillBub(bub,t){
+    bub.textContent='';
+    let body=t.text;
+    if(t.state==='revealing')body=t.shownText||'';
+    if(t.state==='revealing'&&!body.trim()){bub.append(el('span','p02-wait','…'));return;} /* 等待首句（04 时序） */
+    if(!body.trim()){bub.append(el('span','p02-silent',t.role==='assistant'?'（沉默）':'（无内容）'));return;}
+    bub.textContent=body;
+  }
+  function nodeTurn(t,cont){
+    const art=el('article','p02-msg');
+    art.dataset.role=t.role;art.dataset.id=t.id;
+    if(cont)art.dataset.cont='';
+    const bub=el('div','p02-bub');fillBub(bub,t);
+    const meta=el('div','p02-meta');
+    if(t.time!=null)meta.append(el('span','p02-mt',hm(t.time)));
+    if(t.channel==='qq')meta.append(el('span','p02-ch','QQ'));
+    if(t.status==='sending')meta.append(el('span','p02-stx-send','发送中'));
+    if(t.status==='failed')meta.append(el('span','p02-stx-bad','发送失败 · 点击重试'));
+    if(t.state==='revealing')meta.append(el('span','p02-stx-live','正在回复…'));
+    art.append(bub,meta);
+    return art;
+  }
+  const nodeDate=ms=>{const d=el('div','p02-drow');d.append(el('span',null,dayLabel(ms)));
+    d.setAttribute('role','separator');return d;};
+
+  /* —— 面（loading / fail / empty / list：整面替换，互斥） —— */
+  function face(node){
+    root.replaceChildren(node);
+    root.setAttribute('aria-busy',st.listState==='loading'?'true':'false');
+  }
+  function faceLoading(){col=null;face(el('p','p02-loading','正在载入对话…'));}
+  function faceFail(){
+    col=null;
+    const w=el('div','p02-fail');
+    w.append(el('p','p02-fail-t','载入失败'));
+    const b=el('button','p02-retry','重试');b.type='button';
+    b.addEventListener('click',()=>bus.emit('retry:load'));
+    w.append(b);
+    face(w);
+  }
+  function faceEmpty(){ /* 06 挂载点：占位说明，装配时由 06 渲染真实空态 */
+    col=null;
+    const m=el('div','p02-empty');
+    m.append(el('span',null,'［ 06 空状态挂载点 ］'));
+    m.append(el('span',null,'listState=empty · Turn 数 0 —— 装配时此处由 06 渲染（互斥与换面逻辑在 02）'));
+    face(m);
+  }
+  function recomputeGroups(){
+    let prev=null,g=0;
+    for(const t of st.turns){
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      const cont=!!(prev&&prev.role===t.role&&!cross);
+      if(!cont)g++;
+      t._g=g;t._cont=cont;
+      prev=t;
+    }
+  }
+  function renderList(){ /* 全量重建：无动画重放（同一内容只入场一次），用于切档/乱序重排 */
+    recomputeGroups();
+    col=el('div','p02-col');
+    let prev=null;
+    for(const t of st.turns){
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      if(cross)col.append(nodeDate(t.time));
+      const n=nodeTurn(t,t._cont);n.dataset.g=t._g;
+      col.append(n);
+      prev=t;
+    }
+    col.dataset.turns=st.turns.length;
+    face(col);
+  }
+
+  /* —— 顺序规则（02 规格 §2）：dated 升序稳定排；time=null 恒排队尾、保持到达序 —— */
+  function insertIdx(t){
+    if(t.time==null)return st.turns.length;
+    for(let k=0;k<st.turns.length;k++){
+      const cur=st.turns[k];
+      if(cur.time==null)return k;      /* 日期区结束处（null 尾之前） */
+      if(cur.time>t.time)return k;     /* 严格大于：同值不前插（稳定，不互换） */
+    }
+    return st.turns.length;
+  }
+  const sortTurns=arr=>arr.slice().sort((a,b)=>{
+    if(a.time==null)return b.time==null?0:1;
+    if(b.time==null)return -1;
+    return a.time-b.time;
+  });
+
+  /* —— 滚动语义：滞回判定 + 跟随 + 未读 —— */
+  function emitFollow(){bus.emit('follow:change',{atLatest:st.atLatest,unread:st.unread});}
+  function setFollow(v){
+    if(st.atLatest===v)return;
+    st.atLatest=v;
+    if(v)st.unread=0;                  /* 回底清零（02 规格 §4） */
+    emitFollow();devHook();
+  }
+  function checkFollow(){
+    const max=root.scrollHeight-root.clientHeight;
+    if(max<=0){setFollow(true);return;}
+    const d=max-root.scrollTop;
+    if(st.atLatest&&d>LEAVE)setFollow(false);
+    else if(!st.atLatest&&d<=BACK)setFollow(true);
+  }
+  /* 滚动位置记忆（overflow-anchor 已关，全部显式控制）：
+     中插/重排后，若新块起点在视口上方，按“视口上方新增高度”校正 scrollTop（含跨骑部分）；
+     已在底则直接贴底（内容义务）。 */
+  function anchorInsert(node,h0){
+    if(st.atLatest){root.scrollTop=root.scrollHeight;return;}
+    if(!node)return;
+    const top=root.scrollTop,o=node.offsetTop;
+    if(o>=top)return;                  /* 插在视口下方：读位天然不动 */
+    const dh=root.scrollHeight-h0;
+    root.scrollTop=top+Math.min(dh,Math.max(0,top-o));
+  }
+  /* 已有节点增长（揭示/更新）：仅当旧块整段在视口上方时按增高量校正 */
+  function anchorGrowth(node,oldH){
+    if(st.atLatest){root.scrollTop=root.scrollHeight;return;}
+    const top=root.scrollTop,o=node.offsetTop;
+    if(o+oldH<=top)root.scrollTop=top+(node.offsetHeight-oldH);
+  }
+
+  /* —— 序列变更 —— */
+  function structural(focusId){
+    const h0=root.scrollHeight;
+    renderList();
+    const node=focusId?col.querySelector('[data-id="'+cssEsc(focusId)+'"]'):null;
+    anchorInsert(node,h0);
+    checkFollow();
+  }
+  function inject(raw){
+    const t=sanitize(raw);
+    if(!t)return false;                                   /* 非法：单条丢弃 */
+    if(st.listState==='loading')return false;             /* loading 是整面替换期，不接增量 */
+    if(st.byId.has(t.id)){                                /* 同 id 重注入=更新（仅 raw 出现的字段） */
+      const patch={};
+      for(const k of['text','shownText','channel','status','time','state'])
+        if(raw[k]!==undefined)patch[k]=t[k];
+      return update(t.id,patch)?'updated':false;
+    }
+    const idx=insertIdx(t);
+    st.turns.splice(idx,0,t);st.byId.set(t.id,t);
+    if(st.listState==='empty'||!col||!col.isConnected){   /* 0→1 边界：空态与首条原子互斥（同帧换面） */
+      st.listState='ready';renderList();
+      if(st.atLatest)root.scrollTop=root.scrollHeight;
+    }else if(idx===st.turns.length-1){                    /* 尾插快路：增量 append，不重建（保文本选择） */
+      recomputeGroups();
+      const prev=st.turns[st.turns.length-2];
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      if(cross)col.append(nodeDate(t.time));
+      const n=nodeTurn(t,t._cont);n.dataset.g=t._g;
+      col.append(n);
+      col.dataset.turns=st.turns.length;
+      if(st.atLatest)root.scrollTop=root.scrollHeight;    /* 在底跟随（内容义务，非动效） */
+    }else{                                                /* 乱序中插：按值重排（全量重建，instant） */
+      structural(t.id);
+    }
+    if(!st.atLatest){                                     /* 离底：不打断阅读，仅累加未读句 */
+      const n=sentCount(t);
+      if(n){st.unread+=n;emitFollow();}
+    }
+    devHook();
+    return true;
+  }
+  function update(id,patch){
+    const t=st.byId.get(id);
+    if(!t||!patch||typeof patch!=='object')return false;
+    const node=col&&col.isConnected?col.querySelector('[data-id="'+cssEsc(id)+'"]'):null;
+    const oldH=node?node.offsetHeight:0;
+    const resort=patch.time!==undefined&&patch.time!==t.time;
+    Object.assign(t,patch);
+    if(resort){
+      st.turns.splice(st.turns.indexOf(t),1);
+      st.turns.splice(insertIdx(t),0,t);
+      structural(id);
+    }else if(node){
+      const fresh=nodeTurn(t,node.hasAttribute('data-cont'));
+      if(t._g)fresh.dataset.g=t._g;
+      node.replaceWith(fresh);                            /* 原位换节点：不重排、不重放入场 */
+      anchorGrowth(fresh,oldH);
+    }
+    devHook();
+    return true;
+  }
+  /* reveal:progress / reveal:done（04 发来）：只改内容不重建节点——读位、选择、
+     揭示前缀全部保持；计数只认 progress 事件（update 修正不计数，对齐句由 04 继续走 progress）。 */
+  function revealProgress(id,shownText){
+    const t=st.byId.get(id);
+    if(!t||t.state!=='revealing'||typeof shownText!=='string')return false;
+    const node=col&&col.querySelector('[data-id="'+cssEsc(id)+'"]');
+    if(!node)return false;
+    const oldH=node.offsetHeight;
+    t.shownText=shownText;
+    fillBub(node.querySelector('.p02-bub'),t);
+    if(st.atLatest)root.scrollTop=root.scrollHeight;
+    else{anchorGrowth(node,oldH);st.unread++;emitFollow();}
+    devHook();
+    return true;
+  }
+  function revealDone(id){
+    const t=st.byId.get(id);
+    if(!t||t.state!=='revealing')return false;
+    const node=col&&col.querySelector('[data-id="'+cssEsc(id)+'"]');
+    const oldH=node?node.offsetHeight:0;
+    t.state='done';t.shownText=t.text;
+    if(node){
+      fillBub(node.querySelector('.p02-bub'),t);
+      const live=node.querySelector('.p02-stx-live');if(live)live.remove();
+      anchorGrowth(node,oldH);
+    }
+    devHook();
+    return true;
+  }
+  /* jump:latest（07 发来）：单次受控回底——瞬时跳转（方向 B 基线二选一记录，DIRECTIONS）；
+     该次“用户主动回底”由 04 自行监听同信号触发跳过，02 不代劳。 */
+  function jumpLatest(){
+    root.scrollTop=root.scrollHeight;
+    setFollow(true);
+    checkFollow();
+  }
+
+  /* —— listState 迁移（08 驱动；gen 令牌防快速连切竞态） —— */
+  function beginLoad(){
+    st.gen++;st.turns=[];st.byId.clear();
+    st.listState='loading';st.fail=false;
+    st.atLatest=true;st.unread=0;     /* loading/empty 面：pill 必须不在场（07 规格 §3） */
+    emitFollow();
+    faceLoading();devHook();
+    return st.gen;
+  }
+  function loadDone(g,arr){
+    if(g!==st.gen)return false;
+    st.fail=false;
+    const clean=(Array.isArray(arr)?arr:[]).map(sanitize).filter(Boolean);
+    if(!clean.length){st.listState='empty';faceEmpty();}
+    else{
+      st.turns=sortTurns(clean);
+      st.byId=new Map(st.turns.map(t=>[t.id,t]));
+      st.listState='ready';renderList();
+      if(st.atLatest)root.scrollTop=root.scrollHeight;
+    }
+    checkFollow();devHook();
+    return true;
+  }
+  function loadFail(g){
+    if(g!==st.gen)return false;
+    st.fail=true;st.listState='loading'; /* 失败面是 loading 流的错误呈现（PARTS §2.2 无 fail 态） */
+    faceFail();devHook();
+    return true;
+  }
+
+  function mount(el,b){
+    root=el;bus=b;
+    root.classList.add('p02-list');
+    root.addEventListener('scroll',()=>{   /* passive + rAF 合并：只读不拦（PRINCIPLES §5 #15） */
+      if(tick)return;tick=true;
+      requestAnimationFrame(()=>{tick=false;checkFollow();});
+    },{passive:true});
+    window.addEventListener('resize',checkFollow); /* 仅重算判定，零动效（§1 #13） */
+    faceLoading();
+    return api;
+  }
+
+  const api={
+    mount,inject,update,revealProgress,revealDone,jumpLatest,beginLoad,loadDone,loadFail,
+    state:()=>({listState:st.listState,fail:st.fail,atLatest:st.atLatest,unread:st.unread,turns:st.turns.length,gen:st.gen}),
+    onChange(cb){hook=cb;},
+    sentences:splitSent /* 供 04/演示侧复用；装配时以 03 公共实现为准 */
+  };
+  return api;
+})();
+
+/* ================= P02 DEV JS（不随装配：档位/注入/揭示剧本/信号日志） ================= */
+(function(){
+  const $=id=>document.getElementById(id);
+  const listEl=$('p02-list'),logEl=$('p02-log');
+  const IN=new Set(['turn:append','turn:update','reveal:progress','reveal:done','jump:latest']);
+  const bus={
+    m:{},
+    on(t,f){(this.m[t]=this.m[t]||[]).push(f);},
+    emit(t,d){
+      (this.m[t]||[]).slice().forEach(f=>f(d));
+      let extra='';
+      if(t==='follow:change')extra='(atLatest='+d.atLatest+', unread='+d.unread+')';
+      else if(d&&d.id)extra='('+d.id+(d.patch?' ·patch':'')+')';
+      logLine((IN.has(t)?'← ':'→ ')+t+extra);
+    }
+  };
+  function logLine(s){
+    const line=document.createElement('div');line.textContent=s;
+    logEl.append(line);
+    while(logEl.children.length>60)logEl.firstElementChild.remove();
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+
+  /* 部件接总线（与装配时的接线一致） */
+  P02.mount(listEl,bus);
+  bus.on('turn:append',t=>{
+    const r=P02.inject(t);
+    if(r===false)logLine('⚠ 注入被拒绝（非法 Turn 或 loading 期）——列表其余部分完好');
+  });
+  bus.on('turn:update',d=>P02.update(d.id,d.patch));
+  bus.on('reveal:progress',d=>P02.revealProgress(d.id,d.shownText));
+  bus.on('reveal:done',d=>P02.revealDone(d.id));
+  bus.on('jump:latest',()=>P02.jumpLatest());
+  bus.on('retry:load',()=>loadDataset(cur));
+
+  /* 状态读出 */
+  function refresh(s){
+    $('p02-s-atl').textContent=String(s.atLatest);
+    $('p02-s-un').textContent=String(s.unread);
+    $('p02-s-ls').textContent=s.fail?'loading·fail':s.listState;
+    $('p02-s-tn').textContent=String(s.turns);
+    $('p02-s-dr').textContent=String(listEl.querySelectorAll('.p02-drow').length);
+    $('p02-s-g').textContent=String(listEl.querySelectorAll('.p02-msg:not([data-cont])').length);
+  }
+  P02.onChange(refresh);
+
+  /* —— 数据集（02 规格 §3 状态矩阵的五态 + 最坏；文案虚构） —— */
+  const T=(day,h,m,y)=>new Date(y??2026,10,day,h,m).getTime();
+  const LONG=(()=>{const b='编译在凌晨完成，没有警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。';
+    let s='';while(s.length<1880)s+=b;return s+'以上，长文到此收尾。';})();
+  const URLISH='https://mirror.internal.alice/pkg/'+'a'.repeat(170);
+  const EMOJI='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨ 晚安。';
+  const REPLY='收到，这条回复走逐句揭示。第二句演示离底时的未读句计数。第三句验证自动跟随不劫持手动滚动。【认真】第四句带一个情绪标记原样显示。第五句收尾，揭示到此完整。';
+
+  function floodTurns(){
+    const base=T(16,14,0);
+    const U=['收到。','好，先这样。','这一版我先跑一遍。','嗯，辛苦了。','晚上再对一次？'];
+    const A=['编译通过，起服正常。【安心】日志没有新告警，归档线程写完了今天的索引。','这一段我先记下，等实测数据回来再对一次结论。【认真】','可以。流程走完我把要点整理进档案，明天直接续上。','记好了。这一批跑完我会给你一份对照摘要。'];
+    const S=['嗯','在','？','好'];
+    const E=['🌊 潮水退了，滩上很静。','✨ 晚安。','👨‍👩‍👧‍👦 都到齐了。'];
+    const out=[];
+    for(let i=0;i<50;i++){
+      const role=Math.floor(i/6)%2===0?'user':'assistant';
+      const pool=role==='user'?U:A;
+      let text;
+      switch(i%5){
+        case 0:text=pool[i%pool.length];break;
+        case 1:text=pool[(i+1)%pool.length];break;
+        case 2:text=S[i%S.length];break;
+        case 3:text=E[i%E.length];break;
+        default:text=pool[(i+2)%pool.length];
+      }
+      let time;
+      if(i%9===4)time=null;                                   /* null 恒尾 */
+      else if(i%11===7){                                      /* 同值 time：稳定排序不互换 */
+        const prev=out.length?out[out.length-1].time:null;
+        time=typeof prev==='number'?prev:base+i*61e3;
+      }
+      else if((i>=20&&i<23)||(i>=40&&i<43))time=base-6*3600e3+i*61e3; /* 乱序：中插历史区 */
+      else time=base+i*61e3;
+      out.push({id:'f'+i,role,text,time});
+    }
+    return out;
+  }
+  const DATA={
+    normal:()=>[
+      {id:'n1',role:'user',text:'今天的部署顺利吗？',time:T(15,22,41)},
+      {id:'n2',role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。【安心】部署记录已经归档，明天可以晚点起。',time:T(15,22,42)},
+      {id:'n3',role:'assistant',channel:'qq',text:'早上好。昨夜监控没有异常，桌面 0.1.5 的自动检查十点半会跑第一次。',time:T(16,8,52)},
+      {id:'n4',role:'user',text:'好，那今天陪我把升级流程再过一遍？',time:T(16,8,55)},
+      {id:'n5',role:'assistant',text:'可以。上午先确认更新开关的状态，再走一次同版提示的路径。【认真】卡点我会记下，过完整理进桌面档案。',time:T(16,8,55)}
+    ],
+    worst:()=>[
+      {id:'w1',role:'user',text:URLISH,time:new Date(2026,11,31,23,58).getTime()},
+      {id:'w2',role:'assistant',text:LONG,time:new Date(2027,0,3,9,0).getTime()},
+      {id:'w3',role:'assistant',text:EMOJI,time:new Date(2027,0,3,9,1).getTime()},
+      {id:'w4',role:'user',text:'在吗',time:new Date(2027,0,3,9,2).getTime()},
+      {id:'w5',role:'assistant',text:'嗯',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w6',role:'assistant',text:'',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w7',role:'user',text:'这条是发送失败的用户消息',status:'failed',time:new Date(2027,0,3,9,4).getTime()},
+      {id:'w8',role:'assistant',text:'这一轮没有时间字段，元信息按字段隐藏。',time:null}
+    ],
+    single:()=>[{id:'s1',role:'assistant',text:'只有一条消息的会话，验证 0/1/N 边界与日期行判定的下限。',time:T(16,12,0)}],
+    empty:()=>[],
+    flood:()=>floodTurns()
+  };
+
+  /* —— 档位装载（本地替身 08；devGen 防快速连切，部件 gen 防晚到注入） —— */
+  let cur='normal',devGen=0,failArmed=false,uc=0;
+  const dsBtns=[...document.querySelectorAll('.p02-dbtn[data-ds]')];
+  function markCur(){dsBtns.forEach(b=>b.dataset.ds===cur?b.setAttribute('aria-current','true'):b.removeAttribute('aria-current'));}
+  function loadDataset(name){
+    cur=name;markCur();
+    const dg=++devGen;
+    stopReveals();
+    const gp=P02.beginLoad();
+    logLine('⟳ 切档 '+name+'（loading 420ms）');
+    setTimeout(()=>{
+      if(dg!==devGen)return;                      /* 快速连切：中间档注入可取消 */
+      if(failArmed){failArmed=false;P02.loadFail(gp);return;}
+      if(name==='flood'){startFlood(dg,gp);return;}
+      P02.loadDone(gp,DATA[name]());
+    },420);
+  }
+  function startFlood(dg,gp){                     /* 50 条分批到达：在底逐批跟随 / 离底累加未读 */
+    const arr=DATA.flood();
+    let i=10;
+    P02.loadDone(gp,arr.slice(0,10));
+    const batch=()=>{
+      if(dg!==devGen)return;                      /* 注入中途切档/清空：洪流可取消 */
+      arr.slice(i,i+10).forEach(t=>bus.emit('turn:append',t));
+      i+=10;
+      if(i<arr.length)setTimeout(batch,280);
+      else logLine('✓ 洪流 50 条注入完毕');
+    };
+    setTimeout(batch,280);
+  }
+  dsBtns.forEach(b=>b.addEventListener('click',()=>loadDataset(b.dataset.ds)));
+
+  /* —— 揭示剧本（本地替身 04；节拍 240–380ms/句为方向 B 内容节拍，非动画时长） —— */
+  const reveals=new Set();
+  function stopReveals(){reveals.forEach(r=>r.cancel());reveals.clear();} /* 切档：揭示随旧档清除，无残尸 */
+  function finishReveals(){reveals.forEach(r=>r.finish());}              /* 用户主动回底 → 跳过（04 义务替身） */
+  bus.on('jump:latest',()=>finishReveals());
+  $('p02-act-reply').addEventListener('click',()=>{
+    const id='rv'+(++uc)+'-'+Date.now().toString(36);
+    bus.emit('turn:append',{id,role:'assistant',text:REPLY,time:Date.now(),shownText:'',state:'revealing'});
+    const parts=P02.sentences(REPLY);
+    const dg=devGen;
+    const r={done:false,
+      cancel(){this.done=true;reveals.delete(r);},
+      finish(){ /* 跳过=立即完整；自然完成与跳过路径都必须发 reveal:done（04 不变量） */
+        if(this.done)return;this.done=true;reveals.delete(r);
+        bus.emit('reveal:done',{id});
+      }};
+    reveals.add(r);
+    let i=0;
+    const step=()=>{
+      if(r.done||dg!==devGen)return;
+      i++;
+      bus.emit('reveal:progress',{id,shownText:parts.slice(0,i).join('')});
+      if(i<parts.length)setTimeout(step,240+Math.random()*140);
+      else r.finish();
+    };
+    setTimeout(step,600+Math.random()*400);      /* 等待首句 */
+  });
+
+  /* —— 注入与信号按钮 —— */
+  const nid=()=>'dx'+(++uc)+'-'+Date.now().toString(36);
+  $('p02-act-user').addEventListener('click',()=>{
+    bus.emit('turn:append',{id:nid(),role:'user',
+      text:'第 '+(uc)+' 条手动注入的用户消息，time 为当前时刻，排在队尾。',time:Date.now()});
+  });
+  $('p02-act-mid').addEventListener('click',()=>{
+    bus.emit('turn:append',{id:nid(),role:'assistant',
+      text:'乱序消息：time 早于多数消息，触发按值重排、日期行重算与滚动位置记忆。',time:Date.now()-26*3600e3});
+  });
+  $('p02-act-sameid').addEventListener('click',()=>{
+    const last=listEl.querySelector('.p02-msg:last-of-type');
+    if(!last){logLine('⚠ 列表为空，无可重注入的 id');return;}
+    bus.emit('turn:append',{id:last.dataset.id,role:last.dataset.role,
+      text:'同 id 重注入 → 视为更新（本条文本已改写，节点数不变）。'});
+  });
+  $('p02-act-bad').addEventListener('click',()=>{
+    bus.emit('turn:append',{id:nid(),role:'system',text:'非法 role 的消息应当被单条丢弃'});
+  });
+  $('p02-act-fail').addEventListener('click',()=>{
+    failArmed=true;
+    logLine('⚠ 已装填：下一次切档/重播走载入失败面');
+  });
+  $('p02-act-jump').addEventListener('click',()=>bus.emit('jump:latest'));
+  $('p02-act-midscroll').addEventListener('click',()=>{   /* 测试辅助：瞬时置于中部（非产品行为） */
+    const max=listEl.scrollHeight-listEl.clientHeight;
+    if(max>0)listEl.scrollTop=max*0.5;
+  });
+
+  /* —— 启动 —— */
+  loadDataset('normal');
+})();
+</script>
+</body>
+</html>
