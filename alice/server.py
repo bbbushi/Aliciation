@@ -551,6 +551,12 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("thoughts.js", "application/javascript; charset=utf-8")
             elif path == "/thoughts.css":
                 self._file("thoughts.css", "text/css; charset=utf-8")
+            elif path == "/theme-orbit.css":
+                self._file("theme-orbit.css", "text/css; charset=utf-8")
+            elif path == "/orbit.js":
+                self._file("orbit.js", "application/javascript; charset=utf-8")
+            elif path == "/orbit-bg.js":
+                self._file("orbit-bg.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.js":
                 self._file("chat-search.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.css":

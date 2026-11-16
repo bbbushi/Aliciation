@@ -3331,7 +3331,7 @@ boot().catch(showStartupError);
   const root = document.documentElement;
   const control = document.getElementById("ui-theme");
   const state = document.getElementById("ui-theme-state");
-  const normalize = (value) => ["legacy", "minimal"].includes(value) ? value : "room";
+  const normalize = (value) => ["legacy", "minimal", "orbit"].includes(value) ? value : "room";
   let preference = "room", canSave = true;
   try { preference = normalize(localStorage.getItem(key)); }
   catch { canSave = false; }
@@ -3340,6 +3340,7 @@ boot().catch(showStartupError);
     control.value = preference;
     state.textContent = preference === "legacy" ? "已切换到经典视图（轻雾背景，无边框正文）。"
       : preference === "minimal" ? "已切换到简洁视图（专注对话，详细信息与高级设置按需打开）。"
+      : preference === "orbit" ? "已切换到轨道视图（多页环绕，信息收纳为图标与徽标）。"
       : "已使用房间视图（网格房间、神经球与消息气泡）。";
     if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
   }
@@ -3465,7 +3466,7 @@ boot().catch(showStartupError);
   const mouse = window.matchMedia("(hover: hover) and (pointer: fine)");
   let frame = 0;
   let clientX = 0, clientY = 0;
-  const available = () => root.dataset.motion === "on" && mouse.matches
+  const available = () => root.dataset.motion === "on" && root.dataset.theme !== "orbit" && mouse.matches
     && !document.hidden && !chat.closest("[inert], .hidden");
 
   function reset() {
