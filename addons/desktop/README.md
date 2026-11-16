@@ -1,6 +1,6 @@
 # Alice 桌面应用
 
-Tauri 2 窗口复用核心公开 CLI 和 HTTP/SSE，不 import Alice 内部。0.1.0 安装版基本流程、0.1.1 备份退出与重开继续启动已获用户真人验收；0.1.2 新增私有 GitHub Releases 手动签名更新，待真人验收及发布。设计和批次见[桌面 App 文档](../../docs/设计文档/桌面App/Alice桌面App-架构与更新设计-v1-20261114.md)。
+Tauri 2 窗口复用核心公开 CLI 和 HTTP/SSE，不 import Alice 内部。0.1.0 安装版基本流程、0.1.1 备份退出与重开继续启动已获用户真人验收；0.1.2 的手动安装、GitHub 授权与检查更新已获用户真人验收；0.1.4 的正常升级流程（验签、备份安装、自动重启、对话人格保留、聊天及退出重开）已获用户真人验收。0.1.5 新增自动检查及持久开关，待真人验收；详见[自动检查施工记录](../../docs/设计文档/桌面App/自动检查更新-实施与人工验收-20261116.md)。设计和批次见[桌面 App 文档](../../docs/设计文档/桌面App/Alice桌面App-架构与更新设计-v1-20261114.md)。
 
 ## macOS 开发包
 
@@ -16,20 +16,20 @@ Tauri 2 窗口复用核心公开 CLI 和 HTTP/SSE，不 import Alice 内部。0.
 
 维护协议和数据格式现均为 v1；未来数据格式变化需要明确迁移实现，不支持的格式会在打开 Store 前拒绝。0.1.0 不理解新的维护状态，维护期间不要重新打开旧程序。实际恢复与中断撤销演练按用户要求暂缓，不能视为通过。详见[备份与恢复施工记录](../../docs/设计文档/桌面App/更新前备份与失败恢复-实施与人工验收-20261115.md)。
 
-### 私有仓库签名更新（0.1.2）
+### 签名更新（0.1.2 起，0.1.5 支持自动检查）
 
-菜单栏“数据与更新 → 检查更新”读取 `bbbushi/Aliciation` 私有 Releases。点击“打开 GitHub 创建令牌”，创建 fine-grained token，仅选择该仓库，Contents 设为 Read-only；在更新窗口填写。令牌只保存在本次 Alice 进程内存中，可清除，不使用 Codex 的 GitHub 连接，也不使用模型 API Key。每次重开 Alice 需要重新授权。
+菜单栏“数据与更新 → 检查更新”读取 `bbbushi/Aliciation` Releases。仓库现已公开，0.1.3 默认直接读取公开清单与签名包，无需登录或填写令牌；“可选 GitHub 授权”折叠项保留私有源能力。已安装的 0.1.2 仍需一次授权才能升级到 0.1.3。需要授权时，点击“打开 GitHub 创建令牌”，创建 fine-grained token，仅选择该仓库，Contents 设为 Read-only；在更新窗口填写。令牌只保存在本次 Alice 进程内存中，可清除，不使用 Codex 的 GitHub 连接，也不使用模型 API Key。每次重开 Alice 需要重新授权。
 
-流程为手动检查、显示说明、下载并验签、确认安装、等待当前任务结束与保存恢复点、保留旧版程序、替换并重启。不在启动时自动联网，不自动回滚数据。目前仅接受 Apple Silicon macOS、维护协议 v1、数据格式 v1 且无需迁移的更新。0.1.1 没有联网更新入口，第一次需手动换成 0.1.2；同版本不会触发升级。
+流程为手动检查、显示说明、下载并验签、确认安装、等待当前任务结束与保存恢复点、保留旧版程序、替换并重启。0.1.5 默认在启动约 30 秒后检查，持续运行每 24 小时检查，联网失败静默约 1 小时后重试；新版本通过不抢焦点的更新窗口提示，每个版本自动提示一次。检查窗口可关闭自动检查，偏好跨重开保存，手动检查仍可用。自动任务仅取版本清单，下载与安装仍需用户操作，不自动回滚数据。目前仅接受 Apple Silicon macOS、维护协议 v1、数据格式 v1 且无需迁移的更新。0.1.1 没有联网更新入口，第一次需手动换成 0.1.2；同版本不会触发升级。
 
 发布者在源码目录执行以下步骤，生成版本 Release 附件及开发通道清单，不会自动上传：
 
 ```sh
 python3 addons/desktop/dev.py --signer
-python3 addons/desktop/packaging/prepare_update_release.py --notes addons/desktop/packaging/release-notes-0.1.2.md
+python3 addons/desktop/packaging/prepare_update_release.py --notes addons/desktop/packaging/release-notes-0.1.5.md
 ```
 
-默认私钥在 `~/Library/Application Support/Alice Release Keys/updater.key`，仅公钥入库。先将版本附件发布为私有仓库的 `v0.1.2` prerelease，再将 `latest.json` 发布到固定 `desktop-dev` prerelease。后续版本替换通道清单前先上传对应版本附件。详见[私有更新实施与人工验收](../../docs/设计文档/桌面App/应用内签名更新与私有GitHub授权-实施与人工验收-20261116.md)。
+默认私钥在 `~/Library/Application Support/Alice Release Keys/updater.key`，仅公钥入库。0.1.2 发布已由用户完成；0.1.4 已由用户发布并完成正常升级验收，本轮源码与验收记录纳入本次提交，按用户授权上推 `origin/ytq`；当前 0.1.5 自动检查测试包和签名材料已生成，尚未发布。发布时先上传版本附件，再替换固定 `desktop-dev` 的 `latest.json`；版本 tag 必须与清单下载地址一致，例如 `v0.1.4`。后续版本替换通道清单前先上传对应版本附件。详见[私有更新实施与人工验收](../../docs/设计文档/桌面App/应用内签名更新与私有GitHub授权-实施与人工验收-20261116.md)。
 
 在 macOS arm64、CPython 3.14 和已准备好的 `.toolchain/` 工具链环境中构建：
 
@@ -65,7 +65,7 @@ addons/desktop/packaging/.venv/bin/python addons/desktop/packaging/build_macos.p
 - 管道 v1 支持 `status`、`maintenance_status` 与 `shutdown(reason=quit/update/recovery)`；明确 `updates=false`，不支持任意路径/程序/模型工具。恢复通过固定离线 CLI 在后端实际退出后执行，不向聊天页面授予原生命令权限。
 - 外链/新窗口与导入导出、SSE、神经球在系统 WebView 中仍需真人验收；不得因编译成功认定可用。
 - QQ、浏览器、B站与协作者在源码模式沿用既有独立组件；冻结模式不把冻结程序当 Python 解释器调用，未打包组件返回不可用，不自动改用户许可。
-- `packaging/resource-manifest.json` v4 是资源与组件清单，包含实现摘要所需源文件；0.1.2 冻结后端、`.app`、`.dmg` 及签名更新归档已生成。联网授权、双版本安装与重启仍待真人验收；未因编译或文件签名通过认定更新可用。
+- `packaging/resource-manifest.json` v6 是资源与组件清单，包含实现摘要所需源文件；0.1.2 冻结后端、`.app`、`.dmg` 及签名更新归档已生成。0.1.2 联网授权与检查更新已真人通过，0.1.4 正常升级、安装重启与数据保留已获真人确认；异常失败与实际恢复专项仍未验收。
 
 ## 核心公共入口
 

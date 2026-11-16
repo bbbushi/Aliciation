@@ -331,6 +331,7 @@ fn main() {
                     }
                 })
                 .build()?;
+            updates::start_scheduler(app.handle().clone(),setup_state.clone());
             let handle = app.handle().clone();
             let backend = setup_state.clone();
             thread::spawn(move || {

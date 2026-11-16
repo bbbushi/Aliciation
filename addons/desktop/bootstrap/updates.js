@@ -2,8 +2,12 @@
 const $=(id)=>document.getElementById(id);
 let busy=false;
 let timer=null;
-const labels={unauthorized:"本次 GitHub 授权已清除。",checking:"正在检查发布源…",available:"有新版本可用。",current:"当前已是发布源中的最新版本。",downloading:"正在下载更新…",verifying:"正在核验签名与兼容性…",verified:"验签通过，可以确认安装。",preparing:"正在等待任务结束并创建恢复点…",installing:"恢复点已完成，正在安装新版…",restarting:"更新完成，正在重新启动…"};
+let lastState={};
+const labels={unauthorized:"本次 GitHub 授权已清除，可直接检查公开更新。",checking:"正在检查发布源…",available:"有新版本可用。",current:"当前已是发布源中的最新版本。",downloading:"正在下载更新…",verifying:"正在核验签名与兼容性…",verified:"验签通过，可以确认安装。",preparing:"正在等待任务结束并创建恢复点…",installing:"恢复点已完成，正在安装新版…",restarting:"更新完成，正在重新启动…"};
 function render(value){
+  lastState={...lastState,...value};value=lastState;
+  if(typeof value.automatic==="boolean")$("automatic").checked=value.automatic;
+  $("automatic").disabled=busy;
   if(value.current) $("current").textContent=`当前版本 ${value.current} · 开发通道`;
   if(value.version){$("release").hidden=false;$("version").textContent=`新版 ${value.version}`;$("notes").textContent=value.notes||"此版本未提供更新说明。";}
   if(value.phase==="checking"||value.phase==="current"||!value.version)$("release").hidden=true;
@@ -29,6 +33,7 @@ async function perform(action){
   try{await invoke(action,true,action==="check"?$("token").value:null);}catch(error){$("message").textContent=String(error);$("message").classList.add("error");}
   finally{$("token").value="";busy=false;await refresh();}
 }
+$("automatic").onchange=()=>perform($("automatic").checked?"auto_on":"auto_off");
 $("check").onclick=()=>perform("check");
 $("download").onclick=()=>perform("download");
 $("help").onclick=()=>perform("help");
