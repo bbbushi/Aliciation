@@ -1,4 +1,4 @@
-//! Manual, signed macOS updates. Only the bundle-local update window may act.
+//! Scheduled checks and manually confirmed, signed macOS updates. Only the bundle-local update window may act.
 use super::{maintenance, Backend};
 use flate2::read::GzDecoder;
 use reqwest::{redirect::Policy, Url};
@@ -15,19 +15,25 @@ const MAX_EXPANDED: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
 struct Session { phase: String, error: String, update: Option<Update>, bytes: Option<Arc<Vec<u8>>>, release: Option<Value>, token: Option<String> }
+struct Preferences { enabled: bool, announced: Option<String> }
+impl Default for Preferences {
+    fn default() -> Self { Self { enabled:true, announced:None } }
+}
 #[derive(Default)]
-pub struct Updates { session: Mutex<Session>, busy: AtomicBool }
+pub struct Updates { session: Mutex<Session>, busy: AtomicBool, preferences: Mutex<Preferences> }
 
-pub fn open(app: &tauri::AppHandle) {
+pub fn open(app: &tauri::AppHandle) { let _=open_window(app,true); }
+
+fn open_window(app: &tauri::AppHandle, focus: bool) -> bool {
     if let Some(window) = app.get_webview_window("updates") {
-        let _ = window.show(); let _ = window.set_focus(); return;
+        let shown=window.show().is_ok(); if focus { let _ = window.set_focus(); } return shown;
     }
-    let _ = WebviewWindowBuilder::new(app, "updates", WebviewUrl::App("updates.html".into()))
-        .title("Alice — 检查更新").inner_size(580.0, 570.0).min_inner_size(500.0, 440.0)
+    WebviewWindowBuilder::new(app, "updates", WebviewUrl::App("updates.html".into()))
+        .title("Alice — 检查更新").focused(focus).inner_size(580.0, 570.0).min_inner_size(500.0, 440.0)
         .on_navigation(|url| url.path() == "/updates.html" &&
             ((url.scheme() == "tauri" && url.host_str() == Some("localhost")) ||
              (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))))
-        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny).build();
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny).build().is_ok()
 }
 
 fn notify(app: &tauri::AppHandle, value: &Value) {
@@ -42,7 +48,7 @@ fn state(app: &tauri::AppHandle, updates: &Updates) -> Value {
         "error":session.error,"busy":updates.busy.load(Ordering::SeqCst),
         "version":session.update.as_ref().map(|u| &u.version),
         "notes":session.update.as_ref().and_then(|u| u.body.as_ref()).map(|s| s.chars().take(8000).collect::<String>()),
-        "verified":session.bytes.is_some(),"has_token":session.token.is_some(),"source":"GitHub · bbbushi/Aliciation Releases"})
+        "automatic":updates.preferences.lock().unwrap().enabled,"verified":session.bytes.is_some(),"has_token":session.token.is_some(),"source":"GitHub · bbbushi/Aliciation Releases"})
 }
 
 fn phase(app: &tauri::AppHandle, updates: &Updates, name: &str) {
@@ -56,22 +62,28 @@ fn allowed_transport(url: &Url) -> bool {
             host == "api.github.com" || host == "github.com" || host.ends_with(".githubusercontent.com"))
 }
 
-fn github_headers(token: &str, accept: &'static str) -> Result<reqwest::header::HeaderMap,String> {
+fn github_headers(token: Option<&str>, accept: &'static str) -> Result<reqwest::header::HeaderMap,String> {
     use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
     let mut headers=HeaderMap::new();
-    let mut authorization=HeaderValue::try_from(format!("Bearer {token}")).map_err(|_| "GitHub 令牌格式无效")?;
-    authorization.set_sensitive(true);
-    headers.insert(AUTHORIZATION,authorization);headers.insert(ACCEPT,HeaderValue::from_static(accept));
+    if let Some(token)=token {
+        let mut authorization=HeaderValue::try_from(format!("Bearer {token}")).map_err(|_| "GitHub 令牌格式无效")?;
+        authorization.set_sensitive(true);
+        headers.insert(AUTHORIZATION,authorization);
+    }
+    headers.insert(ACCEPT,HeaderValue::from_static(accept));
     Ok(headers)
 }
 
-async fn release_asset(token: &str, tag: &str, name: &str, limit: u64) -> Result<Url,String> {
+async fn release_asset(token: Option<&str>, tag: &str, name: &str, limit: u64) -> Result<Url,String> {
     let client=secure_client(reqwest::Client::builder()).user_agent("Alice-Updater")
         .timeout(Duration::from_secs(30)).build().map_err(|_| "GitHub 请求配置不可用")?;
     let url=format!("https://api.github.com/repos/bbbushi/Aliciation/releases/tags/{tag}");
     let mut response=client.get(url).headers(github_headers(token,"application/vnd.github+json")?).send().await
         .map_err(|_| "无法连接 GitHub 更新源")?;
-    if matches!(response.status().as_u16(),401|403) { return Err("GitHub 授权无效、已过期、权限不足或请求受限".into()); }
+    if matches!(response.status().as_u16(),401|403|429) {
+        return Err(if token.is_some() { "GitHub 授权无效、已过期、权限不足或请求受限；公开源可清除授权后重试" }
+            else { "GitHub 请求受限，请稍后重试，或使用可选的只读授权" }.into());
+    }
     if response.status().as_u16()==404 { return Err("开发更新尚未发布，或令牌未获此仓库的读取权限".into()); }
     if !response.status().is_success() { return Err("GitHub 更新源暂不可用".into()); }
     let mut bytes=Vec::new();
@@ -169,6 +181,119 @@ fn inspect_package(bytes: &[u8], version: &str) -> Result<Value, String> {
     Ok(info)
 }
 
+async fn check_release(app: &tauri::AppHandle, token: Option<&str>) -> Result<Option<Update>,String> {
+    let endpoint=if token.is_some() {
+        release_asset(token,"desktop-dev","latest.json",64*1024).await?
+    } else {
+        Url::parse("https://github.com/bbbushi/Aliciation/releases/download/desktop-dev/latest.json")
+            .map_err(|_| "公开更新源配置无效")?
+    };
+    let updater=app.updater_builder().timeout(Duration::from_secs(30)).configure_client(secure_client)
+        .endpoints(vec![endpoint]).map_err(|_| "更新附件配置不可用")?
+        .headers(github_headers(token,"application/octet-stream")?)
+        .build().map_err(|_| "更新配置不可用")?;
+    let found=updater.check().await.map_err(|_| "更新清单不可访问或格式无效，请检查网络及发布文件")?;
+    if let Some(update)=found.as_ref() {
+        let filename=format!("Alice-{}-darwin-aarch64.app.tar.gz",update.version);
+        if !allowed_transport(&update.download_url) || update.download_url.host_str()!=Some("github.com")
+            || !update.download_url.path().starts_with("/bbbushi/Aliciation/releases/download/")
+            || update.download_url.path().rsplit('/').next()!=Some(filename.as_str()) {
+            return Err("更新包来源或名称不符合当前发布配置".into());
+        }
+    }
+    Ok(found)
+}
+
+fn preference_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf,String> {
+    app.path().app_config_dir().map(|root|root.join("updater.json")).map_err(|_| "更新偏好目录不可用".into())
+}
+
+fn save_preferences(app: &tauri::AppHandle, value: &Preferences) -> Result<(),String> {
+    let path=preference_path(app)?;
+    let directory=path.parent().ok_or("更新偏好目录不可用")?;
+    private_directory(directory)?;
+    if path.is_symlink() { return Err("更新偏好不能是符号链接".into()); }
+    let temporary=directory.join(format!(".updater-{}.tmp",uuid::Uuid::new_v4().simple()));
+    let result:Result<(),String>=(|| {
+        let mut options=fs::OpenOptions::new(); options.write(true).create_new(true);
+        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut file=options.open(&temporary).map_err(|_| "更新偏好无法保存")?;
+        file.write_all(json!({"enabled":value.enabled,"announced":value.announced}).to_string().as_bytes())
+            .and_then(|_|file.sync_all()).map_err(|_| "更新偏好无法落盘")?;
+        fs::rename(&temporary,&path).map_err(|_| "更新偏好无法替换".to_string())
+    })();
+    if result.is_err() { let _=fs::remove_file(temporary); }
+    result
+}
+
+fn load_preferences(app: &tauri::AppHandle) -> Preferences {
+    let disabled=||Preferences { enabled:false,announced:None };
+    let Ok(path)=preference_path(app) else { return disabled(); };
+    if path.is_symlink() { return disabled(); }
+    let metadata=match fs::metadata(&path) {
+        Ok(value)=>value,
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Preferences::default(),
+        Err(_)=>return disabled(),
+    };
+    if !metadata.is_file() || metadata.len()>4096 { return disabled(); }
+    let Ok(bytes)=fs::read(&path) else { return disabled(); };
+    let Ok(value)=serde_json::from_slice::<Value>(&bytes) else { return disabled(); };
+    Preferences { enabled:value["enabled"].as_bool().unwrap_or(false),
+        announced:value["announced"].as_str().filter(|v|v.len()<160).map(str::to_owned) }
+}
+
+// Only fetches version metadata. Never downloads or installs from this timer.
+pub fn start_scheduler(app: tauri::AppHandle, backend: Arc<Backend>) {
+    let updates=app.state::<Arc<Updates>>().inner().clone();
+    *updates.preferences.lock().unwrap()=load_preferences(&app);
+    if cfg!(debug_assertions) || !cfg!(target_os="macos") || !cfg!(target_arch="aarch64") { return; }
+    std::thread::spawn(move|| {
+        std::thread::sleep(Duration::from_secs(30));
+        let mut due=Instant::now();
+        loop {
+            if backend.allow_exit.load(Ordering::SeqCst) { return; }
+            if Instant::now()>=due && updates.preferences.lock().unwrap().enabled
+                && backend.launch_done.load(Ordering::SeqCst) && !backend.reader_done.load(Ordering::SeqCst)
+                && !backend.closing.load(Ordering::SeqCst) && !backend.suspended.load(Ordering::SeqCst)
+                && !backend.maintenance_pending.load(Ordering::SeqCst) && !backend.maintenance_busy.load(Ordering::SeqCst)
+                && !updates.busy.swap(true,Ordering::SeqCst) {
+                let _guard=BusyGuard { updates:updates.clone(),backend:backend.clone() };
+                let token={ let session=updates.session.lock().unwrap();
+                    if session.bytes.is_some() { due=Instant::now()+Duration::from_secs(86400); None }
+                    else { Some(session.token.clone()) }
+                };
+                if let Some(token)=token {
+                    let found=tauri::async_runtime::block_on(check_release(&app,token.as_deref()));
+                    due=Instant::now()+Duration::from_secs(if found.is_ok() {86400} else {3600});
+                    // Disabling checks or beginning shutdown during the request suppresses its result.
+                    if updates.preferences.lock().unwrap().enabled && !backend.closing.load(Ordering::SeqCst)
+                        && !backend.maintenance_pending.load(Ordering::SeqCst) && !backend.maintenance_busy.load(Ordering::SeqCst) {
+                        if let Ok(Some(update))=found {
+                            let version=update.version.clone();
+                            { let mut session=updates.session.lock().unwrap(); session.phase="available".into();
+                                session.error.clear(); session.update=Some(update); }
+                            let handle=app.clone(); let pending=updates.clone(); let control=backend.clone();
+                            let _=app.run_on_main_thread(move|| {
+                                if pending.session.lock().unwrap().update.as_ref().map(|u| &u.version)!=Some(&version) { return; }
+                                let mut preferences=pending.preferences.lock().unwrap();
+                                if !preferences.enabled || preferences.announced.as_ref()==Some(&version)
+                                    || control.closing.load(Ordering::SeqCst) || control.maintenance_pending.load(Ordering::SeqCst)
+                                    || control.suspended.load(Ordering::SeqCst) || control.reader_done.load(Ordering::SeqCst) { return; }
+                                if open_window(&handle,false) {
+                                    preferences.announced=Some(version); let _=save_preferences(&handle,&preferences);
+                                }
+                                drop(preferences);
+                                notify(&handle,&state(&handle,&pending));
+                            });
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+}
+
 struct BusyGuard { updates: Arc<Updates>, backend: Arc<Backend> }
 impl Drop for BusyGuard {
     fn drop(&mut self) {
@@ -181,8 +306,18 @@ pub async fn update_action(window: WebviewWindow, app: tauri::AppHandle, updates
     backend: tauri::State<'_, Arc<Backend>>, action: String, confirmed: bool, token: Option<String>) -> Result<Value, String> {
     if window.label() != "updates" { return Err("此入口仅供应用内更新窗口使用".into()); }
     if action == "state" { return Ok(state(&app, &updates)); }
-    if !matches!(action.as_str(), "check" | "download" | "install" | "forget" | "help") { return Err("未知更新操作".into()); }
+    if !matches!(action.as_str(), "check" | "download" | "install" | "forget" | "help" | "auto_on" | "auto_off") { return Err("未知更新操作".into()); }
     if !confirmed { return Err("更新操作需要明确确认".into()); }
+    if action=="auto_on" || action=="auto_off" {
+        let result={ let mut preferences=updates.preferences.lock().unwrap();
+          let changed=Preferences { enabled:action=="auto_on",announced:preferences.announced.clone() };
+          save_preferences(&app,&changed).map(|_| { *preferences=changed; }) };
+        if let Err(error)=result {
+            updates.session.lock().unwrap().error=error.clone(); return Err(error);
+        }
+        updates.session.lock().unwrap().error.clear();
+        return Ok(state(&app,&updates));
+    }
     if action=="help" {
         std::process::Command::new("/usr/bin/open").arg("https://github.com/settings/personal-access-tokens/new?name=Alice%20Updater&target_name=bbbushi&contents=read&expires_in=30")
             .status().map_err(|_| "无法打开 GitHub 授权页面")?;
@@ -206,35 +341,32 @@ pub async fn update_action(window: WebviewWindow, app: tauri::AppHandle, updates
                     }
                     updates.session.lock().unwrap().token=Some(value);
                 }
-                let token=updates.session.lock().unwrap().token.clone().ok_or("私有仓库更新需要 GitHub 只读令牌，请在此窗口填写")?;
+                let token=updates.session.lock().unwrap().token.clone();
                 { let mut session=updates.session.lock().unwrap(); session.update=None; session.bytes=None; session.release=None; }
                 phase(&app,&updates,"checking");
-                let endpoint=release_asset(&token,"desktop-dev","latest.json",64*1024).await?;
-                let updater = app.updater_builder().timeout(Duration::from_secs(30)).configure_client(secure_client)
-                    .endpoints(vec![endpoint]).map_err(|_| "更新附件配置不可用")?
-                    .headers(github_headers(&token,"application/octet-stream")?)
-                    .build().map_err(|_| "更新配置不可用")?;
-                let found = updater.check().await.map_err(|_| "更新清单不可访问或格式无效，请检查 GitHub 授权及发布文件")?;
+                let found=check_release(&app,token.as_deref()).await?;
                 if let Some(update)=found {
-                    if !allowed_transport(&update.download_url) || update.download_url.host_str()!=Some("github.com")
-                        || !update.download_url.path().starts_with("/bbbushi/Aliciation/releases/download/")
-                        || !update.download_url.path().ends_with(".app.tar.gz") { return Err("更新包来源不符合当前发布配置".into()); }
                     updates.session.lock().unwrap().update=Some(update); phase(&app,&updates,"available");
                 } else { phase(&app,&updates,"current"); }
             }
             "download" => {
                 let update=updates.session.lock().unwrap().update.clone().ok_or("请先检查更新")?;
-                let token=updates.session.lock().unwrap().token.clone().ok_or("GitHub 授权已清除，请重新检查更新")?;
+                let token=updates.session.lock().unwrap().token.clone();
                 let filename=format!("Alice-{}-darwin-aarch64.app.tar.gz",update.version);
                 if update.download_url.path().rsplit('/').next()!=Some(filename.as_str()) { return Err("更新附件名称与版本不一致".into()); }
-                let endpoint=release_asset(&token,&format!("v{}",update.version),&filename,MAX_DOWNLOAD as u64).await?;
+                let endpoint=if token.is_some() {
+                    release_asset(token.as_deref(),&format!("v{}",update.version),&filename,MAX_DOWNLOAD as u64).await?
+                } else { update.download_url.clone() };
                 phase(&app,&updates,"downloading");
                 let client=secure_client(reqwest::Client::builder()).user_agent(format!("Alice-Updater/{}",app.package_info().version))
                     .timeout(Duration::from_secs(600)).build().map_err(|_| "下载配置不可用")?;
-                let mut response=client.get(endpoint).headers(github_headers(&token,"application/octet-stream")?)
+                let mut response=client.get(endpoint).headers(github_headers(token.as_deref(),"application/octet-stream")?)
                     .send().await.map_err(|_| "更新下载失败，可稍后重试")?;
-                if !response.status().is_success() || response.content_length().is_some_and(|n| n>MAX_DOWNLOAD as u64) {
-                    return Err("更新文件不可用或大小超出限制".into());
+                if !response.status().is_success() {
+                    return Err(format!("更新下载失败（HTTP {}），请检查版本标签、附件与访问权限",response.status().as_u16()));
+                }
+                if response.content_length().is_some_and(|n| n>MAX_DOWNLOAD as u64) {
+                    return Err("更新文件超过 512 MiB 下载限制".into());
                 }
                 let total=response.content_length(); let mut bytes=Vec::new(); let mut last=Instant::now();
                 while let Some(chunk)=response.chunk().await.map_err(|_| "下载中断，当前版本仍可继续使用")? {
@@ -274,7 +406,7 @@ pub async fn update_action(window: WebviewWindow, app: tauri::AppHandle, updates
     Ok(state(&app,&updates))
 }
 
-fn private_directory(path: &Path) -> Result<(),String> {
+pub(super) fn private_directory(path: &Path) -> Result<(),String> {
     if path.ancestors().any(|p| p.is_symlink()) { return Err("更新维护目录不能是符号链接".into()); }
     fs::create_dir_all(path).map_err(|_| "无法建立更新维护目录")?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; fs::set_permissions(path,fs::Permissions::from_mode(0o700)).map_err(|_| "无法保护更新维护目录")?; }

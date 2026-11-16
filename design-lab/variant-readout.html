@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>读数 · Alice 对话流变体</title>
+<style>
+  /* ============ 读数（Readout）轴：仪表读数流 ============ */
+  :root {
+    --bg: #0c0f10;
+    --bg-deep: #090c0d;
+    --ink: #d5dcd9;
+    --muted: #7e8b8a;
+    --faint: #566160;
+    --accent: #7fb3ac;
+    --line: rgba(220, 235, 232, 0.13);
+    --dash: rgba(220, 235, 232, 0.09);
+    --box-bg: rgba(255, 255, 255, 0.02);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font); color: var(--ink); background: var(--bg);
+    display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+  }
+
+  /* ---- 顶部会话标题栏（假想） ---- */
+  .topbar {
+    flex: none; display: flex; align-items: center; gap: 16px;
+    height: 48px; padding: 0 22px; border-bottom: 1px solid var(--line);
+    background: var(--bg-deep);
+    font-family: var(--mono); font-size: 12px; letter-spacing: .06em;
+  }
+  .live { display: flex; align-items: center; gap: 7px; color: var(--accent); }
+  .live i { width: 7px; height: 7px; background: var(--accent); font-style: normal; }
+  .sess { color: var(--muted); }
+  .topbar-peer {
+    margin-left: auto; color: var(--faint); max-width: 28vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .topbar-peer b { color: var(--muted); font-weight: 400; margin-right: 5px; }
+
+  /* ---- 演示数据开关（审计工具，非参赛设计） ---- */
+  .demo { flex: none; display: flex; align-items: center; gap: 6px; font-family: var(--mono); }
+  .demo-tag { font-size: 10px; letter-spacing: .14em; color: var(--faint); margin-right: 2px; }
+  .demo-chip {
+    font: 12px var(--font); color: #8d9a98; background: #101415;
+    border: 1px solid #232b2a; padding: 4px 10px; cursor: pointer; border-radius: 0;
+  }
+  .demo-chip:hover { color: #b9c6c4; }
+  .demo-chip:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .demo-chip[aria-pressed="true"] { color: var(--ink); border-color: #3d504d; background: #14201e; }
+
+  /* ---- 消息流 ---- */
+  .stream { flex: 1; overflow-y: auto; position: relative; }
+  .stream::-webkit-scrollbar { width: 8px; }
+  .stream::-webkit-scrollbar-thumb { background: #1d2423; }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 8px 26px 30px; }
+
+  .mark {
+    display: flex; align-items: center; gap: 12px; margin: 24px 0 8px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; color: var(--faint);
+  }
+  .mark::before, .mark::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+
+  .row { display: grid; grid-template-columns: 92px 1fr; gap: 0 16px; margin: 18px 0; align-items: start; }
+  .row--user { grid-template-columns: 1fr 92px; }
+  .row .meta { grid-column: 1; font-family: var(--mono); font-size: 11px; line-height: 1.6; letter-spacing: .05em; color: var(--faint); padding-top: 14px; }
+  .row .box { grid-column: 2; }
+  .row--user .meta { grid-column: 2; text-align: right; }
+  .row--user .box { grid-column: 1; }
+  .meta .who { display: block; color: var(--accent); }
+  .row--user .meta .who { color: #a8b3b0; }
+  .meta .who .name { overflow-wrap: anywhere; }
+
+  .box {
+    position: relative; border: 1px solid var(--line); background: var(--box-bg);
+    padding: 12px 18px 13px; max-width: 100%;
+    overflow-wrap: anywhere; word-break: break-word;
+  }
+  .box::before {
+    content: ''; position: absolute; top: -1px; left: -1px; width: 9px; height: 9px;
+    border-top: 1px solid var(--accent); border-left: 1px solid var(--accent);
+  }
+  .box::after {
+    content: ''; position: absolute; bottom: -1px; right: -1px; width: 9px; height: 9px;
+    border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent);
+  }
+  .row--user .box::before { top: -1px; left: auto; right: -1px; border-left: 0; border-right: 1px solid var(--accent); }
+  .row--user .box::after { bottom: -1px; right: auto; left: -1px; border-right: 0; border-left: 1px solid var(--accent); }
+  .msg--emoji .box { font-size: 24px; line-height: 1.6; }
+
+  /* 逐句揭示：句 = 读数行（虚线分隔）。动效阶段给 .sent[data-state] 加揭示动画 */
+  .sent { display: block; padding: 5px 0 6px; font-size: 14px; line-height: 1.75; border-bottom: 1px dashed var(--dash); }
+  .sent:last-child { border-bottom: 0; }
+
+  /* ---- 空状态（待机画面） ---- */
+  .empty-holder { min-height: 70%; display: flex; align-items: center; justify-content: center; }
+  .standby {
+    position: relative; width: min(430px, 86%); border: 1px solid var(--line);
+    padding: 30px 34px 26px; background: var(--box-bg);
+  }
+  .standby::before {
+    content: ''; position: absolute; top: -1px; left: -1px; width: 12px; height: 12px;
+    border-top: 1px solid var(--accent); border-left: 1px solid var(--accent);
+  }
+  .standby::after {
+    content: ''; position: absolute; bottom: -1px; right: -1px; width: 12px; height: 12px;
+    border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent);
+  }
+  .standby-tag { font-family: var(--mono); font-size: 12px; letter-spacing: .34em; color: var(--accent); }
+  .standby h2 { margin: 14px 0 8px; font-size: 16px; font-weight: 600; letter-spacing: .04em; }
+  .standby p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.9; }
+  .standby-cursor { margin-top: 20px; font-family: var(--mono); font-size: 14px; color: var(--accent); }
+
+  /* ---- 回到最新 pill（占位） ---- */
+  .jump {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 12px; letter-spacing: .06em;
+    color: var(--ink); background: #101415; border: 1px solid #2c3634;
+    padding: 7px 13px; cursor: pointer; border-radius: 0;
+  }
+  .jump:hover { border-color: #465350; }
+  .jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .jump[hidden] { display: none; }
+
+  /* ---- Composer ---- */
+  .composer { flex: none; border-top: 1px solid var(--line); background: var(--bg-deep); }
+  .composer-inner { max-width: 780px; margin: 0 auto; padding: 0 26px; display: flex; align-items: center; }
+  .prompt { font-family: var(--mono); font-size: 15px; color: var(--accent); padding-right: 12px; flex: none; }
+  .composer textarea {
+    flex: 1; min-height: 50px; max-height: 150px; resize: none;
+    background: transparent; border: 0; outline: none;
+    color: var(--ink); font: 14px/1.75 var(--mono);
+    padding: 14px 8px 14px 0; overflow-wrap: anywhere;
+  }
+  .composer textarea::placeholder { color: var(--faint); }
+  .send {
+    flex: none; margin: 9px 0; padding: 9px 16px;
+    font: 12.5px var(--mono); letter-spacing: .12em;
+    color: var(--accent); background: transparent;
+    border: 1px solid var(--accent); cursor: pointer; border-radius: 0;
+  }
+  .send:hover { background: rgba(127, 179, 172, 0.08); }
+  .send:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+  .send:disabled { border-color: #2a3332; color: #4a5554; cursor: default; background: transparent; }
+</style>
+</head>
+<body data-mode="sample">
+
+  <header class="topbar">
+    <span class="live"><i aria-hidden="true"></i>LIVE</span>
+    <span class="sess">SESSION/047 · 夜谈</span>
+    <span class="topbar-peer"><b>PEER</b><span data-peer>阿澈</span></span>
+    <div class="demo" role="group" aria-label="演示数据模式">
+      <span class="demo-tag">演示数据</span>
+      <button class="demo-chip" data-mode-btn="sample" aria-pressed="true">样例</button>
+      <button class="demo-chip" data-mode-btn="worst" aria-pressed="false">极限</button>
+      <button class="demo-chip" data-mode-btn="empty" aria-pressed="false">空态</button>
+    </div>
+  </header>
+
+  <main class="stream" id="stream">
+    <div class="wrap">
+      <div class="empty-holder" id="empty" hidden>
+        <div class="standby">
+          <div class="standby-tag">STANDBY</div>
+          <h2>会话尚未开始记录</h2>
+          <p>在下方输入第一句话，今晚的读数从此刻开始。Enter 发送，Shift + Enter 换行；Alice 的回复会按句逐行落表。</p>
+          <div class="standby-cursor" aria-hidden="true">▮</div>
+        </div>
+      </div>
+      <div id="list"></div>
+    </div>
+    <button class="jump" id="jump" hidden>[ ▼ 回到最新 ]</button>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-inner">
+      <span class="prompt" aria-hidden="true">›</span>
+      <textarea id="input" rows="1" placeholder="输入一行……" aria-label="输入消息"></textarea>
+      <button class="send" id="send" disabled>发送 ↵</button>
+    </div>
+  </footer>
+
+<script>
+'use strict';
+/* ================= 演示数据（内建，供 break-ui 审计） ================= */
+const NAME_NORMAL = '阿澈';
+const NAME_WORST = '凯瑟琳·伊丽莎白·亚历山德罗芙娜·康斯坦丁诺芙娜ConstantinovnaAlexandrovnaRaskolnikovaPetrovskaya伊万诺夫娜·谢尔盖耶芙娜';
+
+function ramble2000() {
+  const base = '今晚要把汇报的开头重写一遍，可是每次写完再读一遍都觉得不对：语气要么太硬要么太软，重点也总是藏在第二段才出现；我又想起白天会议上有人问我数据口径的问题，当时答得含糊，现在越想越不确定到底该用上周的还是上月的，两种算法差了将近一成，选错方向结论就全反了；还有一件小事，楼下便利店的关东煮换成了新汤底，我其实想说但一直没说；窗外的塔吊今晚也没停，影子扫过天花板的时候我会数它转的圈数，数到第七圈就忘了前面数过几圈；';
+  let s = '';
+  while (s.length < 2000) s += base;
+  return s.slice(0, 2000);
+}
+
+const SAMPLE = [
+  { who: 'user',  hm: '23:38', hms: '23:38:04', text: '在吗？今天有点累。' },
+  { who: 'alice', hm: '23:38', hms: '23:38:11', text: '在的。累了就先坐一会儿，不急着说话。今天是被什么事拖着走的？' },
+  { who: 'user',  hm: '23:39', hms: '23:39:32', text: '下午连着开了三个会，晚上又想起明天的汇报还没改完。' },
+  { who: 'alice', hm: '23:40', hms: '23:40:08', text: '三个会连着开，注意力会被抽干的。汇报的事——离明天还有一晚，够你把重点部分改完。要不要把最担心的那一页先念给我听？' },
+  { who: 'user',  hm: '23:41', hms: '23:41:47', text: '主要是开头，总觉得抓不住人。' },
+  { who: 'alice', hm: '23:42', hms: '23:42:03', text: '开头不用"抓人"，把为什么要听讲清楚就够了。你先按这个改，改完念给我听，我陪你到收尾。' },
+  { who: 'user',  hm: '23:43', hms: '23:43:20', text: '好，那我先去改 🫡' },
+  { who: 'alice', hm: '23:43', hms: '23:43:31', text: '去吧。我就在这儿，随时叫我。' }
+];
+
+const ALICE_CANNED = '收到，我在听。你说完这一句，我才接下一句——往后的版本里，我会一句一行地落表。现在先随便聊，我陪着你。';
+
+function buildWorst() {
+  const out = [];
+  const floodUser = ['嗯。', '好', '继续说', '那怎么办', '……', '真的吗', '我再想想', '等一下', '还是算了', '你说了算'];
+  const floodAlice = [
+    '我在。你慢慢说。',
+    '这个判断我同意。理由你其实刚才已经说了。',
+    '换个角度：如果明天就要交，你最想保住哪一段？',
+    '不用急。答案不在今晚，在明早的第一次重读里。',
+    '好。那就先这样，剩下的明天见。',
+    '记下了。这件事我会替你盯着。'
+  ];
+  let t = 22 * 3600 + 4 * 60 + 11;
+  const stamp = () => {
+    const h = String(Math.floor(t / 3600) % 24).padStart(2, '0');
+    const m = String(Math.floor(t / 60) % 60).padStart(2, '0');
+    const s = String(t % 60).padStart(2, '0');
+    t += 40 + ((out.length * 37) % 53);
+    return { hm: h + ':' + m, hms: h + ':' + m + ':' + s };
+  };
+  let k = stamp(); out.push({ who: 'user',  ...k, text: '？' });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '我在。问号也算一句话——说吧，怎么了。' });
+  k = stamp(); out.push({ who: 'user',  ...k, text: '🫠🫥😶‍🌫️🥲🙃🏃‍♀️‍➡️🫨🙃🫠' });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '这一排表情我读出两层意思：很累，但还在撑。哪层更接近？' });
+  k = stamp(); out.push({ who: 'user',  ...k, text: ramble2000() });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '这么长的一段我都收下了。里面有正事、有小事、还有塔吊——你想先处理哪一件？' });
+  let i = 0;
+  while (out.length < 50) {
+    k = stamp();
+    out.push({ who: 'user',  ...k, text: floodUser[i % floodUser.length] });
+    k = stamp();
+    out.push({ who: 'alice', ...k, text: floodAlice[i % floodAlice.length] });
+    i++;
+  }
+  return out;
+}
+
+/* ================= 工具 ================= */
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function paras(t) { return String(t).split('\n').filter(x => x.trim()); }
+function sents(p) { return p.match(/[^。！？!?…]+[。！？!?…]*/g) || [p]; }
+function emojiish(t) {
+  try {
+    const s = String(t).replace(/\s/g, '');
+    return s.length > 0 && /^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D\u20E3]+$/u.test(s);
+  } catch (e) { return false; }
+}
+
+/* ================= 渲染（读数结构：元数据列 + 描边读数框） ================= */
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
+const streamEl = document.getElementById('stream');
+const jumpEl = document.getElementById('jump');
+const ta = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+
+function rowHTML(m, name) {
+  const who = m.who === 'alice' ? 'ALICE' : '<span class="name">' + esc(name) + '</span>';
+  const body = paras(m.text).map(p =>
+    sents(p).map(s => '<span class="sent" data-state="revealed">' + esc(s) + '</span>').join('')
+  ).join('');
+  const emojiCls = emojiish(m.text) ? ' msg--emoji' : '';
+  return '<article class="row row--' + m.who + emojiCls + '" data-who="' + m.who + '">' +
+    '<div class="meta"><span class="who">' + who + '</span><time>' + esc(m.hms) + '</time></div>' +
+    '<div class="box">' + body + '</div>' +
+    '</article>';
+}
+
+function render(fresh) {
+  let html = '<div class="mark">今日 ' + (data.length ? esc(data[0].hm) : '23:38') + '</div>';
+  html += data.map(m => rowHTML(m, peer)).join('');
+  listEl.innerHTML = html;
+  if (fresh && listEl.lastElementChild) {
+    listEl.lastElementChild.classList.add('is-fresh'); /* 动效钩子：新条目入场 */
+  }
+  emptyEl.hidden = data.length > 0;
+  document.querySelectorAll('[data-peer]').forEach(el => { el.textContent = peer; });
+  document.body.dataset.mode = mode;
+  stickBottom();
+}
+
+let mode = 'sample';
+let data = SAMPLE;
+let peer = NAME_NORMAL;
+
+function stickBottom() { streamEl.scrollTop = streamEl.scrollHeight; }
+
+/* ---- 演示模式切换 ---- */
+document.querySelectorAll('[data-mode-btn]').forEach(btn => {
+  btn.addEventListener('click', () => setMode(btn.dataset.modeBtn));
+});
+function setMode(m) {
+  if (m === mode) return;
+  mode = m;
+  document.querySelectorAll('[data-mode-btn]').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.modeBtn === m)));
+  if (m === 'sample') { data = SAMPLE; peer = NAME_NORMAL; }
+  else if (m === 'worst') { data = buildWorst(); peer = NAME_WORST; }
+  else { data = []; peer = NAME_NORMAL; }
+  render(false);
+}
+
+/* ---- 回到最新 pill ---- */
+function nearBottom() {
+  return streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight < 140;
+}
+streamEl.addEventListener('scroll', () => {
+  const show = !nearBottom();
+  jumpEl.hidden = !show;
+  jumpEl.classList.toggle('is-shown', show); /* 动效钩子 */
+});
+jumpEl.addEventListener('click', stickBottom);
+
+/* ---- Composer ---- */
+function autosize() {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 150) + 'px';
+}
+ta.addEventListener('input', () => {
+  autosize();
+  sendBtn.disabled = ta.value.trim().length === 0;
+});
+ta.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submit();
+  }
+});
+sendBtn.addEventListener('click', submit);
+
+function now() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return { hm: p(d.getHours()) + ':' + p(d.getMinutes()), hms: p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) };
+}
+function submit() {
+  const text = ta.value.trim();
+  if (!text) return;
+  const t = now();
+  data = data.concat(
+    { who: 'user', ...t, text },
+    { who: 'alice', ...t, text: ALICE_CANNED }
+  );
+  ta.value = '';
+  autosize();
+  sendBtn.disabled = true;
+  render(true);
+  ta.focus();
+}
+
+/* ---- 选择器桥（仅在被 index.html 预览时转发导航键） ---- */
+if (window.parent !== window) {
+  document.addEventListener('keydown', e => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^[1-9]$/.test(e.key) || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      window.parent.postMessage({ __protoKey: e.key }, '*');
+    }
+  });
+}
+
+render(false);
+</script>
+</body>
+</html>

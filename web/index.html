@@ -393,14 +393,14 @@
         <div class="discovery-settings-sources"><p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p><button id="discovery-settings-preferences" class="link" type="button" disabled>选择平台与兴趣</button></div>
       </section>
       <section class="settings-section hidden" data-settings-section="appearance">
+        <div id="desktop-bubble-settings" hidden><p class="panel-title">桌面气泡</p><p class="settings-hint">Alice 在后台时，点击小球可展开聊天、设置、装扮、退出入口；新回复一句一句出现。消息预览穿透鼠标。</p><button id="desktop-bubble-open" class="btn ghost" type="button">设置桌面气泡…</button><p id="desktop-bubble-result" class="settings-result" role="status"></p></div>
         <label class="panel-title" for="ui-theme">界面主题</label>
         <select id="ui-theme" aria-describedby="ui-theme-hint ui-theme-state">
           <option value="room">房间 · 网格房间与神经球</option>
           <option value="legacy">经典 · 此前的轻雾背景</option>
-          <option value="endfield">终末地 · 工业记录风</option>
           <option value="minimal">简洁 · 专注对话</option>
         </select>
-        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文；终末地视图为暖色工业记录风——琥珀强调色、直角细线、编号标注，动效收敛。简洁视图减少装饰，详细信息与高级设置通过按钮打开独立窗口。选择立即生效，仅保存在此浏览器。</div>
+        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文；简洁视图减少装饰，详细信息与高级设置通过按钮打开独立窗口。选择立即生效，仅保存在此浏览器。</div>
         <div id="ui-theme-state" class="settings-result" role="status"></div>
         <label class="panel-title" for="ui-texture">屏幕纹理</label>
         <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">
@@ -578,6 +578,7 @@
 <script src="/claude-settings.js"></script>
 <script src="/room.js"></script>
 <script src="/app.js"></script>
+<script src="/desktop-settings.js"></script>
 <script src="/discovery.js"></script>
 <script src="/thoughts.js"></script>
 </body>

@@ -529,6 +529,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("index.html", "text/html; charset=utf-8")
             elif path == "/app.js":
                 self._file("app.js", "application/javascript; charset=utf-8")
+            elif path in ("/desktop-chat.html", "/desktop-chat.js", "/desktop-chat.css", "/desktop-settings.js", "/desktop-speech.js"):
+                media = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
+                         ".css": "text/css; charset=utf-8"}
+                self._file(path[1:], media[Path(path).suffix])
             elif path == "/room.js":
                 self._file("room.js", "application/javascript; charset=utf-8")
             elif path == "/observer.js":
@@ -956,6 +960,11 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                             self._json({"error": f"人格底色生成失败：{e}"}, 502)
             elif path == "/api/reset":  # 丢掉当前会话（旧数据归档），回到第一次见面
                 self._json(svc.reset_session())
+            elif path == "/api/chat/request/status":
+                if not self._trusted_json("gui"):
+                    self._json({"error": "请从本机 GUI 核对原请求", "code": "gui_only"}, 403)
+                    return
+                self._json(svc.gui_request_status(self._bounded_body(65536)))
             elif path == "/api/chat":
                 if not (self._trusted_json("gui") or self._trusted_json("evaluations")):
                     self._json({"error": "请从本机 GUI 聊天；适配器使用渠道接口", "code": "gui_only"}, 403)

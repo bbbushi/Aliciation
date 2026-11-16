@@ -1,13 +1,54 @@
 {
-  "version": 4,
-  "stage": "macos-arm64-private-updater-development-bundle",
+  "version": 10,
+  "stage": "macos-arm64-updater-development-bundle",
   "include": [
-    {"source": "alice", "target": "alice", "extensions": [".py", ".json"]},
-    {"source": "web", "target": "web", "extensions": [".html", ".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".webp", ".ico", ".woff", ".woff2"]},
-    {"source": "addons/context_inspector", "target": "addons/context_inspector", "extensions": [".json", ".html", ".js", ".css"]},
-    {"source": "config.example.toml", "target": "config.example.toml"}
+    {
+      "source": "alice",
+      "target": "alice",
+      "extensions": [
+        ".py",
+        ".json"
+      ]
+    },
+    {
+      "source": "web",
+      "target": "web",
+      "extensions": [
+        ".html",
+        ".js",
+        ".css",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".svg",
+        ".webp",
+        ".ico",
+        ".woff",
+        ".woff2"
+      ]
+    },
+    {
+      "source": "addons/context_inspector",
+      "target": "addons/context_inspector",
+      "extensions": [
+        ".json",
+        ".html",
+        ".js",
+        ".css"
+      ]
+    },
+    {
+      "source": "config.example.toml",
+      "target": "config.example.toml"
+    }
   ],
-  "excludeDirectories": ["__pycache__", ".venv", "node_modules", "user", ".git"],
+  "excludeDirectories": [
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    "user",
+    ".git"
+  ],
   "components": {
     "core": "packaged",
     "context-inspector": "packaged",
@@ -18,6 +59,7 @@
     "bilibili": "not-packaged",
     "claude-agent": "not-packaged",
     "dsh-agent": "not-packaged",
-    "updater": "manual-check-signed-private-macos"
+    "updater": "scheduled-check-manual-install-signed-macos",
+    "desktop-bubble": "macos-shortcut-hub-following-sentence-motion"
   }
 }

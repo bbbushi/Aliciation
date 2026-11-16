@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>07 · 回到最新 pill — 舱壁 Bulkhead · 部件演示</title>
+<style>
+/* ============ 曲线与时长：全页唯一定义（PRINCIPLES §2.2/2.3，B 基准 token） ============ */
+:root{
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg:#0d1114; --srf:#11171d; --panel:#141c24; --panel-user:#151f29;
+  --line:#263443; --line-user:#31424f;
+  --tx:#ccd6dd; --dim:#7d8b96; --faint:#57646e;
+  --acc:#8fb8cc; --acc-dim:#42606f; --bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* ============ 页面外壳（罕见档首载 220ms，一容器一入场） ============ */
+.wrap{max-width:1140px;margin:0 auto;padding:26px 20px 46px;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.wrap{opacity:0;transform:translateY(6px)}}
+
+.ph{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.ph h1{margin:0;font-size:16px;font-weight:600;color:#e2e9ee;letter-spacing:.02em}
+.ph .tag{font:10.5px/1 var(--mono);letter-spacing:.12em;color:var(--acc);
+  border:1px solid var(--acc-dim);padding:4px 8px;border-radius:2px;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%)}
+.ph-sub{margin:0 0 20px;font:11px/1.6 var(--sans);color:var(--faint);letter-spacing:.02em}
+.foot{margin:22px 0 0;font:10.5px/1.6 var(--mono);color:var(--faint);letter-spacing:.04em}
+
+.bench{display:grid;grid-template-columns:minmax(400px,480px) 1fr;gap:18px;align-items:start}
+@media (max-width:940px){.bench{grid-template-columns:1fr}}
+
+/* ============ 行为舞台（02/03/05 最小占位 + 07 真实实现） ============ */
+.stage{position:relative;display:flex;flex-direction:column;height:clamp(500px,66vh,640px);
+  background:var(--srf);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.stage-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;
+  border-bottom:1px solid var(--line);font:10.5px/1 var(--mono);letter-spacing:.1em;color:var(--faint)}
+.stage-top .sp{flex:1}
+#stChip{color:var(--acc);border:1px solid var(--acc-dim);padding:3px 7px;border-radius:2px;letter-spacing:.06em}
+#stRead{color:var(--faint);letter-spacing:.03em}
+
+.mock-list{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin}
+.mock-wrap{display:flex;flex-direction:column;padding:14px 16px 24px}
+.mock-drow{display:flex;align-items:center;gap:12px;margin:20px 0 10px;color:var(--faint);
+  font:10.5px/1 var(--mono);letter-spacing:.14em}
+.mock-drow::before,.mock-drow::after{content:'';flex:1;height:1px;background:var(--line)}
+.mock-msg{display:flex;flex-direction:column;max-width:80%;margin-top:13px}
+.mock-msg.user{align-self:flex-end;align-items:flex-end}
+.mock-msg.assistant{align-self:flex-start;align-items:flex-start}
+.mock-bubble{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.mock-msg.assistant .mock-bubble{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.mock-msg.user .mock-bubble{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+.mock-meta{display:flex;gap:8px;margin-top:5px;font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.mock-ch{border:1px solid var(--line);border-radius:2px;padding:2px 5px}
+.mock-live{color:var(--acc)}
+.mock-msg.revealing{cursor:pointer}
+.mock-wait{color:var(--faint)}
+.mock-st{display:none}
+.mock-st.on{display:inline}
+.mock-empty{margin:24vh auto 0;color:var(--faint);font:12px/1.6 var(--mono);text-align:center;padding:0 20px}
+.mock-comp{border-top:1px solid var(--line);padding:9px 14px;display:flex;gap:10px;opacity:.55}
+.fake-in{flex:1;height:38px;border:1px solid var(--line);border-radius:3px;background:var(--bg);
+  color:var(--faint);font:13px/36px var(--sans);padding:0 12px}
+.fake-send{flex:none;width:76px;height:38px;background:#1b2933;border:1px solid var(--acc-dim);
+  border-radius:2px;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%)}
+
+/* ============ 07 · 回到最新 pill（本页唯一真实实现；与 FRAGMENT.md §1 同源）
+   显 170ms / 隐 110ms（exit 快于 enter），自底部入场 translate(-50%,100%)+scale(.95)，
+   origin 50% 100%；transition 可中断不叠加，禁 keyframes。
+   组装定位：全页 fixed;bottom:122px（B 基准，悬于 composer 上方）；
+   本演示舞台内改 absolute;bottom:76px（悬于 composer 占位上方）——仅首行定位不同。 ============ */
+.p07-pill{position:absolute;left:50%;bottom:76px;z-index:20;
+  transform:translate(-50%,100%) scale(.95);transform-origin:50% 100%;opacity:0;pointer-events:none;
+  font:12px/1 var(--sans);letter-spacing:.04em;color:#d5dee6;
+  background:rgba(17,23,29,.96);border:1px solid #33465a;border-radius:2px;padding:10px 16px;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+  transition:opacity 170ms var(--ease-out),transform 170ms var(--ease-out),
+    color 140ms ease,border-color 140ms ease}
+.p07-pill[data-show]{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
+.p07-pill:not([data-show]){transition-duration:110ms}
+.p07-pill:active{transform:translate(-50%,0) scale(.97)}
+.p07-count{color:var(--acc);font-weight:500;margin-left:7px}
+.p07-count:empty{display:none}
+
+/* ============ 右侧驱动台（演示装置，非 07 产物） ============ */
+.rig{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:16px 18px}
+.rig h2{font:11px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin:0 0 10px}
+.rsec{padding-top:16px;margin-top:16px;border-top:1px solid var(--line)}
+.rsec:first-child{padding-top:0;margin-top:0;border-top:0}
+.rig-hint{margin:-4px 0 10px;font:10.5px/1.6 var(--sans);color:var(--faint)}
+
+.pbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.pbtn:active{transform:scale(.97)}
+.pbtn-xs{padding:4px 8px;font-size:10.5px}
+
+.mx{width:100%;border-collapse:collapse;font-size:11.5px;line-height:1.5}
+.mx th{font:10px/1.2 var(--mono);letter-spacing:.1em;color:var(--faint);text-align:left;padding:0 8px 6px 0}
+.mx td{padding:7px 8px 7px 0;border-top:1px solid var(--line);vertical-align:top;color:var(--dim)}
+.mx td:first-child{border-top:1px solid var(--line)}
+.mx td.cs{white-space:nowrap;color:var(--tx);font-weight:500}
+.mx tr[data-now="true"] td{background:#16232c;color:var(--tx)}
+.mx tr[data-now="true"] td.cs{color:var(--acc)}
+.live{margin:10px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:2px;
+  font:10.5px/1.6 var(--mono);color:var(--dim);background:var(--bg);overflow-wrap:anywhere}
+
+.atk{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.atk:first-of-type{border-top:0;padding-top:2px}
+.atk-t{flex:1;min-width:0}
+.atk-t b{display:block;font-size:12px;font-weight:500;color:#d5dee6}
+.atk-t span{display:block;margin-top:2px;font-size:11px;line-height:1.5;color:var(--faint)}
+.urow{display:inline-flex;gap:6px;flex-wrap:wrap}
+
+.cnt{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:0 0 10px;
+  font:11px/1 var(--mono);color:var(--dim)}
+.cnt b{color:#d5dee6;font-weight:500}
+.log{list-style:none;margin:0;padding:0;font:10.5px/1.5 var(--mono);color:var(--dim)}
+.log li{padding:4px 0;border-top:1px solid #1b2530}
+.log li:first-child{border-top:0}
+.log li.pass{color:var(--acc)}
+.log li.fail{color:var(--bad)}
+
+/* ============ hover 门控（全部 :hover 一处收口） ============ */
+@media (hover:hover) and (pointer:fine){
+  .pbtn:hover{color:#b9c6cf;border-color:#33465a}
+  .p07-pill[data-show]:hover{border-color:var(--acc-dim);color:#eaf2f7}
+}
+/* ============ reduced-motion：更少更温和（留透明度，删位移；exit 仍快于 enter 120/90） ============ */
+@media (prefers-reduced-motion:reduce){
+  .wrap{transition:opacity 160ms var(--ease-out);transform:none}
+  .p07-pill{transition:opacity 120ms var(--ease-out),color 140ms ease,border-color 140ms ease;
+    transform:translate(-50%,0)}
+  .p07-pill:not([data-show]){transition-duration:90ms}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="ph">
+    <h1>07 · 回到最新 pill</h1>
+    <span class="tag">方向 B · 舱壁 BULKHEAD</span>
+  </header>
+  <p class="ph-sub">部件行为演示：仅 pill 为真实实现，左侧滚动面 / 消息 / 逐句揭示 / composer 均为最小占位（02 · 03 · 04 · 05）。滞回阈值与未读累积归 02，此处为其提供可验证的驱动环境。离线运行，数据虚构。</p>
+
+  <div class="bench">
+
+    <section class="stage" aria-label="07 行为舞台">
+      <div class="stage-top">
+        <span>02 滚动面占位</span>
+        <button class="pbtn pbtn-xs" id="navTop" title="瞬时跳到顶部">顶</button>
+        <button class="pbtn pbtn-xs" id="navMid" title="瞬时跳到中部">中</button>
+        <button class="pbtn pbtn-xs" id="navBottom" title="瞬时跳到底部">底</button>
+        <span class="sp"></span>
+        <span id="stRead" title="滞回阈值：距底超过 140px 出现 / 回到距底 48px 内消失">距底 0px · 在底</span>
+        <span id="stChip">S1 在底隐藏</span>
+      </div>
+      <div class="mock-list" id="mList" aria-label="消息列表占位"></div>
+      <div class="mock-comp" aria-hidden="true">
+        <div class="fake-in">composer 占位（05）</div>
+        <div class="fake-send"></div>
+      </div>
+      <!-- 07 真实实现：切角标签，与徽标/发送键同构的 9px 双角切 -->
+      <button class="p07-pill" id="p07Pill" aria-hidden="true" tabindex="-1">回到最新<b class="p07-count" id="p07Count"></b></button>
+    </section>
+
+    <aside class="rig" aria-label="五态矩阵与驱动">
+      <div class="rsec">
+        <h2>五态矩阵</h2>
+        <p class="rig-hint">「当前」行实时高亮；驱动按钮自动满足该态前置条件。键盘路径：pill 显示后 Tab 可达，Enter 与点击等效。</p>
+        <table class="mx">
+          <thead><tr><th>态</th><th>条件</th><th>期望</th><th>驱动</th></tr></thead>
+          <tbody>
+            <tr class="mx-row" data-s="1"><td class="cs">S1</td><td>在底 / 空档 / 加载</td><td>pill 不在场，Tab 不可达</td><td><button class="pbtn pbtn-xs" data-drv="s1">回到底部</button></td></tr>
+            <tr class="mx-row" data-s="2"><td class="cs">S2</td><td>离底 · unread=0</td><td>仅固定文案「回到最新」</td><td><button class="pbtn pbtn-xs" data-drv="s2">跳到中部</button></td></tr>
+            <tr class="mx-row" data-s="3"><td class="cs">S3</td><td>离底 · 揭示中</td><td>计数随句递增（＋n 句）</td><td><button class="pbtn pbtn-xs" data-drv="s3">离底并揭示</button></td></tr>
+            <tr class="mx-row" data-s="4"><td class="cs">S4</td><td>unread ≥ 100</td><td>显示 ＋99+ 句，内部继续累加</td><td><button class="pbtn pbtn-xs" data-drv="s4">注入 100</button></td></tr>
+            <tr class="mx-row" data-s="5"><td class="cs">S5</td><td>unread 非法（-1 / NaN / 1e15）</td><td>计数段隐藏，仅固定文案，不崩溃</td><td><button class="pbtn pbtn-xs" data-drv="s5">注入 1e15</button></td></tr>
+          </tbody>
+        </table>
+        <p class="live" id="rigLive">—</p>
+      </div>
+
+      <div class="rsec">
+        <h2>最坏攻击</h2>
+        <div class="atk"><div class="atk-t"><b>W1 计数暴涨 · 洪流 50 条</b><span>离底时一次注入 50 条多句消息：计数一次到位、显示封顶 99+、无布局抖破</span></div><button class="pbtn pbtn-xs" id="atkFlood">洪流</button></div>
+        <div class="atk"><div class="atk-t"><b>W2 快速反复滚动</b><span>6 轮全越界往返：显隐可中断、不叠加、不跳变（transition 重定向，非重放）</span></div><button class="pbtn pbtn-xs" id="atkRapid">越界 ×6</button></div>
+        <div class="atk"><div class="atk-t"><b>判定滞回 · 带内往复</b><span>在 48–140px 判定带内往复 20 次：0 翻转、pill 不闪烁（验收要点：不抖动）</span></div><button class="pbtn pbtn-xs" id="atkBand">带内 ×20</button></div>
+        <div class="atk"><div class="atk-t"><b>W3 回底后再离底</b><span>follow:change(true) 已清零 → 再离底从 0 重新累加；点击回底走真实 jump:latest 链路</span></div><button class="pbtn pbtn-xs" id="atkReoff">走一遍</button></div>
+        <div class="atk"><div class="atk-t"><b>W4 切空档</b><span>Turn=0：即使离底也消失（空态与 pill 永不同屏；atLatest 复位、unread 清零）</span></div><button class="pbtn pbtn-xs" id="atkEmpty">切空</button></div>
+        <div class="atk"><div class="atk-t"><b>unread 直注入</b><span>绕过 02 直接写总线值，验证 07 显示层防御（S5 同源）</span></div>
+          <span class="urow">
+            <button class="pbtn pbtn-xs" data-u="5">5</button>
+            <button class="pbtn pbtn-xs" data-u="100">100</button>
+            <button class="pbtn pbtn-xs" data-u="-1">-1</button>
+            <button class="pbtn pbtn-xs" data-u="NaN">NaN</button>
+            <button class="pbtn pbtn-xs" data-u="1e15">1e15</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="rsec">
+        <h2>监测</h2>
+        <p class="cnt">atLatest 翻转 <b id="cFlips">0</b> · pill 显隐切换 <b id="cSw">0</b>
+          <button class="pbtn pbtn-xs" id="cReset">清零计数</button></p>
+        <ol class="log" id="logOl" aria-label="总线信号与验证记录"></ol>
+      </div>
+
+      <div class="rsec">
+        <h2>恢复</h2>
+        <button class="pbtn" id="atkRestore">重建初始数据</button>
+      </div>
+    </aside>
+
+  </div>
+
+  <p class="foot">07 · 回到最新 pill — parts-impl/07/part.html · 离线演示 · 数据虚构 · 显隐动效按 PRINCIPLES §1 #8 中频档（170ms 入 / 110ms 出，自底部，无弹跳），点击回底为单次瞬时跳转（§1 #9，B 决策）</p>
+</div>
+
+<script>
+'use strict';
+
+/* ===== 演示常量（B 基准） ===== */
+const HYST={leave:140,back:48};   /* 02 滞回：距底 >140 判离底；距底 ≤48 判回底 */
+const CAD={min:240,max:380};      /* 04 揭示节拍（B 档 240–380ms/句，内容节拍非动画时长） */
+const THINK={min:500,max:800};
+const P07_MAX_VALID=1e6;          /* 计数合理上界：非负有限整数且 ≤1e6 才渲染；出域（含 1e15）按非法隐藏 */
+const FLOOD_N=50;
+const REVEAL_TEXT='收到。这条消息用来演示逐句揭示与未读计数的联动。你在上方读历史的时候，我会一句一句把回复落进来。每落一句，只要列表还停在底部之上，pill 的计数就会加一。这是「最新内容还在增长」的承诺。想回来的时候，点下面的「回到最新」。回去的那一下，正在揭示的回复会立即完整，计数同时清零。如果你中途又翻上去，计数会从零重新累加。演示到此，最后一句落定，揭示完成。';
+
+/* ===== 02/03 占位数据 ===== */
+const MOCK=[
+  {role:'user',text:'今天的部署顺利吗？',time:'15:23'},
+  {role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。部署记录已经归档，明天可以晚点起。',time:'15:23'},
+  {role:'assistant',qq:true,text:'早上好。昨夜监控没有异常，桌面 0.1.5 的自动检查十点半会跑第一次。',time:'09:03'},
+  {role:'user',text:'好，那今天陪我把升级流程再过一遍？',time:'09:12'},
+  {role:'assistant',text:'可以。上午先确认更新开关的状态，再走一次同版提示的路径。有问题随时说，我会记下每一步的卡点。',time:'09:13'},
+  {role:'user',text:'记得把要点整理进桌面档案。',time:'09:40'},
+  {role:'assistant',text:'已经在记了。每一步的卡点都会标出来，最后给你一份清单。',time:'09:41'},
+  {role:'user',text:'昨晚那份长文我还没读完。',time:'11:05'},
+  {role:'assistant',text:'凌晨那次编译值得记一笔。三点十一分开始，四点零二分结束，中间没有一条警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。备份核验也过了，摘要一致，nonce 正常。签名校验五分钟内完成，清单里的六十六个 Mach-O 都对上了。回滚点留了两个，一个在升级前，一个在升级后。凌晨五点我又做了一轮共存检查，compileall 全绿。把这些写进档案的时候，我把「无人值守时段」单独标了出来。以后查这次升级，从那一段开始读最快。',time:'11:06'},
+  {role:'user',text:'中午的备份核验过了吗？',time:'12:30'},
+  {role:'assistant',text:'过了。摘要一致，恢复点列表完整。',time:'12:31'},
+  {role:'user',text:'下午我想离线读一会儿旧对话。',time:'13:20'},
+  {role:'assistant',text:'可以。你读的时候我不打扰。有新消息我会记着，你想回来随时点「回到最新」。',time:'13:21'},
+  {role:'user',text:'那晚上再聊。',time:'13:22'},
+  {role:'assistant',text:'嗯，晚上见。今天的要点我先归档。',time:'13:22'},
+  {role:'user',text:'好。',time:'13:23'}
+];
+
+/* ===== 总线与页面状态（PARTS §2.2 单一真源的演示缩样） ===== */
+const S={atLatest:true,unread:0,turns:0,listState:'ready'};
+const bus={
+  m:{},
+  on(sig,fn){(this.m[sig]??=[]).push(fn);},
+  emit(sig,detail){pushLog(sig,detail);(this.m[sig]||[]).forEach(fn=>fn(detail));}
+};
+bus.state=S;
+
+/* ===== 工具 ===== */
+const $=id=>document.getElementById(id);
+const rnd=r=>r.min+Math.random()*(r.max-r.min);
+const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n};
+const END='。！？…';
+function splitSentences(text){        /* 03 占位：简版切句（够演示用） */
+  if(!text||!text.trim())return[];
+  const out=[];let cur='';
+  for(const ch of text){cur+=ch;if(ch==='\n'||END.includes(ch)){out.push(cur);cur='';}}
+  if(cur)out.push(cur);
+  return out.length>400?out.slice(0,400):out;
+}
+
+const mList=$('mList'),pillEl=$('p07Pill'),countEl=$('p07Count'),
+  chip=$('stChip'),readout=$('stRead'),logOl=$('logOl'),
+  flipsEl=$('cFlips'),swEl=$('cSw'),liveEl=$('rigLive');
+
+/* ===== 07 行为模块（与 FRAGMENT.md §3 同源；onToggle 为演示监测钩子，组装可省略） ===== */
+function p07Mount(bus,pillEl,countEl,onToggle){
+  const st={shown:false};
+  const valid=n=>Number.isFinite(n)&&Number.isInteger(n)&&n>=0&&n<=P07_MAX_VALID;
+  function sync(S){
+    const show=!S.atLatest&&S.turns>0&&S.listState==='ready';
+    if(show!==st.shown){
+      st.shown=show;
+      if(show){pillEl.setAttribute('data-show','');}
+      else{
+        pillEl.removeAttribute('data-show');
+        if(document.activeElement===pillEl)pillEl.blur(); /* 隐藏时持焦点 → 让出，避免焦点落在 aria-hidden 上 */
+      }
+      pillEl.setAttribute('aria-hidden',show?'false':'true');
+      pillEl.tabIndex=show?0:-1;
+      if(onToggle)onToggle(show);
+    }
+    const n=S.unread;
+    countEl.textContent=valid(n)&&n>0?'＋'+(n>99?'99+':n)+' 句':''; /* 非法值 → 计数段隐藏 */
+  }
+  pillEl.addEventListener('click',()=>bus.emit('jump:latest')); /* Enter 经 button 原生触发同一 click */
+  bus.on('follow:change',()=>sync(bus.state));
+  return{sync,valid};
+}
+
+/* ===== 监测与台账 ===== */
+let flips=0,switches=0;
+const STL={1:['S1','在底隐藏'],2:['S2','离底 · 静止'],3:['S3','离底 · 计数中'],4:['S4','计数封顶'],5:['S5','非法计数']};
+function bump(){flipsEl.textContent=flips;swEl.textContent=switches;}
+function pushLog(sig,detail){
+  const t=new Date().toTimeString().slice(0,8);
+  addLi('['+t+'] '+sig+(detail!==undefined?'('+detail+')':''));
+}
+function pushNote(text,cls){addLi('· '+text,cls);}
+function addLi(text,cls){
+  const li=el('li',cls||null,text);
+  logOl.prepend(li);
+  while(logOl.children.length>14)logOl.lastChild.remove();
+}
+
+/* ===== 02 占位：列表渲染 ===== */
+function mockTurn(m){
+  const a=el('article','mock-msg '+m.role);
+  const b=el('div','mock-bubble');b.textContent=m.text;
+  const meta=el('div','mock-meta');
+  meta.append(el('span','mock-time',m.time));
+  if(m.qq)meta.append(el('span','mock-ch','QQ'));
+  a.append(b,meta);
+  return a;
+}
+function buildMock(){
+  const w=el('div','mock-wrap');
+  MOCK.forEach((m,i)=>{
+    if(i===2){const d=el('div','mock-drow','11月16日');d.setAttribute('role','separator');w.append(d);}
+    w.append(mockTurn(m));
+  });
+  mList.replaceChildren(w);
+  S.turns=MOCK.length;
+}
+function renderEmpty(){
+  const w=el('div','mock-wrap');
+  w.append(el('p','mock-empty','（空会话占位 · Turn=0 · pill 应不存在）'));
+  mList.replaceChildren(w);
+}
+
+/* ===== 02 占位：滞回滚动语义（判定归 02，07 只消费） ===== */
+function setFollow(v){
+  if(S.atLatest===v)return;
+  S.atLatest=v;flips++;
+  if(v)S.unread=0;                    /* 回底 → unread 清零（02 义务） */
+  bus.emit('follow:change',v);
+  bump();
+}
+function evalFollow(){
+  const max=mList.scrollHeight-mList.clientHeight;
+  if(max<=0){setFollow(true);return;}
+  const d=max-mList.scrollTop;
+  if(S.atLatest&&d>HYST.leave)setFollow(false);
+  else if(!S.atLatest&&d<=HYST.back)setFollow(true);
+}
+
+/* ===== 04 占位：逐句揭示（跳过=补全前缀；节奏为内容节拍） ===== */
+let rev=null;
+function startReveal(){
+  if(rev)return;
+  if(S.listState!=='ready'||S.turns===0){pushNote('当前空档，先「重建初始数据」');return;}
+  const w=mList.querySelector('.mock-wrap');
+  const a=el('article','mock-msg assistant revealing');
+  a.title='点击跳过逐句显示';
+  const b=el('div','mock-bubble');
+  b.append(el('span','mock-wait','…'));
+  const parts=splitSentences(REVEAL_TEXT);
+  parts.forEach(s=>b.append(el('span','mock-st',s)));
+  const meta=el('div','mock-meta');
+  const live=el('span','mock-live','正在回复…');
+  meta.append(el('span','mock-time','刚刚'),live);
+  a.append(b,meta);
+  w.append(a);
+  S.turns++;
+  if(S.atLatest)mList.scrollTop=mList.scrollHeight;
+  sync07();updReadout();
+  const spans=[...b.querySelectorAll('.mock-st')],wait=b.querySelector('.mock-wait');
+  let i=0,done=false,timer=0;
+  const finish=why=>{
+    if(done)return;done=true;clearTimeout(timer);
+    spans.forEach(s=>s.classList.add('on'));       /* 跳过 = 立即补全前缀，不整段重渲 */
+    if(wait)wait.remove();
+    live.remove();a.classList.remove('revealing');a.removeAttribute('title');
+    if(S.atLatest)mList.scrollTop=mList.scrollHeight; /* 补全会增高内容：在底须重压底（02 跟随义务） */
+    rev=null;sync07();
+    pushNote(why==='jump'?'揭示跳过（用户主动回底）· 全文立即完整':
+             why==='click'?'揭示跳过（点击消息本体）· 全文立即完整':'揭示完成（reveal:done）');
+  };
+  rev={finish};
+  a.addEventListener('click',()=>{if(rev)rev.finish('click');});
+  const step=()=>{
+    if(done)return;
+    if(wait)wait.remove();
+    if(i<spans.length){
+      spans[i++].classList.add('on');
+      if(S.atLatest){mList.scrollTop=mList.scrollHeight;}   /* 在底跟随：02 内容义务 */
+      else{S.unread++;sync07();}                             /* 离底：每句 +1（02 累积） */
+      timer=setTimeout(step,rnd(CAD));
+    }else finish('natural');
+  };
+  timer=setTimeout(step,rnd(THINK));
+  pushNote('开始揭示（'+parts.length+' 句，'+CAD.min+'–'+CAD.max+'ms/句）');
+}
+
+/* ===== 挂载 07 ===== */
+const p07=p07Mount(bus,pillEl,countEl,()=>{switches++;bump();});
+function sync07(){p07.sync(S);rigLive();}
+bus.on('follow:change',rigLive);
+
+/* ===== jump:latest 接收（02/04 占位：单次瞬时回底 + 用户主动回底触发跳过） ===== */
+bus.on('jump:latest',()=>{
+  setFollow(true);                      /* 先回底态（unread 清零） */
+  if(rev)rev.finish('jump');            /* 再补全揭示（finish 内部因在底会跟随置底） */
+  mList.scrollTop=mList.scrollHeight;   /* B 决策：瞬时跳转（受控单次，非劫持滚动）；补全后再压一次底兜底 */
+  updReadout();
+});
+
+/* ===== 读数与实况 ===== */
+function updReadout(){
+  const max=mList.scrollHeight-mList.clientHeight;
+  const d=Math.max(0,Math.round(max-mList.scrollTop));
+  readout.textContent='距底 '+d+'px · '+(S.atLatest?'在底':'离底');
+}
+function stateNo(){
+  if(S.listState!=='ready'||S.turns===0||S.atLatest)return 1;
+  if(!p07.valid(S.unread))return 5;
+  if(S.unread>=100)return 4;
+  if(S.unread>0)return 3;
+  return 2;
+}
+function rigLive(){
+  const no=stateNo();
+  chip.textContent=STL[no][0]+' '+STL[no][1];
+  document.querySelectorAll('.mx-row').forEach(tr=>{
+    if(Number(tr.dataset.s)===no)tr.setAttribute('data-now','true');
+    else tr.removeAttribute('data-now');
+  });
+  liveEl.textContent='atLatest='+S.atLatest+' · unread='+String(S.unread)+'（原值） · 计数段「'+(countEl.textContent||'（空）')+'」 · turns='+S.turns+' · listState='+S.listState;
+}
+
+/* ===== 驱动与攻击 ===== */
+let busy=false;
+function runSteps(steps,interval,done){
+  busy=true;let k=0;
+  (function next(){
+    if(k>=steps.length){busy=false;done();return;}
+    steps[k++]();
+    setTimeout(next,interval);
+  })();
+}
+function simFlips(ds){ /* 用与 02 相同的滞回逻辑在给定 d 序列上推演期望翻转数 */
+  let s=S.atLatest,f=0;
+  for(const d of ds){
+    let ns=s;
+    if(s&&d>HYST.leave)ns=false;
+    else if(!s&&d<=HYST.back)ns=true;
+    if(ns!==s){f++;s=ns;}
+  }
+  return f;
+}
+const maxScroll=()=>mList.scrollHeight-mList.clientHeight;
+function goTo(d){mList.scrollTop=maxScroll()-d;evalFollow();updReadout();}
+
+function atkBand(){
+  if(busy){pushNote('上一个验证还在跑…');return;}
+  const f0=flips,s0=switches,ds=[];
+  for(let i=0;i<20;i++)ds.push(i%2?130:60);           /* 全部落在 48–140 判定带内 */
+  const steps=ds.map(d=>()=>goTo(d));
+  const exp=simFlips(ds);
+  runSteps(steps,80,()=>{
+    const df=flips-f0,ds2=switches-s0,ok=df===exp&&ds2===exp;
+    pushNote(ok?'滞回带内（48–140px）往复 ×20：翻转 '+df+'、pill 切换 '+ds2+'（期望各 '+exp+'）✓'
+               :'滞回验证异常：翻转 '+df+' / 切换 '+ds2+'，期望 '+exp+' ✗',ok?'pass':'fail');
+  });
+}
+function atkRapid(){
+  if(busy){pushNote('上一个验证还在跑…');return;}
+  const span=Math.max(200,Math.min(520,maxScroll()*0.8));
+  const f0=flips,s0=switches,ds=[],cyc=6;
+  for(let i=0;i<cyc*2;i++)ds.push(i%2?0:span);        /* 每轮全越界一次 */
+  const steps=ds.map(d=>()=>goTo(d));
+  const exp=simFlips(ds);
+  runSteps(steps,110,()=>{
+    const df=flips-f0,ds2=switches-s0,ok=df===exp&&ds2===exp;
+    pushNote(ok?'快速越界 ×'+cyc+'：翻转 '+df+'、pill 切换 '+ds2+'，每次一翻、transition 中断重定向不叠加 ✓'
+               :'快速越界异常：翻转 '+df+' / 切换 '+ds2+'，期望 '+exp+' ✗',ok?'pass':'fail');
+  });
+}
+function flood(){
+  const w=mList.querySelector('.mock-wrap');
+  if(!w||S.listState!=='ready'){pushNote('当前空档，先「重建初始数据」');return;}
+  let add=0;
+  const frag=document.createDocumentFragment();
+  for(let i=1;i<=FLOOD_N;i++){
+    const t='洪流注入第 '+i+' 条。压力记录，句子二。'+(i%2?'':'再补一句，凑成三句。');
+    add+=splitSentences(t).length;
+    frag.append(mockTurn({role:i%4?'assistant':'user',text:t,time:'刚刚'}));
+  }
+  w.append(frag);
+  S.turns+=FLOOD_N;
+  if(S.atLatest)mList.scrollTop=mList.scrollHeight;
+  else S.unread+=add;                                  /* 离底：新 Turn 的新句一次性累加（02 义务） */
+  sync07();updReadout();
+  pushNote('洪流 +'+FLOOD_N+' 条 / +'+add+' 句（内部无上限累加，显示封顶 99+）');
+}
+function atkReoff(){
+  if(busy){pushNote('上一个验证还在跑…');return;}
+  busy=true;
+  goTo(400);
+  S.unread=37;sync07();
+  pushNote('离底注入 unread=37（应显示 ＋37 句）');
+  setTimeout(()=>{
+    bus.emit('jump:latest');                           /* 真实链路：置底 + follow(true) 清零 + 揭示跳过 */
+    updReadout();
+    setTimeout(()=>{
+      goTo(400);
+      S.unread+=5;sync07();
+      pushNote('再离底 +5 句 → 应显示 ＋5 句（清零后重新累加）✓','pass');
+      busy=false;
+    },350);
+  },350);
+}
+function atkEmpty(){
+  if(rev)rev.finish('natural');                        /* 切档中断：不留「正在回复…」残尸 */
+  S.listState='empty';S.turns=0;S.atLatest=true;S.unread=0;
+  renderEmpty();sync07();updReadout();
+  pushNote('切空档：Turn=0 · atLatest 复位 · pill 消失（离底与否都消失）');
+}
+function restore(){
+  if(rev)rev.finish('natural');
+  S.listState='ready';S.atLatest=true;S.unread=0;
+  buildMock();
+  mList.scrollTop=mList.scrollHeight;
+  sync07();updReadout();
+  pushNote('重建初始数据（16 条，回到底部）');
+}
+function injectUnread(v){
+  S.unread=v;sync07();
+  pushNote('注入 unread='+String(v)+'（离底时才可见效果）');
+}
+
+/* 驱动按钮 */
+const drives={
+  s1:()=>goTo(0),
+  s2:()=>goTo(Math.min(400,maxScroll()*0.5)),
+  s3:()=>{goTo(Math.min(400,maxScroll()*0.5));startReveal();},
+  s4:()=>{goTo(Math.min(400,maxScroll()*0.5));injectUnread(100);},
+  s5:()=>{goTo(Math.min(400,maxScroll()*0.5));injectUnread(1e15);}
+};
+document.querySelectorAll('[data-drv]').forEach(b=>b.addEventListener('click',()=>{
+  if(busy){pushNote('上一个验证还在跑…');return;}
+  drives[b.dataset.drv]();
+}));
+document.querySelectorAll('[data-u]').forEach(b=>b.addEventListener('click',()=>injectUnread(Number(b.dataset.u))));
+$('navTop').addEventListener('click',()=>{mList.scrollTop=0;evalFollow();updReadout();});
+$('navMid').addEventListener('click',()=>{mList.scrollTop=maxScroll()/2;evalFollow();updReadout();});
+$('navBottom').addEventListener('click',()=>{mList.scrollTop=mList.scrollHeight;evalFollow();updReadout();});
+$('atkFlood').addEventListener('click',flood);
+$('atkRapid').addEventListener('click',atkRapid);
+$('atkBand').addEventListener('click',atkBand);
+$('atkReoff').addEventListener('click',atkReoff);
+$('atkEmpty').addEventListener('click',atkEmpty);
+$('atkRestore').addEventListener('click',restore);
+$('cReset').addEventListener('click',()=>{flips=0;switches=0;bump();pushNote('监测计数清零');});
+
+/* ===== 启动 ===== */
+buildMock();
+sync07();
+mList.scrollTop=mList.scrollHeight;
+updReadout();rigLive();bump();
+mList.addEventListener('scroll',()=>{evalFollow();updReadout();});
+window.addEventListener('resize',updReadout);
+pushNote('演示就绪：初始在底（S1）。先手动滚动看滞回，再逐态驱动。');
+</script>
+</body>
+</html>

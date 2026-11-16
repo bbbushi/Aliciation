@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-maintenance-action"
+description = "Enables the maintenance_action command without any pre-configured scope."
+commands.allow = ["maintenance_action"]
+
+[[permission]]
+identifier = "deny-maintenance-action"
+description = "Denies the maintenance_action command without any pre-configured scope."
+commands.deny = ["maintenance_action"]

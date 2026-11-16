@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>台账 · Alice 对话流变体</title>
+<style>
+  /* ============ 台账（Ledger）轴：编辑式记录条目 ============ */
+  :root {
+    --bg: #101013;
+    --bg-deep: #0c0c0f;
+    --panel: #17171b;
+    --panel-user: #262119;
+    --ink: #e6e1d7;
+    --muted: #979287;
+    --faint: #6b675e;
+    --accent: #d29a55;
+    --edge-user: #8a7a5c;
+    --line: #2b2a2f;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font); color: var(--ink); background: var(--bg);
+    display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+  }
+
+  /* ---- 顶部会话标题栏（假想） ---- */
+  .topbar {
+    flex: none; display: flex; align-items: center; gap: 14px;
+    height: 54px; padding: 0 22px; border-bottom: 1px solid var(--line);
+    background: var(--bg-deep);
+  }
+  .topbar-mark { width: 10px; height: 10px; outline: 1px solid var(--accent); outline-offset: 2px; flex: none; }
+  .topbar-title { line-height: 1.3; min-width: 0; }
+  .topbar-eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--faint); }
+  .topbar-h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .02em; }
+  .topbar-peer {
+    margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted);
+    max-width: 26vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .topbar-peer b { color: var(--edge-user); font-weight: 400; margin-right: 6px; }
+
+  /* ---- 演示数据开关（审计工具，非参赛设计） ---- */
+  .demo { flex: none; display: flex; align-items: center; gap: 6px; }
+  .demo-tag { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--faint); margin-right: 2px; }
+  .demo-chip {
+    font: 12px var(--font); color: #9a958a; background: #17171b;
+    border: 1px solid #2c2c31; padding: 4px 10px; cursor: pointer; border-radius: 0;
+  }
+  .demo-chip:hover { color: #c9c4b8; }
+  .demo-chip:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .demo-chip[aria-pressed="true"] { color: var(--ink); border-color: #57503f; background: #221e17; }
+
+  /* ---- 消息流 ---- */
+  .stream { flex: 1; overflow-y: auto; position: relative; scroll-behavior: auto; }
+  .stream::-webkit-scrollbar { width: 8px; }
+  .stream::-webkit-scrollbar-thumb { background: #26262b; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 10px 26px 30px; }
+
+  .entry { margin: 30px 0; }
+  .entry:first-child { margin-top: 22px; }
+  .entry-head {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em; color: var(--faint);
+  }
+  .entry-head .no { color: var(--accent); }
+  .entry-head .who { color: var(--muted); }
+  .entry-head .who .peer { max-width: 34vw; overflow-wrap: anywhere; }
+  .entry--user { display: flex; flex-direction: column; align-items: flex-end; }
+  .entry--user .entry-head { flex-direction: row-reverse; }
+  .entry--user .entry-head .no { color: var(--edge-user); }
+
+  .panel {
+    padding: 18px 22px 20px; max-width: 100%;
+    overflow-wrap: anywhere; word-break: break-word;
+  }
+  .entry--alice .panel {
+    background: var(--panel);
+    border-left: 2px solid var(--accent);
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+    max-width: 78%;
+  }
+  .entry--user .panel {
+    background: var(--panel-user);
+    border-right: 2px solid var(--edge-user);
+    clip-path: polygon(14px 0, 100% 0, 100% 100%, 0 100%, 0 14px);
+    max-width: 72%;
+  }
+  .p { margin: 0 0 10px; font-size: 15.5px; line-height: 1.85; }
+  .p:last-child { margin-bottom: 0; }
+
+  /* 逐句揭示：句子 = 编号记录行。动效阶段给 .sent[data-state] 加揭示动画 */
+  .sent { display: flex; gap: 12px; padding: 3px 0; }
+  .sent i {
+    flex: none; min-width: 20px; text-align: right;
+    font: italic 400 11px var(--mono); font-style: normal;
+    letter-spacing: .05em; color: var(--accent); padding-top: 6px;
+  }
+  .entry--user .sent { display: block; padding: 2px 0; }
+  .msg--emoji .panel { font-size: 24px; line-height: 1.6; }
+
+  /* ---- 空状态 ---- */
+  .empty { padding: 15vh 0 10vh; }
+  .empty-no { font-family: var(--mono); font-size: 56px; color: rgba(210,154,85,.22); line-height: 1; }
+  .empty h2 { margin: 18px 0 10px; font-size: 19px; font-weight: 600; letter-spacing: .03em; }
+  .empty p { margin: 0; max-width: 46ch; color: var(--muted); font-size: 14px; line-height: 1.9; }
+  .empty-hint {
+    margin-top: 26px; font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    color: var(--faint); display: flex; gap: 18px;
+  }
+
+  /* ---- 回到最新 pill（占位） ---- */
+  .jump {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 12px; letter-spacing: .08em;
+    color: var(--ink); background: var(--panel);
+    border: 1px solid #3a3940; padding: 7px 14px; cursor: pointer;
+    clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+  }
+  .jump:hover { border-color: #55503f; }
+  .jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .jump[hidden] { display: none; }
+
+  /* ---- Composer ---- */
+  .composer { flex: none; border-top: 1px solid var(--line); background: var(--bg-deep); }
+  .composer-inner { max-width: 820px; margin: 0 auto; padding: 0 26px; display: flex; align-items: flex-start; }
+  .prompt { font-family: var(--mono); font-size: 14px; color: var(--accent); padding: 16px 10px 16px 0; flex: none; }
+  .composer textarea {
+    flex: 1; min-height: 52px; max-height: 150px; resize: none;
+    background: transparent; border: 0; outline: none;
+    color: var(--ink); font: 15px/1.7 var(--font);
+    padding: 15px 8px 15px 0; overflow-wrap: anywhere;
+  }
+  .composer textarea::placeholder { color: var(--faint); }
+  .send {
+    flex: none; margin: 11px 0; padding: 9px 18px;
+    font: 13px var(--font); letter-spacing: .06em;
+    color: #161310; background: var(--accent); border: 0; cursor: pointer;
+    clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+  }
+  .send:hover { background: #dca963; }
+  .send:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+  .send:disabled { background: #3a362e; color: #77716a; cursor: default; }
+</style>
+</head>
+<body data-mode="sample">
+
+  <header class="topbar">
+    <span class="topbar-mark" aria-hidden="true"></span>
+    <div class="topbar-title">
+      <div class="topbar-eyebrow">ALICE · 会话台账</div>
+      <h1 class="topbar-h1">周四夜 · 闲谈</h1>
+    </div>
+    <span class="topbar-peer"><b>PEER</b><span data-peer>阿澈</span></span>
+    <div class="demo" role="group" aria-label="演示数据模式">
+      <span class="demo-tag">演示数据</span>
+      <button class="demo-chip" data-mode-btn="sample" aria-pressed="true">样例</button>
+      <button class="demo-chip" data-mode-btn="worst" aria-pressed="false">极限</button>
+      <button class="demo-chip" data-mode-btn="empty" aria-pressed="false">空态</button>
+    </div>
+  </header>
+
+  <main class="stream" id="stream">
+    <div class="wrap">
+      <div class="empty" id="empty" hidden>
+        <div class="empty-no">00</div>
+        <h2>这一页还没有字</h2>
+        <p>这是你和 Alice 的对话台账。第一句话由你写下——随便说点什么，不必想好措辞；Alice 的回复会一句一句落上来，每句一行，编好号。</p>
+        <div class="empty-hint"><span>↵ 发送</span><span>⇧↵ 换行</span></div>
+      </div>
+      <div id="list"></div>
+    </div>
+    <button class="jump" id="jump" hidden>▼ 最新记录</button>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-inner">
+      <span class="prompt" aria-hidden="true">&gt;</span>
+      <textarea id="input" rows="1" placeholder="写下这一句……" aria-label="输入消息"></textarea>
+      <button class="send" id="send" disabled>发送 ↵</button>
+    </div>
+  </footer>
+
+<script>
+'use strict';
+/* ================= 演示数据（内建，供 break-ui 审计） ================= */
+const NAME_NORMAL = '阿澈';
+const NAME_WORST = '凯瑟琳·伊丽莎白·亚历山德罗芙娜·康斯坦丁诺芙娜ConstantinovnaAlexandrovnaRaskolnikovaPetrovskaya伊万诺夫娜·谢尔盖耶芙娜';
+
+function ramble2000() {
+  const base = '今晚要把汇报的开头重写一遍，可是每次写完再读一遍都觉得不对：语气要么太硬要么太软，重点也总是藏在第二段才出现；我又想起白天会议上有人问我数据口径的问题，当时答得含糊，现在越想越不确定到底该用上周的还是上月的，两种算法差了将近一成，选错方向结论就全反了；还有一件小事，楼下便利店的关东煮换成了新汤底，我其实想说但一直没说；窗外的塔吊今晚也没停，影子扫过天花板的时候我会数它转的圈数，数到第七圈就忘了前面数过几圈；';
+  let s = '';
+  while (s.length < 2000) s += base;
+  return s.slice(0, 2000);
+}
+
+const SAMPLE = [
+  { who: 'user',  hm: '23:38', hms: '23:38:04', text: '在吗？今天有点累。' },
+  { who: 'alice', hm: '23:38', hms: '23:38:11', text: '在的。累了就先坐一会儿，不急着说话。今天是被什么事拖着走的？' },
+  { who: 'user',  hm: '23:39', hms: '23:39:32', text: '下午连着开了三个会，晚上又想起明天的汇报还没改完。' },
+  { who: 'alice', hm: '23:40', hms: '23:40:08', text: '三个会连着开，注意力会被抽干的。汇报的事——离明天还有一晚，够你把重点部分改完。要不要把最担心的那一页先念给我听？' },
+  { who: 'user',  hm: '23:41', hms: '23:41:47', text: '主要是开头，总觉得抓不住人。' },
+  { who: 'alice', hm: '23:42', hms: '23:42:03', text: '开头不用"抓人"，把为什么要听讲清楚就够了。你先按这个改，改完念给我听，我陪你到收尾。' },
+  { who: 'user',  hm: '23:43', hms: '23:43:20', text: '好，那我先去改 🫡' },
+  { who: 'alice', hm: '23:43', hms: '23:43:31', text: '去吧。我就在这儿，随时叫我。' }
+];
+
+const ALICE_CANNED = '收到，我在听。你说完这一句，我才接下一句——往后的版本里，我会一句一句地落到台账上。现在先随便聊，我陪着你。';
+
+function buildWorst() {
+  const out = [];
+  const floodUser = ['嗯。', '好', '继续说', '那怎么办', '……', '真的吗', '我再想想', '等一下', '还是算了', '你说了算'];
+  const floodAlice = [
+    '我在。你慢慢说。',
+    '这个判断我同意。理由你其实刚才已经说了。',
+    '换个角度：如果明天就要交，你最想保住哪一段？',
+    '不用急。答案不在今晚，在明早的第一次重读里。',
+    '好。那就先这样，剩下的明天见。',
+    '记下了。这件事我会替你盯着。'
+  ];
+  let t = 22 * 3600 + 4 * 60 + 11; // 22:04:11 起
+  const stamp = () => {
+    const h = String(Math.floor(t / 3600) % 24).padStart(2, '0');
+    const m = String(Math.floor(t / 60) % 60).padStart(2, '0');
+    const s = String(t % 60).padStart(2, '0');
+    t += 40 + ((out.length * 37) % 53);
+    return { hm: h + ':' + m, hms: h + ':' + m + ':' + s };
+  };
+  let k = stamp(); out.push({ who: 'user',  ...k, text: '？' });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '我在。问号也算一句话——说吧，怎么了。' });
+  k = stamp(); out.push({ who: 'user',  ...k, text: '🫠🫥😶‍🌫️🥲🙃🏃‍♀️‍➡️🫨🙃🫠' });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '这一排表情我读出两层意思：很累，但还在撑。哪层更接近？' });
+  k = stamp(); out.push({ who: 'user',  ...k, text: ramble2000() });
+  k = stamp(); out.push({ who: 'alice', ...k, text: '这么长的一段我都收下了。里面有正事、有小事、还有塔吊——你想先处理哪一件？' });
+  let i = 0;
+  while (out.length < 50) {
+    k = stamp();
+    out.push({ who: 'user',  ...k, text: floodUser[i % floodUser.length] });
+    k = stamp();
+    out.push({ who: 'alice', ...k, text: floodAlice[i % floodAlice.length] });
+    i++;
+  }
+  return out;
+}
+
+/* ================= 工具 ================= */
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function paras(t) { return String(t).split('\n').filter(x => x.trim()); }
+function sents(p) { return p.match(/[^。！？!?…]+[。！？!?…]*/g) || [p]; }
+function emojiish(t) {
+  try {
+    const s = String(t).replace(/\s/g, '');
+    return s.length > 0 && /^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D\u20E3]+$/u.test(s);
+  } catch (e) { return false; }
+}
+
+/* ================= 渲染（台账结构） ================= */
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
+const streamEl = document.getElementById('stream');
+const jumpEl = document.getElementById('jump');
+const ta = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+
+function sentenceRows(text) {
+  return paras(text).map(p =>
+    '<p class="p">' + sents(p).map((s, j) =>
+      '<span class="sent" data-state="revealed"><i>' + String(j + 1).padStart(2, '0') + '</i>' + esc(s) + '</span>'
+    ).join('') + '</p>'
+  ).join('');
+}
+function plainRows(text) {
+  return paras(text).map(p => '<p class="p">' + sents(p).map(s =>
+    '<span class="sent" data-state="revealed">' + esc(s) + '</span>'
+  ).join('') + '</p>').join('');
+}
+
+function entryHTML(m, idx, name) {
+  const no = String(idx + 1).padStart(2, '0');
+  const who = m.who === 'alice' ? 'ALICE' : '<span class="peer">' + esc(name) + '</span>';
+  const body = m.who === 'alice' ? sentenceRows(m.text) : plainRows(m.text);
+  const emojiCls = emojiish(m.text) ? ' msg--emoji' : '';
+  return '<article class="entry entry--' + m.who + emojiCls + '" data-who="' + m.who + '" data-idx="' + no + '">' +
+    '<header class="entry-head"><span class="no">REC ' + no + '</span><span class="who">' + who + '</span><time>' + esc(m.hm) + '</time></header>' +
+    '<div class="panel">' + body + '</div>' +
+    '</article>';
+}
+
+let mode = 'sample';
+let data = SAMPLE;
+let peer = NAME_NORMAL;
+
+function render(fresh) {
+  listEl.innerHTML = data.map((m, i) => entryHTML(m, i, peer)).join('');
+  if (fresh && data.length) {
+    const last = listEl.lastElementChild;
+    if (last) last.classList.add('is-fresh'); /* 动效钩子：新条目入场 */
+  }
+  emptyEl.hidden = data.length > 0;
+  document.querySelectorAll('[data-peer]').forEach(el => { el.textContent = peer; });
+  document.body.dataset.mode = mode;
+  stickBottom();
+}
+
+function stickBottom() { streamEl.scrollTop = streamEl.scrollHeight; }
+
+/* ---- 演示模式切换 ---- */
+document.querySelectorAll('[data-mode-btn]').forEach(btn => {
+  btn.addEventListener('click', () => setMode(btn.dataset.modeBtn));
+});
+function setMode(m) {
+  if (m === mode) return;
+  mode = m;
+  document.querySelectorAll('[data-mode-btn]').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.modeBtn === m)));
+  if (m === 'sample') { data = SAMPLE; peer = NAME_NORMAL; }
+  else if (m === 'worst') { data = buildWorst(); peer = NAME_WORST; }
+  else { data = []; peer = NAME_NORMAL; }
+  render(false);
+}
+
+/* ---- 回到最新 pill ---- */
+function nearBottom() {
+  return streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight < 140;
+}
+streamEl.addEventListener('scroll', () => {
+  const show = !nearBottom();
+  jumpEl.hidden = !show;
+  jumpEl.classList.toggle('is-shown', show); /* 动效钩子 */
+});
+jumpEl.addEventListener('click', stickBottom);
+
+/* ---- Composer ---- */
+function autosize() {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 150) + 'px';
+}
+ta.addEventListener('input', () => {
+  autosize();
+  sendBtn.disabled = ta.value.trim().length === 0;
+});
+ta.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submit();
+  }
+});
+sendBtn.addEventListener('click', submit);
+
+function now() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return { hm: p(d.getHours()) + ':' + p(d.getMinutes()), hms: p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) };
+}
+function submit() {
+  const text = ta.value.trim();
+  if (!text) return;
+  const t = now();
+  data = data.concat(
+    { who: 'user', ...t, text },
+    { who: 'alice', ...t, text: ALICE_CANNED }
+  );
+  ta.value = '';
+  autosize();
+  sendBtn.disabled = true;
+  render(true);
+  ta.focus();
+}
+
+/* ---- 选择器桥（仅在被 index.html 预览时转发导航键） ---- */
+if (window.parent !== window) {
+  document.addEventListener('keydown', e => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^[1-9]$/.test(e.key) || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      window.parent.postMessage({ __protoKey: e.key }, '*');
+    }
+  });
+}
+
+render(false);
+</script>
+</body>
+</html>

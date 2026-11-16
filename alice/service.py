@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 import hashlib
+import hmac
 from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime
@@ -448,6 +449,32 @@ class ChatService:
 
     def chat_activity(self) -> dict:
         return self._channels.activity()
+
+    def gui_request_status(self, payload: dict) -> dict:
+        """Read-only identity-bound lookup. Never accepts or reruns a GUI request."""
+        if (not isinstance(payload, dict) or set(payload) != {"text", "request_id", "session_epoch"}
+                or not isinstance(payload["text"], str)
+                or not isinstance(payload["request_id"], str) or not payload["request_id"]
+                or not isinstance(payload["session_epoch"], str) or not payload["session_epoch"]):
+            raise ChannelError(400, "invalid_request", "原请求身份无效")
+        request = self._channels.gui_request(payload["text"], payload["request_id"], payload["session_epoch"])
+        if not self._lock.acquire(blocking=False):
+            raise ChannelError(503, "status_unavailable", "请求状态暂不可确认，请稍后继续核对")
+        try:
+            self._channels.check_epoch(request["session_epoch"])
+            prior = self.store.conn.execute(
+                "SELECT request_id,session_epoch,channel_id,payload_hash,status,user_turn_id,assistant_turn_id,"
+                "error_code,maintenance_status FROM channel_requests WHERE request_id=? OR source_key=?",
+                (request["request_id"], request["source_key"])).fetchone()
+            if prior is None:
+                return {"status": "not_found", "request_id": request["request_id"], "session_epoch": request["session_epoch"]}
+            if (prior["channel_id"] != "gui" or prior["session_epoch"] != request["session_epoch"]
+                    or not hmac.compare_digest(prior["payload_hash"], request["payload_hash"])):
+                raise ChannelError(409, "request_conflict", "相同消息标识的内容或来源不一致")
+            return {key: prior[key] for key in ("request_id", "session_epoch", "status", "user_turn_id",
+                                                "assistant_turn_id", "error_code", "maintenance_status")}
+        finally:
+            self._lock.release()
 
     def authenticate_channel(self, token):
         return self._channels.authenticate(token)
