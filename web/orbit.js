@@ -845,9 +845,14 @@
       moveNode(overview, side);
       moveNode(results, mainCol);
       moveNode(prefs, side);
-      // 结果区说明句：标题悬停承接（02b：短版入「找到的资料」悬停）
+      // 导语精简 1 字（P2 91→90 贴线，05 轮次 11）：原句入悬停
+      const intro = discovery.querySelector(".discovery-intro");
+      if (intro) { subText(intro, "找点感兴趣的，留着一起聊"); subAttr(intro, "title", "找点你感兴趣的，留着一起聊。"); }
+      // 结果区说明句：标题悬停承接（02b：短版入「找到的资料」悬停）；39 字说明句收纳
       const resHead = results && results.querySelector("h2");
-      if (resHead) subAttr(resHead, "title", "原文与判断分开保留");
+      if (resHead) subAttr(resHead, "title", "原文与判断分开保留；资料会到期，没有新发现时也可以什么都不带回");
+      const resHint = results && results.querySelector(".discovery-results > .discovery-hint, .discovery-hint");
+      if (resHint && results.contains(resHint)) subStyle(resHint, "display:none");
       // 偏好 note ≈49 字收纳：隐藏 + 头部悬停短句（02b P1-2）
       const note = document.querySelector(".discovery-preferences-note");
       if (note) {
@@ -864,6 +869,16 @@
       // interests-box 初始 open 移除（02b 裁定请求 3，还原恢复）
       const interests = $("discovery-interests-box");
       if (interests) subFlag(interests, "open", false);
+      // 字数帽（05 轮次 11）：抽屉/用量块默认折叠——展开内容不计常驻的口径前提是
+      // 「默认不可见」。discovery.js 重绘会恢复 open，observer 强制维持（还原=subFlag 登记链）。
+      const foldDetail = (el) => { if (el && el.open) subFlag(el, "open", false); };
+      foldDetail(drawer);
+      foldDetail(task);
+      if (interests) foldDetail(interests);
+      spy(discovery, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] }, () => {
+        foldDetail(drawer); foldDetail(task);
+        const ib = $("discovery-interests-box"); if (ib) foldDetail(ib);
+      });
       // 偏好浮层包装：CSS 呈浮层抽屉（节点留在面板内）；S10 族动态列表浮层挂滚动例外钩子（R5d P3 组）
       if (prefs) {
         const f = document.createElement("div");
@@ -874,9 +889,34 @@
       body.appendChild(side);
       body.appendChild(mainCol);
       discovery.appendChild(body);
-      // app.js 运行时可能给面板加 hidden（导航语义残留）：orbit 期间剥离
-      spy(discovery, { attributes: true, attributeFilter: ["class"] }, () => {
+      // app.js 运行时可能给面板加 hidden（导航语义残留）：orbit 期间剥离；
+      // discovery.js 重绘后维持折叠/空态替身/说明收纳/引导态去重（字数帽口径前提，05 轮次 11）
+      spy(discovery, { attributes: true, attributeFilter: ["class", "open"], childList: true, subtree: true }, () => {
         if (discovery.classList.contains("hidden")) discovery.classList.remove("hidden");
+        foldDetail(drawer); foldDetail(task);
+        const ib2 = $("discovery-interests-box"); if (ib2) foldDetail(ib2);
+        // 结果说明 39 字：标题悬停承接（重绘后维持）
+        for (const h of discovery.querySelectorAll(".discovery-results .discovery-hint"))
+          if (!h.style.display) h.style.display = "none";
+        // 空态替身（重绘后维持）
+        const emp = discovery.querySelector(".discovery-empty");
+        if (emp && !emp.dataset.orbitTuck) {
+          emp.dataset.orbitTuck = "1";
+          const raw = emp.textContent.trim();
+          if (raw.length > 12) { emp.textContent = "开放平台并添加兴趣后，资料会出现在这里。"; emp.title = raw; }
+        }
+        // 引导态去重（11-15 原则）：下一步引导在场时，status（无错误时）与 context 范围摘要
+        // 与引导信息重叠——orbit 域隐藏（还原=subStyle 登记链；discovery.js 语义类不动）
+        const next = discovery.querySelector("#discovery-next");
+        const nextOn = next && !next.classList.contains("hidden");
+        const status = $("discovery-status");
+        const ctx = $("discovery-context");
+        const applyGuide = (el) => {
+          if (!el) return;
+          const want = nextOn && !(el === status && el.dataset.kind === "error") ? "none" : "";
+          if (el.style.display !== want) el.style.display = want;
+        };
+        applyGuide(status); applyGuide(ctx);
       });
     }
     pages.discovery = p2;
@@ -934,7 +974,15 @@
         else moveNode(d, opsDrawer);
       }
       moveNode(opsDrawer, side);
-      // 主列 = 其余全部子节点
+      // 字数帽（05 轮次 11）：右列抽屉默认折叠——thoughts.js 渲染的 details 自带 open；
+      // thoughts.js 重绘恢复 open 由 spy 强制维持。thought-detail 保留程序化 open 通道。
+      const foldThought = () => {
+        for (const d of side.querySelectorAll("details")) if (d.open) subFlag(d, "open", false);
+      };
+      foldThought();
+      // 主列 = 其余全部子节点；双标题去重（R5c 同款）：面板自带 #thought-title 由页头接管
+      const thoughtTitle = $("thought-title");
+      if (thoughtTitle) subStyle(thoughtTitle, "display:none");
       for (const child of [...thought.childNodes]) {
         if (child === body || child.nodeType !== 1) continue;
         moveNode(child, mainCol);
@@ -951,9 +999,14 @@
         mainCol.insertBefore(rep, mainCol.firstChild.nextSibling || null);
         undos.push(() => rep.remove());
       }
-      // #thought-run 文案替换（「调用模型」入悬停）
-      const run = $("thought-run");
-      if (run) { subText(run, "现在探索一轮"); subAttr(run, "title", "调用模型，计入后台额度"); }
+      // #thought-run 文案替换（「调用模型」入悬停）。11-17 清醒睡眠改造后主行动按钮
+      // 为 #thought-wake「开启后台测试（调用模型）」（11 字）——替身跟随新节点（05 轮次 11）
+      const run = $("thought-run") || $("thought-wake");
+      if (run) { subText(run, "开启后台活动"); subAttr(run, "title", run.textContent.trim() + "；调用模型，计入后台额度"); }
+      // 疑问占位精简（02b 预算 8 字）：原句入悬停
+      const qLabel = [...thought.querySelectorAll("label, .settings-hint")]
+        .find((el) => el.textContent.includes("留下一个想继续研究的问题"));
+      if (qLabel) { subText(qLabel, "记下想研究的问题"); subAttr(qLabel, "title", "留下一个想继续研究的问题"); }
       // 疑问空态收纳：只读 observer + h3 悬停（轮次 4 钉死模板写死文案计入）
       const questions = $("thought-questions");
       if (questions) {
@@ -981,9 +1034,11 @@
       body.appendChild(mainCol);
       body.appendChild(side);
       thought.appendChild(body);
-      // app.js selectSettings 会给本 section 切 hidden：orbit 期间剥离（P3 永远可见）
-      spy(thought, { attributes: true, attributeFilter: ["class"] }, () => {
+      // app.js selectSettings 会给本 section 切 hidden：orbit 期间剥离（P3 永远可见）；
+      // thoughts.js 重绘恢复抽屉 open：强制维持折叠（字数帽口径前提）
+      spy(thought, { attributes: true, attributeFilter: ["class", "open"], childList: true, subtree: true }, () => {
         if (thought.classList.contains("hidden")) thought.classList.remove("hidden");
+        foldThought();
       });
     }
     pages.thoughts = p3;
