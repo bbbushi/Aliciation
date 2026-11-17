@@ -82,7 +82,7 @@ html[data-theme=orbit] .orbit-float {
 #orbit-dock {
   position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom));
   transform: translateX(-50%); z-index: 30;
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 8px;   /* 簇距 8+16+线=25px（05 轮次 10：03a 双重计数收敛） */
   height: 56px; padding: 8px 12px;
   background: #0d1624f0; border: 1px solid var(--orbit-line-strong);
   border-radius: 999px; box-shadow: var(--orbit-shadow-dock);
@@ -96,7 +96,7 @@ html[data-theme=orbit] .orbit-float {
 #orbit-dock::before { right: 100%; }
 #orbit-dock::after  { left: 100%; transform: scaleX(-1); }
 /* 扫描线内衬：与舞台同质感（全局纹理 z6 罩不到 body 级 dock） */
-html[data-theme=orbit] #orbit-dock > * { position: relative; z-index: 1; }
+html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: relative; z-index: 1; }
 .orbit-dock-texture {
   position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none;
   background: repeating-linear-gradient(to bottom, #01040b38 0 1px, transparent 1px 3px);
@@ -336,8 +336,7 @@ html[data-theme=orbit] .discovery-header .card-x { color: var(--orbit-faint); }
 /* 双列只挂包装容器 .orbit-body（03b §0.5；header/status/warning/bound 仍为 #discovery 直接子节点横贯——防棋盘化 R3 P1-2） */
 html[data-theme=orbit] #discovery .orbit-body {
   min-height: 0; display: grid; gap: var(--den-gap);
-  grid-template-columns: 300px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);   /* 行定义删除（R5b C6/R5d P1-1：两项自动放置挤一行，第二行空置） */
 }
 html[data-theme=orbit] #discovery .orbit-body-side { display: flex; flex-direction: column; gap: var(--den-gap); min-height: 0; }
 html[data-theme=orbit] #discovery .orbit-body-main { min-height: 0; }
@@ -388,7 +387,7 @@ html[data-theme=orbit] .orbit-state-chip[data-state=sleeping] { background: var(
 /* 双列：左疑问+思辨流，右抽屉栈（grid 只挂包装容器） */
 html[data-theme=orbit] #orbit-page-thoughts .orbit-body {
   min-height: 0; display: grid; gap: var(--den-gap);
-  grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 340px;
 }
 @media (max-width: 900px) { html[data-theme=orbit] #orbit-page-thoughts .orbit-body { grid-template-columns: minmax(0, 1fr); } }
 html[data-theme=orbit] .orbit-drawer-stack { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; overflow-y: auto; }
@@ -1104,7 +1103,7 @@ html[data-theme=orbit] .composer:focus-within + .composer-foot { opacity: 1; vis
 /* composer 包裹层（#chat > footer）：侧距对齐 #msgs 的 880px 消息列（同款公式），
    使输入框与消息流同列对齐；composer 本体样式不动（03a 负面清单） */
 html[data-theme=orbit] #chat > footer.orbit-composer-wrap {
-  padding: 14px max(28px, calc((100% - 880px) / 2)) 15px;
+  padding: 14px max(28px, calc((100% - 880px) / 2)) max(15px, env(safe-area-inset-bottom));
 }
 
 /* S7 协作者卡（DSH/Claude）：worker-tasks.js 状态轮询会持续写回内联 inset（room 遗留
@@ -1116,3 +1115,95 @@ html[data-theme=orbit] #collaborator-dock .collaborator-avatar {
 html[data-theme=orbit] #claude-collaborator-dock .collaborator-avatar {
   top: auto !important; left: auto !important; right: 16px !important; bottom: 106px !important;
 }
+
+/* ==========================================================================
+   §6 布局专审修补（05 轮次 10；输入 R5a/R5b/R5c/R5d 四份审查，快照驱动）
+   ========================================================================== */
+
+/* --- §6.1 密度档回退（R5d P1-2：--den-* 仅在带 data-density 的元素上定义，
+   makeWindow 窗头挂档外/S1/gate 等无 density 祖先 → var() 按 IACVT 归零。
+   根级给 mid 默认值兜底；body 级小浮层显式声明 tight 档。 --- */
+html[data-theme=orbit] {
+  --den-pad: 24px; --den-gap: 20px; --den-lead: 1.7; --den-ctl: 38px;
+}
+html[data-theme=orbit] #action-confirm,
+html[data-theme=orbit] #claude-gate,
+html[data-theme=orbit] .composer-permission,
+html[data-theme=orbit] .collaborator-avatar,
+html[data-theme=orbit] .orbit-tip {
+  --den-pad: 16px; --den-gap: 12px; --den-lead: 1.55; --den-ctl: 32px;
+}
+
+/* --- §6.2 R5b：大页面旧皮重置与打磨 --- */
+/* B-01（P1）：#discovery 自带 .discovery-panel 旧皮（flex:1+2px 边框+--bg 实底）
+   在 orbit 页容器内把面板锁成 638px 高，右列内容穿框溢出约 302px——orbit 域整体重置 */
+html[data-theme=orbit] #discovery {
+  flex: 0 1 auto; height: auto; min-height: 0;
+  border: 0; background: transparent;
+}
+/* B-03：overview 旧规则 align-items 影响入口排 */
+html[data-theme=orbit] .discovery-overview { align-items: stretch; }
+/* B-04：页头 28px 错位（legacy padding 与 orbit 页头叠加） */
+html[data-theme=orbit] #discovery .discovery-header { padding: 0 0 var(--sp-5); }
+/* B-05：结果卡旧 margin 与 --den-gap 双距 */
+html[data-theme=orbit] .discovery-results .orbit-card { margin: 0; }
+/* B-06：状态带/引导带旧皮收薄（2px 边+实底 → 1px+透明），间距交给页内 gap */
+html[data-theme=orbit] #discovery .discovery-status {
+  border: 1px solid var(--orbit-line-faint); border-left-width: 2px;
+  background: transparent; margin: 0 0 var(--sp-3); padding: var(--sp-2) var(--sp-3);
+}
+html[data-theme=orbit] #discovery .discovery-next {
+  border: 1px solid var(--orbit-line-faint); border-left-width: 2px; margin-bottom: 0;
+}
+/* B-10/B-11：P3 抽屉与疑问表单的 legacy margin 双距 */
+html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer,
+html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer details { margin: 0; }
+html[data-theme=orbit] #orbit-page-thoughts .orbit-body form { margin: var(--sp-3) 0; }
+/* B-12：抽屉栈双层滚动——栈自身不再滚，交给页容器 */
+html[data-theme=orbit] .orbit-drawer-stack { max-height: 100%; overflow-y: visible; }
+/* P2/P4 页头补挂统一模板类（P3 页头由 orbit.js 补建，见 §6.4） */
+html[data-theme=orbit] .orbit-page-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--den-gap); padding: 0 0 var(--sp-5);
+}
+html[data-theme=orbit] .orbit-page-head .page-title { font: 600 var(--fs-page)/1.4 var(--font); margin: 0; }
+
+/* --- §6.3 R5c：M2–M7 设置窗接管补齐 --- */
+/* B1 兜底：head 带遗留 .modal-head 的 space-between，工具簇 wrapper 由 orbit.js 包（§6.5），
+   此处先压掉均布防其他复用窗被撕开 */
+html[data-theme=orbit] .orbit-win-head { justify-content: flex-start; }
+html[data-theme=orbit] .orbit-win-tools { display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; }
+/* A1：M2–M7 是 div.modal 非 dialog，::backdrop 全链失效——压暗对齐令牌档
+   （无入退场动画为已知偏差，登记 06） */
+html[data-theme=orbit] .modal { background: #05080fd9; }   /* div 窗无 ::backdrop，直接压暗（与 dialog 窗同档） */
+/* C2/D3：步点条接管 legacy margin（settings-nav margin 24 双重缩进→0）；
+   横向保留 den-pad 内衬使首格与标题/分区左缘对齐（364→388） */
+html[data-theme=orbit] .settings-nav.orbit-step-dots { margin: 0 0 var(--den-gap); padding: 0 var(--den-pad); }
+/* D1：分区间隙 44（legacy gap 22 × anchor 空盒双槽）→ den-gap 20 */
+html[data-theme=orbit] .settings-body { gap: var(--den-gap); }
+html[data-theme=orbit] .settings-body > :empty { display: none; }
+/* D2：窗体节奏令牌化（去 legacy 4px 顶值） */
+html[data-theme=orbit] .modal-body { padding: 0 var(--den-pad) var(--den-pad); }
+/* D4：关闭钮 36×32 → flex-basis 残留重置 */
+html[data-theme=orbit] .orbit-win-btn { flex: 0 0 auto; }
+/* R5d P2-2：窗头内 dock 类说明图标统一 32（与关闭钮同簇） */
+html[data-theme=orbit] .orbit-win-head .orbit-icon { width: 32px; height: 32px; }
+html[data-theme=orbit] .orbit-win-head .orbit-icon .orbit-symbol { width: 18px; height: 18px; }
+/* 返回钮（03c 1.2：M2–M7 必备，orbit.js §6.5 创建） */
+html[data-theme=orbit] .orbit-win-back { margin-right: var(--sp-2); }
+
+/* --- §6.4 R5d/R5a：杂项几何 --- */
+/* F7：M10 矮视口钳制（100dvh<616 时窗底越界不可达） */
+html[data-theme=orbit] #orbit-win-workers .worker-workspace,
+html[data-theme=orbit] #orbit-win-workers .orbit-window-body {
+  min-height: min(480px, calc(100dvh - 48px - var(--orbit-dock-clear)));
+}
+/* E2：S9 启动条对齐浮层宽帽纪律 + 换行态 */
+html[data-theme=orbit] #boot-status { max-width: min(320px, calc(100vw - 48px)); border-radius: 999px; }
+html[data-theme=orbit] #boot-status[data-wrap] { border-radius: 10px; }
+/* F6：触屏命中区（自建窗关闭钮/步点 ≥40） */
+@media (pointer: coarse) {
+  html[data-theme=orbit] .orbit-win-btn { width: 40px; height: 40px; }
+  html[data-theme=orbit] .orbit-step { width: 40px; height: 40px; }
+}
+/* R5d P2-3：三页页头对齐统一 flex-start（P2/P4 的 head 由 §6.2 模板接管） */

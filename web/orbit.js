@@ -531,6 +531,7 @@
     const d = document.createElement("dialog");
     d.id = id;
     d.className = "orbit-window" + (size ? " orbit-window--" + size : "");
+    d.setAttribute("data-density", "mid");   // R5d P1-2：窗头在 body 外，须在 dialog 层挂档否则 --den-* 归零
     if (ariaLabel) d.setAttribute("aria-label", ariaLabel); // R3 P1-6：显式复制，不靠继承
     if (title) {
       const head = document.createElement("div");
@@ -673,13 +674,32 @@
       subClass(head, "orbit-win-head");
       const title = $("settings-title");
       subClass(title, "orbit-win-title");
+      // R5c B1：head 带遗留 .modal-head space-between——工具簇 wrapper（说明/关闭同簇右聚）
+      const tools = document.createElement("div");
+      tools.className = "orbit-win-tools";
+      head.appendChild(tools);
+      undos.push(() => { for (const k of [...tools.childNodes]) head.appendChild(k); tools.remove(); });
+      const x = $("settings-x");
+      if (x) moveNode(x, tools);
+      // R5c B2：返回钮（03c 1.2 必备）——复用关闭链路（与 Esc 同源语义）
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "orbit-win-btn orbit-win-back";
+      back.setAttribute("aria-label", "返回");
+      back.setAttribute("data-tip", "返回");
+      back.appendChild(svg("x", ""));
+      back.querySelector("svg").style.width = "18px";
+      back.querySelector("svg").style.height = "18px";
+      wire(back, "click", () => { if (x) x.click(); });
+      head.insertBefore(back, title);
+      undos.push(() => back.remove());
     }
-    const x = $("settings-x");
-    subClass(x, "orbit-win-btn");
-    subAttr(x, "data-tip", "关闭");
 
     // 步点条：原 nav.settings-nav 已在窗头下方，只挂类 + 图标化（监听全保留，02c 0.3）
     const nav = card.querySelector("nav.settings-nav");
+    // R5c C1：元素化指示条（05 轮次 7 裁定）——span 引擎随 [aria-pressed=true] 滑移。
+    // moveIndicator 须在函数级作用域（openSettings 包装跨块引用，块内 const 会 ReferenceError）。
+    let moveIndicator = () => {};
     if (nav) {
       subClass(nav, "orbit-step-dots");
       const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", observer: "layers", qq: "qq", workers: "dsh" };
@@ -692,11 +712,25 @@
         b.querySelector("svg").style.width = "18px";
         b.querySelector("svg").style.height = "18px";
       }
-      // thoughts.js 注入的「思想与探索」按钮：隐藏（归 P3，轮次 3 裁定 1）
-      const thBtn = nav.querySelector('button[data-settings="thoughts"], .settings-nav button');
+      const indicator = document.createElement("span");
+      indicator.className = "orbit-step-indicator";
+      nav.appendChild(indicator);
+      undos.push(() => indicator.remove());
+      moveIndicator = () => {
+        const cur = nav.querySelector('button[aria-pressed="true"]');
+        if (!cur) return;
+        indicator.style.transform = `translateX(${cur.offsetLeft}px)`;
+        indicator.style.width = `${cur.offsetWidth}px`;
+        indicator.dataset.ready = "1";
+      };
+      // thoughts.js 注入的「思想与探索」按钮：无条件隐藏（05 轮次 10 C3：跨页跳转项不进步点条）
+      const thBtn = nav.querySelector('button[data-settings="thoughts"]');
+      if (thBtn) subStyle(thBtn, "display:none");
       for (const b of nav.querySelectorAll("button")) {
-        if (!b.getAttribute("data-settings")) subStyle(b, "display:none"); // 动态注册按钮（thoughts）
+        if (!b.getAttribute("data-settings") || b.getAttribute("data-settings") === "thoughts")
+          subStyle(b, "display:none"); // 动态注册按钮（thoughts）
       }
+      later(moveIndicator, 0);
       // switchStep 重入守卫 + 窗头标题随动（M-09/M-10）
       wire(nav, "click", (e) => {
         const b = e.target.closest && e.target.closest("button[data-settings]");
@@ -705,6 +739,7 @@
         switching = true;
         later(() => { switching = false; }, 240);
         later(syncSettingsTitle, 0);
+        later(moveIndicator, 0);
       }, { capture: true });
     }
     // 五个分区自带标题 clip 隐藏保节点（唯一可见标题规则；还原表 02c #4）
@@ -742,6 +777,7 @@
       };
       ui.openSettings = function (key) {
         if (key === "thoughts") { route("thoughts"); syncThoughtsVisible(); return; }
+        later(moveIndicator, 60);   // 开窗/换分区后指示条重定位（首开时布局才稳定）
         return origOpen.apply(this, arguments);
       };
       undos.push(() => { ui.selectSettings = origSelect; ui.openSettings = origOpen; });
@@ -801,13 +837,14 @@
       drawer.appendChild(sum);
       const box = $("discovery-settings-box");
       if (box) moveNode(box, drawer);
-      // 右主列：行动区 + 结果区 + 偏好
+      // 左列 = 行动区（03b §2.1/R5b J1：开关+主按钮+入口排 overview 为首位），
+      // 右主列仅结果流；偏好浮层包装节点物理在左列（窗口召唤，R5d P1-1 分组重排）
       const overview = discovery.querySelector(".discovery-overview");
       const results = discovery.querySelector(".discovery-results");
       const prefs = $("discovery-preferences");
-      moveNode(overview, mainCol);
+      moveNode(overview, side);
       moveNode(results, mainCol);
-      moveNode(prefs, mainCol);
+      moveNode(prefs, side);
       // 结果区说明句：标题悬停承接（02b：短版入「找到的资料」悬停）
       const resHead = results && results.querySelector("h2");
       if (resHead) subAttr(resHead, "title", "原文与判断分开保留");
@@ -818,7 +855,7 @@
         const prefHead = document.querySelector(".discovery-preferences-head");
         if (prefHead) subAttr(prefHead, "title", "平台即点即存；草稿会保留");
       }
-      // 左列余项：见闻维护 / 活动用量（原 details 原样入列）
+      // 左列余项：见闻维护 / 活动用量 / 策略抽屉（依次其后，R5b J1）
       const learn = $("discovery-learning-preview");
       const task = document.querySelector("details.discovery-task");
       moveNode(learn, side);
@@ -827,8 +864,13 @@
       // interests-box 初始 open 移除（02b 裁定请求 3，还原恢复）
       const interests = $("discovery-interests-box");
       if (interests) subFlag(interests, "open", false);
-      // 偏好浮层包装：CSS 呈浮层抽屉（节点留在面板内）
-      if (prefs) { const f = document.createElement("div"); f.className = "orbit-float"; wrapNode(prefs, f); }
+      // 偏好浮层包装：CSS 呈浮层抽屉（节点留在面板内）；S10 族动态列表浮层挂滚动例外钩子（R5d P3 组）
+      if (prefs) {
+        const f = document.createElement("div");
+        f.className = "orbit-float";
+        f.setAttribute("data-orbit-scroll", "");
+        wrapNode(prefs, f);
+      }
       body.appendChild(side);
       body.appendChild(mainCol);
       discovery.appendChild(body);
@@ -847,6 +889,26 @@
     p3.setAttribute("data-density", "wide");
     app.insertBefore(p3, app.querySelector(".terminal-foot") || null);
     undos.push(() => p3.remove());
+    // P3 页头（R5b J2/R5d P2-1：三页页头同构 .orbit-page-head——标题 + 清醒睡眠 chip）
+    const thoughtHead = document.createElement("header");
+    thoughtHead.className = "orbit-page-head";
+    const thoughtTitle = document.createElement("h1");
+    thoughtTitle.className = "page-title";
+    thoughtTitle.textContent = "思想与探索";
+    const chip = document.createElement("span");
+    chip.className = "orbit-state-chip";
+    chip.setAttribute("data-state", "awake");
+    thoughtHead.append(thoughtTitle, chip);
+    p3.appendChild(thoughtHead);
+    undos.push(() => thoughtHead.remove());
+    // chip 只读镜像 #thought-lifecycle 的 data-state（05 轮次 7 星线裁定同路径；原节点收纳）
+    const lifecycle = $("thought-lifecycle");
+    if (lifecycle) {
+      subStyle(lifecycle, "display:none");
+      const syncChip = () => { chip.dataset.state = lifecycle.dataset.state === "sleeping" ? "sleeping" : "awake"; };
+      syncChip();
+      spy(lifecycle, { attributes: true, attributeFilter: ["data-state"] }, syncChip);
+    }
     if (thought) {
       moveNode(thought, p3);
       subFlag(thought, "hidden", false);
@@ -1309,10 +1371,12 @@
       if (testBtn) { maintain(testBtn, "测试"); subAttr(testBtn, "title", "测试候选连接"); }
       const saveBtn = $("model-save");
       if (saveBtn) { maintain(saveBtn, "保存"); subAttr(saveBtn, "title", "验证并保存可能产生少量 API 费用"); }
-      // 窗头「说明」图标：四段全文悬停（触屏点按兜底由 tip 控制器承担）
+      // 窗头「说明」图标：四段全文悬停（触屏点按兜底由 tip 控制器承担）；
+      // 归入窗头工具簇 wrapper（R5c B1：说明与关闭同簇右聚）
       if (hints.length) {
         const head = document.querySelector("#settings-modal .orbit-win-head");
-        if (head) {
+        const tools = head && head.querySelector(".orbit-win-tools");
+        if (tools) {
           const info = document.createElement("button");
           info.type = "button";
           info.className = "orbit-icon orbit-icon-entry";
@@ -1320,7 +1384,7 @@
           info.setAttribute("data-tip-long", "");
           info.setAttribute("aria-label", "对话与模型说明");
           info.appendChild(svg("info"));
-          head.appendChild(info);
+          tools.insertBefore(info, tools.firstChild);   // 说明在关闭左侧
           undos.push(() => info.remove());
         }
       }
@@ -1392,6 +1456,11 @@
     applyBudgetRewrites();
     installMirrors();
     route("chat", { silent: true });
+    // R5a P2-3 启动自检：composer 列宽对齐依赖 footer.orbit-composer-wrap（base 仍 760），
+    // 漏挂会静默失轴——只警示不阻断。
+    const cWrap = document.querySelector(".composer")?.parentElement;
+    if (!cWrap || !cWrap.classList.contains("orbit-composer-wrap"))
+      console.warn("[orbit] composer wrap missing .orbit-composer-wrap — 消息列对齐未生效");
   }
   function uninstall() {
     if (!installed) return;
