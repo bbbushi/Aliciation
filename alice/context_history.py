@@ -32,6 +32,7 @@ class HistoryContext:
         self.issued, self.loaded, self.cursors = {}, set(), {}
         self.sent = set()
         self.calls = self.chars = 0
+        self.search_calls = self.load_calls = 0
         self.remaining_tokens = None
         self.events = []
 
@@ -56,21 +57,31 @@ class HistoryContext:
                 (self.remaining_tokens is None or estimate_tokens(body) <= self.remaining_tokens))
 
     def execute(self, name, args):
-        if self.calls >= self.cfg.history_calls:
-            return dump({'error': 'history_call_limit'})
-        self.calls += 1
+        if name not in ('history_search', 'history_load'):
+            return dump({'error': 'unknown_tool'})
         if not isinstance(args, dict):
             return dump({'error': 'invalid_arguments'})
+        # Discovery must not consume the opportunity to read its results.
+        # The existing setting caps each stage; chars/tokens remain shared.
+        counter = 'search_calls' if name == 'history_search' else 'load_calls'
+        if not getattr(self.session, "testing", False) and getattr(self, counter) >= self.cfg.history_calls:
+            result = {'error': 'history_call_limit', 'stage': name,
+                      'notice': ('搜索次数已用完；如正文额度仍有剩余，可读取本轮已有引用。' if name == 'history_search'
+                                 else '正文读取次数已用完，不再重试；未读材料保持未知。'),
+                      'budget': self.budget()}
+            self.events.append({'action': name, 'status': 'history_call_limit', 'count': 0, 'results': []})
+            return dump(result)
+        setattr(self, counter, getattr(self, counter) + 1)
+        self.calls += 1
         issued, cursors = dict(self.issued), dict(self.cursors)
         if name == 'history_search':
             result = self.search(args)
         elif name == 'history_load':
             result = self.load(args)
-        else:
-            result = {'error': 'unknown_tool'}
+        result['budget'] = self.budget()
         if not self.fits(result):
             self.issued, self.cursors = issued, cursors
-            result = {'error': 'budget_exceeded'}
+            result = {'error': 'budget_exceeded', 'budget': self.budget()}
         else:
             self.chars += len(dump(result))
             self.loaded.update(item['ref'] for item in result.get('items', []) if item.get('status') == 'loaded')
@@ -81,6 +92,10 @@ class HistoryContext:
                                  'status': item.get('status', 'candidate')}
                                 for item in result.get('items', [])]})
         return dump(result)
+
+    def budget(self):
+        return {'search_calls_remaining': None if getattr(self.session, "testing", False) else max(0, self.cfg.history_calls - self.search_calls),
+                'load_calls_remaining': None if getattr(self.session, "testing", False) else max(0, self.cfg.history_calls - self.load_calls)}
 
     def search(self, args):
         query, cursor = args.get('query'), args.get('cursor')
@@ -113,6 +128,8 @@ class HistoryContext:
             self.cursors[next_cursor] = ((query, before, offset + 8, signature)
                 if offset + 8 < len(candidates) else (query, rows[-1]['user_id'], 0, None))
         return {'items': items, 'cursor': next_cursor, 'scan_limit': 200,
+                'query_outcome': 'matches' if items else 'no_matches_in_scanned_window',
+                'absence_means': '本次许可窗口与查询未找到；不能据此认定从未发生。',
                 'remaining_window_matches': max(0, len(candidates) - offset - 8),
                 'notice': '仅在当前允许的旧往返窗口搜索；片段不是完整正文，也不是发生事实或当前授权。'}
 
@@ -149,6 +166,8 @@ class HistoryContext:
         return {'items': items, 'notice': '以下为历史发言资料，按原说话者理解；AI旧自述只证明当时这样说过，实际事件与操作需相应依据。'}
 
     def metadata(self):
-        return {'boundary': self.boundary, 'calls': self.calls, 'chars': self.chars, 'loaded_refs': sorted(self.loaded),
+        return {'boundary': self.boundary, 'calls': self.calls,
+                'search_calls': self.search_calls, 'load_calls': self.load_calls,
+                'budget': self.budget(), 'chars': self.chars, 'loaded_refs': sorted(self.loaded),
                 'sent_refs': sorted(self.sent),
                 'issued_count': len(self.issued), 'events': self.events}

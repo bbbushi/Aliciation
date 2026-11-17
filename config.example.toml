@@ -30,7 +30,7 @@ working_set_ttl_turns = 12     # 当前渠道后续装配次数；重复keep不�
 working_set_calls = 4          # keep/release合计，仍受本轮总工具上限约束
 history_enabled = false       # C3独立开关，需indexed；只读当前库同渠道的已完成普通往返
 history_max_chars = 8000      # 目录及完整原文回执累计预算；不截断后伪称完整
-history_calls = 2             # search/load合计，仍受本轮总工具上限约束
+history_calls = 2             # search与load各自的次数上限；0同时关闭，字数与本轮总工具预算共用
 # 前情与实际完整往返装配共用边界，提前预留注入上限；按既有最小跨度分批生成。
 recap_enabled = false         # C3普通旧往返前情；默认关闭，独立于indexed
 recap_min_rows = 4

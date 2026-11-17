@@ -90,7 +90,7 @@ class PersonaRegistryContext:
     def execute(self, name: str, args) -> str:
         if name != "persona_load" or not isinstance(args, dict):
             return dump({"error": "invalid_arguments"})
-        if self.calls >= self.limits["max_persona_load_calls"]:
+        if not getattr(self, "testing", False) and self.calls >= self.limits["max_persona_load_calls"]:
             return dump({"error": "call_limit",
                          "notice": "人格读取额度已用完；可凭核心直接回答，不执行额外展开。"})
         refs = args.get("refs")
@@ -246,7 +246,7 @@ class MaterialRegistryContext:
                 or not isinstance(args["refs"], list) or not 1 <= len(args["refs"]) <= 2
                 or any(not isinstance(r, str) or not 1 <= len(r) <= 200 for r in args["refs"])):
             return dump({"error": "invalid_arguments"})
-        if self.calls >= self.limits["max_persona_load_calls"]:
+        if not getattr(self, "testing", False) and self.calls >= self.limits["max_persona_load_calls"]:
             return dump({"error": "call_limit"})
         self.calls += 1
         items, pending, loaded = [], dict(self.loaded), set(self.loaded_block_ids)

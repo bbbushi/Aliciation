@@ -526,15 +526,52 @@ function renderTurnMetadata(node) {
 
 // 上下文观测插件入口（20261107 插件设计 §7）：从回复携带 request_id 进入；缺 ID 只能进列表。
 let inspectorEnabled = null;
+let inspectorGeneration = 0;
 async function inspectorProbe() {
   if (inspectorEnabled !== null) return inspectorEnabled;
+  const generation = inspectorGeneration;
   try {
     const r = await fetch("/api/plugins/context-inspector/status",
       { headers: { "X-Alice-Intent": "observer" }, cache: "no-store" });
     const d = await r.json().catch(() => ({}));
-    inspectorEnabled = d.status === "ok" && d.plugin && d.plugin.enabled === true;
-  } catch { inspectorEnabled = false; }
-  return inspectorEnabled;
+    if (generation !== inspectorGeneration) return inspectorEnabled === true;
+    if (r.ok && (d.status === "disabled" || (d.status === "ok" && d.plugin)))
+      inspectorEnabled = d.status === "ok" && d.plugin.enabled === true;
+  } catch { /* A transient read failure must not permanently hide the entry. */ }
+  return inspectorEnabled === true;
+}
+
+function openContextInspector(requestId = null) {
+  const url = "/addons/context-inspector/" + (requestId ? `?request_id=${encodeURIComponent(requestId)}` : "");
+  if (!window.__TAURI_INTERNALS__?.invoke) {window.open(url, "_blank", "noopener");return;}
+  const dialog = $("#context-inspector-dialog"), frame = $("#context-inspector-frame");
+  frame.src = url;
+  try {if (!dialog.open) dialog.showModal();}
+  catch {frame.src = "about:blank";toast("观测窗口未能打开，请重新进入设置后重试。");}
+}
+
+function bindInspectorLink(link, requestId = null) {
+  link.href = "/addons/context-inspector/" + (requestId ? `?request_id=${encodeURIComponent(requestId)}` : "");
+  link.target = "_blank"; link.rel = "noopener";
+  link.onclick = (event) => {
+    if (window.__TAURI_INTERNALS__?.invoke) {event.preventDefault();openContextInspector(requestId);}
+  };
+}
+
+$("#context-inspector-close").onclick = () => $("#context-inspector-dialog").close();
+$("#context-inspector-dialog").addEventListener("close", () => {$("#context-inspector-frame").src = "about:blank";});
+$("#context-inspector-dialog").addEventListener("keydown", (event) => {if (event.key === "Escape") event.stopPropagation();});
+
+function refreshInspectorLinks(enabled) {
+  inspectorGeneration++; inspectorEnabled = enabled;
+  for (const link of document.querySelectorAll("#msgs .ci-jump")) {
+    const separator = link.previousSibling;
+    if (separator?.nodeType === Node.TEXT_NODE && separator.textContent === " · ") separator.remove();
+    link.remove();
+  }
+  if (enabled) for (const node of document.querySelectorAll("#msgs .msg.assistant")) {
+    if ((node.dataset.channel || "gui") === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
+  }
 }
 
 function noteInspectorLink(node) {
@@ -545,16 +582,73 @@ function noteInspectorLink(node) {
   inspectorProbe().then((ok) => {
     // 追加时刻再去重：连续两次渲染会在探针 resolve 前都通过调用时守卫
     const target = node.querySelector(".message-meta");
-    if (!ok || !node.isConnected || !target || target.querySelector(".ci-jump")) return;
+    if (!ok || inspectorEnabled !== true || !node.isConnected || node.dataset.requestId !== requestId
+        || !target || target.querySelector(".ci-jump")) return;
     const link = document.createElement("a");
     link.className = "link ci-jump";
-    link.href = `/addons/context-inspector/?request_id=${encodeURIComponent(requestId)}`;
-    link.target = "_blank";
-    link.rel = "opener";
+    bindInspectorLink(link, requestId);
     link.textContent = "查看本轮上下文";
     target.append(document.createTextNode(" · "), link);
   });
 }
+
+(() => {
+  const form = $("#observer-settings-form"), enabled = $("#observer-settings-enabled"), body = $("#observer-settings-body");
+  const save = $("#observer-settings-save"), refresh = $("#observer-settings-refresh"), open = $("#observer-settings-open");
+  const result = $("#observer-settings-result");
+  let view = null, working = false, dirty = false, needsSync = false;
+  const describe = () => view ? `查看入口${view.enabled ? "已启用" : "已关闭"} · 正文${view.body_capture ? "留存已开启" : "不留存"}` : "尚未读取设置";
+  function note(message, error = false) {result.textContent = message;result.classList.toggle("error", error);}
+  function controls() {
+    enabled.disabled = body.disabled = working || !view?.writable || needsSync;
+    save.disabled = working || !view?.writable || !dirty || needsSync;
+    save.textContent = working ? "正在同步…" : "保存设置";
+    refresh.disabled = working;
+    refresh.textContent = dirty ? "放弃草稿并同步" : "同步状态";
+    open.disabled = working || !view?.enabled || needsSync;
+    form.setAttribute("aria-busy", String(working));
+  }
+  function apply(next) {
+    if (typeof next.enabled !== "boolean" || typeof next.body_capture !== "boolean"
+        || typeof next.metadata_enabled !== "boolean" || typeof next.writable !== "boolean"
+        || typeof next.session_epoch !== "string") throw new Error("设置状态不完整，请更新服务后重试。");
+    view = next;dirty = false;needsSync = false;
+    enabled.checked = next.enabled;body.checked = next.body_capture;
+    $("#observer-settings-metadata").textContent = `调用元数据采集${next.metadata_enabled ? "已开启" : "已关闭"}；开启正文留存会同时启用元数据采集。关闭查看入口不会停止正文留存。`;
+    refreshInspectorLinks(next.enabled);
+  }
+  async function request(payload = null) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      return await api("/api/observer/settings", {method:payload ? "POST" : "GET", signal:controller.signal,
+        headers:{"X-Alice-Intent":"observer-settings", ...(payload ? {"Content-Type":"application/json"} : {})},
+        ...(payload ? {body:JSON.stringify(payload)} : {})});
+    } finally {clearTimeout(timer);}
+  }
+  async function load() {
+    if (working) return;
+    working = true;controls();note("正在读取当前实例的观测设置…");
+    try {apply(await request());note(`${describe()}${view.writable ? "。" : "；此服务未绑定可写配置，仅可查看。"}`);}
+    catch (error) {needsSync = true;note(`读取未完成：${error.name === "AbortError" ? "同步超时，请稍后重试" : error.message}`, true);}
+    finally {working = false;controls();}
+  }
+  form.addEventListener("change", () => {
+    dirty = !!view && (enabled.checked !== view.enabled || body.checked !== view.body_capture);
+    note(dirty ? "有未保存的修改，当前运行设置仍保持原值。" : describe());controls();
+  });
+  form.onsubmit = async (event) => {
+    event.preventDefault();if (working || !view?.writable || !dirty || needsSync) return;
+    const payload = {enabled:enabled.checked, body_capture:body.checked, revision:view.revision, session_epoch:view.session_epoch};
+    working = true;controls();save.textContent = "正在保存…";note("正在保存到当前实例的配置…");
+    try {apply(await request(payload));note(`已保存 · ${describe()}。入口立即更新，采集从新请求开始，无需重启。`);}
+    catch (error) {needsSync = true;note(`保存未能确认：${error.name === "AbortError" ? "连接超时" : error.message}。请同步状态核对后再操作。`, true);}
+    finally {working = false;controls();}
+  };
+  refresh.onclick = load;
+  open.onclick = () => {if (view?.enabled && !needsSync) openContextInspector();};
+  window.AliceObserverSettings = {setVisible(on) {if (on && !dirty) load();}};
+  controls();
+})();
 
 function redactSourceNode(node, pending = false) {
   renderTurnBubbles(node, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
@@ -2087,9 +2181,7 @@ async function renderResidency(view) {
     for (const item of d.material_preview.excluded || []) body.append(node("p", `${item.bundle_id}：${item.reason}`, "hint"));
   }
   const observerLink = document.createElement("a");
-  observerLink.href = "/addons/context-inspector/";
-  observerLink.target = "_blank";
-  observerLink.rel = "noopener";
+  bindInspectorLink(observerLink);
   observerLink.textContent = "查看上下文观测器";
   body.append(observerLink);
   body.append(node("p", d.material ? "原文分类已在导入时保存；可直接切换支持的装配模式，无需再准备旧式分层。调整核心和场景请返回人格，选择编辑原文分类。" : "操作顺序：准备分层 → 核对并保存 → 启用按需。切换模式不调用模型，无需重启。", "hint"));
@@ -3099,7 +3191,7 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
 
   function selectSettings(section = "general") {
-    if (!["general", "appearance", "discovery", "thoughts", "qq", "workers", "claude", "service"].includes(section)) section = "general";
+    if (!["general", "appearance", "discovery", "thoughts", "observer", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
@@ -3107,6 +3199,7 @@ boot().catch(showStartupError);
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceThoughts?.setVisible(section === "thoughts" && !byId("settings-modal").classList.contains("hidden"));
+    window.AliceObserverSettings?.setVisible(section === "observer" && !byId("settings-modal").classList.contains("hidden"));
   }
   window.AliceUI = { selectSettings, openSettings, closeSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));

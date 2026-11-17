@@ -338,8 +338,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         if limit is not None and len(packet_ids) > limit:
             raise ValueError("本轮外部资料数量超过用户配置的限制")
     from .store import text_score
+    from .thought_workspace import current_stance_rows
     stance_ids = set()
-    for stance in store.memory_rows(purpose="chat", scope=source_scope, kind="stance"):
+    for stance in current_stance_rows(store, store.memory_rows(purpose="chat", scope=source_scope, kind="stance")):
         if stance["origin"] == "conversation":
             continue
         if text_score(user_text, stance["title"] + " " + stance["content"]) < 0.12 and not any(
@@ -958,13 +959,26 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                   source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
     with store.source_transaction():
-        for contact_id in source_context.get("contact_incorporated", []):
-            contact_valid = (growth_valid() and (memory_session is None or memory_session.valid())
-                             and (persona_registry is None or persona_registry.valid()))
-            store.conn.execute("UPDATE thought_contacts SET status=?,turn_id=?,updated_at=? WHERE id=? AND status='incorporating'",
-                ("incorporated" if contact_valid else "needs_review", assistant_id, time.time(), contact_id))
-            thought_workspace.event(store, "contact_used_in_reply" if contact_valid else "contact_reply_discarded",
-                                    contact_id, {"turn_id": assistant_id})
+        # v2 invitations: bind the actually saved reply of the request that
+        # accepted them. Unknown or discarded results stay unknown; the
+        # expansion is never counted as a new proactive contact.
+        if source_context.get("invitation_expanded"):
+            from .autonomy_v2 import build
+            from .autonomy_v2.models import Scope as _V2Scope
+            if growth_valid():
+                stack = build(store=store)
+                v2_scope = _V2Scope(session_epoch=store.meta_get("session_epoch") or "", channel_id="gui")
+                for attempt_id in source_context["invitation_expanded"]:
+                    try:
+                        stack.invitations.commit_expansion(
+                            thought_workspace.execution_context(store, source_context), attempt_id=attempt_id,
+                            assistant_turn_id=assistant_id)
+                    except ValueError as exc:
+                        thought_workspace.event(store, "invitation_expansion_failed", attempt_id,
+                                                {"reason": str(exc)[:180]})
+            else:
+                thought_workspace.event(store, "invitation_expansion_failed",
+                                        source_context["invitation_expanded"][0], {"reason": "material_changed"})
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     if ctx_trace is not None:
         ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
@@ -989,7 +1003,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         basis["memory"]["valid_at_finish"] = memory_session.valid()
     basis["thoughts"] = {"basis": source_context.get("thought_basis"),
                          "question_versions": (source_context["thought_session"].question_versions if source_context.get("thought_session") else {}),
-                         "contacts_used": source_context.get("contact_incorporated", [])}
+                         "contacts_used": source_context.get("contact_incorporated", []),
+                         "invitations_expanded": source_context.get("invitation_expanded", [])}
     basis["persona_growth"] = {"sections": growth_basis["sections"],
                                "evidence_ids": [ref["id"] for ref in growth_refs],
                                "valid_at_finish": growth_valid()}

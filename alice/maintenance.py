@@ -1156,19 +1156,30 @@ class MaintenanceRunner:
         with service._lock:
             queue_due_tasks(service.store, service.cfg)
             service.store.purge_expired_tidy_rollbacks()
-            task = service.store.next_maintenance_task()
+            from .activity import awake
+            is_awake = awake(service.store, testing_policy=False)
+            task = (service.store.next_maintenance_task() if is_awake else service.store.conn.execute(
+                "SELECT * FROM maintenance_tasks WHERE status='queued' AND trigger='explicit' ORDER BY created_at,id LIMIT 1").fetchone())
             reflection = service.store.conn.execute(
-                "SELECT task_id FROM compact_reflections WHERE status='queued' ORDER BY task_id LIMIT 1").fetchone()
+                "SELECT r.task_id,t.trigger FROM compact_reflections r JOIN maintenance_tasks t ON t.id=r.task_id "
+                "WHERE r.status='queued' AND (? OR t.trigger='explicit') ORDER BY r.task_id LIMIT 1", (int(is_awake),)).fetchone()
+        def should_yield():
+            if self._chat_busy():
+                return True
+            if (task if task is not None else reflection)["trigger"] == "explicit":
+                return False
+            with service._lock:
+                return not awake(service.store, testing_policy=False)
         if task is None:
             if reflection is not None:
                 drive(compact_reflection_steps(service.store, service.client, service.cfg, reflection["task_id"],
-                      should_stop=self._stop.is_set, chat_active=self._chat_busy), service._lock)
+                      should_stop=self._stop.is_set, chat_active=should_yield), service._lock)
             return
         steps = (compact_task_steps(service.store, service.client, service.cfg, task["id"],
-                                    should_stop=self._stop.is_set, chat_active=self._chat_busy)
+                                    should_stop=self._stop.is_set, chat_active=should_yield)
                  if task["kind"] == "compact"
                  else tidy_task_steps(service.store, service.client, service.cfg, task["id"],
-                                      should_stop=self._stop.is_set, chat_active=self._chat_busy))
+                                      should_stop=self._stop.is_set, chat_active=should_yield))
         try:
             drive(steps, service._lock)
         except MaintenanceStopped:

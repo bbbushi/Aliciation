@@ -24,6 +24,7 @@ _ASSIGN = re.compile(r"^(?P<prefix>[ \t]*)(?P<key>[A-Za-z0-9_-]+)(?P<eq>[ \t]*=[
 _STRING_VALUE = re.compile(
     r'''^(?P<lead>[ \t]*)(?P<value>"(?:\\.|[^"\\])*"|'[^']*')(?P<tail>[ \t]*(?:#.*)?)$'''
 )
+_BOOL_VALUE = re.compile(r"^(?P<lead>[ \t]*)(?:true|false)(?P<tail>[ \t]*(?:#.*)?)$")
 
 
 def _read(path: Path) -> bytes:
@@ -57,8 +58,8 @@ def _split_eol(line: str) -> tuple[str, str]:
     return line, ""
 
 
-def _patched_text(text: str, old: dict, changes: dict[str, str], *, section="llm") -> str:
-    """定位普通配置表与单行字符串键；不确定时拒绝，绝不重排配置。"""
+def _patched_text(text: str, old: dict, changes: dict[str, str | bool], *, section="llm") -> str:
+    """定位普通配置表与单行标量键；不确定时拒绝，绝不重排配置。"""
     lines = text.splitlines(keepends=True)
     eol = "\r\n" if "\r\n" in text else "\n"
     table_header: int | None = None
@@ -84,7 +85,8 @@ def _patched_text(text: str, old: dict, changes: dict[str, str], *, section="llm
             key = match.group("key")
             if key in assignments:
                 raise ConfigEditError(f"[{section}] 中有重复的配置项，请先手工修正")
-            if not _STRING_VALUE.fullmatch(match.group("rest")):
+            pattern = _BOOL_VALUE if type(changes[key]) is bool else _STRING_VALUE
+            if not pattern.fullmatch(match.group("rest")):
                 raise ConfigEditError(f"[{section}] 的 {key} 使用了暂不支持的写法，请先手工调整")
             assignments[key] = index
 
@@ -101,7 +103,8 @@ def _patched_text(text: str, old: dict, changes: dict[str, str], *, section="llm
         body, suffix = _split_eol(lines[index])
         match = _ASSIGN.fullmatch(body)
         assert match is not None
-        value = _STRING_VALUE.fullmatch(match.group("rest"))
+        pattern = _BOOL_VALUE if type(changes[key]) is bool else _STRING_VALUE
+        value = pattern.fullmatch(match.group("rest"))
         assert value is not None
         lines[index] = (
             match.group("prefix") + key + match.group("eq") + value.group("lead")
@@ -158,6 +161,33 @@ def _replace_string_values(path: Path, changes: dict[str, str], expected_revisio
     if parsed != expected:
         raise ConfigEditError("配置文件使用了复杂 TOML 写法，界面无法安全保留，请手工编辑")
 
+    return _publish_config(path, output, expected_revision)
+
+
+def replace_observation_settings(path: Path, *, enabled: bool, metadata: bool,
+                                 body_capture: bool, expected_revision: str) -> str:
+    """Atomically patch only the three observation booleans, preserving TOML."""
+    if any(type(v) is not bool for v in (enabled, metadata, body_capture)):
+        raise ConfigEditError("观测设置必须为布尔值")
+    if body_capture and not metadata:
+        raise ConfigEditError("正文采集需要元数据采集")
+    source = _read(path)
+    if hashlib.sha256(source).hexdigest() != expected_revision:
+        raise ConfigConflict("配置文件已被其他操作修改，请刷新设置后重试")
+    patched, old = _parse(source)
+    changes = {"plugins": {"context_inspector_enabled": enabled},
+               "context": {"observer_enabled": metadata, "observer_body_capture": body_capture}}
+    expected = copy.deepcopy(old)
+    for section, values in changes.items():
+        patched = _patched_text(patched, _parse(patched.encode("utf-8"))[1], values, section=section)
+        expected.setdefault(section, {}).update(values)
+    output = patched.encode("utf-8")
+    if _parse(output)[1] != expected:
+        raise ConfigEditError("观测配置使用了复杂TOML写法，无法安全保留，请手工处理")
+    return _publish_config(path, output, expected_revision)
+
+
+def _publish_config(path: Path, output: bytes, expected_revision: str) -> str:
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

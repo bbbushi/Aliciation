@@ -15,6 +15,7 @@ from .learning import LearningStoreMixin
 from .maintenance import SCHEMA as MAINTENANCE_SCHEMA, MaintenanceStoreMixin
 from .worker_context import SCHEMA as WORKER_CONTEXT_SCHEMA, WORKER_SHADOW, WorkerStoreMixin
 from .thought_workspace import SCHEMA as THOUGHT_SCHEMA
+from .autonomy_v2.schema import SCHEMA as AUTONOMY_V2_SCHEMA
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -157,6 +158,7 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         self.conn.executescript(WORKER_CONTEXT_SCHEMA)
         self.conn.executescript(MAINTENANCE_SCHEMA)
         self.conn.executescript(THOUGHT_SCHEMA)
+        self.conn.executescript(AUTONOMY_V2_SCHEMA)
         self.purge_source_packets()
 
     def _migrate(self) -> None:

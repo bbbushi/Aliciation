@@ -656,7 +656,7 @@
   /* ---------- 十、设置窗增强（M2–M7 复用 #settings-modal；02c 权威口径） ---------- */
 
   const SECTION_NAMES = {
-    general: "对话与模型", appearance: "外观", discovery: "联网搜索",
+    general: "对话与模型", appearance: "外观", discovery: "联网搜索", observer: "上下文观测",
     qq: "QQ 连接", workers: "DSH 授权", claude: "Claude 授权", thoughts: "思想与探索",
   };
   let switching = false; // M-10 switchStep 纪元重入守卫
@@ -682,7 +682,7 @@
     const nav = card.querySelector("nav.settings-nav");
     if (nav) {
       subClass(nav, "orbit-step-dots");
-      const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", qq: "qq", workers: "dsh" };
+      const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", observer: "layers", qq: "qq", workers: "dsh" };
       for (const b of nav.querySelectorAll("button[data-settings]")) {
         subClass(b, "orbit-step");
         const key = b.getAttribute("data-settings");

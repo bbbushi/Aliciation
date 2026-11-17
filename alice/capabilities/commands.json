@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 7,
   "units": [
     {
       "command": "recall",
@@ -180,7 +180,7 @@
     },
     {
       "command": "history_search",
-      "summary": "搜索当前渠道获准访问的旧对话索引。",
+      "summary": "搜索当前渠道获准访问的旧对话索引；搜索与正文读取分别计次。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -207,7 +207,7 @@
     },
     {
       "command": "history_load",
-      "summary": "读取本轮历史引用的完整往返。",
+      "summary": "读取本轮历史引用的完整往返；读取额度独立于搜索，总字数预算共用。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -743,7 +743,7 @@
     },
     {
       "command": "thought_load",
-      "summary": "展开真实疑问或观点引用的正文、未知与出处。",
+      "summary": "读取任务摘要或按需展开旧推演/观点；默认task不载入旧正文。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -751,6 +751,14 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 80
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "task",
+              "full"
+            ],
+            "description": "疑问默认task，仅任务题目与状态；要旧进展/推演/出处正文时选full并绑定其全部来源。观点引用始终展开正文。"
           }
         },
         "required": [
@@ -794,6 +802,38 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 80
+          },
+          "activity": {
+            "type": "string",
+            "enum": [
+              "interest",
+              "problem",
+              "iteration"
+            ],
+            "description": "该疑问所属活动：兴趣探索、问题思考、自我迭代。"
+          },
+          "importance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "当前判断的持续价值，0–3。"
+          },
+          "urgency": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "当前判断的紧迫度，0–3。"
+          },
+          "due_at": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 253402300799,
+            "description": "有依据的截止时间（Unix秒）；0表示无期限，不猜用户未给出的期限。"
+          },
+          "schedule_reason": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "价值、紧迫性与可推进条件的简短依据；推断保留为推断。"
           }
         },
         "required": [
@@ -810,7 +850,7 @@
     },
     {
       "command": "thought_update",
-      "summary": "更新疑问进展、等待条件，或重新打开旧问题。",
+      "summary": "更新疑问进展、等待条件（含资格与额度），或重新打开旧问题。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -825,6 +865,8 @@
               "open",
               "waiting_user",
               "waiting_source",
+              "waiting_permission",
+              "waiting_budget",
               "paused",
               "closed"
             ]
@@ -836,6 +878,74 @@
           "next_step": {
             "type": "string",
             "maxLength": 1000
+          },
+          "activity": {
+            "type": "string",
+            "enum": [
+              "interest",
+              "problem",
+              "iteration"
+            ],
+            "description": "该疑问所属活动：兴趣探索、问题思考、自我迭代。"
+          },
+          "importance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "当前判断的持续价值，0–3。"
+          },
+          "urgency": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "当前判断的紧迫度，0–3。"
+          },
+          "due_at": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 253402300799,
+            "description": "有依据的截止时间（Unix秒）；0表示无期限，不猜用户未给出的期限。"
+          },
+          "schedule_reason": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "价值、紧迫性与可推进条件的简短依据；推断保留为推断。"
+          },
+          "wait_condition": {
+            "type": "object",
+            "description": "等待状态必须附：类型与原因。解除只能靠相关真实条件变化或重新打开。",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user_feedback",
+                  "source",
+                  "permission",
+                  "budget",
+                  "material"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "context_hint": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "family_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "提议把该疑问显式关联到另一问题族（同族共享同依据推演窗口）。"
           }
         },
         "required": [
@@ -851,7 +961,7 @@
     },
     {
       "command": "thought_resolve",
-      "summary": "提交阶段结论，按价值保存思辨或见闻并关联疑问。",
+      "summary": "提交阶段结论与剩余事项状态；按价值保存思辨或见闻并关联疑问。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -896,6 +1006,54 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 80
+          },
+          "next_status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "waiting_user",
+              "waiting_source",
+              "waiting_permission",
+              "waiting_budget",
+              "paused",
+              "closed",
+              "resolved"
+            ],
+            "description": "剩余事项的后续状态：可执行给open（附下一步）；等外部条件给waiting_*（附wait_condition）。有remaining时必填。"
+          },
+          "wait_condition": {
+            "type": "object",
+            "description": "等待状态必须附：类型与原因。解除只能靠相关真实条件变化或重新打开。",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user_feedback",
+                  "source",
+                  "permission",
+                  "budget",
+                  "material"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "context_hint": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "create_independent_view": {
+            "type": "boolean",
+            "description": "确有独立价值时另立观点身份；默认修订当前版，不默认新增另一条长期观点。"
           }
         },
         "required": [
@@ -913,15 +1071,10 @@
     },
     {
       "command": "contact_propose",
-      "summary": "提出进展反馈、必要询问或兴趣分享的主动联系意图。",
+      "summary": "前台准备一句简短邀请；自主窗口改用 activity_finish 一并提交交流决定。",
       "parameters": {
         "type": "object",
         "properties": {
-          "ref": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 80
-          },
           "motive": {
             "type": "string",
             "enum": [
@@ -930,15 +1083,48 @@
               "share"
             ]
           },
-          "message": {
+          "topic": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 2000
+            "maxLength": 80,
+            "description": "主题摘要，只用于识别话题，不承载正文。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "为何值得聊。"
+          },
+          "invitation_text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "一句邀请，例如：之前那个问题我有了点新想法，现在方便聊两句吗？"
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "关联疑问引用；展开正文通过引用在接受后载入。"
+          },
+          "view_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "关联观点引用（需先检索取得）。"
+          },
+          "intent_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "本轮可重新判断的意图索引；再次邀请沿用该意图，不创建重复主题。"
           }
         },
         "required": [
           "motive",
-          "message"
+          "topic",
+          "reason",
+          "invitation_text"
         ],
         "additionalProperties": false
       },
@@ -948,29 +1134,35 @@
       }
     },
     {
-      "command": "contact_update",
-      "summary": "读取并判断联系意图是否仍适合，采用到本次回应、准备送达或取消。",
+      "command": "contact_reply",
+      "summary": "把用户对当前邀请的回应绑定到本次真实消息：接受后载入展开材料，没空或拒绝收住。",
       "parameters": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 80
+            "maxLength": 80,
+            "description": "思想索引中的邀请引用。"
           },
           "decision": {
             "type": "string",
             "enum": [
-              "read",
-              "ready",
-              "incorporate",
-              "cancel"
+              "accept",
+              "defer",
+              "decline"
             ]
           },
-          "message": {
+          "reason": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
+            "maxLength": 500,
+            "description": "判断依据（如用户原话的指向）。"
+          },
+          "requested_retry_at": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 253402300799,
+            "description": "用户明确说了晚点/明天时的再邀时间（Unix秒）。"
           }
         },
         "required": [
@@ -981,7 +1173,186 @@
       },
       "internal": {
         "executor": "thought",
-        "operation": "contact_update"
+        "operation": "contact_reply"
+      }
+    },
+    {
+      "command": "activity_finish",
+      "summary": "自主窗口收尾：一次提交进展和交流决定（现在邀请/留待以后/无需联系），附简短理由。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "wait",
+              "rest",
+              "done"
+            ]
+          },
+          "progress_kind": {
+            "type": "string",
+            "enum": [
+              "evidence",
+              "action",
+              "inference",
+              "rewrite",
+              "none"
+            ],
+            "description": "本窗口实际发生的变化类型。"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "哪个不确定点发生了变化，简短结果说明。"
+          },
+          "question_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "本次窗口推进的疑问引用；自由兴趣窗口可省略。"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "description": "本窗口实际loaded的memory/history/stance原样ref或已读packet_id，不附注；历史按用户/AI说话者拆分，观点只作参考。"
+          },
+          "action_refs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "description": "工具返回的action_receipt.ref原样值（真实工具调用ID）；不填函数名、检索任务ID或描述。"
+          },
+          "next_step": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "wait_condition": {
+            "type": "object",
+            "description": "等待状态必须附：类型与原因。解除只能靠相关真实条件变化或重新打开。",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user_feedback",
+                  "source",
+                  "permission",
+                  "budget",
+                  "material"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "context_hint": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "requested_idle_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+            "description": "选择rest时可提供期望等待时长，受用户上限约束。"
+          },
+          "communication": {
+            "type": "object",
+            "description": "每个工作窗口须作交流判断；none 只填 decision/reason；invite/later 关联本轮取得的 ref/view_ref 或 intent_ref。",
+            "properties": {
+              "motive": {
+                "type": "string",
+                "enum": [
+                  "progress",
+                  "request",
+                  "share"
+                ],
+                "description": "新意图必填；沿用 intent_ref 可省略。"
+              },
+              "topic": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "新意图必填；沿用 intent_ref 可省略。主题摘要，不带正文。"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "description": "为何值得聊。"
+              },
+              "invitation_text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240,
+                "description": "仅 invite 必填：一句简短询问是否方便；later/none 不填，不携带成果正文。"
+              },
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "关联疑问引用；展开正文通过引用在接受后载入。"
+              },
+              "view_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "关联观点引用（需先检索取得）。"
+              },
+              "intent_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "本轮可重新判断的意图索引；再次邀请沿用该意图，不创建重复主题。"
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "invite",
+                  "later",
+                  "none"
+                ],
+                "description": "invite 现在邀请；later 只留意图，之后重新判断；none 无需联系。"
+              }
+            },
+            "required": [
+              "decision",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "decision",
+          "progress_kind",
+          "summary",
+          "communication"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "activity_finish"
       }
     }
   ]

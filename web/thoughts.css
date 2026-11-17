@@ -11,3 +11,10 @@
 #thought-settings pre { max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 #thought-settings details { margin:14px 0; }
 #thought-settings .thought-error { color:var(--danger, #ee9c9c); }
+#thought-activities fieldset { margin:12px 0; padding:12px; border:1px solid var(--line, #526071); border-radius:8px; }
+#thought-lifecycle { padding:6px 0; }
+#thought-lifecycle[data-state="awake"] { color:var(--accent, #b9d8bf); }
+#thought-invitations article strong, #thought-invitations article p { overflow-wrap:anywhere; }
+#thought-migration-note { margin:8px 0 0; }
+
+#thought-settings [hidden] { display: none !important; }

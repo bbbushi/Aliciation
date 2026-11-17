@@ -384,9 +384,21 @@
       <div class="modal-title" id="settings-title">设置</div>
       <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button></nav>
+    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="observer" aria-pressed="false" aria-label="上下文观测">上下文观测</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button></nav>
     <div class="modal-body settings-body">
       <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
+      <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="observer-settings-title">
+        <h2 id="observer-settings-title" class="panel-title">上下文观测</h2>
+        <p id="observer-settings-result" class="settings-result" role="status" aria-live="polite">尚未读取设置。</p>
+        <form id="observer-settings-form">
+          <p><label><input id="observer-settings-enabled" type="checkbox" disabled> 启用上下文观测器</label></p>
+          <p class="settings-hint">显示查看入口，与下方的正文留存独立。</p>
+          <p><label><input id="observer-settings-body" type="checkbox" disabled> 留存完整上下文</label></p>
+          <p class="settings-hint">从新请求开始留存对话、人格及工具等输入正文，仅保存在本机。关闭后不删除已有记录。</p>
+          <div class="row"><button id="observer-settings-save" class="btn primary" type="submit" disabled>保存设置</button><button id="observer-settings-refresh" class="btn ghost" type="button">同步状态</button><button id="observer-settings-open" class="btn ghost" type="button" disabled>打开观测器</button></div>
+        </form>
+        <details><summary>留存与生效说明</summary><p class="settings-hint">保存后入口立即更新，采集从下一次新请求生效；在途请求沿用开始时的策略，无需重启。完整正文滚动保留最近10个采集请求，同时受7天和50MiB限制。较早未采集的请求不补录，超限或来源失效时如实标记缺口。</p><p id="observer-settings-metadata" class="settings-hint"></p></details>
+      </section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
         <div class="discovery-settings-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
         <p class="settings-hint">管理自动寻找、聊天查找、额度与资料保存。普通草稿在切换分区或关闭设置后保留，未保存的密钥会清空。</p>
@@ -567,6 +579,10 @@
 </div>
 
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+<dialog id="context-inspector-dialog" class="acv-dialog" aria-labelledby="context-inspector-title">
+  <header class="acv-head"><h2 id="context-inspector-title">上下文观测器</h2><button id="context-inspector-close" class="btn ghost" type="button" autofocus>关闭</button></header>
+  <iframe id="context-inspector-frame" class="ci-settings-frame" title="上下文观测器" src="about:blank"></iframe>
+</dialog>
 
 <script src="/context-viewer.js"></script>
 <script src="/observer.js"></script>
