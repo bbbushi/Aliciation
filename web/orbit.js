@@ -554,6 +554,7 @@
       wire(x, "click", () => closeOrbitWindow(d));
       tools.appendChild(x);
       head.appendChild(tools);
+      d._orbitTools = tools;   // hint 收纳引擎挂点（05 轮次 11）
       d.setAttribute("aria-labelledby", t.id);
       d.appendChild(head);
       d._orbitCloseBtn = x;
@@ -574,6 +575,40 @@
     document.body.appendChild(d);
     undos.push(() => { if (d.open) d.close(); d.remove(); });
     return d;
+  }
+
+  /* ---------- 八·补、L2 窗级 hint 收纳引擎（05 轮次 11：02b/02c 说明卡设计的通用化） ----------
+     >12 字的静态 hint 隐藏并聚合进窗头「说明」钮（口径 2：按需展开；role=status/结果行动态值排除）。
+     动态分区（claude-settings 等）重绘由各窗 spy 重跑 tuckHints 维持（幂等）。 */
+  const HINT_SEL = ".settings-hint, .worker-hint, .obs-hint, .discovery-hint";
+  function tuckHints(scope) {
+    const parts = [];
+    if (!scope) return parts;
+    for (const h of scope.querySelectorAll(HINT_SEL)) {
+      if (h.closest('[role="status"], .settings-result')) continue;
+      if (h.style.display === "none") continue;
+      const txt = (h.textContent || "").replace(/\s+/g, " ").trim();
+      if (!txt || [...txt].length <= 12) continue;
+      subStyle(h, "display:none");
+      parts.push(txt);
+    }
+    return parts;
+  }
+  function ensureInfoBtn(tools, tipText) {
+    let info = tools.querySelector(".orbit-info-btn");
+    if (!info) {
+      info = document.createElement("button");
+      info.type = "button";
+      info.className = "orbit-icon orbit-info-btn";
+      info.setAttribute("aria-label", "本窗说明");
+      info.setAttribute("data-tip-long", "");
+      info.appendChild(svg("info"));
+      const closeBtn = tools.querySelector(".orbit-win-btn");
+      tools.insertBefore(info, closeBtn || null);   // 说明在关闭左侧（R5c B1 同簇）
+      undos.push(() => info.remove());
+    }
+    if (tipText) info.setAttribute("data-tip", tipText);
+    return info;
   }
 
   /* ---------- 九、四自建窗安装（S2 / M8 / M9 / M10） ---------- */
@@ -608,6 +643,17 @@
         }
       };
       spy(aside, { attributes: true, attributeFilter: ["class"] }, sync);
+      // hint 收纳引擎（05 轮次 11）：搬移后收集，业务重绘由 spy 维持（幂等）；
+      // 聚合文本进窗头说明钮（tools 由 makeWindow 提供）
+      const applyHints = () => {
+        const parts = tuckHints(aside);
+        if (dialog._orbitTools) {
+          const cur = parts.length ? parts.join(" ｜ ") : "本窗无附加说明";
+          ensureInfoBtn(dialog._orbitTools, cur);
+        }
+      };
+      applyHints();
+      spy(aside, { childList: true, subtree: true }, applyHints);
       wire(dialog, "close", () => {
         if (!aside.classList.contains("hidden")) aside.classList.add("hidden"); // close 回写信号
         if (opts.onClose) opts.onClose();
@@ -681,6 +727,19 @@
       undos.push(() => { for (const k of [...tools.childNodes]) head.appendChild(k); tools.remove(); });
       const x = $("settings-x");
       if (x) moveNode(x, tools);
+      // hint 收纳引擎：逐分区收集（ⓘ 随分区切换更新 tip，见 syncSettingsTitle）
+      const sectionTips = {};
+      for (const sec of card.querySelectorAll("[data-settings-section]")) {
+        const parts = tuckHints(sec);
+        if (parts.length) sectionTips[sec.dataset.settingsSection] = parts;
+      }
+      card._orbitInfoTip = ensureInfoBtn(tools, "");
+      card._orbitSyncInfo = () => {
+        const cur = card.querySelector("[data-settings-section]:not(.hidden)");
+        const key = cur ? cur.dataset.settingsSection : "";
+        const parts = sectionTips[key] || [];
+        card._orbitInfoTip.setAttribute("data-tip", parts.length ? parts.join(" ｜ ") : "本分区无附加说明");
+      };
       // R5c B2：返回钮（03c 1.2 必备）——复用关闭链路（与 Esc 同源语义）
       const back = document.createElement("button");
       back.type = "button";
@@ -792,6 +851,8 @@
     const key = cur.getAttribute("data-settings-section");
     const name = SECTION_NAMES[key];
     if (name && title.textContent !== name) title.textContent = name; // 首次写入已被 subText 登记还原
+    const card = document.querySelector("#settings-modal .modal-card");
+    if (card && card._orbitSyncInfo) card._orbitSyncInfo();   // ⓘ 说明随分区切换（05 轮次 11）
   }
 
   /* ---------- 十一、页面骨架与搬移（结构壳：02a/02b/02c） ---------- */
@@ -1385,26 +1446,13 @@
     //    消息列 880 宽（03a 负面清单只护 composer 本体，父级 padding 属容器排版） ——
     const composerWrap = document.querySelector(".composer")?.parentElement;
     if (composerWrap && composerWrap.tagName === "FOOTER") subClass(composerWrap, "orbit-composer-wrap");
-    // —— M2「对话与模型」：四条静态说明收进窗头「说明」悬停卡；Base URL 降为次级 ——
+    // —— M2「对话与模型」：Base URL 降为次级；hint 说明卡已由窗级引擎统一接管（05 轮次 11） ——
     const m2 = $("model-settings");
     if (m2) {
-      const hints = [];
-      const collect = (el, label) => {
-        if (!el) return;
-        const text = (el.textContent || "").replace(/\s+/g, " ").trim();
-        if (!text) return;
-        subStyle(el, "display:none");
-        hints.push(label + "：" + text);
-      };
-      collect(document.querySelector('section[data-settings-section="general"] .settings-hint'), "思考深度");
-      collect(m2.querySelector(":scope > .settings-hint"), "接口与费用");
-      collect(m2.querySelector("p.settings-hint"), "整理模型");
-      for (const el of m2.querySelectorAll(".settings-hint"))
-        if ((el.textContent || "").includes("密钥不回显")) collect(el, "密钥");
       // Base URL：只读展示降次级（完整值挂「供应商」悬停；值随供应商变化，转 07 抽验）
       subStyle($("model-base-url"), "display:none");
       const baseUrlLabel = document.querySelector('label[for="model-base-url"]');
-      if (baseUrlLabel) collect(baseUrlLabel, "Base URL");
+      if (baseUrlLabel) subStyle(baseUrlLabel, "display:none");
       const providerLabel = document.querySelector('label[for="model-provider"]');
       const baseUrl = $("model-base-url");
       if (providerLabel && baseUrl)
@@ -1426,22 +1474,124 @@
       if (testBtn) { maintain(testBtn, "测试"); subAttr(testBtn, "title", "测试候选连接"); }
       const saveBtn = $("model-save");
       if (saveBtn) { maintain(saveBtn, "保存"); subAttr(saveBtn, "title", "验证并保存可能产生少量 API 费用"); }
-      // 窗头「说明」图标：四段全文悬停（触屏点按兜底由 tip 控制器承担）；
-      // 归入窗头工具簇 wrapper（R5c B1：说明与关闭同簇右聚）
-      if (hints.length) {
-        const head = document.querySelector("#settings-modal .orbit-win-head");
-        const tools = head && head.querySelector(".orbit-win-tools");
-        if (tools) {
-          const info = document.createElement("button");
-          info.type = "button";
-          info.className = "orbit-icon orbit-icon-entry";
-          info.setAttribute("data-tip", hints.join(" ｜ "));
-          info.setAttribute("data-tip-long", "");
-          info.setAttribute("aria-label", "对话与模型说明");
-          info.appendChild(svg("info"));
-          tools.insertBefore(info, tools.firstChild);   // 说明在关闭左侧
-          undos.push(() => info.remove());
+      // 窗头「说明」图标已由窗级 hint 引擎统一创建（05 轮次 11；installSettingsWindow）
+    }
+    // —— M5 QQ：连接详情折叠 + 步引导句悬停化（02c「连接说明/使用限制」折叠的落地，05 轮次 11；
+    //    qq-status/channel-note 为 role=status 动态值不计；确认句=口径 4 豁免保留） ——
+    const qqSection = document.querySelector('[data-settings-section="qq"]');
+    if (qqSection) {
+      const foldQq = () => { for (const d of qqSection.querySelectorAll("details.qq-details")) if (d.open) subFlag(d, "open", false); };
+      foldQq();
+      spy(qqSection, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] }, foldQq);
+      const GUIDE = ["打开手机QQ，扫一扫", "用你本人的QQ私聊机器人", "扫码或配对已完成", "扫码资料只保存在这台电脑"];
+      for (const p of qqSection.querySelectorAll("p")) {
+        const t = (p.textContent || "").replace(/\s+/g, "");
+        if (!GUIDE.some((g) => t.includes(g.replace(/\s+/g, "")))) continue;
+        subStyle(p, "display:none");
+        const stepTitle = p.closest(".qq-step")?.querySelector("h3") || p.previousElementSibling;
+        if (stepTitle) subAttr(stepTitle, "title", p.textContent.trim());
+      }
+    }
+    // —— M7 Claude：表单标签精简（02c 预算案短版），全文入悬停；确认句=口径 4 豁免 ——
+    const claudeSection = document.querySelector('[data-settings-section="claude"]');
+    if (claudeSection) {
+      const CLAUDE_SHORT = [
+        ["任务工作目录（绝对路径）", "工作目录"],
+        ["每个任务最多轮数", "任务轮数"],
+        ["每个任务费用阈值（美元）", "单任务费用上限"],
+        ["每日费用阈值（美元）", "每日费用上限"],
+      ];
+      for (const [full, short] of CLAUDE_SHORT) {
+        const label = [...claudeSection.querySelectorAll("label")]
+          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
+        if (label) { subText(label, short); subAttr(label, "title", full); }
+      }
+    }
+    // —— M6 DSH：同步 checkbox 标签改写（02c 预算案）+ 同步说明/凭据状态收纳；边界句=口径 4 豁免 ——
+    const dshSection = document.querySelector('[data-settings-section="workers"]');
+    if (dshSection) {
+      const DSH_SHORT = [
+        ["归档或恢复Alice任务时，同步处理DSH专属会话", "归档时同步DSH会话"],
+        ["删除Alice任务时，也永久删除DSH专属会话", "删除时同步删除"],
+      ];
+      for (const [full, short] of DSH_SHORT) {
+        const label = [...dshSection.querySelectorAll("label")]
+          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
+        if (label) { subText(label, short); subAttr(label, "title", full); }
+      }
+      for (const hid of ["#workers-sync-archive-hint", "#workers-credential-state"]) {
+        const el = dshSection.querySelector(hid);
+        if (el) subStyle(el, "display:none");
+      }
+      // 三步分步（02c 分步器）：三步容器本就独立（worker-pairing/workers-policy/workers-task-settings）
+      // ——只显当前步，H3 作切换点；标题/状态块常驻。还原=subStyle style 登记。
+      const stepContainers = [
+        dshSection.querySelector("section.worker-pairing"),
+        dshSection.querySelector("#workers-policy"),
+        dshSection.querySelector("#workers-task-settings"),
+      ].filter(Boolean);
+      if (stepContainers.length > 1) {
+        const activateStep = (idx) => stepContainers.forEach((p, i) => {
+          const want = i === idx ? "" : "none";
+          if (p.style.display !== want) subStyle(p, "display:" + want);
+        });
+        activateStep(0);
+        for (const p of stepContainers) {
+          const h3 = p.querySelector("h3");
+          if (h3) { subAttr(h3, "role", "button"); subAttr(h3, "tabindex", "0"); wire(h3, "click", () => activateStep(stepContainers.indexOf(p))); }
         }
+      }
+    }
+    // —— M8 记忆观察器：obs-help 免责/口径说明整块收纳 + evidence-types dd 说明折叠
+    //    （02c「dt 保留/dd 折叠」预算案落地，05 轮次 11；全文挂对应 dt 悬停） ——
+    const obsAsideM8 = $("observer");
+    if (obsAsideM8) {
+      const obsHelp = obsAsideM8.querySelector(".obs-help");
+      if (obsHelp) {
+        const txt = (obsHelp.textContent || "").replace(/\s+/g, " ").trim();
+        if ([...txt].length > 30) {
+          subStyle(obsHelp, "display:none");
+          const anchor = $("obs-status") || obsAsideM8.querySelector(".obs-head strong");
+          if (anchor) subAttr(anchor, "title", txt);
+        }
+      }
+      for (const dd of obsAsideM8.querySelectorAll(".obs-evidence-types dd")) {
+        const txt = (dd.textContent || "").replace(/\s+/g, " ").trim();
+        if ([...txt].length <= 10) continue;
+        subStyle(dd, "display:none");
+        const dt = dd.previousElementSibling;
+        if (dt && dt.tagName === "DT") subAttr(dt, "title", txt);
+      }
+    }
+    // —— M9 P1 核查：额度/人工校准两个表单区折叠（02c 三抽屉落地——费用许可本就是 details，
+    //    这两个是 section.eval-section 常驻展开）；确认句=口径 4 豁免保留在折叠内 ——
+    const evAsideM9 = $("evaluations");
+    if (evAsideM9) {
+      for (const sec of evAsideM9.querySelectorAll("section.eval-section")) {
+        const h3 = sec.querySelector(":scope > h3");
+        if (!h3) continue;
+        const name = h3.textContent.trim() || "说明";
+        if (name.includes("费用许可")) continue;   // details 版已在别处折叠
+        const d = document.createElement("details");
+        d.className = "eval-section orbit-fold";
+        const sum = document.createElement("summary");
+        sum.textContent = name;
+        d.appendChild(sum);
+        subStyle(h3, "display:none");   // summary 接管标题
+        wrapNode(sec, d);
+      }
+    }
+    // —— M9 表单标签精简（02c 预算案短版），全文入悬停 ——
+    const evalSec = $("evaluations");
+    if (evalSec) {
+      const EVAL_SHORT = [
+        ["每日最多额外模型请求数（0–100）", "日额度上限"],
+        ["本次人工确认的最低一致率（大于0，不超过100）", "最低一致率"],
+      ];
+      for (const [full, short] of EVAL_SHORT) {
+        const label = [...evalSec.querySelectorAll("label")]
+          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
+        if (label) { subText(label, short); subAttr(label, "title", full); }
       }
     }
     // —— P3 思想与探索：睡眠提示 15 字替身、探索按钮短名、思辨提示收纳（02b 裁定 1） ——

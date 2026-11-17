@@ -1207,3 +1207,10 @@ html[data-theme=orbit] #boot-status[data-wrap] { border-radius: 10px; }
   html[data-theme=orbit] .orbit-step { width: 40px; height: 40px; }
 }
 /* R5d P2-3：三页页头对齐统一 flex-start（P2/P4 的 head 由 §6.2 模板接管） */
+
+/* M6 DSH 三步分步（05 轮次 11）：H3 作切换点（JS 挂 role=button；步骤容器显隐走 subStyle） */
+html[data-theme=orbit] .orbit-step-pane h3[role=button],
+html[data-theme=orbit] [data-settings-section=workers] h3[role=button] {
+  cursor: pointer; color: var(--accent); font: 600 var(--fs-section)/1.5 var(--font);
+  padding: var(--sp-1) 0; border-bottom: 1px solid var(--orbit-line-faint); margin-bottom: var(--sp-2);
+}
