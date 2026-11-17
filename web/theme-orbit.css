@@ -1100,3 +1100,19 @@ html[data-theme=orbit] .composer:focus-within + .composer-foot { opacity: 1; vis
 @media (prefers-reduced-motion: reduce) {
   html[data-theme=orbit] .composer-foot { transition: none; }
 }
+
+/* composer 包裹层（#chat > footer）：侧距对齐 #msgs 的 880px 消息列（同款公式），
+   使输入框与消息流同列对齐；composer 本体样式不动（03a 负面清单） */
+html[data-theme=orbit] #chat > footer.orbit-composer-wrap {
+  padding: 14px max(28px, calc((100% - 880px) / 2)) 15px;
+}
+
+/* S7 协作者卡（DSH/Claude）：worker-tasks.js 状态轮询会持续写回内联 inset（room 遗留
+   top 定位把卡压到右上遮消息区），JS 首装重置不可持久——CSS !important 作最终裁决：
+   固定会话区右下、两张纵向错开。代价：orbit 下不可拖拽（登记 06 降级项）。 */
+html[data-theme=orbit] #collaborator-dock .collaborator-avatar {
+  top: auto !important; left: auto !important; right: 16px !important; bottom: 16px !important;
+}
+html[data-theme=orbit] #claude-collaborator-dock .collaborator-avatar {
+  top: auto !important; left: auto !important; right: 16px !important; bottom: 106px !important;
+}

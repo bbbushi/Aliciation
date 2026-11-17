@@ -1020,13 +1020,22 @@
     // 甲组还原表 #1：chat-new-attempt（原句入悬停）
     const attempt = $("chat-new-attempt");
     if (attempt) { subText(attempt, "作为新一轮发送"); subAttr(attempt, "title", "允许作为新一轮发送"); }
-    // P1 顶栏图标化：#chat-refresh（同步记录 → 图标，还原表 #19 CSS 侧已备案）
+    // P1 顶栏图标化：#chat-refresh 图标化并搬进顶栏动作区（02a：同步记录→顶栏图标；
+    // sync-bar 空壳隐藏——49px 空横条只挂一个图标是排版噪音，还原表 #19）
     const refresh = $("chat-refresh");
     if (refresh) {
       subClass(refresh, "orbit-icon-entry");
       subAttr(refresh, "data-tip", "同步记录");
       subAttr(refresh, "aria-label", "同步记录");
       subHtml(refresh, ""); refresh.appendChild(svg("sync"));
+      const headerActions = document.querySelector(".chat-header-actions");
+      if (headerActions) moveNode(refresh, headerActions);
+      const syncBar = document.querySelector(".chat-sync-bar");
+      if (syncBar) {
+        const visible = [...syncBar.children].some((c) =>
+          c !== refresh && !c.classList.contains("hidden"));
+        if (!visible) subStyle(syncBar, "display:none");
+      }
     }
     // M9 还原表 #2-#12
     const evalHeadStrong = document.querySelector("#evaluations .obs-head strong");
@@ -1253,10 +1262,12 @@
   /* ---------- 十三·补、字数帽预算文案（02c M2 / 02b P3；轮次 3 批准的运行时替换） ----------
      帽内常驻文案精简，被收起的全文走「说明」悬停卡与控件 title（口径 2/4：按需展开、完整性保留）。 */
   function applyBudgetRewrites() {
-    // S7 协作者头像卡：拖拽坐标（inset）是 room 主题留下的，orbit 首装重置到会话区
-    // 右下角（还原表登记旧值；拖拽功能不动——worker-tasks.js 继续写 inline inset）。
-    const colab = document.querySelector(".collaborator-avatar");
-    if (colab) subStyle(colab, "inset: auto 16px 16px auto");
+    // S7 协作者卡定位交由 CSS !important 裁决（theme-orbit.css §5）——worker-tasks.js
+    // 状态轮询持续写回内联 inset，JS 首装重置不持久；orbit 下卡固定右下、拖拽禁用（已登记）。
+    // —— composer 包裹层（#chat > footer，room 遗留 158px 侧距）挂类：CSS 侧对齐
+    //    消息列 880 宽（03a 负面清单只护 composer 本体，父级 padding 属容器排版） ——
+    const composerWrap = document.querySelector(".composer")?.parentElement;
+    if (composerWrap && composerWrap.tagName === "FOOTER") subClass(composerWrap, "orbit-composer-wrap");
     // —— M2「对话与模型」：四条静态说明收进窗头「说明」悬停卡；Base URL 降为次级 ——
     const m2 = $("model-settings");
     if (m2) {
