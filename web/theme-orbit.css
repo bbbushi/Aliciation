@@ -15,6 +15,9 @@ html[data-theme=orbit] {
   /* 底色三级（沿用旧名 → 现有组件自动换肤） */
   --bg: #060b13; --card: #0d1624; --soft: #142137; --nav: #0a111d;
   --orbit-surface-page: #0d1624e6;
+  /* 页壳玻璃面（05 轮次 12）：房间+球全局背景化后，大页壳低透让场景透出（对齐 room 的
+     「球在正文正后全亮度」观感，玻璃仅保留文字护面）；窗/浮层仍用实面 */
+  --orbit-surface-glass: #0d162466;
   --orbit-surface-window: #121d2ff2;
   --orbit-surface-float: #182540;
   /* 文字三级 */
@@ -58,7 +61,7 @@ html[data-theme=orbit] [data-density=tight] { --den-pad:16px; --den-gap:12px; --
 
 /* 三层容器基类（页面层透出微光；窗层独占 backdrop 压暗；浮层最亮最锐） */
 html[data-theme=orbit] .orbit-page {
-  background: var(--orbit-surface-page);
+  background: var(--orbit-surface-glass);   /* 05 轮次 12：玻璃壳透出全局背景（房间+球） */
   border: 1px solid var(--line); border-radius: var(--orbit-radius-m);
   box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;
 }
@@ -254,7 +257,7 @@ html[data-theme=orbit] #orbit-main {
   box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;   /* 页影 44：P1 唯一影 */
   display: flex;
 }
-html[data-theme=orbit] #orbit-main > .chat { flex: 1; min-height: 0; background: var(--orbit-surface-page); }
+html[data-theme=orbit] #orbit-main > .chat { flex: 1; min-height: 0; background: var(--orbit-surface-glass); }   /* 05 轮次 12 玻璃壳 */
 /* 眉标装饰隐藏（R3 P1-7；文本随 dock「对话」图标 tip 呈现，计入 02a 还原表 #19） */
 html[data-theme=orbit] .chat::before { content: none; }
 /* 顶栏身分行 + 动作图标排 */
@@ -454,7 +457,7 @@ html[data-theme=orbit] #onboarding, html[data-theme=orbit] #welcome {
   position: static; background: transparent; padding: 0; display: contents;
 }
 html[data-theme=orbit] .welcome-card {
-  background: var(--orbit-surface-page); border: 1px solid var(--line);
+  background: var(--orbit-surface-glass); border: 1px solid var(--line);
   border-radius: var(--orbit-radius-m);
   box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;   /* 页影 44 允许面 */
   padding: var(--den-pad); max-width: 620px;

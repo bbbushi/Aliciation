@@ -1,10 +1,12 @@
-/* orbit 主题常驻舞台：网格房间 + 中央神经球（改编自 room.js，全局 body 级画布）。
+/* orbit 主题常驻背景：网格房间 + 中央神经球（改编自 room.js，全局 body 级画布）。
    纯装饰，不读会话数据、不发请求、不响应指针、不监听滚动（滚动是页内行为）。
-   球位/半径/亮度/视差按 body[data-orbit-page] 五档联动（04a §2.1，值来自 03b §六基准）：
-   0.9s 临界阻尼弹簧插值（无过冲，球不得越入文字区正后）；睡眠档强制安静（自转/呼吸降档）。
-   门禁：动效关 / 系统减动效 / 页面隐藏 / 非 orbit 主题 → 一帧静态（当前页档基准位直接成形）。
+   05 轮次 12 用户裁定（2026-11-18）：房间与神经球恒定为全局背景——球固定于视口投影中心，
+   不随页迁移（原五档球位与页角探出构图整体废弃，03b §六/04a §2.1 的球位基准随之失效）；
+   页壳改玻璃面（--orbit-surface-glass）透出场景；睡眠档强制安静（自转/呼吸降档）。
+   门禁：动效关 / 系统减动效 / 页面隐藏 / 非 orbit 主题 → 一帧静态（居中基准位直接成形）。
    运行态信号由 orbit.js 经 OrbitBG.setState 单向传入；唯一自读信号是 #chat 的 is-receiving
-   （room.js 先例）。思想星线以粒子松动区抽象表达（05 轮次 7 裁定），不复制原 svg 逻辑。 */
+   （room.js 先例）。思想星线以粒子松动区抽象表达（05 轮次 7 裁定），不复制原 svg 逻辑。
+   OrbitBG.setPage 保留为兼容空操作（orbit.js 切页五连仍调用）。 */
 (() => {
   const root = document.documentElement;
   const chat = document.getElementById("chat");
@@ -18,16 +20,6 @@
   const ROOM = { floor: 1.02, ceil: 1.18, wallX: 2.55, zNear: -1.5, zFar: 3.6, step: 0.52 };
   const SPRING_K = 26;
   const DRAG = 7;
-  // 五档构图目标（视口分数 + 半径档 + 亮度因子 + 房间视差），04a §2.1
-  const POSE = {
-    chat:       { fx: .72, fy: .62, r: 1.00, dim: 1.00, pan: -.10 },
-    discovery:  { fx: .82, fy: .24, r: 0.70, dim: 1.00, pan: -.14 },
-    thoughts:   { fx: .18, fy: .20, r: 0.70, dim: 1.00, pan: .14 },
-    settings:   { fx: .50, fy: .88, r: 0.46, dim: 0.72, pan: 0 },
-    onboarding: { fx: .50, fy: .22, r: 1.15, dim: 1.00, pan: 0 },
-  };
-  // 弹簧插值（apple-design springObject 同族）：T=0.9s 临界阻尼，4ms 子步进，落定吸附
-  const SPRING_W = Math.PI * 2 / 0.9;
 
   // ---------- 舞台画布：body 级、z0，非 orbit 主题隐藏 ----------
   const canvas = document.createElement("canvas");
@@ -130,10 +122,10 @@
     return e;
   };
 
-  // ---------- 投影（球心平面位 cur.x/cur.y 由页档弹簧驱动） ----------
+  // ---------- 投影（球心固定于视口投影中心；05 轮次 12 全局背景裁定） ----------
   let W = 0, H = 0;
-  let CX = 0, CY = 0, FOVK = 0, FCENTER = 0;
-  const recalcMetrics = () => { FOVK = H * FOV; CX = W / 2; CY = H * 0.47; FCENTER = FOVK / (BASE.z + CAM_DIST); };
+  let CX = 0, CY = 0, FOVK = 0;
+  const recalcMetrics = () => { FOVK = H * FOV; CX = W / 2; CY = H * 0.5; };   // 05 轮次 12 追记：球/房间/光晕随投影中心精确居中（原 0.47H 是面板几何旧基准，屏心偏上 3%）
   const project = (x, y, z) => {
     const zz = z + CAM_DIST;
     const f = FOVK / zz;
@@ -180,14 +172,14 @@
 
   // ---------- 粒子物理：弹簧回位 + 呼吸噪声力 + 松动区外扩（room.js 同源） ----------
   const rot = { cy: 1, sy: 0, cx: 1, sx: 0, R: BASE.r };
-  function updateParticles(t, excite, dt, cur) {
-    const sleeping = cur.sleep ? 1 : 0;
+  function updateParticles(t, excite, dt) {
+    const sleeping = signals.thoughtState === 2 ? 1 : 0;
     const breathe = 1 + (sleeping ? 0.012 : 0.022) * Math.sin(t * 0.45) + excite * 0.05 * Math.sin(t * 5.2);
     const ry = t * (sleeping ? 0.06 : 0.14);
     const rx = 0.14 + 0.03 * Math.sin(t * 0.21) + excite * 0.03 * Math.sin(t * 2.6);
     rot.cy = Math.cos(ry); rot.sy = Math.sin(ry);
     rot.cx = Math.cos(rx); rot.sx = Math.sin(rx);
-    rot.R = BASE.r * cur.r * breathe;
+    rot.R = BASE.r * breathe;
     const A = 0.5 * (1 + 1.2 * excite);
     const K = SPRING_K - 4 * excite;
     const dragF = Math.exp(-DRAG * dt);
@@ -215,22 +207,22 @@
       pt.env = env;
       const x2 = pt.x * rot.cy + pt.z * rot.sy, z2 = pt.z * rot.cy - pt.x * rot.sy;
       const y2 = pt.y * rot.cx - z2 * rot.sx, z3 = pt.y * rot.sx + z2 * rot.cx;
-      const wx = cur.x + swayX + x2 * rot.R, wy = cur.y + swayY + y2 * rot.R, wz = BASE.z + z3 * rot.R;
+      const wx = swayX + x2 * rot.R, wy = swayY + y2 * rot.R, wz = BASE.z + z3 * rot.R;
       const f = FOVK / (wz + CAM_DIST);
       const p = pts[i];
       p.x = CX + wx * f; p.y = CY + wy * f; p.z = wz + CAM_DIST; p.env = env;
     }
   }
-  function projectStatic(cur) {                  // 静态帧：页档基准位直接成形（不经弹簧）
+  function projectStatic() {                     // 静态帧：居中基准位直接成形
     const ry = 9.7 * 0.14, rx = 0.14 + 0.03 * Math.sin(9.7 * 0.21);
     rot.cy = Math.cos(ry); rot.sy = Math.sin(ry);
     rot.cx = Math.cos(rx); rot.sx = Math.sin(rx);
-    rot.R = BASE.r * cur.r * 1.022;
+    rot.R = BASE.r * 1.022;
     for (let i = 0; i < P_N; i++) {
       const pt = particles[i];
       const x2 = pt.hx * rot.cy + pt.hz * rot.sy, z2 = pt.hz * rot.cy - pt.hx * rot.sy;
       const y2 = pt.hy * rot.cx - z2 * rot.sx, z3 = pt.hy * rot.sx + z2 * rot.cx;
-      const wx = cur.x + x2 * rot.R, wy = cur.y + y2 * rot.R, wz = BASE.z + z3 * rot.R;
+      const wx = x2 * rot.R, wy = y2 * rot.R, wz = BASE.z + z3 * rot.R;
       const f = FOVK / (wz + CAM_DIST);
       const p = pts[i];
       p.x = CX + wx * f; p.y = CY + wy * f; p.z = wz + CAM_DIST; p.env = 0;
@@ -283,39 +275,6 @@
     }
   }
 
-  // ---------- 页档状态与弹簧（逐量独立，落定吸附） ----------
-  const chan = () => ({ x: 0, y: 0, r: 1, dim: 1, pan: 0 });
-  const cur = chan(), vel = chan();
-  const tgt = chan();
-  tgt.sleep = 0;
-  let poseName = "chat";
-  const CH = ["x", "y", "r", "dim", "pan"];
-  const settled = { x: true, y: true, r: true, dim: true, pan: true };
-  function retarget() {
-    const p = POSE[poseName] || POSE.chat;
-    tgt.x = (p.fx * W - CX) / FCENTER;               // 视口分数 → 世界坐标（一次解出）
-    tgt.y = (p.fy * H - CY) / FCENTER;
-    tgt.r = p.r; tgt.dim = p.dim; tgt.pan = p.pan;
-    tgt.sleep = poseName === "thoughts" ? signals.thoughtState : 0;
-    for (const k of CH) settled[k] = false;
-    kick();
-  }
-  function integrateSpring(dt) {
-    const steps = Math.max(1, Math.ceil(dt / 0.004));
-    const h = dt / steps;
-    for (let s = 0; s < steps; s++) {
-      for (const k of CH) {
-        if (settled[k]) continue;
-        const a = SPRING_W * SPRING_W * (tgt[k] - cur[k]) - 2 * SPRING_W * vel[k];   // 临界阻尼 z=1
-        vel[k] += a * h;
-        cur[k] += vel[k] * h;
-        if (Math.abs(tgt[k] - cur[k]) < 0.002 && Math.abs(vel[k]) < 0.01) {
-          cur[k] = tgt[k]; vel[k] = 0; settled[k] = true;
-        }
-      }
-    }
-  }
-
   // ---------- 运行态信号（orbit.js 单向传入；唯一自读 #chat.is-receiving） ----------
   const signals = { receiving: false, discoveryRunning: false, thoughtState: 0 };   // thoughtState: 0 清醒 / 1 运行 / 2 睡眠
   let excite = 0;
@@ -328,28 +287,26 @@
   // ---------- 主绘制 ----------
   function draw(t, dt) {
     ctx.clearRect(0, 0, W, H);
-    drawRoom(cur.dim, cur.pan);
-    const gx = CX + cur.x * FCENTER, gy = CY + cur.y * FCENTER;
-    const gr = ctx.createRadialGradient(gx, gy, 0, gx, gy, H * 0.28);
-    gr.addColorStop(0, `rgba(120,159,215,${(0.12 * cur.dim).toFixed(3)})`);
+    drawRoom(1, 0);
+    const gr = ctx.createRadialGradient(CX, CY, 0, CX, CY, H * 0.28);
+    gr.addColorStop(0, "rgba(120,159,215,0.12)");
     gr.addColorStop(1, "rgba(120,159,215,0)");
     ctx.fillStyle = gr;
-    ctx.fillRect(gx - H * 0.28, gy - H * 0.28, H * 0.56, H * 0.56);
+    ctx.fillRect(CX - H * 0.28, CY - H * 0.28, H * 0.56, H * 0.56);
     updatePatches(t, excite, dt);
-    updateParticles(t, excite, dt, cur);
-    drawParticles(excite, cur.dim);
+    updateParticles(t, excite, dt);
+    drawParticles(excite, 1);
   }
   function paintStatic() {
     ctx.clearRect(0, 0, W, H);
-    drawRoom(tgt.dim, tgt.pan);
-    const gx = CX + tgt.x * FCENTER, gy = CY + tgt.y * FCENTER;
-    const gr = ctx.createRadialGradient(gx, gy, 0, gx, gy, H * 0.28);
-    gr.addColorStop(0, `rgba(120,159,215,${(0.12 * tgt.dim).toFixed(3)})`);
+    drawRoom(1, 0);
+    const gr = ctx.createRadialGradient(CX, CY, 0, CX, CY, H * 0.28);
+    gr.addColorStop(0, "rgba(120,159,215,0.12)");
     gr.addColorStop(1, "rgba(120,159,215,0)");
     ctx.fillStyle = gr;
-    ctx.fillRect(gx - H * 0.28, gy - H * 0.28, H * 0.56, H * 0.56);
-    projectStatic(tgt);
-    drawParticles(0, tgt.dim);
+    ctx.fillRect(CX - H * 0.28, CY - H * 0.28, H * 0.56, H * 0.56);
+    projectStatic();
+    drawParticles(0, 1);
   }
 
   // ---------- 循环与门禁 ----------
@@ -368,7 +325,6 @@
     const t = ts / 1000;
     const dt = Math.min(0.1, last ? t - last : 0.016);
     last = t;
-    integrateSpring(dt);
     const target = exciteTarget();
     const rate = signals.receiving && signals.thoughtState !== 2 ? 3.2 : 1.4;
     excite += (target - excite) * Math.min(1, dt * rate);
@@ -394,7 +350,6 @@
     canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     recalcMetrics();
-    retarget();
     if (!raf && W) paintStatic();
   };
   window.addEventListener("resize", resize);
@@ -407,18 +362,18 @@
   new MutationObserver(kick).observe(root, { attributes: true, attributeFilter: ["data-motion"] });
   new MutationObserver(kick).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
   document.addEventListener("visibilitychange", kick);
+  // 看门狗：页面可见+动效开+主题在，但动画循环停摆（浏览器遮挡判定残留等引擎态）时自愈重 kick；
+  // 动效关/非 orbit 的合法停画态不触发（避免周期性空 kick 刷 __bgLog 与反复重绘静态帧）
+  setInterval(() => {
+    if (document.visibilityState === "visible" && !raf && root.dataset.motion === "on" && themeOK()) kick();
+  }, 2000);
 
   window.OrbitBG = {
-    setPage(name) {
-      poseName = POSE[name] ? name : "chat";
-      retarget();
+    setPage(name) {   // 05 轮次 12：背景全局化，页档不再驱动球位；保留接口兼容 orbit.js 切页五连
+      (window.__bgLog = window.__bgLog || []).push(["setPage-idle", name]);
     },
     setState(patch) {
-      let changed = false;
-      for (const k of Object.keys(patch)) {
-        if (signals[k] !== patch[k]) { signals[k] = patch[k]; changed = true; }
-      }
-      if (changed && poseName === "thoughts") retarget();   // 睡眠/清醒切换影响tgt.sleep
+      for (const k of Object.keys(patch)) signals[k] = patch[k];
     },
   };
 
