@@ -3,6 +3,9 @@
 (() => {
   const el = (id) => document.getElementById(id);
   const layers = { active: "活跃", warehouse: "仓库", longterm: "长期" };
+  const viewTitles = { overview: "变化与进度", memories: "记忆与观点", persona: "人格与思想",
+    history: "人格历史", tombstones: "遗忘记录", skills: "技能记录", traces: "调用轨迹" };
+  const narrowReader = window.matchMedia("(max-width: 760px)");
   const labels = {
     id: "稳定 ID", title: "标题", layer: "层级", kind: "类型", created_at: "记录时间 created_at",
     salience: "重要性（存储值）", pressure: "压力标记（存储值）", mention_count: "提及次数", use_count: "使用次数",
@@ -17,6 +20,7 @@
   let pending = { snapshot: false, list: false, detail: false }, changes = [], firstTime = null;
   let listRevision = 0, detailRevision = 0, before = null, ceiling = null, nextBefore = null;
   let listSignature = "", detail = null, nextOffset = null;
+  let detailReturn = null;
   let query = "", interrupted = false;
   let personaFrame = null, personaRenderGeneration = 0, detailReadingSignature = null;
   let personaFolds = new Map();
@@ -51,14 +55,41 @@
       ? `最后有效快照：${time(snapshot.sampled_at)} · ${el("obs-auto").checked ? "自动刷新开启" : "自动刷新暂停"}`
       : "尚无有效快照；打开观察器不会触发记忆提取。");
   }
+  function syncDetailLayout() {
+    const workbench = el("obs-workbench");
+    workbench.classList.toggle("obs-has-detail", !!detail);
+    workbench.classList.toggle("obs-persona-file", detail?.view === "persona");
+    const readerView = ["memories", "history", "skills"].includes(view());
+    const empty = el("obs-detail-empty");
+    empty.classList.toggle("hidden", !readerView || !!detail);
+    empty.querySelector("h3").textContent = view() === "history" ? "选择一份人格快照"
+      : view() === "skills" ? "选择一条技能记录" : "选择一条记忆";
+    empty.querySelector("p").textContent = view() === "history" ? "在此分段核对所选历史文件。"
+      : view() === "skills" ? "在此查看技能正文与字段信息。" : "在此查看当前正文与字段信息。";
+    text("obs-detail-back", detail?.view === "persona" ? "‹ 返回人格状态" : "‹ 返回列表");
+    for (const button of el("obs-list").querySelectorAll(".obs-record-open")) {
+      button.setAttribute("aria-pressed", String(detail?.view === button.dataset.obsType && String(detail.id) === button.dataset.obsId));
+    }
+  }
   function clearDetail() {
-    detail = null; nextOffset = null; detailRevision++; detailReadingSignature = null;
+    detail = null; detailReturn = null; nextOffset = null; detailRevision++; detailReadingSignature = null;
     el("obs-detail").classList.add("hidden");
-    for (const id of ["obs-detail-title", "obs-detail-time", "obs-detail-meta", "obs-detail-text", "obs-detail-reading"]) text(id, "");
+    for (const id of ["obs-detail-title", "obs-detail-kind", "obs-detail-tags", "obs-detail-time", "obs-detail-meta", "obs-detail-text", "obs-detail-reading", "obs-detail-scope"]) text(id, "");
+    el("obs-detail-fields").open = false;
     el("obs-detail-mode").value = "reading";
     el("obs-detail-reading-tools").classList.add("hidden");
     setDetailMode();
     el("obs-detail-next").disabled = true;
+    syncDetailLayout();
+  }
+  function returnFromDetail() {
+    const selected = detail, destination = detailReturn;
+    clearDetail();
+    const trigger = selected?.view === "persona" ? el("obs-persona-file")
+      : [...el("obs-list").querySelectorAll(".obs-record-open")].find((button) => button.dataset.obsType === selected?.view && button.dataset.obsId === String(selected?.id));
+    const fallback = [...el("obs-nav").querySelectorAll("[data-obs-view]")].find((button) => button.dataset.obsView === view());
+    (trigger || fallback || el("obs-close")).focus({ preventScroll: true });
+    if (destination) destination.pane.scrollTop = destination.scrollTop;
   }
   function clearData() {
     window.AliceContextViewer?.close();
@@ -705,32 +736,43 @@
     d.items.forEach((r) => {
       const card = node("article", undefined, "obs-record");
       if (type === "memories") card.dataset.memoryId = r.id;
-      if (type === "history") {
-        card.append(node("strong", r.filename), node("p", `文件修改时间：${time(r.mtime)}`, "obs-hint"));
-      } else if (type === "tombstones") {
+      if (type === "tombstones") {
+        card.classList.add("obs-tombstone");
         card.append(node("strong", `墓碑 #${r.id} · 原记忆 #${r.memory_id} ${r.title}`), node("p", `实际删除：${time(r.expired_at)}`, "obs-hint"), node("p", r.reason));
         if (r.truncated) card.appendChild(node("p", "此记录的长字段已截断；不存在可恢复的记忆正文。", "obs-hint"));
       } else {
-        card.append(node("strong", `#${r.id} ${r.title}`), node("p", r.preview || "（空正文）", "obs-preview"));
-        card.appendChild(node("p", type === "memories"
-          ? `${format("layer", r.layer)} · ${format("kind", r.kind)} · 重要性存储值 ${r.salience} · 压力存储值 ${r.pressure} · 提及 ${r.mention_count} · 使用 ${r.use_count}`
-          : `使用 ${r.use_count} · 创建 ${time(r.created_at)}`, "obs-hint"));
-      }
-      if (type !== "tombstones") {
-        const button = node("button", "查看详情", "btn ghost"); button.type = "button";
+        const button = node("button", undefined, "obs-record-open"); button.type = "button";
+        button.dataset.obsType = type;
+        button.dataset.obsId = type === "history" ? r.filename : String(r.id);
+        const heading = node("span", undefined, "obs-record-heading");
+        heading.appendChild(node("span", type === "history" ? r.filename : r.title, "obs-record-title"));
+        if (type !== "history") heading.appendChild(node("span", `#${r.id}`, "obs-record-id"));
+        button.appendChild(heading);
+        button.appendChild(node("span", type === "history" ? `文件修改：${time(r.mtime)}`
+          : type === "memories" ? `${format("layer", r.layer)} · ${format("kind", r.kind)}`
+          : `使用 ${r.use_count} · 创建 ${time(r.created_at)}`, "obs-record-meta"));
+        if (type !== "history") button.appendChild(node("span", r.preview || "（空正文）", "obs-preview"));
         button.onclick = () => openDetail(type, type === "history" ? r.filename : r.id);
         card.appendChild(button);
       }
       container.appendChild(card);
     });
+    syncDetailLayout();
   }
   function openDetail(type, id) {
+    const pane = type === "persona" ? el("obs-persona") : el("obs-browser");
+    const destination = { pane, scrollTop: pane.scrollTop };
     clearDetail();
+    detailReturn = destination;
     detail = { view: type, id, offset: 0, dirty: true };
     el("obs-detail").classList.remove("hidden");
     text("obs-detail-title", type === "persona" ? "当前人格文件 · 当前片段" : type === "history" ? `历史文件 · ${id} · 当前片段` : `详情 ${id}`);
     text("obs-detail-time", "正在读取…");
+    text("obs-detail-kind", type === "persona" ? "当前人格文件 · 当前片段" : type === "history" ? "历史快照 · 当前片段" : `当前正文 · #${id}`);
     setDetailMode();
+    syncDetailLayout();
+    el("obs-detail").scrollTop = 0;
+    if (narrowReader.matches || type === "persona") el("obs-detail-title").focus({ preventScroll: true });
     pending.detail = true; pump();
   }
   function setDetailMode() {
@@ -739,6 +781,7 @@
     el("obs-detail-reading-tools").classList.toggle("hidden", !file);
     el("obs-detail-reading").classList.toggle("hidden", !reading);
     el("obs-detail-text").classList.toggle("hidden", !!reading);
+    el("obs-detail-text").classList.toggle("obs-source", !!file);
   }
   function renderDetailReading(d, selected) {
     const signature = JSON.stringify([selected.view, selected.id, d.offset, d.text]);
@@ -769,6 +812,12 @@
     const chars = Array.from(d.text).length;
     text("obs-detail-time", `采样 ${time(d.sampled_at)} · 字符 ${chars ? d.offset + 1 : d.offset}–${d.offset + chars} / ${d.total_chars}（本段替换上一段）`);
     text("obs-detail-text", d.text || "（空正文）");
+    if (d.metadata?.title || d.metadata?.filename) text("obs-detail-title", d.metadata.title || d.metadata.filename);
+    const tags = selected.view === "memories" ? ["layer", "kind", "origin"].filter((key) => d.metadata?.[key] != null).map((key) => format(key, d.metadata[key])) : [];
+    text("obs-detail-tags", tags.join(" · "));
+    el("obs-detail-tags").classList.toggle("hidden", !tags.length);
+    text("obs-detail-scope", selected.view === "history" ? "读取已有历史文件；文件修改时间不是精确变更时刻。"
+      : selected.view === "persona" ? "当前文件片段；各段可能来自不同采样版本。" : "展示当前存储内容；本页不保留变化前的旧正文。");
     if (["persona", "history"].includes(selected.view)) renderDetailReading(d, selected);
     setDetailMode();
     const meta = el("obs-detail-meta"); meta.replaceChildren();
@@ -783,7 +832,8 @@
     if (selected.view === "memories") {
       const link = node("button", "查看出处与相关讨论", "link"); link.type = "button";
       link.onclick = () => window.AliceChatSearch?.showMemory(d.metadata.id);
-      meta.append(node("dt", "追溯"), link);
+      const discussion = node("dd"); discussion.appendChild(link);
+      meta.append(node("dt", "追溯"), discussion);
       if (d.metadata.provenance_status === "legacy_unverified") meta.append(node("dt", "迁移状态"), node("dd", "旧记录缺少可核对来源，暂不进入自动召回和思辨。"));
     }
   }
@@ -793,27 +843,38 @@
     clearDetail();
     if (isList()) { pending.list = true; pump(); }
   }
-  function changeView() {
+  function syncView() {
     el("obs-overview").classList.toggle("hidden", view() !== "overview");
     el("obs-persona").classList.toggle("hidden", view() !== "persona");
     el("obs-traces").classList.toggle("hidden", view() !== "traces");
     el("obs-browser").classList.toggle("hidden", !isList());
     el("obs-layer").classList.toggle("hidden", view() !== "memories");
     el("obs-kind").classList.toggle("hidden", view() !== "memories");
+    el("obs-filter-selects").classList.toggle("hidden", view() !== "memories");
     el("obs-search").classList.toggle("hidden", view() === "history");
+    el("obs-workbench").classList.toggle("obs-list-view", ["memories", "history", "skills"].includes(view()));
+    text("obs-list-title", viewTitles[view()] || "条目列表");
+    for (const button of el("obs-nav").querySelectorAll("[data-obs-view]")) button.setAttribute("aria-pressed", String(button.dataset.obsView === view()));
     text("obs-list-hint", view() === "history" ? "文件名 vNNN 是覆盖前旧正文的保存编号，不代表该版本的最终正文。文件修改时间不是精确变更时刻。"
       : view() === "tombstones" ? "这些是库内已有的真实删除记录，包含本次观察之前的历史。墓碑不保存正文，不按标题推断替代关系。"
       : view() === "skills" ? "技能已有提炼记录；当前对话未消费技能，计数不能证明行为影响。"
       : "查询只读，不增加提及或使用次数。列表预览有长度上限，详情可分段查看；全文来源链未记录。");
     el("obs-list-hint").appendChild(document.createTextNode(" 每页独立采样，分页固定 ID 上界但不是冻结快照；条目变化可能改变筛选结果，刷新到最新可重新遍历。"));
+    syncDetailLayout();
+  }
+  function changeView() {
+    syncView();
     resetList();
   }
   function close() {
+    const wasOpened = opened;
     opened = false; generation++; clearTimeout(timer); controller?.abort();
     pending = { snapshot: false, list: false, detail: false };
     clearData(); scope = null;
     el("observer").classList.add("hidden"); el("observer-btn").setAttribute("aria-expanded", "false");
-    el("app").classList.remove("observing");
+    el("observer-btn").removeAttribute("aria-current");
+    if (wasOpened) { el("chat-nav").classList.add("selected"); el("chat-nav").setAttribute("aria-current", "page"); }
+    el("app").classList.remove("observing", "observer-workspace");
   }
   el("observer-btn").onclick = () => {
     if (opened) { close(); return; }
@@ -821,7 +882,9 @@
     window.AliceWorkers?.close(false);
     opened = true; stopped = false; generation++;
     el("observer").classList.remove("hidden"); el("observer-btn").setAttribute("aria-expanded", "true");
-    el("app").classList.add("observing");
+    el("observer-btn").setAttribute("aria-current", "page");
+    el("chat-nav").classList.remove("selected"); el("chat-nav").removeAttribute("aria-current");
+    el("app").classList.add("observing", "observer-workspace");
     requestSnapshot(); schedule();
   };
   el("obs-close").onclick = close;
@@ -842,6 +905,11 @@
     else pending.snapshot = false;
   };
   el("obs-view").onchange = changeView;
+  el("obs-nav").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-obs-view]");
+    if (!button || button.dataset.obsView === view()) return;
+    el("obs-view").value = button.dataset.obsView; changeView();
+  });
   el("obs-search").onsubmit = (e) => { e.preventDefault(); query = el("obs-query").value.trim(); resetList(); };
   el("obs-layer").onchange = resetList;
   el("obs-kind").onchange = resetList;
@@ -865,7 +933,8 @@
   }
   el("obs-persona-expand").onclick = () => foldPersonaSections(true);
   el("obs-persona-collapse").onclick = () => foldPersonaSections(false);
-  el("obs-detail-close").onclick = clearDetail;
+  el("obs-detail-close").onclick = returnFromDetail;
+  el("obs-detail-back").onclick = returnFromDetail;
   el("obs-detail-first").onclick = () => { if (detail) { detail.offset = 0; detail.dirty = true; detailRevision++; pending.detail = true; pump(); } };
   el("obs-detail-next").onclick = () => {
     if (!detail || nextOffset === null) return;
@@ -873,6 +942,7 @@
     detail.dirty = true;
     pending.detail = true; pump();
   };
+  syncView();
   window.addEventListener("pagehide", close);
   window.AliceObserver = {
     close,

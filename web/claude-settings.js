@@ -4,7 +4,7 @@
   const modal = document.getElementById("settings-modal");
   const tab = document.createElement("button");
   tab.type = "button"; tab.dataset.settings = "claude";
-  tab.setAttribute("aria-pressed", "false"); tab.textContent = "Claude";
+  tab.setAttribute("aria-pressed", "false"); tab.setAttribute("aria-controls", "claude-settings"); tab.textContent = "Claude";
   modal.querySelector('[data-settings="workers"]').after(tab);
   const section = document.createElement("section");
   section.id = "claude-settings";
@@ -12,25 +12,40 @@
   section.dataset.settingsSection = "claude";
   section.setAttribute("aria-labelledby", "claude-settings-title");
   section.innerHTML = `
-    <div class="worker-settings-head"><h2 id="claude-settings-title" class="panel-title">Claude 授权</h2><button id="claude-settings-refresh" class="link" type="button">同步状态</button></div>
+    <div class="worker-settings-head settings-page-head"><h2 id="claude-settings-title" class="panel-title">Claude 授权</h2><button id="claude-settings-refresh" class="link" type="button">同步状态</button></div>
     <p id="claude-settings-status" class="worker-status" role="status" aria-live="polite">尚未读取授权状态</p>
-    <p class="settings-hint">Claude 使用本机 CLI，任务执行时启动。请先在本机完成 Claude CLI 安装与登录；这里独立管理派工授权，不使用 DSH 的连接令牌。</p>
-    <form id="claude-policy-form" class="worker-task-settings">
-      <label class="worker-ack"><input id="claude-enabled" type="checkbox" disabled> 允许 Alice 调用 Claude</label>
-      <label for="claude-workspace">任务工作目录（绝对路径）</label>
-      <input id="claude-workspace" type="text" maxlength="1000" placeholder="例如 D:\\AliceTasks\\Claude" autocomplete="off" spellcheck="false" disabled>
-      <div class="worker-policy-limits">
-        <label for="claude-max-turns">每个任务最多轮数<input id="claude-max-turns" type="number" min="1" max="100" step="1" value="12" disabled></label>
-        <label for="claude-task-budget">每个任务费用阈值（美元）<input id="claude-task-budget" type="number" min="0" max="10000" step="0.01" value="0.50" disabled></label>
-        <label for="claude-day-budget">每日费用阈值（美元）<input id="claude-day-budget" type="number" min="0" max="10000" step="0.01" value="2.00" disabled></label>
+    <p class="settings-hint settings-page-note">先安装并登录本机 Claude CLI，再保存派工授权。</p>
+    <form id="claude-policy-form" class="settings-group" aria-labelledby="claude-policy-title">
+      <div class="worker-config-heading">
+        <h3 id="claude-policy-title">派工授权</h3>
+        <label class="worker-grant-toggle"><input id="claude-enabled" type="checkbox" role="switch" disabled><span>允许 Alice 调用 Claude</span><span class="worker-grant-track" aria-hidden="true"></span></label>
       </div>
-      <p class="worker-hint">费用为自报统计，阈值不保证供应商账单上限；未知费用需要人工核对。Claude 与 DSH 各自最多执行一个任务、排队四个任务，可以同时工作。</p>
-      <label class="worker-ack"><input id="claude-native-ack" type="checkbox" disabled> 我授权 Claude 在以上范围执行任务，并理解权限质询和原生权限监督不等同于操作系统沙箱。</label>
-      <p class="worker-hint">修改或关闭授权会停止本工具的旧任务，并撤销旧任务正文；参数完全相同的保存不会重置授权。DSH 的授权与任务不受影响。</p>
-      <button id="claude-policy-save" class="btn primary" type="submit" disabled>保存授权</button>
-      <p id="claude-policy-result" class="worker-hint" role="status"></p>
+      <div class="worker-config-grid">
+        <section class="worker-field-group" aria-labelledby="claude-scope-title">
+          <h4 id="claude-scope-title">派工范围</h4>
+          <div class="settings-field"><label for="claude-workspace">工作目录（绝对路径）</label><input id="claude-workspace" type="text" maxlength="1000" placeholder="例如 D:\\AliceTasks\\Claude" autocomplete="off" spellcheck="false" disabled></div>
+          <div class="settings-field"><label for="claude-max-turns">单任务最多轮数</label><input id="claude-max-turns" type="number" min="1" max="100" step="1" value="12" disabled></div>
+        </section>
+        <section class="worker-field-group" aria-labelledby="claude-limits-title">
+          <h4 id="claude-limits-title">费用阈值</h4>
+          <div class="worker-policy-limits">
+            <label for="claude-task-budget">单任务（美元）<input id="claude-task-budget" type="number" min="0" max="10000" step="0.01" value="0.50" disabled></label>
+            <label for="claude-day-budget">每日合计（美元）<input id="claude-day-budget" type="number" min="0" max="10000" step="0.01" value="2.00" disabled></label>
+          </div>
+          <p class="worker-hint">阈值依据 Claude 自报费用判断。实际账单可能超过阈值，未知费用需人工核对。</p>
+        </section>
+      </div>
+      <div class="worker-permission-boundary">
+        <p id="claude-permission-note">权限质询和原生权限监督不能替代操作系统沙箱。</p>
+        <label class="worker-ack"><input id="claude-native-ack" type="checkbox" aria-describedby="claude-permission-note" disabled><span>我了解权限边界，并授权 Claude 在以上范围执行任务。</span></label>
+      </div>
+      <p class="worker-hint">更改或关闭已有授权会停止 Claude 的旧任务并撤销其正文。保存前会请你确认。</p>
+      <div class="worker-config-footer"><p id="claude-policy-result" class="worker-hint" role="status"></p><div class="settings-actions"><button id="claude-policy-save" class="btn primary" type="submit" disabled>保存授权</button></div></div>
     </form>
-    <div class="worker-task-settings"><h3>任务记录</h3><p class="worker-hint">Claude 窗口只展示 Claude 会话。归档、恢复和删除只整理 Alice 中的 Claude 记录，不调用 DSH，也不删除工作目录文件。已有任务可引用到主聊天供 Alice 查看，暂不支持在同一 Claude 任务内追加执行。</p></div>`;
+    <details class="settings-help"><summary>运行方式与任务记录</summary>
+      <p class="worker-hint">Claude 在执行任务时启动本机 CLI，使用独立于 DSH 的授权。两者各可运行一个任务、排队四个，并可同时工作。参数一致时保留当前授权。</p>
+      <p class="worker-hint">Claude 窗口只展示 Claude 会话。归档、恢复和删除仅整理 Alice 中的记录，工作目录文件保留。已有任务可引用到主聊天，同一任务暂不支持追加执行。</p>
+    </details>`;
   modal.querySelector(".settings-body").append(section);
   const $ = (id) => document.getElementById(id);
   const form = $("claude-policy-form"), result = $("claude-policy-result");
