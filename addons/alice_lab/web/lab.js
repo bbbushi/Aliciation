@@ -131,9 +131,9 @@ function stack(segments) {
   wrap.append(bar, legend);
   return wrap;
 }
-function table(headers, rows) {
-  const wrap = el("div", "scroll"), result = node("table"), top = node("tr"),
-    head = node("thead"), body = node("tbody");
+function table(headers, rows, opts = {}) {
+  const wrap = el("div", "scroll" + (opts.cards ? " cards" : "")), result = node("table"),
+    top = node("tr"), head = node("thead"), body = node("tbody");
   for (const name of headers) {
     const th = node("th", name);
     th.scope = "col";
@@ -142,12 +142,14 @@ function table(headers, rows) {
   head.append(top);
   for (const row of rows) {
     const tr = node("tr");
-    for (const value of row) {
+    row.forEach((value, index) => {
       const td = node("td");
+      if (headers[index]) td.dataset.label = headers[index];
       if (value instanceof HTMLElement) td.append(value);
       else td.textContent = value ?? "—";
+      if (!(value instanceof HTMLElement) && (value == null || value === "—")) td.className = "blank";
       tr.append(td);
-    }
+    });
     body.append(tr);
   }
   result.append(head, body);
@@ -290,12 +292,14 @@ function paintMemory(v, out) {
   const counts = v.counts || {}, items = v.items || [];
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const pressured = items.filter((i) => i.pressure).length;
+  const important = items.filter((i) => i.salience >= 1).length;
   out.append(kpis([
     {label:"记忆总数", value: fmt.int(total), hint:"三层合计"},
     {label:"活跃", value: fmt.int(counts.active)},
     {label:"仓库", value: fmt.int(counts.warehouse)},
     {label:"长期", value: fmt.int(counts.longterm)},
-    {label:"压力中", value: fmt.int(pressured), hint:"最近 40 条内"},
+    {label:"重要事项", value: fmt.int(important), hint:"salience=1，最近 40 条"},
+    {label:"压力中", value: fmt.int(pressured), hint:"pressure=1"},
   ]));
 
   const layerCard = card("三层分布", "活跃层进上下文，仓库层待晋升，长期层是稳定结论。");
@@ -307,26 +311,31 @@ function paintMemory(v, out) {
   const weekAgo = Date.now() / 1000 - 7 * 86400;
   const usedThisWeek = items.filter((i) => i.last_used_at && i.last_used_at >= weekAgo).length;
   const soonest = items.reduce((min, i) => (i.expires_at && (!min || i.expires_at < min) ? i.expires_at : min), null);
-  layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条 · 最近 40 条内`));
+  layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
   layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
 
-  const hot = [...items].sort((a, b) => (b.use_count || 0) - (a.use_count || 0)).slice(0, 8)
-    .filter((i) => (i.use_count || 0) > 0);
-  const heatCard = card("使用热度", "最近 40 条里被取用最多的记忆。");
-  heatCard.body.append(hot.length
-    ? barRows(hot.map((i) => ({label:`#${i.id} ${kindLabels[i.kind] || i.kind || ""}`, value:i.use_count || 0,
-        color:C[3], note:`${fmt.int(i.use_count)} 次 · 提及 ${fmt.int(i.mention_count)}`})))
-    : emptyNote("最近没有记忆被取用。"));
+  const ranked = [...items].sort((a, b) => (b.salience || 0) - (a.salience || 0)
+    || (b.use_count || 0) - (a.use_count || 0)).slice(0, 8);
+  const heatCard = card("重要与常用", "与 Alice 自己的排序取向一致：先 salience（重大事项 0/1），再取用次数。");
+  heatCard.body.append(ranked.length
+    ? barRows(ranked.map((i) => ({label:`#${i.id} ${kindLabels[i.kind] || i.kind || ""}`,
+        value:i.use_count || 0, color:i.salience ? C[3] : C[1],
+        note:`${i.salience ? "重要" : "一般"} · ${fmt.int(i.use_count)} 次`})))
+    : emptyNote("还没有记忆。"));
+  if (ranked.length) {
+    heatCard.body.append(el("p", "note",
+      "salience 只有 0/1 两档（生日、健康、重大决定、重要约定、强烈情绪），不是连续价值分；层与取用次数才是长期依据。"));
+  }
 
   const listCard = card("最近记忆", `按 id 倒序，最多 ${items.length} 条；只有元数据。`);
   if (!items.length) listCard.body.append(emptyNote("还没有记忆。"));
   else {
-    listCard.body.append(table(["#", "层", "类型", "显著度", "提及/使用", "最近使用", "到期", "状态"], items.map((i) => [
+    listCard.body.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
       String(i.id), layerLabels[i.layer] || i.layer || "—", kindLabels[i.kind] || i.kind || "—",
-      fmt.int(i.salience), `${fmt.int(i.mention_count)} / ${fmt.int(i.use_count)}`,
+      i.salience ? pill("重要", "warn") : "—", fmt.int(i.mention_count), fmt.int(i.use_count),
       fmt.ago(i.last_used_at), i.expires_at ? fmt.time(i.expires_at) : "—",
       lifecycleLabels[i.lifecycle] || i.lifecycle || i.provenance_status || "—",
-    ])));
+    ]), {cards:true}));
     listCard.body.append(rawDetails("查看原始元数据", items));
   }
 
@@ -334,8 +343,12 @@ function paintMemory(v, out) {
   noteCard.body.append(el("p", "note",
     targetMode === "body" ? "当前连接已含正文授权，可在下方按 ID 读取已留存的正文。"
       : "当前连接只有元数据授权，按 ID 读取正文会被拒绝。"));
-  out.append(gridOf([layerCard.box, heatCard.box]));
-  mountCards(out, [{box: listCard.box, wide:true}, {box: noteCard.box, wide:true}]);
+  const column = el("div", "col");
+  column.append(layerCard.box, noteCard.box);
+  const pair = el("div", "grid");
+  pair.append(column, heatCard.box);
+  out.append(pair);
+  mountCards(out, [{box: listCard.box, wide:true}]);
 }
 
 function paintQuestions(v, out) {
@@ -400,7 +413,11 @@ function paintQuestions(v, out) {
       box.append(left, dotEl, body);
       wrap.append(box);
     }
-    listCard.body.append(wrap, rawDetails("查看原始记录", items));
+    listCard.body.append(wrap);
+    if (targetMode !== "isolated") {
+      listCard.body.append(el("p", "note", "日常连接只读：推进疑问要在隔离实例里操作，这里只显示状态。"));
+    }
+    listCard.body.append(rawDetails("查看原始记录", items));
   }
   out.append(gridOf([statusCard.box, originCard.box]));
   mountCards(out, [{box: listCard.box, wide:true}]);
