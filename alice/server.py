@@ -551,6 +551,12 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("thoughts.js", "application/javascript; charset=utf-8")
             elif path == "/thoughts.css":
                 self._file("thoughts.css", "text/css; charset=utf-8")
+            elif path == "/theme-orbit.css":
+                self._file("theme-orbit.css", "text/css; charset=utf-8")
+            elif path == "/orbit.js":
+                self._file("orbit.js", "application/javascript; charset=utf-8")
+            elif path == "/orbit-bg.js":
+                self._file("orbit-bg.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.js":
                 self._file("chat-search.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.css":
@@ -606,6 +612,18 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._evaluation_route(path)
             elif path == "/api/settings":
                 self._json({"thinking": svc.thinking_view()})
+            elif path == "/api/observer/settings":
+                if not self._trusted_intent("observer-settings"):
+                    self._json({"error": "请从本机设置页面读取观测配置"}, 403)
+                    return
+                if urlparse(self.path).query:
+                    raise ValueError("观测设置不接受查询参数")
+                try:
+                    self._json(svc.observation_settings())
+                except ConfigConflict as exc:
+                    self._json({"error": str(exc)}, 409)
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
             elif path == "/api/runtime":
                 if not self._trusted_intent("runtime"):
                     self._json({"error": "只能从本机 GUI 读取启动信息"}, 403)
@@ -834,6 +852,19 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
+            if path == "/api/observer/settings":
+                if not self._trusted_json("observer-settings"):
+                    self._json({"error": "请从本机设置页面修改观测配置"}, 403)
+                    return
+                if urlparse(self.path).query:
+                    raise ValueError("观测设置不接受查询参数")
+                try:
+                    self._json(svc.observation_settings(self._bounded_body(4096)))
+                except ConfigConflict as exc:
+                    self._json({"error": str(exc)}, 409)
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+                return
             if path == "/api/thoughts":
                 if not self._trusted_json("thoughts"):
                     self._json({"error": "请从本机GUI操作思想与探索", "code": "gui_only"}, 403)

@@ -124,6 +124,10 @@ class SearchSession:
         self.intent = copy.deepcopy(request.get("search_intent") or {})
         self.revision, self.settings = coordinator._config_locked()
         self.settings = copy.deepcopy(self.settings)
+        from .autonomy_policy import TEST_CONTROLS_ONLY
+        if self.background and TEST_CONTROLS_ONLY:
+            self.settings.update(chat_search_calls=None, chat_dependency_limit=None,
+                                 chat_material_limit=None, read_candidates=2, chat_search_results=2)
         self.cancel = threading.Event()
         self.on_progress = on_progress
         self.calls, self.results = 0, {}
@@ -187,7 +191,8 @@ class SearchSession:
     def allowed(self, settings):
         if self.background:
             from .thought_workspace import settings as autonomy_settings
-            return (settings["enabled"] and self.scope == "gui"
+            from .autonomy_policy import TEST_CONTROLS_ONLY
+            return ((TEST_CONTROLS_ONLY or settings["enabled"]) and self.scope == "gui"
                     and autonomy_settings(self.service.store)["allow_external"])
         return self.coordinator._chat_search_allowed(self.scope, settings)
 
@@ -233,7 +238,8 @@ class SearchSession:
             revision, current = c._config_locked()
             if not self.allowed(current):
                 return {**empty, "status": "blocked", "reason_code": "chat_search_disabled",
-                        "message": "本渠道尚未获准搜索；请在本机设置中开启对话搜索及所需的 QQ 资料许可"}
+                        "message": ("后台外部读取不可用：请核对内容发现总许可、探索外部读取许可及所选平台权限。"
+                                    if self.background else "本渠道尚未获准搜索；请在本机设置中开启对话搜索及所需的 QQ 资料许可")}
             if self.finished or self.cancel.is_set() or self.epoch != c.dataset_id or revision != self.revision:
                 return {**empty, "status": "blocked", "reason_code": "source_revoked", "message": "本轮搜索已停止或许可已变化"}
             if self.qq_deadline is not None and time.monotonic() >= self.qq_deadline:

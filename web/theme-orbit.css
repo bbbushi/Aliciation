@@ -1,0 +1,1219 @@
+/* ===== Orbit 主题（轨道 · 环行她的世界）=====
+   多页环绕信息架构：背景是舞台（orbit-bg.js），页面是绕行的站，dock 是轨道本身。
+   本文件为集成组装稿，段落来源：
+   §1 基座（令牌/密度/三层容器/dock/悬停卡）← 03a-样式设计-令牌与全局组件.md §8.1–8.3
+   §2 大页面组 ← 03b-样式设计-大页面组.md（集成组装）
+   §3 中小页面组 ← 03c-样式设计-中小页面组.md（集成组装）
+   §4 动效 ← 04a/04b-动效设计（集成组装，reduce 降级随段）
+   裁定依据：docs/设计文档/主题-orbit-多页面重构-20261117/05-交流与决策记录.md（轮次 0–8）。
+   勘误表见 06-集成施工记录.md：03b:589 残留 55%、03a:464 残留 80px 等文档残留按裁定值吸收。
+   红线：#msgs 内部/气泡样式/reveal 机制/composer 内部零覆盖（03a 第六节负面清单）。 */
+
+/* ===== §1a 设计令牌（03a §8.1） ===== */
+html[data-theme=orbit] {
+  color-scheme: dark;
+  /* 底色三级（沿用旧名 → 现有组件自动换肤） */
+  --bg: #060b13; --card: #0d1624; --soft: #142137; --nav: #0a111d;
+  --orbit-surface-page: #0d1624e6;
+  /* 页壳玻璃面（05 轮次 12）：房间+球全局背景化后，大页壳低透让场景透出（对齐 room 的
+     「球在正文正后全亮度」观感，玻璃仅保留文字护面）；窗/浮层仍用实面 */
+  --orbit-surface-glass: #0d162466;
+  --orbit-surface-window: #121d2ff2;
+  --orbit-surface-float: #182540;
+  /* 文字三级 */
+  --ink: #d9e2f4; --muted: #a2b2cc; --orbit-faint: #8298b8;
+  /* 强调（沿用 room 族） */
+  --accent: #91b8ff; --accent-hover: #b7d0ff; --accent-soft: #1b2e49; --on-accent: #07111f;
+  /* 状态四档 */
+  --ok: #7fd8bd;      --ok-bg: #142b2a;
+  --warning: #e4c080; --warning-bg: #2b2519;
+  --danger: #ffa3a3;  --danger-bg: #321b25;
+  --neutral: #8b9cb8; --neutral-bg: #1c2740;
+  /* 边框分级 */
+  --line: #29364e; --orbit-line-faint: #1c2740; --orbit-line-strong: #3d5178; --edge: #93a9d0;
+  /* 字体/字号 */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --fs-page: 20px; --fs-section: 15px; --fs-body: 15px; --fs-sub: 13px; --fs-tip: 12px;
+  /* 间距（4 的倍数） */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+  --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
+  /* 跨组件令牌：召唤窗窗头高 / 分步步点直径 / 浮层偏距（05 轮次 5 裁定采纳） */
+  --orbit-win-head-h: 52px; --orbit-step-dot: 8px; --orbit-float-offset: 8px;
+  /* dock 让位：toast 84 = 此值 − 12；#app 底让位 94 = 此值 − 2；OB/S5 96 = 此值 */
+  --orbit-dock-clear: 96px;
+  /* 圆角/阴影三档（页影缓、窗影深、浮层影锐） */
+  --radius: 6px; --orbit-radius-m: 10px; --orbit-radius-l: 14px;
+  --orbit-shadow-page: 0 10px 44px #01040966;
+  --orbit-shadow-window: 0 24px 80px #01040ab3;
+  --orbit-shadow-float: 0 6px 20px #01040ac0;
+  --orbit-shadow-dock: 0 10px 44px #01040980, 0 0 28px #5b87ff12,
+    inset 0 1px 0 #ffffff0d, inset 0 -1px 0 #00000059;
+  /* 动效参数（动效令牌 --orbit-dur-page / --orbit-backdrop-2 于 §4 并入，05 轮次 7 裁定） */
+  --orbit-ease: cubic-bezier(.2, .7, .2, 1);
+  --orbit-dur: 180ms; --orbit-dur-quick: 125ms;
+}
+
+/* 密度三档（大页宽呼吸、中页居中、小浮层零滚动） */
+html[data-theme=orbit] [data-density=wide]  { --den-pad:32px; --den-gap:32px; --den-lead:1.8;  --den-ctl:44px; }
+html[data-theme=orbit] [data-density=mid]   { --den-pad:24px; --den-gap:20px; --den-lead:1.7;  --den-ctl:38px; }
+html[data-theme=orbit] [data-density=tight] { --den-pad:16px; --den-gap:12px; --den-lead:1.55; --den-ctl:32px; }
+
+/* 三层容器基类（页面层透出微光；窗层独占 backdrop 压暗；浮层最亮最锐） */
+html[data-theme=orbit] .orbit-page {
+  background: var(--orbit-surface-glass);   /* 05 轮次 12：玻璃壳透出全局背景（房间+球） */
+  border: 1px solid var(--line); border-radius: var(--orbit-radius-m);
+  box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;
+}
+html[data-theme=orbit] .orbit-window {
+  width: min(860px, calc(100vw - 40px)); max-height: calc(100dvh - 48px);
+  background: var(--orbit-surface-window);
+  border: 1px solid var(--orbit-line-strong); border-radius: var(--orbit-radius-m);
+  box-shadow: var(--orbit-shadow-window); color: var(--ink); overflow: auto;
+}
+html[data-theme=orbit] .orbit-window::backdrop { background: #05080fd9; }
+/* 浮层滚动例外（05 轮次 5 + 轮次 8 追认）：挂 data-orbit-scroll 的动态列表浮层壳
+   （S10/S11 窗口族及同类）可内滚动并放宽宽度帽；仍无 backdrop 压暗 */
+html[data-theme=orbit] .orbit-float[data-orbit-scroll] { overflow: auto; }
+html[data-theme=orbit] .orbit-float {
+  max-width: 320px; background: var(--orbit-surface-float);
+  border: 1px solid var(--orbit-line-strong); border-radius: var(--orbit-radius-l);
+  box-shadow: var(--orbit-shadow-float); overflow-wrap: anywhere; min-width: 0;
+}
+
+/* ===== §1b dock：轨道本体（03a §8.2） ===== */
+#orbit-dock {
+  position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 30;
+  display: flex; align-items: center; gap: 8px;   /* 簇距 8+16+线=25px（05 轮次 10：03a 双重计数收敛） */
+  height: 56px; padding: 8px 12px;
+  background: #0d1624f0; border: 1px solid var(--orbit-line-strong);
+  border-radius: 999px; box-shadow: var(--orbit-shadow-dock);
+}
+/* 轨道延伸线：两侧各 48px 渐隐细线（纯装饰，窄屏隐藏） */
+#orbit-dock::before, #orbit-dock::after {
+  content: ''; position: absolute; top: 50%; width: 48px; height: 1px;
+  background: linear-gradient(90deg, transparent, #3d5178);
+  pointer-events: none;
+}
+#orbit-dock::before { right: 100%; }
+#orbit-dock::after  { left: 100%; transform: scaleX(-1); }
+/* 扫描线内衬：与舞台同质感（全局纹理 z6 罩不到 body 级 dock） */
+html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: relative; z-index: 1; }
+.orbit-dock-texture {
+  position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, #01040b38 0 1px, transparent 1px 3px);
+  opacity: .22;
+}
+.orbit-dock-cluster { display: flex; align-items: center; gap: 4px; }
+.orbit-dock-cluster + .orbit-dock-cluster { border-left: 1px solid var(--orbit-line-faint); padding-left: 16px; }
+
+/* 图标格 40×40 四态（SVG 线条图标 stroke 1.6，字符体系降级为装饰） */
+.orbit-icon {
+  position: relative; display: grid; place-items: center;
+  width: 40px; height: 40px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--orbit-faint); padding: 0;
+  transition: background-color var(--orbit-dur) var(--orbit-ease),
+              color var(--orbit-dur) var(--orbit-ease), opacity var(--orbit-dur) var(--orbit-ease);
+}
+.orbit-icon .orbit-symbol { width: 20px; height: 20px; stroke-width: 1.6; }
+.orbit-icon:hover, .orbit-icon:focus-visible { color: var(--ink); background: var(--soft); opacity: 1; }
+.orbit-icon[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
+.orbit-icon[aria-current="page"]::after {           /* 站点光点：绕行停靠指示 */
+  content: ''; position: absolute; left: 50%; bottom: -6px;
+  width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 6px #91b8ff88;
+}
+.orbit-icon[data-idle=mid] { opacity: .8; }
+/* 功能低档 .70（≈3.65:1 过非文字 3:1 线，R3 P1-5）；.55（≈2.7:1）仅限纯装饰，功能图标禁用 */
+.orbit-icon[data-idle=low] { opacity: .7; }
+.orbit-icon[data-idle=low]:hover, .orbit-icon[data-idle=low]:focus-visible { opacity: 1; }
+/* 触屏兜底通用规则（R3 P2-10）：一并覆盖窗内 [data-idle=low]，各段不再单写 */
+@media (pointer: coarse) { html[data-theme=orbit] [data-idle=low] { opacity: .75; } }
+.orbit-icon:disabled { opacity: .35; cursor: not-allowed; }
+@media (hover: none) { .orbit-icon { transition: none; } }  /* 触屏去粘滞 hover */
+
+/* 徽标与状态点（汇总收纳的统一形态） */
+.orbit-badge {
+  position: absolute; top: -4px; right: -4px; z-index: 1;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  display: grid; place-items: center; border-radius: 8px;
+  font: 700 11px/1 var(--mono); border: 2px solid #0d1624f0;   /* 开孔描边 */
+}
+.orbit-badge[data-tone=warn]   { background: var(--warning); color: #3a2c10; }
+.orbit-badge[data-tone=info]   { background: var(--accent);  color: var(--on-accent); }
+.orbit-badge[data-tone=neutral]{ background: var(--neutral-bg); color: var(--ink); }
+.orbit-dot {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid #0d1624f0;
+}
+.orbit-dot[data-state=ready]   { background: var(--ok); }
+.orbit-dot[data-state=busy], .orbit-dot[data-state=waiting] { background: var(--warning); }
+.orbit-dot[data-state=error]   { background: var(--danger); }
+.orbit-dot[data-state=unknown] { background: var(--neutral); }
+
+/* 窄屏通栏形态 */
+@media (max-width: 720px) {
+  #orbit-dock { left: 8px; right: 8px; transform: none; border-radius: 20px;
+                overflow-x: auto; scrollbar-width: none; gap: 8px; }
+  #orbit-dock::-webkit-scrollbar { display: none; }
+  #orbit-dock::before, #orbit-dock::after { display: none; }
+  .orbit-dock-cluster + .orbit-dock-cluster { padding-left: 8px; }
+}
+@media (forced-colors: active) {
+  #orbit-dock { border-color: CanvasText; background: Canvas; }
+  .orbit-dock-texture, #orbit-dock::before, #orbit-dock::after { display: none; }
+}
+
+/* ===== §1c 悬停揭示卡（03a §8.3）：≤12 字单行；口径4豁免长句 ≤320px 多行 ===== */
+.orbit-tip {
+  position: fixed; z-index: 50;
+  max-width: 240px; padding: 6px 10px;
+  background: var(--orbit-surface-float);
+  border: 1px solid var(--orbit-line-strong); border-radius: 8px;
+  box-shadow: var(--orbit-shadow-float);
+  color: var(--ink); font: 500 var(--fs-tip)/1.5 var(--font);
+  overflow-wrap: anywhere; min-width: 0;
+  pointer-events: none; opacity: 0; visibility: hidden;
+  transition: opacity var(--orbit-dur) var(--orbit-ease), visibility 0s linear var(--orbit-dur);
+}
+.orbit-tip[data-show] { opacity: 1; visibility: visible; transition-delay: 0s; }
+.orbit-tip[data-long] { max-width: 320px; }   /* 安全/费用边界豁免句 */
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .orbit-tip { transition: opacity var(--orbit-dur-quick) linear; }
+  .orbit-tip, .orbit-tip[data-long] { border-color: CanvasText; background: Canvas; }
+}
+
+/* ===== §2 大页面组（03b；包装/标记节点登记见 03b §0.5——grid 只挂 .orbit-body/.orbit-drawer-stack 包装容器） ===== */
+/* 大页骨架通用增量（03b §0.3；底让位 94 = dock-clear 96 − 页边距修正 2，R3 P1-3 推导口径） */
+html[data-theme=orbit] #app { padding: 52px 14px calc(var(--orbit-dock-clear) - 2px); }
+html[data-theme=orbit] .orbit-page {
+  position: relative; z-index: 1;
+  width: min(1080px, 100%); margin: 0 auto;
+  max-height: calc(100dvh - 52px - var(--orbit-dock-clear) + 2px);
+  overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+  padding: var(--den-pad);
+  display: flex; flex-direction: column; gap: var(--den-gap);
+  font: 500 var(--fs-body)/var(--den-lead) var(--font);
+}
+/* 页头统一语言（P2/P3/P4 共用；P1 顶栏沿用 chat header） */
+html[data-theme=orbit] .orbit-page-head {
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  gap: var(--sp-3) var(--sp-6);
+  padding-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--orbit-line-faint);
+}
+html[data-theme=orbit] .orbit-page-head h1 { margin: 0; font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; }
+html[data-theme=orbit] .orbit-lede { margin: var(--sp-1) 0 0; font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); }
+html[data-theme=orbit] .orbit-kicker { font: 600 11px/1.8 var(--mono); letter-spacing: 2px; color: var(--orbit-faint); }
+/* 抽屉三层渐进（P2 策略 / P3 设置与运行记录；层级靠结构线不靠影） */
+html[data-theme=orbit] .orbit-drawer { border: 1px solid var(--orbit-line-faint); border-radius: var(--radius); }
+html[data-theme=orbit] .orbit-drawer > summary {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-height: var(--den-ctl); padding: 0 var(--sp-3);
+  font: 600 var(--fs-section)/1.5 var(--font); color: var(--ink); border-radius: var(--radius);
+}
+html[data-theme=orbit] .orbit-drawer > summary::before {
+  content: ''; width: 7px; height: 7px; flex: 0 0 7px;
+  border-right: 1.6px solid var(--orbit-faint); border-bottom: 1.6px solid var(--orbit-faint);
+  transform: rotate(45deg);                        /* 折叠：向下 */
+  transition: transform var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-drawer[open] > summary::before { transform: rotate(-135deg); }  /* 展开：向上 */
+html[data-theme=orbit] .orbit-drawer[open] > summary { color: var(--accent); }
+html[data-theme=orbit] .orbit-drawer > summary:hover { color: var(--accent-hover); }
+html[data-theme=orbit] .orbit-drawer .orbit-drawer {
+  margin: 0 0 0 var(--sp-3); border: 0; border-left: 1px solid var(--orbit-line-faint); border-radius: 0;
+}
+html[data-theme=orbit] .orbit-drawer .orbit-drawer > summary {
+  min-height: 38px; font: 600 var(--fs-sub)/1.6 var(--font); color: var(--muted);
+}
+html[data-theme=orbit] .orbit-drawer .orbit-drawer > summary:hover { color: var(--ink); }
+html[data-theme=orbit] .orbit-drawer .orbit-drawer > *:not(summary) { margin: 0 0 0 var(--sp-4); padding: var(--sp-2) 0 var(--sp-3); font: 500 var(--fs-body)/var(--den-lead) var(--font); }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-drawer > summary::before { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-drawer > summary::before { transition: none; }
+/* 页内卡片语言（03b §0.4；.orbit-card 由 orbit.js 容器级挂类） */
+html[data-theme=orbit] .orbit-card {
+  border: 1px solid var(--orbit-line-faint); border-radius: var(--radius);
+  padding: var(--sp-4); background: transparent; min-width: 0;
+  transition: border-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-card:hover,
+html[data-theme=orbit] .orbit-card:focus-within { border-color: var(--orbit-line-strong); }
+html[data-theme=orbit] .orbit-card :is(h3, h4, strong) { font: 600 var(--fs-body)/1.6 var(--font); overflow-wrap: anywhere; min-width: 0; }
+html[data-theme=orbit] .orbit-card p, html[data-theme=orbit] .orbit-card dd { font: 500 var(--fs-sub)/1.7 var(--font); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+/* 背景关系（03b §六；05 轮次 7 裁定 3 星线同隐。03b 片段 var(--orbit-stage) 未定义，按其"复用 --bg"注记落 var(--bg)） */
+html[data-theme=orbit] body { background: var(--bg); }
+html[data-theme=orbit] .chat-atmosphere,
+html[data-theme=orbit] .atmosphere-thoughts { display: none; }   /* orbit-bg 接管 */
+
+/* --- P1 对话主页（壳内原生皮形；.chat 2px 边与 ::after 角标不动，仅按 03a §六授权换底色） --- */
+html[data-theme=orbit] #orbit-main {
+  position: relative; z-index: 1;
+  width: min(1080px, 100%); margin: 0 auto;
+  max-height: calc(100dvh - 52px - var(--orbit-dock-clear) + 2px);
+  box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;   /* 页影 44：P1 唯一影 */
+  display: flex;
+}
+html[data-theme=orbit] #orbit-main > .chat { flex: 1; min-height: 0; background: var(--orbit-surface-glass); }   /* 05 轮次 12 玻璃壳 */
+/* 眉标装饰隐藏（R3 P1-7；文本随 dock「对话」图标 tip 呈现，计入 02a 还原表 #19） */
+html[data-theme=orbit] .chat::before { content: none; }
+/* 顶栏身分行 + 动作图标排 */
+html[data-theme=orbit] .chat > header { border-bottom-color: var(--orbit-line-faint); }
+html[data-theme=orbit] .chat-subtitle { display: none; }   /* 02a R1 */
+html[data-theme=orbit] .chat-header-actions { display: flex; align-items: center; gap: var(--sp-2); }
+html[data-theme=orbit] .who { font: 600 var(--fs-section)/1.5 var(--font); }
+/* 图标入口（idle 中档 .8） */
+html[data-theme=orbit] .orbit-icon-entry {
+  display: grid; place-items: center; width: 40px; height: 40px; padding: 0;
+  border: 0; border-radius: 10px; background: transparent;
+  color: var(--orbit-faint); opacity: .8;
+  transition: color var(--orbit-dur) var(--orbit-ease), opacity var(--orbit-dur) var(--orbit-ease),
+              background-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-icon-entry svg { width: 20px; height: 20px; stroke-width: 1.6; }
+html[data-theme=orbit] .orbit-icon-entry:hover,
+html[data-theme=orbit] .orbit-icon-entry:focus-visible { color: var(--ink); background: var(--soft); opacity: 1; }
+/* 信号行：activity 状态点 + 待确认短文案 + 同步图标（右缘与身分行动作对齐） */
+html[data-theme=orbit] .chat-sync-bar { border-bottom: 1px solid var(--orbit-line-faint); gap: var(--sp-3); }
+html[data-theme=orbit] #chat-activity { display: inline-flex; align-items: center; gap: var(--sp-2);
+  font: 500 var(--fs-tip)/1.5 var(--font); color: var(--muted); overflow-wrap: anywhere; }
+html[data-theme=orbit] #chat-activity::before { content: ''; width: 7px; height: 7px; flex: 0 0 7px;
+  border-radius: 50%; background: var(--neutral); }   /* 无镜像时回退 neutral 点（03b §八.5） */
+html[data-theme=orbit] #chat-activity[data-state=ready]::before   { background: var(--ok); }
+html[data-theme=orbit] #chat-activity[data-state=busy]::before,
+html[data-theme=orbit] #chat-activity[data-state=waiting]::before { background: var(--warning); }
+html[data-theme=orbit] #chat-activity[data-state=error]::before   { background: var(--danger); }
+html[data-theme=orbit] #chat-new-attempt { display: inline-flex; align-items: center; gap: 6px;
+  color: var(--warning); font-weight: 600; text-underline-offset: 3px; }
+html[data-theme=orbit] #chat-new-attempt::before { content: ''; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--warning); }
+html[data-theme=orbit] #chat-refresh { font: inherit; }   /* 图标化后套 .orbit-icon-entry 语言（orbit.js 挂类） */
+/* 待确认提示行：状态四档令牌着色（R3 P2-2 授权），超 4 行内滚（02a 设限授权） */
+html[data-theme=orbit] .chat-notice {
+  margin: 0 28px var(--sp-2); padding: 10px 14px;   /* 24→28：与信号行右缘对齐（R3 P2-5） */
+  border: 1px solid var(--warning); border-radius: var(--radius);
+  background: var(--warning-bg); color: var(--warning);
+  font: 500 var(--fs-sub)/1.7 var(--font); overflow-wrap: anywhere;
+  max-height: calc(var(--fs-sub) * 1.7 * 4 + 21px); overflow-y: auto;
+}
+/* 空态排版档位 + ASCII 装饰收纳位（节点与文案不动） */
+html[data-theme=orbit] .chat-empty .eyebrow { color: var(--orbit-faint) !important; font: 600 11px/1.8 var(--mono); letter-spacing: 2px; }
+html[data-theme=orbit] .chat-empty h1 { margin: var(--sp-5) 0 var(--sp-2);
+  font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; }
+html[data-theme=orbit] .chat-empty p { font: 500 var(--fs-sub)/1.6 var(--font); }
+html[data-theme=orbit] .orbit-empty-sigil { margin-top: var(--sp-8);
+  font: 10px/1.25 var(--mono); color: var(--orbit-faint); opacity: .55; user-select: none; }  /* 纯装饰专用档 .55 */
+/* 回底 pill（小浮层语言；70% 低档 R3 P1-5） */
+html[data-theme=orbit] #chat-latest {
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-radius: 999px; box-shadow: var(--orbit-shadow-float);
+  color: var(--orbit-faint); opacity: .7;
+}
+html[data-theme=orbit] #chat-latest:hover, html[data-theme=orbit] #chat-latest:focus-visible { color: var(--ink); opacity: 1; }
+/* 来源行图标（70% 低档 R3 P1-5；触屏 .75 兜底） */
+html[data-theme=orbit] .orbit-source-icon {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--orbit-faint); opacity: .7;
+  transition: opacity var(--orbit-dur) var(--orbit-ease), color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-source-icon:hover,
+html[data-theme=orbit] .orbit-source-icon:focus-visible { opacity: 1; color: var(--ink); }
+@media (pointer: coarse) { html[data-theme=orbit] .orbit-source-icon { opacity: .75; } }
+/* composer 上待绑定入口行：warning 条令牌着色（R3 P2-2 点名授权） */
+html[data-theme=orbit] .composer-permission .link {
+  border: 1px solid var(--warning); background: var(--warning-bg); color: var(--warning);
+  border-radius: var(--radius);
+}
+
+/* --- P2 内容发现（#orbit-page-discovery 挂 data-density=wide，orbit.js 标注） --- */
+html[data-theme=orbit] .discovery-header {
+  display: flex; align-items: flex-start; gap: var(--sp-4);
+  padding-bottom: var(--sp-5); border-bottom: 1px solid var(--orbit-line-faint);
+}
+html[data-theme=orbit] .discovery-header h1 { margin: 0; font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; }
+html[data-theme=orbit] .discovery-header .card-x { color: var(--orbit-faint); }
+/* 双列只挂包装容器 .orbit-body（03b §0.5；header/status/warning/bound 仍为 #discovery 直接子节点横贯——防棋盘化 R3 P1-2） */
+html[data-theme=orbit] #discovery .orbit-body {
+  min-height: 0; display: grid; gap: var(--den-gap);
+  grid-template-columns: 300px minmax(0, 1fr);   /* 行定义删除（R5b C6/R5d P1-1：两项自动放置挤一行，第二行空置） */
+}
+html[data-theme=orbit] #discovery .orbit-body-side { display: flex; flex-direction: column; gap: var(--den-gap); min-height: 0; }
+html[data-theme=orbit] #discovery .orbit-body-main { min-height: 0; }
+@media (max-width: 900px) { html[data-theme=orbit] #discovery .orbit-body { grid-template-columns: minmax(0, 1fr); } }
+/* 行动区与入口排 */
+html[data-theme=orbit] .discovery-overview { display: flex; flex-direction: column; gap: var(--sp-3); }
+html[data-theme=orbit] .orbit-entry-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+html[data-theme=orbit] .orbit-entry-row .btn.ghost { min-height: var(--den-ctl); font: 600 var(--fs-sub)/1.5 var(--font); }
+html[data-theme=orbit] .discovery-overview[data-enabled=on] #discovery-toggle-enabled { color: var(--accent); font-weight: 600; }  /* R3 P2-7 钩子 */
+/* 结果区（卡语言见 .orbit-card） */
+html[data-theme=orbit] .discovery-results { min-height: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+html[data-theme=orbit] .discovery-results h2 { margin: 0; font: 600 var(--fs-section)/1.5 var(--font); }
+html[data-theme=orbit] #discovery-card-count { font: 700 11px var(--mono); color: var(--orbit-faint); margin-left: var(--sp-2); }  /* R3 P2-6 挂既有节点 */
+/* 状态与引导带（错误钩子 data-kind 以 discovery.css 实况为集成核对项） */
+html[data-theme=orbit] .discovery-status { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); overflow-wrap: anywhere; }
+html[data-theme=orbit] .discovery-status[data-kind=error] { color: var(--danger); }
+html[data-theme=orbit] .discovery-bound {
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-left: 2px solid var(--accent);
+  border-radius: var(--radius); background: var(--accent-soft);
+  display: flex; align-items: center; gap: var(--sp-3); overflow-wrap: anywhere;
+}
+/* 运行中不伪造进度：反馈走停止按钮 warning 态 */
+html[data-theme=orbit] #discovery-cancel:not(.hidden) {
+  color: var(--warning); border: 1px solid var(--warning); background: var(--warning-bg); border-radius: var(--radius);
+}
+/* 结果空态（81/90 时刻）：虚线托盘 */
+html[data-theme=orbit] .discovery-empty {
+  display: grid; place-content: center; gap: var(--sp-2); min-height: 200px;
+  padding: var(--sp-6); text-align: center;
+  border: 1px dashed var(--orbit-line-faint); border-radius: var(--radius);
+  font: 500 var(--fs-sub)/1.7 var(--font); color: var(--muted); overflow-wrap: anywhere;
+}
+html[data-theme=orbit] #discovery details > summary { overflow-wrap: anywhere; }
+
+/* --- P3 思想与探索（#orbit-page-thoughts 挂 data-density=wide） --- */
+html[data-theme=orbit] #orbit-page-thoughts .orbit-page-head { align-items: center; }
+/* 清醒睡眠徽标（03a 十.3：睡眠=待机） */
+html[data-theme=orbit] .orbit-state-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--neutral-bg); color: var(--neutral);
+  font: 600 var(--fs-sub)/1.5 var(--font); max-width: 100%; overflow-wrap: anywhere;
+}
+html[data-theme=orbit] .orbit-state-chip::before { content: ''; width: 7px; height: 7px; flex: 0 0 7px;
+  border-radius: 50%; background: currentColor; }
+html[data-theme=orbit] .orbit-state-chip[data-state=awake]    { background: var(--ok-bg);      color: var(--ok); }
+html[data-theme=orbit] .orbit-state-chip[data-state=sleeping] { background: var(--neutral-bg); color: var(--neutral); }
+/* 双列：左疑问+思辨流，右抽屉栈（grid 只挂包装容器） */
+html[data-theme=orbit] #orbit-page-thoughts .orbit-body {
+  min-height: 0; display: grid; gap: var(--den-gap);
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+@media (max-width: 900px) { html[data-theme=orbit] #orbit-page-thoughts .orbit-body { grid-template-columns: minmax(0, 1fr); } }
+html[data-theme=orbit] .orbit-drawer-stack { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; overflow-y: auto; }
+/* 行动区：运行态高亮只给「暂停」；主按钮睡眠期保持全亮（手动探索只要求 allow_paid） */
+html[data-theme=orbit] #thought-run  { min-height: var(--den-ctl); }
+html[data-theme=orbit] #thought-stop { min-height: var(--den-ctl); border: 1px solid var(--orbit-line-faint); border-radius: var(--radius); }
+html[data-theme=orbit] #thought-stop:not([disabled]):not(.hidden) { border-color: var(--warning); color: var(--warning); background: var(--warning-bg); }
+/* 15 字替身行 */
+html[data-theme=orbit] .orbit-thought-hint { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); overflow-wrap: anywhere; }
+/* 疑问输入区与调度权重/事件 pre（横向滚动优先不硬折） */
+html[data-theme=orbit] #thought-settings textarea { min-height: calc(var(--den-ctl) + 12px); width: 100%; }
+html[data-theme=orbit] #thought-settings pre {
+  margin: var(--sp-2) 0; padding: var(--sp-3); border: 1px solid var(--orbit-line-faint); border-radius: var(--radius);
+  background: var(--soft); font: 500 12px/1.7 var(--mono);
+  max-height: 320px; overflow: auto; overflow-wrap: normal; white-space: pre;
+}
+
+/* --- P4 设置 hub（03b §四；hub 卡由 orbit.js 产出，形状语言区分召唤↗/跨页→） --- */
+html[data-theme=orbit] .orbit-hub-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+@media (max-width: 720px) { html[data-theme=orbit] .orbit-hub-grid { grid-template-columns: minmax(0, 1fr); } }
+html[data-theme=orbit] .orbit-hub-item {
+  position: relative; display: flex; align-items: center; gap: var(--sp-3);
+  min-height: 72px; padding: var(--sp-4) var(--sp-5);
+  text-align: left; background: transparent; color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--orbit-radius-m);
+  transition: border-color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-hub-item:hover,
+html[data-theme=orbit] .orbit-hub-item:focus-visible { border-color: var(--orbit-line-strong); background: var(--soft); }
+html[data-theme=orbit] .orbit-hub-item strong { font: 600 var(--fs-body)/1.5 var(--font); overflow-wrap: anywhere; min-width: 0; }
+html[data-theme=orbit] .orbit-hub-item .orbit-symbol { width: 20px; height: 20px; flex: 0 0 20px; stroke-width: 1.6; color: var(--orbit-faint); }
+html[data-theme=orbit] .orbit-hub-item:hover .orbit-symbol { color: var(--ink); }
+html[data-theme=orbit] .orbit-hub-item::after {
+  content: ''; width: 8px; height: 8px; flex: 0 0 8px; margin-left: auto;
+  border-right: 1.6px solid var(--orbit-faint); border-bottom: 1.6px solid var(--orbit-faint);
+  transform: rotate(180deg);                       /* ↗ = 召唤窗 */
+  transition: transform var(--orbit-dur) var(--orbit-ease);
+}
+/* 徽标挂点：卡右上 10px（dock 同款 dot/badge，orbit.js 镜像 data-state） */
+html[data-theme=orbit] .orbit-hub-item .orbit-dot,
+html[data-theme=orbit] .orbit-hub-item .orbit-badge { position: absolute; top: 10px; right: 10px; }
+/* 跨页项：accent 语言 + → 方向符 */
+html[data-theme=orbit] .orbit-hub-item[data-jump] { border-color: var(--accent); background: var(--accent-soft); }
+html[data-theme=orbit] .orbit-hub-item[data-jump] .orbit-symbol,
+html[data-theme=orbit] .orbit-hub-item[data-jump]:hover .orbit-symbol { color: var(--accent); }
+html[data-theme=orbit] .orbit-hub-item[data-jump]::after { transform: rotate(-135deg); border-color: var(--accent); }  /* → */
+/* 召唤中的分区卡：active 印记（窗开期间 orbit.js 挂 data-open） */
+html[data-theme=orbit] .orbit-hub-item[data-open] { border-color: var(--orbit-line-strong); border-left: 2px solid var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-hub-item,
+  html[data-theme=orbit] .orbit-hub-item::after { transition: none; }   /* M-19 印记/方向符即时切换 */
+}
+html[data-theme=orbit][data-motion=off] .orbit-hub-item,
+html[data-theme=orbit][data-motion=off] .orbit-hub-item::after { transition: none; }
+
+/* --- OB1/OB2 引导页（03b §五；舞台透出 + 底让位 = dock-clear 直引） --- */
+html[data-theme=orbit] #orbit-page-onboarding,
+html[data-theme=orbit] #orbit-page-welcome {
+  position: fixed; inset: 0; z-index: 10; overflow: auto;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 24px var(--orbit-dock-clear);
+}
+html[data-theme=orbit] #onboarding, html[data-theme=orbit] #welcome {
+  position: static; background: transparent; padding: 0; display: contents;
+}
+html[data-theme=orbit] .welcome-card {
+  background: var(--orbit-surface-glass); border: 1px solid var(--line);
+  border-radius: var(--orbit-radius-m);
+  box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;   /* 页影 44 允许面 */
+  padding: var(--den-pad); max-width: 620px;
+}
+/* 步进行（对勾描画动效见 §4 M-18；data-done/aria-current 由 orbit.js 维护） */
+html[data-theme=orbit] .onboarding-steps {
+  gap: var(--sp-3) var(--sp-6); margin: 0 0 var(--sp-5);
+  font: 500 var(--fs-sub)/1.6 var(--font); color: var(--orbit-faint);
+}
+html[data-theme=orbit] .onboarding-steps li { display: inline-flex; align-items: center; gap: var(--sp-1); }
+html[data-theme=orbit] .onboarding-steps li[data-done] { color: var(--ok); }
+html[data-theme=orbit] .onboarding-steps li[aria-current="step"] { color: var(--ink); font-weight: 700; }
+/* 头部与提示档位 */
+html[data-theme=orbit] .w-head { margin: var(--sp-5) 0 var(--sp-6); }
+html[data-theme=orbit] .w-head h1 { font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; margin: 0 0 var(--sp-2); }
+html[data-theme=orbit] .w-head p { font: 500 var(--fs-sub)/1.6 var(--font); }
+html[data-theme=orbit] .welcome-card .hint { font: 500 var(--fs-sub)/1.7 var(--font); color: var(--muted); overflow-wrap: anywhere; }
+/* 警告行（w-warn）：warning 四档 */
+html[data-theme=orbit] .warn-line { border: 1px solid var(--warning); background: var(--warning-bg); color: var(--warning) !important; border-radius: var(--radius); }
+/* 已有人格卡（时刻 A 主位） */
+html[data-theme=orbit] .cur { background: var(--accent-soft); border: 1px solid var(--line); border-radius: var(--orbit-radius-m); }
+/* C′ 文档 chip（可点替身，浮层语言） */
+html[data-theme=orbit] .orbit-doc-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  box-shadow: var(--orbit-shadow-float); font: 600 var(--fs-sub)/1.5 var(--font); color: var(--ink);
+}
+html[data-theme=orbit] .orbit-doc-chip .chip-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 亲历说明（C′ 常驻）：引文重量 */
+html[data-theme=orbit] #orbit-page-welcome .orbit-lived-note {
+  border-left: 2px solid var(--accent); padding: var(--sp-2) var(--sp-3); margin: var(--sp-3) 0;
+  font: 500 var(--fs-sub)/1.7 var(--font); color: var(--muted); overflow-wrap: anywhere;
+}
+/* 拖放悬停态沿用现状 accent 反馈（注意力设计不删；颜色过渡降级见 §4 M-04 同批 reduce 档） */
+html[data-theme=orbit] .drop.over { background: var(--accent-soft); border-color: var(--accent); }
+
+/* ===== §3 中小页面组（03c；壳机制权威口径=orbit.js 运行时追加类，05 轮次 6 裁定 9） ===== */
+/* 召唤窗壳：md 640 / sm 420（M9→--md、S2→--sm 类由 orbit.js 追加） */
+html[data-theme=orbit] .orbit-window { scrollbar-width: thin; scrollbar-color: var(--orbit-line-strong) transparent; }
+html[data-theme=orbit] .orbit-window--md { width: min(640px, calc(100vw - 40px)); }
+html[data-theme=orbit] .orbit-window--sm { width: min(420px, calc(100vw - 32px)); }
+/* 窗头（主行 --orbit-win-head-h；唯一可见标题；M10 工具头同规格无标题文本） */
+html[data-theme=orbit] .orbit-win-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: var(--sp-3);
+  min-height: var(--orbit-win-head-h); padding: 0 var(--den-pad);
+  background: inherit; border-bottom: 1px solid var(--orbit-line-faint);
+}
+html[data-theme=orbit] .orbit-win-title { font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; color: var(--ink);
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-theme=orbit] .orbit-win-sub { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted);
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-theme=orbit] .orbit-win-tools { margin-left: auto; display: flex; gap: var(--sp-2); }
+/* 窗内图标钮（返回/关闭/说明/同步状态等，32×32） */
+html[data-theme=orbit] .orbit-win-btn {
+  display: grid; place-items: center; width: 32px; height: 32px;
+  border: 0; border-radius: 8px; background: transparent;
+  color: var(--orbit-faint); cursor: pointer; padding: 0;
+  transition: color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-win-btn:hover,
+html[data-theme=orbit] .orbit-win-btn:focus-visible { color: var(--ink); background: var(--soft); }
+html[data-theme=orbit] .orbit-win-btn:disabled { opacity: .45; cursor: not-allowed; }
+html[data-theme=orbit] .orbit-win-btn svg { width: 18px; height: 18px; stroke-width: 1.6; }
+/* 窗内分区步点条（M2–M7；当前分区指示条=§4 .orbit-step-indicator 元素——05 轮次 7 裁定 5 替代 03c 1.6 ::after 规格） */
+html[data-theme=orbit] .orbit-step-dots {
+  position: relative; display: flex; gap: 4px; align-items: center;
+  padding: 0 var(--den-pad); border-bottom: 1px solid var(--orbit-line-faint);
+}
+html[data-theme=orbit] .orbit-step {
+  position: relative; display: grid; place-items: center;
+  width: 36px; height: 36px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--orbit-faint); opacity: .8; cursor: pointer; padding: 0;
+  transition: color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease),
+              opacity var(--orbit-dur) var(--orbit-ease), box-shadow var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-step svg { width: 18px; height: 18px; stroke-width: 1.6; }
+html[data-theme=orbit] .orbit-step:hover,
+html[data-theme=orbit] .orbit-step:focus-visible { color: var(--ink); background: var(--soft); opacity: 1; }
+html[data-theme=orbit] .orbit-step[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-step { transition: none; }   /* M-10 ④：步点色变直接切换 */
+}
+html[data-theme=orbit][data-motion=off] .orbit-step { transition: none; }
+/* 窗内控件皮（input/select/textarea 共用） */
+html[data-theme=orbit] .orbit-window input:not([type=checkbox]):not([type=radio]),
+html[data-theme=orbit] .orbit-window select, html[data-theme=orbit] .orbit-window textarea {
+  height: var(--den-ctl); padding: 0 var(--sp-3);
+  background: var(--orbit-surface-page); border: 1px solid var(--line);
+  border-radius: var(--radius); color: var(--ink); font: 500 var(--fs-body)/1.7 var(--font);
+}
+html[data-theme=orbit] .orbit-window input:disabled,
+html[data-theme=orbit] .orbit-window select:disabled { opacity: .45; cursor: not-allowed; }
+/* 窗内按钮三型（静态皮；过渡声明统一在 §4 M-04 一处，R4 P2-6） */
+html[data-theme=orbit] .orbit-window .btn { height: var(--den-ctl); border-radius: var(--radius);
+  font: 600 var(--fs-body)/1 var(--font); padding: 0 var(--sp-4); cursor: pointer; }
+html[data-theme=orbit] .orbit-window .btn.primary { background: var(--accent); color: var(--on-accent); border: 1px solid transparent; }
+html[data-theme=orbit] .orbit-window .btn.ghost   { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+html[data-theme=orbit] .orbit-window .btn.danger  { background: transparent; color: var(--danger); border: 1px solid var(--line); }
+html[data-theme=orbit] .orbit-window .btn.primary:hover { background: var(--accent-hover); }
+html[data-theme=orbit] .orbit-window .btn.ghost:hover   { background: var(--soft); }
+html[data-theme=orbit] .orbit-window .btn.danger:hover  { background: var(--danger-bg); border-color: var(--orbit-line-strong); }
+html[data-theme=orbit] .orbit-window .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* M11 全屏终态变体（03c 片段 var(--orbit-stage) 未定义，同 03b 注记落 var(--bg)；z 60 盖 dock） */
+html[data-theme=orbit] .shutdown-screen { background: var(--bg); z-index: 60; }
+html[data-theme=orbit] .shutdown-card {
+  width: min(560px, calc(100vw - 40px)); padding: var(--sp-8);
+  background: var(--orbit-surface-window); border: 1px solid var(--orbit-line-strong);
+  border-radius: var(--orbit-radius-m); box-shadow: var(--orbit-shadow-window); color: var(--ink);
+}
+html[data-theme=orbit] #restart-command { font: 500 13px/1.6 var(--mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; }
+
+/* 分步器（03c §二：M5 装饰式 / M6·M7·OB 交互式；错误不标红步点） */
+html[data-theme=orbit] .orbit-steps { display: flex; align-items: center; gap: var(--sp-3); }
+html[data-theme=orbit] .orbit-step-item { display: flex; align-items: center; gap: var(--sp-3); position: relative; }
+html[data-theme=orbit] .orbit-step-item + .orbit-step-item::before {
+  content: ''; width: var(--sp-3); height: 1px; background: var(--orbit-line-faint);
+}
+html[data-theme=orbit] .orbit-step-item[data-done] + .orbit-step-item::before { background: var(--orbit-line-strong); }
+html[data-theme=orbit] .orbit-step-dot {
+  width: var(--orbit-step-dot); height: var(--orbit-step-dot); border-radius: 50%;
+  border: 1px solid var(--orbit-line-strong); background: transparent;
+}
+html[data-theme=orbit] .orbit-step-item[data-done] .orbit-step-dot { background: var(--muted); border-color: var(--muted); }
+html[data-theme=orbit] .orbit-step-item[aria-current="step"] .orbit-step-dot,
+html[data-theme=orbit] .orbit-step-item[aria-pressed="true"] .orbit-step-dot {
+  background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* 交互式步点命中区（文字 clip 隐藏后的按钮本体，40×40） */
+html[data-theme=orbit] .orbit-step-item > button {
+  display: grid; place-items: center; width: 40px; height: 40px;
+  border: 0; background: transparent; border-radius: var(--radius); cursor: pointer; padding: 0;
+}
+html[data-theme=orbit] .orbit-step-item > button:hover .orbit-step-dot { border-color: var(--ink); }
+/* 口径 4 折叠统一部件（chevron 以双边框线绘——R3 P2-11 硬性施工注：禁实心方块上线） */
+html[data-theme=orbit] .orbit-fold {
+  border: 1px solid var(--orbit-line-faint); border-radius: var(--radius);
+  background: var(--orbit-surface-page);
+}
+html[data-theme=orbit] .orbit-fold[data-tone="boundary"] { border-left: 2px solid var(--warning); }
+html[data-theme=orbit] .orbit-fold > summary {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: var(--den-ctl); padding: 0 var(--sp-3); border-radius: var(--radius);
+  font: 600 var(--fs-body)/1 var(--font); color: var(--ink); cursor: pointer; list-style: none;
+}
+html[data-theme=orbit] .orbit-fold > summary::-webkit-details-marker { display: none; }
+html[data-theme=orbit] .orbit-fold > summary::before {
+  content: ''; width: 8px; height: 8px; flex: 0 0 8px;
+  border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg);                       /* 收合：向右 */
+  transition: transform var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-fold[open] > summary::before { transform: rotate(45deg); }   /* 展开：向下（90° 扫描） */
+html[data-theme=orbit] .orbit-fold[data-tone="boundary"] > summary::after {
+  content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--warning);
+}
+html[data-theme=orbit] .orbit-fold > summary:hover { background: var(--soft); }
+html[data-theme=orbit] .orbit-fold .orbit-fold-body {
+  padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--orbit-line-faint);
+  line-height: var(--den-lead); color: var(--muted); max-height: 50dvh; overflow-y: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-fold > summary::before { transition: none; }   /* M-17：不转静态到位 */
+}
+html[data-theme=orbit][data-motion=off] .orbit-fold > summary::before { transition: none; }
+
+/* M8 记忆观察器（03c §三；壳控件复用 §一） */
+html[data-theme=orbit] #orbit-window-observer .obs-tools {
+  display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--den-pad) 0;
+}
+html[data-theme=orbit] #orbit-window-observer .obs-status {
+  margin: 0; padding: 0 var(--den-pad);
+  background: transparent; border-radius: 0;   /* R3 P2-4：重置 style.css 原值，色块仅 error/busy 态 */
+  font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted);
+}
+html[data-theme=orbit] #orbit-window-observer .obs-status[data-state="error"] {
+  color: var(--danger); background: var(--danger-bg);
+  border-radius: var(--radius); padding: var(--sp-2) var(--sp-3);
+}
+html[data-theme=orbit] #orbit-window-observer .obs-status[data-busy]::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; margin-right: var(--sp-2);
+  border-radius: 50%; background: var(--warning); vertical-align: 1px;
+}
+html[data-theme=orbit] #orbit-window-observer .obs-hint { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); }
+html[data-theme=orbit] #orbit-window-observer .obs-scroll section > h3 {
+  font: 600 var(--fs-section)/1.5 var(--font); color: var(--ink);
+  margin: var(--den-gap) 0 var(--sp-2);
+}
+html[data-theme=orbit] #orbit-window-observer .obs-text {
+  font: 500 13px/1.6 var(--mono); white-space: pre-wrap;
+  overflow-wrap: anywhere; color: var(--ink);
+}
+/* 次级窗头：#obs-detail 内 .obs-head（两级层级不产生新窗） */
+html[data-theme=orbit] #obs-detail .obs-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center;
+  min-height: 40px; background: inherit; border-bottom: 1px solid var(--orbit-line-faint);
+}
+html[data-theme=orbit] #obs-detail .obs-head strong { font: 600 var(--fs-section)/1.5 var(--font); color: var(--ink); }
+html[data-theme=orbit] #obs-detail dl { margin: var(--sp-3) 0; display: grid; grid-template-columns: 96px 1fr; gap: var(--sp-2) var(--sp-3); }
+html[data-theme=orbit] #obs-detail dt { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); }
+html[data-theme=orbit] #obs-detail dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+
+/* M10 DSH 协作（03c §四；窗壳零过渡与拖动态见 §4 M-13；窗高底距 88 = dock-clear − 8，R3 P2-3） */
+html[data-theme=orbit] #orbit-win-workers { height: min(720px, calc(100dvh - 48px - var(--orbit-dock-clear) + 8px)); }
+html[data-theme=orbit] #orbit-win-workers .worker-workspace {
+  display: grid; grid-template-columns: 264px 1fr; height: 100%; min-height: 480px;
+}
+html[data-theme=orbit] #orbit-win-workers .worker-sidebar {
+  border-right: 1px solid var(--orbit-line-faint); padding: var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
+}
+/* 会话筛选分段控件（aria-pressed 互斥；色变降级见 §4 M-19） */
+html[data-theme=orbit] #orbit-win-workers .worker-list-filter {
+  display: inline-flex; gap: 2px; padding: 2px; align-self: flex-start;
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+html[data-theme=orbit] #orbit-win-workers .worker-list-filter button {
+  height: 32px; padding: 0 var(--sp-3); border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted); font: 600 var(--fs-sub)/1 var(--font); cursor: pointer;
+  transition: color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] #orbit-win-workers .worker-list-filter button[aria-pressed="true"] {
+  background: var(--accent-soft); color: var(--accent);
+}
+/* 工具头＝拖动区（无标题文本，硬约束） */
+html[data-theme=orbit] #orbit-win-workers .worker-head {
+  display: flex; align-items: center; min-height: var(--orbit-win-head-h);
+  padding: 0 var(--sp-3); border-bottom: 1px solid var(--orbit-line-faint);
+  cursor: grab; user-select: none;
+}
+html[data-theme=orbit] #orbit-win-workers .worker-head[data-dragging] { cursor: grabbing; }
+html[data-theme=orbit] #orbit-win-workers .worker-head-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
+/* 任务状态 chip（色/底成对令牌） */
+html[data-theme=orbit] #orbit-win-workers .worker-task-state {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font: 700 11px/1.5 var(--mono);
+}
+html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="ready"]   { background: var(--ok-bg);      color: var(--ok); }
+html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="busy"],
+html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="waiting"] { background: var(--warning-bg); color: var(--warning); }
+html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="error"]   { background: var(--danger-bg);  color: var(--danger); }
+html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="unknown"] { background: var(--neutral-bg); color: var(--neutral); }
+/* 「更多」popover：下开上展、浮层语言、320px 内滚（浮层纪律例外登记 8.3-iii） */
+html[data-theme=orbit] #orbit-win-workers .worker-task-menu { position: relative; }
+html[data-theme=orbit] #orbit-win-workers .worker-task-menu-popover {
+  position: absolute; bottom: calc(100% + var(--orbit-float-offset)); right: 0; z-index: 5;
+  width: min(320px, calc(100vw - 48px)); max-height: 320px; overflow-y: auto;
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-radius: var(--orbit-radius-l); box-shadow: var(--orbit-shadow-float);
+  padding: var(--sp-3); display: grid; gap: var(--sp-3);
+  overflow-wrap: anywhere; min-width: 0;
+}
+html[data-theme=orbit] #orbit-win-workers .worker-task-menu-popover .worker-actions + .worker-actions {
+  border-top: 1px solid var(--orbit-line-faint); padding-top: var(--sp-3);
+}
+html[data-theme=orbit] #orbit-win-workers .worker-management-confirm {
+  background: var(--orbit-surface-page); border: 1px solid var(--orbit-line-faint);
+  border-radius: 8px; padding: var(--sp-3);
+}
+/* 固定预览条（右贴边左圆角，竖排提示） */
+html[data-theme=orbit] #workers-dock-preview {
+  position: fixed; right: 0; top: 50%; translate: 0 -50%; z-index: 50;
+  width: 44px; height: 160px; padding: var(--sp-2);
+  display: grid; place-items: center; border-radius: 14px 0 0 14px;
+  background: var(--accent-soft); border: 1px solid var(--orbit-line-strong); border-right: 0;
+}
+html[data-theme=orbit] #workers-dock-preview span {
+  writing-mode: vertical-rl; font: 500 var(--fs-tip)/1.5 var(--font); color: var(--accent);
+}
+/* 头像钮（152px 图收起形态） */
+html[data-theme=orbit] #orbit-win-workers .worker-window-avatar {
+  width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--orbit-line-strong);
+  overflow: hidden; padding: 0; cursor: pointer; background: transparent;
+}
+html[data-theme=orbit] #orbit-win-workers .worker-window-avatar img { width: 100%; height: 100%; object-fit: cover; }
+html[data-theme=orbit] #orbit-win-workers .worker-window-avatar:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* S1 全局确认框（红线：只换肤不重构；backdrop 档归 §4 --orbit-backdrop-2） */
+html[data-theme=orbit] [data-orbit-surface="confirm"] {
+  width: min(320px, calc(100vw - 32px));
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-radius: var(--orbit-radius-l); box-shadow: var(--orbit-shadow-float);
+  color: var(--ink); padding: var(--den-pad);
+}
+html[data-theme=orbit] #action-confirm-message {
+  font: 500 var(--fs-body)/1.55 var(--font); color: var(--ink);
+  max-height: 40dvh; overflow-y: auto; overflow-wrap: anywhere;   /* 完整性红线：不截断，滚动兜底 */
+}
+html[data-theme=orbit] [data-orbit-surface="confirm"] h2 {
+  margin: 0 0 var(--sp-3); font: 600 var(--fs-section)/1.5 var(--font); color: var(--ink);
+}
+html[data-theme=orbit] [data-orbit-surface="confirm"] .action-confirm-buttons {
+  display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-3);
+}
+/* S1 按钮皮：不在 .orbit-window 内，三型皮不生效；tight 档 ctl 32px（R3 P1-4 补皮案） */
+html[data-theme=orbit] [data-orbit-surface="confirm"] .btn {
+  height: var(--den-ctl); border-radius: var(--radius);
+  font: 600 var(--fs-sub)/1 var(--font); padding: 0 var(--sp-3); cursor: pointer;
+}
+html[data-theme=orbit] [data-orbit-surface="confirm"] .btn.primary { background: var(--accent); color: var(--on-accent); border: 1px solid transparent; }
+html[data-theme=orbit] [data-orbit-surface="confirm"] .btn.primary:hover { background: var(--accent-hover); }
+html[data-theme=orbit] [data-orbit-surface="confirm"] .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+html[data-theme=orbit] [data-orbit-surface="confirm"] .btn.ghost:hover { background: var(--soft); }
+/* S5 权限质询卡（权威位 R3 P1-3：right 24 / bottom dock-clear / 宽 360；boundary 音调左缘 warning） */
+html[data-theme=orbit] [data-orbit-surface="gate"] {
+  position: fixed; right: 24px; bottom: var(--orbit-dock-clear); z-index: 300;
+  width: min(360px, calc(100vw - 48px));
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-left: 2px solid var(--warning); border-radius: var(--orbit-radius-l);
+  box-shadow: var(--orbit-shadow-float); color: var(--ink); padding: var(--den-pad);
+}
+html[data-theme=orbit] [data-orbit-surface="gate"] [id^="claude-gate-load-error"],
+html[data-theme=orbit] [data-orbit-surface="gate"] .orbit-error-slot {
+  background: var(--danger-bg); color: var(--danger); border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-3); font: 500 var(--fs-sub)/1.55 var(--font);
+}
+/* S7 协作者状态卡（pointer-events:none 纯呈现；12s 收回计时归 orbit.js——06 核对项） */
+html[data-theme=orbit] [data-orbit-surface="avatar-card"] {
+  width: 240px; padding: var(--den-pad);
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-radius: var(--orbit-radius-l); box-shadow: var(--orbit-shadow-float);
+  color: var(--ink); pointer-events: none;
+  transition: opacity var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] [data-orbit-surface="avatar-card"][data-retreating] { opacity: .35; }   /* 拖动让位态 */
+html[data-theme=orbit] [data-orbit-surface="avatar-card"][data-hiding] { opacity: 0; }         /* 12s 渐隐收出口 */
+/* S8 toast（bottom = dock-clear − 12；音调=左缘竖条+色，双图形不单靠颜色） */
+html[data-theme=orbit] #toast {
+  position: fixed; left: 50%; translate: -50% 0;
+  bottom: calc(var(--orbit-dock-clear) - 12px); z-index: 70;
+  width: min(320px, calc(100vw - 48px)); padding: 10px 14px;
+  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
+  border-radius: 8px; box-shadow: var(--orbit-shadow-float);
+  color: var(--ink); font: 500 var(--fs-tip)/1.55 var(--font);
+  overflow-wrap: anywhere; min-width: 0;
+}
+html[data-theme=orbit] #toast::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px;
+  background: var(--neutral);
+}
+html[data-theme=orbit] #toast[data-tone="ok"]::before      { background: var(--ok); }
+html[data-theme=orbit] #toast[data-tone="warning"]::before { background: var(--warning); }
+html[data-theme=orbit] #toast[data-tone="danger"]::before  { background: var(--danger); }
+html[data-theme=orbit] #toast[data-clamp] {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+html[data-theme=orbit] #toast[data-clamp][data-scroll] { display: block; max-height: 4.8em; overflow-y: auto; }
+/* S9 启动状态条（R3 P1-8：inset 重置 + inline-flex，防 inset:0 残留全屏竖带） */
+html[data-theme=orbit] #boot-status {
+  position: fixed; inset: 16px auto auto; left: 50%; translate: -50% 0; z-index: 20;
+  display: inline-flex; align-items: center;
+  max-width: min(480px, calc(100vw - 48px)); padding: 8px 16px; border-radius: 999px;
+  background: var(--orbit-surface-window); border: 1px solid var(--orbit-line-strong);
+  box-shadow: var(--orbit-shadow-float); color: var(--muted);
+  font: 500 var(--fs-sub)/1.6 var(--font);
+}
+html[data-theme=orbit] #boot-status::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; margin-right: var(--sp-2);
+  border-radius: 50%; background: var(--warning); vertical-align: 1px;
+}
+/* S3/S4/S6 注入小窗：壳走 orbit-window--sm 基类（规格落法），此处只补证据型断词（03c §5.3） */
+html[data-theme=orbit] [data-orbit-surface="chat-search"],
+html[data-theme=orbit] [data-orbit-surface="sources"],
+html[data-theme=orbit] [data-orbit-surface="context"] { overflow-wrap: anywhere; }
+
+/* ===== §4 动效（04a/04b；reduce 与 data-motion=off 同元素形双分支随段——R4 P1-2 修法） ===== */
+/* 动效令牌（05 轮次 7 裁定 2 采纳 04a 提案，并入令牌块） */
+html[data-theme=orbit] {
+  --orbit-dur-page: 240ms;         /* 页容器级转场时长 */
+  --orbit-backdrop-2: #05080f66;   /* 窗上第二层（S1）浅压暗档 */
+}
+/* 通用关键帧（04a orbit-fade-in/out、orbit-check-draw 与 04b orbit-fade/orbit-draw 同体各并一枚） */
+@keyframes orbit-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes orbit-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes orbit-page-in  { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
+@keyframes orbit-win-in   { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes orbit-win-out  { from { opacity: 1; } to { opacity: 0; } }
+@keyframes orbit-spin     { to { transform: rotate(1turn); } }
+@keyframes orbit-check-draw { to { stroke-dashoffset: 0; } }
+@keyframes orbit-badge-pop {
+  0% { transform: scale(1); } 35% { transform: scale(1.16); } 100% { transform: scale(1); }
+}
+@keyframes orbit-badge-glow {   /* 两波总长 2.4s，播一次即止（一次性协议） */
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  18% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--pulse) 20%, transparent); }
+  42% { box-shadow: 0 0 0 1px transparent; }
+  60% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--pulse) 15%, transparent); }
+}
+@keyframes orbit-toast-danger {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  30% { box-shadow: 0 0 10px 1px #ffa3a34d; }
+  62% { box-shadow: 0 0 6px 0 #ffa3a333; }
+}
+@keyframes orbit-gate-in { from { opacity: 0; transform: scale(.97); } }
+@keyframes orbit-landmark { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes orbit-dot-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 6px 1px #e4c08040; }
+}
+/* 页转场（04a §一）：入场 scale(.97)+淡入 240ms；旧页即隐无退场帧（05 轮次 7 裁定 1） */
+html[data-theme=orbit] .orbit-page.is-entering,
+html[data-theme=orbit] #orbit-main.is-entering,
+html[data-theme=orbit] #orbit-page-onboarding.is-entering,
+html[data-theme=orbit] #orbit-page-welcome.is-entering {
+  animation: orbit-page-in var(--orbit-dur-page) var(--orbit-ease) both;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;   /* 仅入场期；animationend 移除类即清（04a §六.3） */
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-page.is-entering,
+  html[data-theme=orbit] #orbit-main.is-entering,
+  html[data-theme=orbit] #orbit-page-onboarding.is-entering,
+  html[data-theme=orbit] #orbit-page-welcome.is-entering {
+    animation-name: orbit-fade-in;
+    animation-duration: var(--orbit-dur-quick);
+    will-change: opacity;
+  }
+}
+html[data-theme=orbit][data-motion=off] .orbit-page.is-entering,
+html[data-theme=orbit][data-motion=off] #orbit-main.is-entering,
+html[data-theme=orbit][data-motion=off] #orbit-page-onboarding.is-entering,
+html[data-theme=orbit][data-motion=off] #orbit-page-welcome.is-entering {
+  animation-name: orbit-fade-in;
+  animation-duration: var(--orbit-dur-quick);
+  will-change: opacity;
+}
+/* 召唤窗入场/退场 B 案（05 轮次 5 裁定 5：[data-closing] ≤120ms 淡出后真关；退场期 pointer-events:none） */
+html[data-theme=orbit] .orbit-window[data-opening] {
+  animation: orbit-win-in var(--orbit-dur) var(--orbit-ease) both;
+  transform-origin: var(--orbit-win-ox, 50%) var(--orbit-win-oy, 50%);   /* origin 由 orbit.js 写入（04a §3.1） */
+  will-change: transform, opacity;
+}
+html[data-theme=orbit] .orbit-window[data-opening]::backdrop { animation: orbit-fade-in var(--orbit-dur) var(--orbit-ease) both; }
+html[data-theme=orbit] .orbit-window[data-closing] {
+  animation: orbit-win-out 120ms var(--orbit-ease) both;
+  pointer-events: none; will-change: opacity;
+}
+html[data-theme=orbit] .orbit-window[data-closing]::backdrop { animation: orbit-fade-out 120ms var(--orbit-ease) both; }
+html[data-theme=orbit] #orbit-win-workers[data-opening] { animation-name: orbit-fade-in; transform: none; }   /* M10 仅 opacity（甲-10） */
+/* S1 第二层浅 backdrop（04a §3.3；05 轮次 7 裁定 2 采纳 --orbit-backdrop-2，取代 03c §5.9 transparent 档） */
+html[data-theme=orbit] #action-confirm::backdrop { background: var(--orbit-backdrop-2); }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-window[data-opening],
+  html[data-theme=orbit] #orbit-win-workers[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
+  html[data-theme=orbit] .orbit-window[data-opening]::backdrop { animation-duration: var(--orbit-dur-quick); }
+  html[data-theme=orbit] .orbit-window[data-closing] { animation: none; opacity: 0; }   /* reduce 不播退场，JS 直接 close() */
+  html[data-theme=orbit] .orbit-window[data-closing]::backdrop { animation: none; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-window[data-opening],
+html[data-theme=orbit][data-motion=off] #orbit-win-workers[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
+html[data-theme=orbit][data-motion=off] .orbit-window[data-opening]::backdrop { animation-duration: var(--orbit-dur-quick); }
+html[data-theme=orbit][data-motion=off] .orbit-window[data-closing] { animation: none; opacity: 0; }
+html[data-theme=orbit][data-motion=off] .orbit-window[data-closing]::backdrop { animation: none; }
+/* 步体切换与步名换字（04a §4.1/§4.4：旧出 120ms → 新进 180ms；容器级，不触碰步内 hidden 语义） */
+html[data-theme=orbit] [data-step-out] { animation: orbit-fade-out 120ms var(--orbit-ease) both; pointer-events: none; }
+html[data-theme=orbit] [data-step-in]  { animation: orbit-fade-in var(--orbit-dur) var(--orbit-ease) both; }
+html[data-theme=orbit] .orbit-win-sub[data-swap] { animation: orbit-fade-in var(--orbit-dur) var(--orbit-ease) both; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] [data-step-out] { animation: none; display: none; }   /* 无出场上半段 */
+  html[data-theme=orbit] [data-step-in],
+  html[data-theme=orbit] .orbit-win-sub[data-swap] { animation-duration: var(--orbit-dur-quick); }
+}
+html[data-theme=orbit][data-motion=off] [data-step-out] { animation: none; display: none; }
+html[data-theme=orbit][data-motion=off] [data-step-in],
+html[data-theme=orbit][data-motion=off] .orbit-win-sub[data-swap] { animation-duration: var(--orbit-dur-quick); }
+/* 步点指示条（04b M-09 元素化方案，05 轮次 7 裁定 5；无常驻 will-change，R4 P2-1） */
+html[data-theme=orbit] .orbit-step-indicator {
+  position: absolute; bottom: -1px; left: 0; height: 2px; border-radius: 1px;
+  background: var(--accent);
+  transition: transform var(--orbit-dur) var(--orbit-ease), width var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-step-dots:not([data-ready]) .orbit-step-indicator { transition: none; }   /* 载入不动画 */
+@media (prefers-reduced-motion: reduce) { html[data-theme=orbit] .orbit-step-indicator { transition: none; } }   /* 跳变无位移 */
+html[data-theme=orbit][data-motion=off] .orbit-step-indicator { transition: none; }
+/* OB 步进对勾（04a §4.3：240ms 一次性描画，delay 120ms 对齐新步体入场帧，R4 P1-1/P2-2） */
+html[data-theme=orbit] .onboarding-steps li[data-done] .orbit-check path {
+  stroke-dasharray: var(--ck-len, 24); stroke-dashoffset: var(--ck-len, 24);
+  animation: orbit-check-draw 240ms var(--orbit-ease) 120ms backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .onboarding-steps li[data-done] .orbit-check path { animation: none; stroke-dashoffset: 0; }
+}
+html[data-theme=orbit][data-motion=off] .onboarding-steps li[data-done] .orbit-check path { animation: none; stroke-dashoffset: 0; }
+/* M-01 图标三态 reduce/off 降级：过渡全移除即时切换（色变是状态回执；.70/.8 档位静态保留） */
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-icon,
+  html[data-theme=orbit] .orbit-icon-entry,
+  html[data-theme=orbit] .orbit-source-icon { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-icon,
+html[data-theme=orbit][data-motion=off] .orbit-icon-entry,
+html[data-theme=orbit][data-motion=off] .orbit-source-icon { transition: none; }
+@media (hover: none) {
+  html[data-theme=orbit] .orbit-icon-entry,
+  html[data-theme=orbit] .orbit-source-icon { transition: none; }   /* 触屏去粘滞（.orbit-icon 已在 §1） */
+}
+/* M-02 tip：data-motion=off 与 §1 reduce 同速（04b M-02 补） */
+html[data-theme=orbit][data-motion=off] .orbit-tip { transition: opacity var(--orbit-dur-quick) linear; }
+/* M-03 徽标一次性注意力协议（出现/数值增各播一次，播完永久静止；页内同源提示在场=quiet 只 pop 不微光） */
+html[data-theme=orbit] .orbit-badge { transform-origin: 70% 30%; }
+html[data-theme=orbit] .orbit-badge[data-tone=warn] { --pulse: var(--warning); }
+html[data-theme=orbit] .orbit-badge[data-tone=info] { --pulse: var(--accent); }
+html[data-theme=orbit] .orbit-badge[data-attention] {
+  animation: orbit-badge-pop 220ms var(--orbit-ease) 1,
+             orbit-badge-glow 2400ms ease-out 1;
+}
+html[data-theme=orbit] .orbit-badge[data-attention="quiet"] { animation: orbit-badge-pop 220ms var(--orbit-ease) 1; }
+html[data-theme=orbit] .orbit-badge[data-fading] { opacity: 0; transition: opacity 150ms linear; }
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  html[data-theme=orbit] .orbit-badge[data-attention] { animation: none; }   /* 停帧只留状态色+数字 */
+  html[data-theme=orbit] .orbit-badge[data-fading] { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-badge[data-attention] { animation: none; }
+html[data-theme=orbit][data-motion=off] .orbit-badge[data-fading] { transition: none; }
+/* M-04 通用反馈框架（.orbit-window .btn 的 transition 全稿仅此处声明一次，R4 P2-6） */
+html[data-theme=orbit] .orbit-window .btn,
+html[data-theme=orbit] .orbit-win-btn,
+html[data-theme=orbit] [data-orbit-surface="gate"] .btn {
+  transition: transform 160ms var(--orbit-ease),
+              background-color var(--orbit-dur) var(--orbit-ease),
+              border-color var(--orbit-dur) var(--orbit-ease),
+              color var(--orbit-dur) var(--orbit-ease),
+              opacity var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-window .btn:active:not(:disabled),
+html[data-theme=orbit] [data-orbit-surface="gate"] .btn:active:not(:disabled) { transform: scale(.97); }
+html[data-theme=orbit] .btn[data-dirty] { border-color: var(--accent); }   /* 前置暗示（orbit.js 挂/摘） */
+html[data-theme=orbit] [data-busy]::after {
+  content: ''; width: 12px; height: 12px; margin-left: var(--sp-2);
+  border: 1.6px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  animation: orbit-spin 800ms linear infinite;
+}
+/* 结果回执：色块淡入 + 对勾一次性描画（.orbit-result/.orbit-mark 为 orbit.js 标记类） */
+html[data-theme=orbit] .orbit-result[data-kind="ok"] .orbit-mark path,
+html[data-theme=orbit] .orbit-result[data-kind="error"] .orbit-mark path {
+  stroke-dasharray: 24; stroke-dashoffset: 24;
+  animation: orbit-check-draw 240ms var(--orbit-ease) 1 forwards;
+}
+html[data-theme=orbit] .orbit-result { animation: orbit-fade-in var(--orbit-dur) var(--orbit-ease) 1; }
+/* S5 到达（origin 靠右下触发语境） */
+html[data-theme=orbit] [data-orbit-surface="gate"][data-arrive] {
+  animation: orbit-gate-in var(--orbit-dur) var(--orbit-ease) 1;
+  transform-origin: 80% 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-window .btn,
+  html[data-theme=orbit] .orbit-win-btn,
+  html[data-theme=orbit] [data-orbit-surface="gate"] .btn { transition-duration: var(--orbit-dur-quick); }
+  html[data-theme=orbit] .orbit-window .btn:active:not(:disabled),
+  html[data-theme=orbit] [data-orbit-surface="gate"] .btn:active:not(:disabled) { transform: none; }   /* 按压停帧留色变 */
+  html[data-theme=orbit] [data-busy]::after { animation: none; }                                       /* JS 改写「…」 */
+  html[data-theme=orbit] .orbit-result .orbit-mark path { animation: none; stroke-dashoffset: 0; }
+  html[data-theme=orbit] .orbit-result { animation-duration: var(--orbit-dur-quick); }
+  html[data-theme=orbit] [data-orbit-surface="gate"][data-arrive] { animation: orbit-fade-in var(--orbit-dur-quick) linear 1; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-window .btn,
+html[data-theme=orbit][data-motion=off] .orbit-win-btn,
+html[data-theme=orbit][data-motion=off] [data-orbit-surface="gate"] .btn { transition-duration: var(--orbit-dur-quick); }
+html[data-theme=orbit][data-motion=off] .orbit-window .btn:active:not(:disabled),
+html[data-theme=orbit][data-motion=off] [data-orbit-surface="gate"] .btn:active:not(:disabled) { transform: none; }
+html[data-theme=orbit][data-motion=off] [data-busy]::after { animation: none; }
+html[data-theme=orbit][data-motion=off] .orbit-result .orbit-mark path { animation: none; stroke-dashoffset: 0; }
+html[data-theme=orbit][data-motion=off] .orbit-result { animation-duration: var(--orbit-dur-quick); }
+html[data-theme=orbit][data-motion=off] [data-orbit-surface="gate"][data-arrive] { animation: orbit-fade-in var(--orbit-dur-quick) linear 1; }
+/* M-06/M-19 勾选随状态色（03a 4.3 随状态档；eval-auto 同皮） */
+html[data-theme=orbit] .orbit-window label:has(input:checked) { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-window label:has(input:checked) { transition: none; }
+}
+/* M-07 发现开关（钩子 R3 P2-7；前置圆点一次性 pop，orbit.js animationend 摘标记） */
+html[data-theme=orbit] #discovery-toggle-enabled { transition: color var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] .discovery-overview[data-enabled] #discovery-toggle-enabled::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px;
+  border-radius: 50%; background: currentColor;
+}
+html[data-theme=orbit] .discovery-overview[data-just-toggled] #discovery-toggle-enabled::before {
+  animation: orbit-badge-pop 200ms var(--orbit-ease) 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #discovery-toggle-enabled { transition: none; }
+  html[data-theme=orbit] .discovery-overview[data-just-toggled] #discovery-toggle-enabled::before { animation: none; }
+}
+html[data-theme=orbit][data-motion=off] #discovery-toggle-enabled { transition: none; }
+html[data-theme=orbit][data-motion=off] .discovery-overview[data-just-toggled] #discovery-toggle-enabled::before { animation: none; }
+/* M-08 toast 生命周期（进入/退出 180ms；danger 竖条 2.4s 一次性播完静止；data-show 过桥归 orbit.js，06 核对项） */
+html[data-theme=orbit] #toast { transition: opacity var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] #toast[data-show] { opacity: 1; }
+html[data-theme=orbit] #toast:not([data-show]) { opacity: 0; }
+html[data-theme=orbit] #toast[data-tone="danger"]::before {
+  animation: orbit-toast-danger 2400ms ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #toast { transition-duration: var(--orbit-dur-quick); }
+  html[data-theme=orbit] #toast[data-tone="danger"]::before { animation: none; }   /* 只留红条 */
+}
+html[data-theme=orbit][data-motion=off] #toast { transition-duration: var(--orbit-dur-quick); }
+html[data-theme=orbit][data-motion=off] #toast[data-tone="danger"]::before { animation: none; }
+/* M-12 clip 落点一次性亮线（备选方案未采纳时启用；orbit.js 开窗挂 data-landmark） */
+html[data-theme=orbit] .orbit-win-head[data-landmark]::after {
+  content: ''; position: absolute; left: var(--den-pad); right: var(--den-pad);
+  bottom: -1px; height: 2px; border-radius: 1px; background: var(--accent);
+  animation: orbit-landmark 1200ms ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-win-head[data-landmark]::after { animation: none; opacity: 0; }
+}
+html[data-theme=orbit][data-motion=off] .orbit-win-head[data-landmark]::after { animation: none; opacity: 0; }
+/* M-13 M10 拖动与预览（窗壳零过渡：left/top 1:1 跟手；甲-10 全程无 transform） */
+html[data-theme=orbit] #workers-dock-preview { transition: opacity var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] #orbit-win-workers { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #workers-dock-preview { transition-duration: var(--orbit-dur-quick); }
+}
+html[data-theme=orbit][data-motion=off] #workers-dock-preview { transition-duration: var(--orbit-dur-quick); }
+/* M-15 S9 启动条：连接进行=循环微光（进行中的光是活着不是催促，R4 P2-3 节奏例外备案）；完成=125ms 淡出 */
+html[data-theme=orbit] #boot-status::before { animation: orbit-dot-breathe 2400ms ease-in-out infinite; }
+html[data-theme=orbit] #boot-status[data-done] { opacity: 0; transition: opacity 125ms linear; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #boot-status::before { animation: none; }
+  html[data-theme=orbit] #boot-status[data-done] { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] #boot-status::before { animation: none; }
+html[data-theme=orbit][data-motion=off] #boot-status[data-done] { transition: none; }
+/* M-16 S7 卡：reduce/off 出现·收回·让位全部瞬时（03c §7.4） */
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] [data-orbit-surface="avatar-card"] { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] [data-orbit-surface="avatar-card"] { transition: none; }
+/* M-19 M10 分段控件色变 reduce/off 即时 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #orbit-win-workers .worker-list-filter button { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] #orbit-win-workers .worker-list-filter button { transition: none; }
+
+/* ===== §5 集成补遗（主代理） ===== */
+/* composer-foot 聚焦浮现（02a P1 预算要求常驻 0 字；仅控可见性，不碰 composer 内部样式——
+   03a §六负面清单保护的是其样式与机制本体，主题级显隐与 minimal 同法） */
+html[data-theme=orbit] .composer-foot { opacity: 0; visibility: hidden; transition: opacity 160ms ease; }
+html[data-theme=orbit] .composer:focus-within + .composer-foot { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .composer-foot { transition: none; }
+}
+
+/* composer 包裹层（#chat > footer）：侧距对齐 #msgs 的 880px 消息列（同款公式），
+   使输入框与消息流同列对齐；composer 本体样式不动（03a 负面清单） */
+html[data-theme=orbit] #chat > footer.orbit-composer-wrap {
+  padding: 14px max(28px, calc((100% - 880px) / 2)) max(15px, env(safe-area-inset-bottom));
+}
+
+/* S7 协作者卡（DSH/Claude）：worker-tasks.js 状态轮询会持续写回内联 inset（room 遗留
+   top 定位把卡压到右上遮消息区），JS 首装重置不可持久——CSS !important 作最终裁决：
+   固定会话区右下、两张纵向错开。代价：orbit 下不可拖拽（登记 06 降级项）。 */
+html[data-theme=orbit] #collaborator-dock .collaborator-avatar {
+  top: auto !important; left: auto !important; right: 16px !important; bottom: 16px !important;
+}
+html[data-theme=orbit] #claude-collaborator-dock .collaborator-avatar {
+  top: auto !important; left: auto !important; right: 16px !important; bottom: 106px !important;
+}
+
+/* ==========================================================================
+   §6 布局专审修补（05 轮次 10；输入 R5a/R5b/R5c/R5d 四份审查，快照驱动）
+   ========================================================================== */
+
+/* --- §6.1 密度档回退（R5d P1-2：--den-* 仅在带 data-density 的元素上定义，
+   makeWindow 窗头挂档外/S1/gate 等无 density 祖先 → var() 按 IACVT 归零。
+   根级给 mid 默认值兜底；body 级小浮层显式声明 tight 档。 --- */
+html[data-theme=orbit] {
+  --den-pad: 24px; --den-gap: 20px; --den-lead: 1.7; --den-ctl: 38px;
+}
+html[data-theme=orbit] #action-confirm,
+html[data-theme=orbit] #claude-gate,
+html[data-theme=orbit] .composer-permission,
+html[data-theme=orbit] .collaborator-avatar,
+html[data-theme=orbit] .orbit-tip {
+  --den-pad: 16px; --den-gap: 12px; --den-lead: 1.55; --den-ctl: 32px;
+}
+
+/* --- §6.2 R5b：大页面旧皮重置与打磨 --- */
+/* B-01（P1）：#discovery 自带 .discovery-panel 旧皮（flex:1+2px 边框+--bg 实底）
+   在 orbit 页容器内把面板锁成 638px 高，右列内容穿框溢出约 302px——orbit 域整体重置 */
+html[data-theme=orbit] #discovery {
+  flex: 0 1 auto; height: auto; min-height: 0;
+  border: 0; background: transparent;
+}
+/* B-03：overview 旧规则 align-items 影响入口排 */
+html[data-theme=orbit] .discovery-overview { align-items: stretch; }
+/* B-04：页头 28px 错位（legacy padding 与 orbit 页头叠加） */
+html[data-theme=orbit] #discovery .discovery-header { padding: 0 0 var(--sp-5); }
+/* B-05：结果卡旧 margin 与 --den-gap 双距 */
+html[data-theme=orbit] .discovery-results .orbit-card { margin: 0; }
+/* B-06：状态带/引导带旧皮收薄（2px 边+实底 → 1px+透明），间距交给页内 gap */
+html[data-theme=orbit] #discovery .discovery-status {
+  border: 1px solid var(--orbit-line-faint); border-left-width: 2px;
+  background: transparent; margin: 0 0 var(--sp-3); padding: var(--sp-2) var(--sp-3);
+}
+html[data-theme=orbit] #discovery .discovery-next {
+  border: 1px solid var(--orbit-line-faint); border-left-width: 2px; margin-bottom: 0;
+}
+/* B-10/B-11：P3 抽屉与疑问表单的 legacy margin 双距 */
+html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer,
+html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer details { margin: 0; }
+html[data-theme=orbit] #orbit-page-thoughts .orbit-body form { margin: var(--sp-3) 0; }
+/* B-12：抽屉栈双层滚动——栈自身不再滚，交给页容器 */
+html[data-theme=orbit] .orbit-drawer-stack { max-height: 100%; overflow-y: visible; }
+/* P2/P4 页头补挂统一模板类（P3 页头由 orbit.js 补建，见 §6.4） */
+html[data-theme=orbit] .orbit-page-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--den-gap); padding: 0 0 var(--sp-5);
+}
+html[data-theme=orbit] .orbit-page-head .page-title { font: 600 var(--fs-page)/1.4 var(--font); margin: 0; }
+
+/* --- §6.3 R5c：M2–M7 设置窗接管补齐 --- */
+/* B1 兜底：head 带遗留 .modal-head 的 space-between，工具簇 wrapper 由 orbit.js 包（§6.5），
+   此处先压掉均布防其他复用窗被撕开 */
+html[data-theme=orbit] .orbit-win-head { justify-content: flex-start; }
+html[data-theme=orbit] .orbit-win-tools { display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; }
+/* A1：M2–M7 是 div.modal 非 dialog，::backdrop 全链失效——压暗对齐令牌档
+   （无入退场动画为已知偏差，登记 06） */
+html[data-theme=orbit] .modal { background: #05080fd9; }   /* div 窗无 ::backdrop，直接压暗（与 dialog 窗同档） */
+/* C2/D3：步点条接管 legacy margin（settings-nav margin 24 双重缩进→0）；
+   横向保留 den-pad 内衬使首格与标题/分区左缘对齐（364→388） */
+html[data-theme=orbit] .settings-nav.orbit-step-dots { margin: 0 0 var(--den-gap); padding: 0 var(--den-pad); }
+/* D1：分区间隙 44（legacy gap 22 × anchor 空盒双槽）→ den-gap 20 */
+html[data-theme=orbit] .settings-body { gap: var(--den-gap); }
+html[data-theme=orbit] .settings-body > :empty { display: none; }
+/* D2：窗体节奏令牌化（去 legacy 4px 顶值） */
+html[data-theme=orbit] .modal-body { padding: 0 var(--den-pad) var(--den-pad); }
+/* D4：关闭钮 36×32 → flex-basis 残留重置 */
+html[data-theme=orbit] .orbit-win-btn { flex: 0 0 auto; }
+/* R5d P2-2：窗头内 dock 类说明图标统一 32（与关闭钮同簇） */
+html[data-theme=orbit] .orbit-win-head .orbit-icon { width: 32px; height: 32px; }
+html[data-theme=orbit] .orbit-win-head .orbit-icon .orbit-symbol { width: 18px; height: 18px; }
+/* 返回钮（03c 1.2：M2–M7 必备，orbit.js §6.5 创建） */
+html[data-theme=orbit] .orbit-win-back { margin-right: var(--sp-2); }
+
+/* --- §6.4 R5d/R5a：杂项几何 --- */
+/* F7：M10 矮视口钳制（100dvh<616 时窗底越界不可达） */
+html[data-theme=orbit] #orbit-win-workers .worker-workspace,
+html[data-theme=orbit] #orbit-win-workers .orbit-window-body {
+  min-height: min(480px, calc(100dvh - 48px - var(--orbit-dock-clear)));
+}
+/* E2：S9 启动条对齐浮层宽帽纪律 + 换行态 */
+html[data-theme=orbit] #boot-status { max-width: min(320px, calc(100vw - 48px)); border-radius: 999px; }
+html[data-theme=orbit] #boot-status[data-wrap] { border-radius: 10px; }
+/* F6：触屏命中区（自建窗关闭钮/步点 ≥40） */
+@media (pointer: coarse) {
+  html[data-theme=orbit] .orbit-win-btn { width: 40px; height: 40px; }
+  html[data-theme=orbit] .orbit-step { width: 40px; height: 40px; }
+}
+/* R5d P2-3：三页页头对齐统一 flex-start（P2/P4 的 head 由 §6.2 模板接管） */
+
+/* M6 DSH 三步分步（05 轮次 11）：H3 作切换点（JS 挂 role=button；步骤容器显隐走 subStyle） */
+html[data-theme=orbit] .orbit-step-pane h3[role=button],
+html[data-theme=orbit] [data-settings-section=workers] h3[role=button] {
+  cursor: pointer; color: var(--accent); font: 600 var(--fs-section)/1.5 var(--font);
+  padding: var(--sp-1) 0; border-bottom: 1px solid var(--orbit-line-faint); margin-bottom: var(--sp-2);
+}

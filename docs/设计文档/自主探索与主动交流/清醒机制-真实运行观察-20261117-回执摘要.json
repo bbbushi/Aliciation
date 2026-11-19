@@ -1,0 +1,337 @@
+[
+  {
+    "at": "2026-11-17T17:13:03.604456+08:00",
+    "wake_state": "sleeping",
+    "revision": "19",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 0
+      }
+    ],
+    "idle": [],
+    "totals": null,
+    "latest_run": {
+      "id": "idle_76d28c1a3bb64915",
+      "status": "completed",
+      "reason": "idle_rest",
+      "manual": 0,
+      "model_calls": 0,
+      "steps": 0,
+      "activity": "idle",
+      "created_at": 1794898022.701252,
+      "updated_at": 1794898022.701252
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:13:48.186075+08:00",
+    "wake_state": "awake",
+    "revision": "20",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 0
+      }
+    ],
+    "idle": [
+      {
+        "scope": "gui",
+        "started_at": 1794906796.4360662,
+        "until_at": 1794907096.4360662,
+        "reason": "weighted_rotation",
+        "related_run_id": null
+      }
+    ],
+    "totals": null,
+    "latest_run": {
+      "id": "idle_85871a7dc26749ed",
+      "status": "completed",
+      "reason": "idle_rest",
+      "manual": 0,
+      "model_calls": 0,
+      "steps": 0,
+      "activity": "idle",
+      "created_at": 1794906796.4364219,
+      "updated_at": 1794906796.4364219
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:14:45.396756+08:00",
+    "wake_state": "awake",
+    "revision": "20",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 0
+      }
+    ],
+    "idle": [
+      {
+        "scope": "gui",
+        "started_at": 1794906796.4360662,
+        "until_at": 1794907096.4360662,
+        "reason": "weighted_rotation",
+        "related_run_id": null
+      }
+    ],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "idle_85871a7dc26749ed",
+      "status": "completed",
+      "reason": "idle_rest",
+      "manual": 0,
+      "model_calls": 0,
+      "steps": 0,
+      "activity": "idle",
+      "created_at": 1794906796.4364219,
+      "updated_at": 1794906796.4364219
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:17:09.212297+08:00",
+    "wake_state": "awake",
+    "revision": "20",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 0
+      }
+    ],
+    "idle": [
+      {
+        "scope": "gui",
+        "started_at": 1794906796.4360662,
+        "until_at": 1794907096.4360662,
+        "reason": "weighted_rotation",
+        "related_run_id": null
+      }
+    ],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "idle_85871a7dc26749ed",
+      "status": "completed",
+      "reason": "idle_rest",
+      "manual": 0,
+      "model_calls": 0,
+      "steps": 0,
+      "activity": "idle",
+      "created_at": 1794906796.4364219,
+      "updated_at": 1794906796.4364219
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:18:10.750094+08:00",
+    "wake_state": "awake",
+    "revision": "20",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 0
+      }
+    ],
+    "idle": [
+      {
+        "scope": "gui",
+        "started_at": 1794906796.4360662,
+        "until_at": 1794907096.4360662,
+        "reason": "weighted_rotation",
+        "related_run_id": null
+      }
+    ],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "idle_85871a7dc26749ed",
+      "status": "completed",
+      "reason": "idle_rest",
+      "manual": 0,
+      "model_calls": 0,
+      "steps": 0,
+      "activity": "idle",
+      "created_at": 1794906796.4364219,
+      "updated_at": 1794906796.4364219
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:18:38.097206+08:00",
+    "wake_state": "awake",
+    "revision": "20",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 6
+      }
+    ],
+    "idle": [],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "explore_e688dba260e146deb9ca12421542d9f3",
+      "status": "running",
+      "reason": "model_in_flight",
+      "manual": 0,
+      "model_calls": 6,
+      "steps": 7,
+      "activity": "problem",
+      "created_at": 1794907096.788555,
+      "updated_at": 1794907114.982534
+    },
+    "receipt": []
+  },
+  {
+    "at": "2026-11-17T17:20:08.702639+08:00",
+    "wake_state": "awake",
+    "revision": "22",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 7
+      }
+    ],
+    "idle": [],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "explore_e688dba260e146deb9ca12421542d9f3",
+      "status": "completed",
+      "reason": "activity_finished",
+      "manual": 0,
+      "model_calls": 7,
+      "steps": 9,
+      "activity": "problem",
+      "created_at": 1794907096.788555,
+      "updated_at": 1794907122.8833878
+    },
+    "receipt": [
+      {
+        "run_id": "explore_e688dba260e146deb9ca12421542d9f3",
+        "decision": "wait",
+        "progress_kind": "evidence",
+        "actual_execution": 1,
+        "substantive_progress": 0,
+        "resulting_status": "waiting_user",
+        "remaining_family_windows": 2,
+        "reason": "evidence_already_known",
+        "created_at": 1794907122.881314
+      }
+    ]
+  },
+  {
+    "at": "2026-11-17T17:20:55.271954+08:00",
+    "wake_state": "awake",
+    "revision": "22",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 7
+      }
+    ],
+    "idle": [],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "explore_e688dba260e146deb9ca12421542d9f3",
+      "status": "completed",
+      "reason": "activity_finished",
+      "manual": 0,
+      "model_calls": 7,
+      "steps": 9,
+      "activity": "problem",
+      "created_at": 1794907096.788555,
+      "updated_at": 1794907122.8833878
+    },
+    "receipt": [
+      {
+        "run_id": "explore_e688dba260e146deb9ca12421542d9f3",
+        "decision": "wait",
+        "progress_kind": "evidence",
+        "actual_execution": 1,
+        "substantive_progress": 0,
+        "resulting_status": "waiting_user",
+        "remaining_family_windows": 2,
+        "reason": "evidence_already_known",
+        "created_at": 1794907122.881314
+      }
+    ]
+  },
+  {
+    "at": "2026-11-17T17:22:03.815262+08:00",
+    "wake_state": "sleeping",
+    "revision": "23",
+    "usage": [
+      {
+        "day": "2026-11-17",
+        "models": 7
+      }
+    ],
+    "idle": [],
+    "totals": {
+      "turns": 45,
+      "memories": 16,
+      "thought_questions": 12,
+      "v2_view_revisions": 0,
+      "v2_invitation_attempts": 0
+    },
+    "latest_run": {
+      "id": "explore_e688dba260e146deb9ca12421542d9f3",
+      "status": "completed",
+      "reason": "activity_finished",
+      "manual": 0,
+      "model_calls": 7,
+      "steps": 9,
+      "activity": "problem",
+      "created_at": 1794907096.788555,
+      "updated_at": 1794907122.8833878
+    },
+    "receipt": [
+      {
+        "run_id": "explore_e688dba260e146deb9ca12421542d9f3",
+        "decision": "wait",
+        "progress_kind": "evidence",
+        "actual_execution": 1,
+        "substantive_progress": 0,
+        "resulting_status": "waiting_user",
+        "remaining_family_windows": 2,
+        "reason": "evidence_already_known",
+        "created_at": 1794907122.881314
+      }
+    ]
+  }
+]

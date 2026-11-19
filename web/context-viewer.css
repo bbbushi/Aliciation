@@ -4,6 +4,7 @@
   font: 14px/1.6 system-ui, -apple-system, "PingFang SC", sans-serif; }
 .acv-dialog[open] { display: flex; flex-direction: column; }
 .acv-dialog::backdrop { background: #15233399; }
+.ci-settings-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #f6f8fb; }
 .acv-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #dce3eb; }
 .acv-head h2 { font-size: 18px; margin: 0; color: inherit; }
 .acv-dialog button, .acv-dialog select, .acv-dialog input { font: inherit; color: #1c2733; border: 1px solid #b8c4d3;

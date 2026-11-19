@@ -1,33 +1,55 @@
 """Question-driven idle agent and GUI contact delivery, disabled by default."""
 from __future__ import annotations
 
-from datetime import datetime
-import hashlib
 import json
 import threading
 import time
 import uuid
+from itertools import count
 
 from . import thought_workspace as thoughts
+from . import activity, autonomy_policy
 from .background_runtime import day, reserve_model
 from .channels import ChannelError
 
 RUN_GUIDANCE = """这是你的自主探索运行，不是用户刚发来的一条消息。
-从实际疑问、相关记忆或自己的兴趣中选择值得推进的事情，也可以判断暂时没有值得推进的内容。
+从实际疑问、相关记忆或自己的兴趣中选择值得推进的事情，也可以判断暂时没有值得推进的内容，选择休息或等待。
 你决定收纳、选题、方法、解决与否、成果价值和交流意图。先读所需正文，再围绕具体缺口尝试获准的方法。
 可以形成当前看法；关于经历和事实的判断保留真实出处与未知。未解疑问不作为已证实事实。
-有进展时用思想能力保存摘要和下一步；完成时提交成果或说明不保留的理由，不要求每次产出观点。
-需要用户信息时可提出具体联系意图，并将相关问题置为waiting_user；没有回复不生成催办。
-旧联系意图标为needs_review时，结合最新材料决定更新准备、保留下次交流或取消。
-联系意图已保存不表示已送达。用户委托通常优先，同时允许自己的兴趣。
-把这次明确的进展、剩余缺口与下一步简短记录；不输出原始思维链。
+有实质变化时用思想能力保存摘要与下一步；等待外部条件时明确等待类型与原因，不靠反复改写制造进展。
+窗口结束前用 activity_finish 提交一次结束回执：说明决定（continue/wait/rest/done）与变化类型（evidence/action/inference/rewrite/none）；
+回执引用逐字使用已载入材料的ref；历史往返由宿主按说话者拆分，自有观点可作参考但不是外部新证据。
+动作使用工具返回的action_receipt.ref，不用函数名或描述拼造ID。表述润色不算实质进展。
+以宿主task_anchor里的原任务为目标推进。未命中只报告本次查询未找到，受限未返回只报告尚未读到；保留目标和下一步，不把材料使用说明推成素材没有原型或原任务无需完成。
+任务目录与task摘要不等于已读旧推演；仅需复查旧推演时才用thought_load(detail=full)。
+历史AI自述可以参考表达，但不能证明真实做过或对用户有效。具体活动自述以本窗口工具与运行账本为依据，语言习惯本身可直接采用。
+每个工作窗口的 activity_finish 同时提交 communication：invite（现在邀请）、later（留待以后）、none（无需联系），附简短理由。
+先判断是否有值得告诉用户的新结果、共同兴趣或需要用户补充的信息，再区分现在邀请还是留待以后；重复解释处境、润色旧话不必联系，也无需凑联系次数。
+invite/later 关联已保存的问题ref、观点view_ref，或沿用 eligible_contact_intents 的intent_ref；新内容先收纳，再提交结束回执。
+invite 另附 invitation_text，只简短询问现在是否方便；later 只保留意图不排队发送。即使当前联系受阻，也如实表达意图，由宿主核对权限与投递条件。
+邀请不携带成果正文，用户接受后宿主才会载入展开材料；没有回复不催办。后台不单独调用 contact_propose。
+收纳或更新具体事项时，可用其调度参数说明所属活动、价值、紧迫性及有依据的截止时间。
+同一批材料上的推演窗口有限：先想清楚再写，窗口用尽时等待新证据而不是换个说法再来一轮。
+不输出原始思维链。
 """
 
 
 def in_window(start, end):
-    from .discovery_memory import DAY_ZONE
-    clock = datetime.now(DAY_ZONE).strftime("%H:%M")
-    return start == end or (start <= clock < end if start < end else clock >= start or clock < end)
+    return activity.in_window(start, end)
+
+
+def tool_receipt(result, call):
+    try:
+        start = result.index("{")
+        body = json.loads(result[start:])
+    except (ValueError, TypeError, AttributeError):
+        return result
+    if not isinstance(body, dict):
+        return result
+    body["action_receipt"] = {"ref": call.id, "tool": call.function.name,
+                              "outcome": body.get("error") or body.get("status") or "returned",
+                              "notice": "实际工具调用回执；被拒、未读或搜索未命中不证明目标不存在。"}
+    return result[:start] + thoughts.dump(body)
 
 
 class YieldToForeground(Exception):
@@ -81,6 +103,8 @@ class AutonomyCoordinator:
                 for row in store.conn.execute(f"SELECT id,basis FROM {table}").fetchall():
                     if json.loads(row["basis"]).get("packets"):
                         store.conn.execute(f"UPDATE {table} SET {field} WHERE id=?", (row["id"],))
+                        if table == "thought_questions":
+                            store.conn.execute("DELETE FROM thought_agenda WHERE question_id=?", (row["id"],))
 
     def access(self, action="status", payload=None):
         service = self.service
@@ -102,6 +126,9 @@ class AutonomyCoordinator:
                     store.meta_set("autonomy_revision", str(revision + 1))
                     self.cancel_reason = "settings_changed"
                     self.cancel.set()
+                    if not activity.awake(store):
+                        store.conn.execute("UPDATE exploration_runs SET status='paused',reason='sleeping',updated_at=? "
+                            "WHERE epoch=? AND manual=0 AND status='queued'", (time.time(), self.epoch))
                 elif action == "record":
                     session = thoughts.ThoughtSession(store, {"scope": "gui"})
                     result = session.execute("thought_record", {"question": payload.get("question"),
@@ -117,13 +144,21 @@ class AutonomyCoordinator:
                     if "error" in result:
                         raise ValueError(result["reason"])
                 elif action in {"run", "resume"}:
+                    activity.clear_idle(store, reason="explicit_task")
                     config = thoughts.settings(store)
-                    if not config["allow_paid"]:
-                        raise ValueError("请先允许探索使用已配置模型")
+                    if not config["allow_paid"] or (autonomy_policy.TEST_CONTROLS_ONLY and config["wake_state"] != "awake"):
+                        raise ValueError("请先打开后台总开关，允许调用已配置模型")
                     if store.conn.execute("SELECT 1 FROM exploration_runs WHERE epoch=? AND status IN('queued','running')",
                                           (self.epoch,)).fetchone():
                         raise ValueError("已有探索排队或运行，请先查看进度")
                     if action == "resume":
+                        old = store.conn.execute("SELECT * FROM exploration_runs WHERE id=? AND epoch=?",
+                            (payload.get("run_id"), self.epoch)).fetchone()
+                        info = activity.run_info(store, payload.get("run_id"))
+                        if not autonomy_policy.TEST_CONTROLS_ONLY and info and not config["activities"][info["activity"]]["seconds"]:
+                            raise ValueError("该活动时长为0，请先开放")
+                        if old and not thoughts.valid_basis(store, json.loads(old["basis"])):
+                            raise ValueError("原探索资料已变化，请开始新的活动")
                         changed = store.conn.execute("UPDATE exploration_runs SET status='queued',manual=1,updated_at=? "
                             "WHERE id=? AND epoch=? AND status='paused'", (time.time(), payload.get("run_id"), self.epoch)).rowcount
                         if not changed:
@@ -149,6 +184,65 @@ class AutonomyCoordinator:
                     if not changed:
                         raise ValueError("联系已改变或已经送达，请刷新核对")
                     thoughts.event(store, "contact_cancelled", identity)
+                elif action == "contact_reply":
+                    # Direct user action from the panel. Acceptance binds to a real
+                    # chat message, so buttons only carry defer/decline.
+                    identity, version, decision = payload.get("id"), payload.get("version"), payload.get("decision")
+                    if (not isinstance(identity, str) or type(version) is not int
+                            or decision not in {"defer", "decline"}):
+                        raise ValueError("按钮仅支持稍后或不聊；接受请在聊天中自然回应")
+                    from .autonomy_v2 import build
+                    from .autonomy_v2.models import ContactReply, ReplyDecision
+                    context = thoughts.execution_context(store, {"request_id": "panel_reply", "scope": "gui"})
+                    build(store=store).contact_reply(context, ContactReply(
+                        attempt_id=identity, expected_attempt_version=version,
+                        decision=ReplyDecision(decision), reason="面板按钮操作"))
+                elif action == "intent_cancel":
+                    identity, version = payload.get("id"), payload.get("version")
+                    if not isinstance(identity, str) or type(version) is not int:
+                        raise ValueError("联系意图引用无效")
+                    changed = store.conn.execute("UPDATE v2_contact_intents SET state='closed',version=version+1,updated_at=? "
+                        "WHERE id=? AND version=? AND epoch=? AND state='active'",
+                        (time.time(), identity, version, self.epoch)).rowcount
+                    if not changed:
+                        raise ValueError("联系意图已改变或已结束，请刷新核对")
+                    with store.source_transaction():
+                        store.conn.execute("UPDATE v2_invitation_attempts SET state='withdrawn',version=version+1,updated_at=? "
+                            "WHERE intent_id=? AND epoch=? AND state IN('prepared','awaiting_reply')", (time.time(), identity, self.epoch))
+                    thoughts.event(store, "intent_cancelled", identity)
+                elif action == "migration_prepare":
+                    from .autonomy_v2 import build
+                    from .autonomy_v2.models import Scope
+                    plan = build(store=store).prepare_migration(Scope(session_epoch=self.epoch, channel_id="gui"))
+                    stored = {"identity": plan.identity, "legacy_contact_ids": list(plan.legacy_contact_ids),
+                              "question_ids": list(plan.question_ids), "memory_ids": list(plan.memory_ids),
+                              "compatibility_notes": list(plan.compatibility_notes)}
+                    store.meta_set("autonomy_migration_plan", thoughts.dump(stored))
+                    thoughts.event(store, "migration_prepared", plan.identity,
+                                   {"contacts": len(plan.legacy_contact_ids), "questions": len(plan.question_ids)})
+                elif action == "migration_apply":
+                    stored = json.loads(store.meta_get("autonomy_migration_plan") or "null")
+                    if not isinstance(stored, dict) or payload.get("identity") != stored.get("identity"):
+                        raise ValueError("请先准备迁移计划，再按当前计划执行")
+                    from .autonomy_v2 import build
+                    from .autonomy_v2.models import MigrationPlan, Scope
+                    plan = MigrationPlan(identity=stored["identity"],
+                                         scope=Scope(session_epoch=self.epoch, channel_id="gui"),
+                                         from_contract="autonomy-v1", to_contract="autonomy-v2", data_format=1,
+                                         question_ids=tuple(stored["question_ids"]),
+                                         memory_ids=tuple(stored["memory_ids"]),
+                                         legacy_contact_ids=tuple(stored["legacy_contact_ids"]),
+                                         compatibility_notes=tuple(stored["compatibility_notes"]))
+                    build(store=store).apply_migration(plan)
+                    store.meta_set("autonomy_migration_plan", "")
+                elif action == "idle_rest":
+                    period = activity.enter_idle(store, "user_requested_rest")
+                    if period is None:
+                        raise ValueError("发呆时长为0，主动休息已停用")
+                    self.cancel_reason = "user_paused"
+                    self.cancel.set()
+                elif action == "idle_wake":
+                    activity.clear_idle(store, reason="user_requested")
                 elif action == "detail":
                     return self._detail(payload)
                 else:
@@ -175,39 +269,148 @@ class AutonomyCoordinator:
                     if thoughts.valid_basis(store, json.loads(r["basis"]))]
         runs = [dict(r) for r in store.conn.execute("SELECT id,status,reason,question_id,model_calls,steps,created_at,updated_at "
                 "FROM exploration_runs WHERE epoch=? ORDER BY created_at DESC LIMIT 30", (self.epoch,))]
+        for run in runs:
+            run["activity"] = activity.run_info(store, run["id"])
+            receipt = store.conn.execute("SELECT * FROM v2_progress_receipts WHERE run_id=?", (run["id"],)).fetchone()
+            run["finish_receipt"] = dict(receipt) if receipt else None
         events = [dict(r) for r in store.conn.execute("SELECT id,kind,object_id,detail,created_at FROM thought_events "
                   "WHERE epoch=? ORDER BY id DESC LIMIT 60", (self.epoch,))]
         stances = [{"id": r["id"], "title": r["title"], "created_at": r["created_at"]}
-                   for r in store.memory_rows(purpose="observer", scope="gui", kind="stance")][:50]
+                   for r in thoughts.current_stance_rows(store, store.memory_rows(purpose="observer", scope="gui", kind="stance"))][:50]
         usage = store.conn.execute("SELECT models FROM background_usage WHERE day=?", (day(),)).fetchone()
+        config = thoughts.settings(store)
+        lifecycle = activity.lifecycle(config)
+        scheduler = activity.weights(store, config)
+        idle = activity.active_idle(store)
+        active = next((r for r in runs if r["status"] in {"running", "queued"}), None)
+        if active and active["status"] == "running":
+            wait = "running"
+        elif not self._idle():
+            wait = "foreground_priority"
+        elif lifecycle["effective"] == "sleeping" and not active:
+            wait = lifecycle["reason"]
+        elif not config["allow_paid"]:
+            wait = "model_permission_required"
+        elif not autonomy_policy.TEST_CONTROLS_ONLY and (usage[0] if usage else 0) >= config["daily_models"]:
+            wait = "daily_model_budget"
+        elif not autonomy_policy.TEST_CONTROLS_ONLY and (not config["run_models"] or not config["run_steps"] or not config["run_seconds"]):
+            wait = "run_budget_disabled"
+        elif active:
+            wait = "queued"
+        elif idle:
+            wait = "idle_rest"
+        elif not any(m["weight"] for m in scheduler["modes"].values() if m != "idle"):
+            wait = "waiting_material"
+        else:
+            latest = store.conn.execute("SELECT COALESCE(MAX(ts),0) FROM turns").fetchone()[0]
+            wait = "ready_for_test" if autonomy_policy.TEST_CONTROLS_ONLY else "waiting_idle" if time.time()-latest < config["idle_seconds"] else "waiting_interval"
+        scheduler["status"] = wait
+        scheduler["idle"] = {"active": idle is not None, "until_at": idle["until_at"] if idle else None,
+                             "reason": idle["reason"] if idle else None}
+        intents = [{k: r[k] for k in ("id", "version", "motive", "topic", "reason", "state",
+                                      "question_id", "next_eligible_at", "legacy_contact_id", "updated_at")}
+                   for r in store.conn.execute("SELECT * FROM v2_contact_intents WHERE epoch=? ORDER BY updated_at DESC LIMIT 50", (self.epoch,))]
+        invitations = [{k: r[k] for k in ("id", "version", "intent_id", "state", "invitation_text", "prepared_at",
+                                          "delivered_at", "expires_at", "invitation_turn_id", "reply_user_turn_id",
+                                          "expansion_turn_id", "deferred_reason", "updated_at")}
+                       for r in store.conn.execute("SELECT * FROM v2_invitation_attempts WHERE epoch=? ORDER BY updated_at DESC LIMIT 50", (self.epoch,))]
+        for invitation in invitations:
+            invitation["topic"] = next((i["topic"] for i in intents if i["id"] == invitation["intent_id"]), "")
+        from .autonomy_v2 import build
+        from .autonomy_v2.models import Scope
+        stack = build(store=store)
+        scope = Scope(session_epoch=self.epoch, channel_id="gui")
+        for intent in intents:
+            stored_intent = stack.invitations.repository.get_intent(scope, intent["id"])
+            if intent["state"] == "active":
+                intent["blockers"] = stack.invitations.delivery_blockers(scope, stored_intent)
+            try:
+                stack.invitations.host.validate_intent(scope, stored_intent)
+            except ValueError:
+                intent["reason"] = "意图已结束或资料已变化，原理由不再展示"
+        for invitation in invitations:
+            if invitation["state"] == "prepared":
+                intent = stack.invitations.repository.get_intent(scope, invitation["intent_id"])
+                invitation["blockers"] = stack.invitations.delivery_blockers(scope, intent,
+                    attempt_id=invitation["id"])
+        decisions = [stack.communication.get_for_run(self.epoch, r[0]) for r in store.conn.execute(
+            "SELECT run_id FROM v2_contact_decisions WHERE epoch=? ORDER BY created_at DESC LIMIT 50", (self.epoch,))]
+        for run in runs:
+            run["communication_receipt"] = stack.communication.get_for_run(self.epoch, run["id"])
+        plan_stored = json.loads(store.meta_get("autonomy_migration_plan") or "null")
         return {"status": "ok", "session_epoch": self.epoch,
-                "revision": int(store.meta_get("autonomy_revision") or 0), "settings": thoughts.settings(store),
+                "revision": int(store.meta_get("autonomy_revision") or 0), "settings": config,
+                "lifecycle": lifecycle, "scheduler": scheduler,
                 "questions": questions, "stances": stances, "contacts": contacts, "runs": runs, "events": events,
+                "intents": intents, "invitations": invitations, "communication_decisions": decisions,
+                "migration_plan": plan_stored,
                 "budget": {"day": day(), "models": usage[0] if usage else 0},
                 "channels": {"gui": True, "next_chat": True, "qq": False, "offline": False}}
 
     def _detail(self, payload):
         store = self.service.store
         if payload.get("kind") == "question":
-            return thoughts.public_question(self._question(payload.get("id"), payload.get("version")), full=True)
+            row = self._question(payload.get("id"), payload.get("version"))
+            from dataclasses import asdict
+            from .autonomy_v2.adapters import question_from_row
+            question = question_from_row(store, row)
+            return {**thoughts.public_question(row, full=True), "scheduling": activity.assessment(store, row),
+                    "family_id": question.family_id, "material": asdict(question.material),
+                    "wait_condition": asdict(question.wait_condition) if question.wait_condition else None,
+                    "remaining_family_windows": activity.remaining_windows(store, row, thoughts.settings(store)["same_material_windows"])}
         if payload.get("kind") == "stance":
             row = next((r for r in store.memory_rows(purpose="observer", scope="gui", kind="stance") if r["id"] == payload.get("id")), None)
             if row:
                 return {"content": row["content"], "title": row["title"]}
         if payload.get("kind") == "run":
             row = store.conn.execute("SELECT * FROM exploration_runs WHERE id=? AND epoch=?", (payload.get("id"), self.epoch)).fetchone()
+            info = activity.run_info(store, row["id"]) if row else None
+            if row and info and info["activity"] == "idle":
+                # Rest has no source-derived body. Support older basis={} rows
+                # without relaxing the licence checks on real work records.
+                if (not row["id"].startswith("idle_") or row["question_id"] is not None
+                        or row["model_calls"] or row["steps"]):
+                    raise ValueError("发呆记录与实际执行信息不一致")
+                selection = info.get("selection") or {}
+                return {"id": row["id"], "kind": "idle", "status": row["status"],
+                        "reason": row["reason"], "model_calls": 0, "steps": 0,
+                        "messages": [], "finish_receipt": None,
+                        "activity": {"activity": "idle", "started_at": info["started_at"],
+                                     "deadline": info["deadline"], "selection": {
+                                         key: selection[key] for key in ("reason", "idle_seconds") if key in selection}}}
             if row and thoughts.valid_basis(store, json.loads(row["basis"])):
-                return {"id": row["id"], "status": row["status"], "messages": json.loads(row["checkpoint"])}
+                from .autonomy_v2 import build
+                return {"id": row["id"], "status": row["status"], "messages": json.loads(row["checkpoint"]),
+                        "activity": info,
+                        "communication_receipt": build(store=store).communication.get_for_run(self.epoch, row["id"]),
+                        "finish_receipt": dict(receipt) if (receipt := store.conn.execute(
+                            "SELECT * FROM v2_progress_receipts WHERE run_id=?", (row["id"],)).fetchone()) else None}
         raise ValueError("记录不存在或来源已失效")
 
-    def _enqueue(self, qid=None, *, manual=False):
+    def _enqueue(self, qid=None, *, manual=False, mode=None, selection=None):
         store, now = self.service.store, time.time()
+        if mode is None:
+            question = store.conn.execute("SELECT * FROM thought_questions WHERE id=? AND epoch=?", (qid, self.epoch)).fetchone() if qid else None
+            mode, selection = activity.choose(store, thoughts.settings(store), question=question)
+        if mode is None:
+            raise ValueError("暂无可推进活动；请留下具体问题或等待新资料")
+        if mode == "idle":
+            activity.enter_idle(store, selection.get("reason") or "no_actionable_work")
+            raise ValueError("当前无可推进事项，已进入发呆；稍后会重新判断")
+        qid = qid or selection.get("question_id")
         identity = "explore_" + uuid.uuid4().hex
         basis = {"epoch": self.epoch}
         with store.source_transaction():
             store.conn.execute("INSERT INTO exploration_runs(id,epoch,status,question_id,basis,manual,created_at,updated_at) "
                 "VALUES(?,?,'queued',?,?,?,?,?)", (identity, self.epoch, qid, thoughts.dump(basis), int(manual), now, now))
             thoughts.event(store, "exploration_queued", identity, {"question_id": qid, "manual": manual})
+            activity.register(store, identity, mode, selection)
+            if qid:
+                row = store.conn.execute("SELECT * FROM thought_questions WHERE id=? AND epoch=?", (qid, self.epoch)).fetchone()
+                if row is not None:
+                    # Charge the family window for this real execution at admission.
+                    activity.consume_window(store, row, identity,
+                                            max(1, min(int(thoughts.settings(store).get("same_material_windows") or 2), 20)))
 
     def _loop(self):
         while not self.stop_event.wait(5):
@@ -240,52 +443,62 @@ class AutonomyCoordinator:
                         "AND (updated_at<? OR id NOT IN(SELECT id FROM exploration_runs ORDER BY created_at DESC LIMIT 30))", (time.time()-7*86400,))
                     store.conn.execute("DELETE FROM thought_events WHERE id NOT IN(SELECT id FROM thought_events ORDER BY id DESC LIMIT 2000)")
                     store.meta_set("autonomy_last_cleanup", str(time.time()))
-            self._deliver_locked()
+            expired_idle = store.conn.execute("SELECT until_at FROM v2_activity_idle WHERE scope='gui'").fetchone()
+            if expired_idle is not None and expired_idle[0] <= time.time():
+                activity.clear_idle(store)  # Expiry permits re-scheduling; it never forces work.
+            if activity.active_idle(store):
+                return  # Voluntary rest: no delivery, no model call, host timer only.
+            self._deliver_invitations_locked()
             config = thoughts.settings(store)
             run = store.conn.execute("SELECT * FROM exploration_runs WHERE epoch=? AND status='queued' ORDER BY created_at LIMIT 1",
                                      (self.epoch,)).fetchone()
-            if not config["allow_paid"]:
+            if not config["allow_paid"] or (autonomy_policy.TEST_CONTROLS_ONLY and config["wake_state"] != "awake"):
                 return
             used = store.conn.execute("SELECT models FROM background_usage WHERE day=?", (day(),)).fetchone()
-            if not config["run_models"] or not config["run_seconds"] or (used[0] if used else 0) >= config["daily_models"]:
+            if not autonomy_policy.TEST_CONTROLS_ONLY and (not config["run_models"] or not config["run_steps"] or not config["run_seconds"] or (used[0] if used else 0) >= config["daily_models"]):
+                return
+            if run is not None and not run["manual"] and not activity.awake(store):
+                with store.source_transaction():
+                    store.conn.execute("UPDATE exploration_runs SET status='paused',reason='sleeping',updated_at=? WHERE id=?",
+                                       (time.time(), run["id"]))
                 return
             if run is None:
-                if not config["enabled"] or not in_window(config["window_start"], config["window_end"]):
+                if not activity.awake(store):
                     return
                 latest = store.conn.execute("SELECT COALESCE(MAX(ts),0) FROM turns").fetchone()[0]
-                if time.time() - latest < config["idle_seconds"]:
+                if not autonomy_policy.TEST_CONTROLS_ONLY and time.time() - latest < config["idle_seconds"]:
                     return
-                last = store.meta_get_time("autonomy_last_started")
-                if time.time() - last < config["interval_seconds"]:
+                if not autonomy_policy.TEST_CONTROLS_ONLY and time.time() - store.meta_get_time("autonomy_last_started") < config["interval_seconds"]:
                     return
-                paused = store.conn.execute("SELECT * FROM exploration_runs WHERE epoch=? AND status='paused' AND manual=0 "
-                    "ORDER BY updated_at LIMIT 1", (self.epoch,)).fetchone()
-                if paused:
-                    run = paused
-                else:
-                    # Empty discovery runs are revisited only for new material or
-                    # a bounded curiosity opportunity, not every scheduler tick.
-                    stamp = self._input_stamp()
-                    eligible = any(r["status"] == "open" for r in thoughts.question_rows(store))
-                    review = store.conn.execute("SELECT 1 FROM thought_contacts WHERE epoch=? AND status='needs_review' LIMIT 1", (self.epoch,)).fetchone()
-                    curiosity_due = time.time() - store.meta_get_time("autonomy_last_curiosity") >= 21600
-                    if not eligible and not review and stamp == store.meta_get("autonomy_inputs") and not curiosity_due:
-                        return
-                    self._enqueue()
-                    store.meta_set("autonomy_inputs", stamp)
-                    store.meta_set("autonomy_last_curiosity", str(time.time()))
-                    run = store.conn.execute("SELECT * FROM exploration_runs WHERE epoch=? AND status='queued' ORDER BY created_at LIMIT 1", (self.epoch,)).fetchone()
+                mode, selection = activity.choose(store, config)
+                if mode is None:
+                    return
+                if mode == "idle":
+                    activity.enter_idle(store, selection.get("reason") or "weighted_rotation")
+                    return
+                self._enqueue(manual=False, mode=mode, selection=selection)
+                run = store.conn.execute("SELECT * FROM exploration_runs WHERE epoch=? AND status='queued' ORDER BY created_at LIMIT 1",
+                                         (self.epoch,)).fetchone()
+            info = activity.run_info(store, run["id"])
+            if info is None:  # Old queued/resumed run: retain its task, add mode metadata.
+                target = store.conn.execute("SELECT * FROM thought_questions WHERE id=? AND epoch=?", (run["question_id"], self.epoch)).fetchone()
+                mode, selection = activity.choose(store, config, question=target)
+                if mode is None:
+                    with store.source_transaction():
+                        store.conn.execute("UPDATE exploration_runs SET status='paused',reason='waiting_material' WHERE id=?", (run["id"],))
+                    return
+                with store.source_transaction():
+                    activity.register(store, run["id"], mode, selection)
+                info = activity.run_info(store, run["id"])
+            if not autonomy_policy.TEST_CONTROLS_ONLY and not config["activities"][info["activity"]]["seconds"]:
+                with store.source_transaction():
+                    store.conn.execute("UPDATE exploration_runs SET status='paused',reason='mode_disabled',updated_at=? WHERE id=?", (time.time(), run["id"]))
+                return
             self.cancel = threading.Event()
             self.cancel_reason = "user_cancelled"
             store.meta_set("autonomy_last_started", str(time.time()))
-        self._run(dict(run), config)
-
-    def _input_stamp(self):
-        store = self.service.store
-        from .context_memory import version
-        material = [[r["id"], version(r)] for r in store.memory_rows(purpose="thought", scope="gui")[:40]]
-        latest = store.conn.execute("SELECT COALESCE(MAX(id),0) FROM turns WHERE role='user'").fetchone()[0]
-        return hashlib.sha256(thoughts.dump([latest, material]).encode()).hexdigest()
+            admitted = {**dict(run), "settings_revision": int(store.meta_get("autonomy_revision") or 0)}
+        self._run(admitted, config)
 
     def _gate(self, run, config, revision, basis, latest, deadline):
         store = self.service.store
@@ -295,8 +508,8 @@ class AutonomyCoordinator:
             raise ValueError("session_changed")
         if str(revision) != (store.meta_get("autonomy_revision") or "0"):
             raise YieldToForeground("settings_changed")
-        if not run["manual"] and not in_window(config["window_start"], config["window_end"]):
-            raise YieldToForeground("outside_run_window")
+        if (autonomy_policy.TEST_CONTROLS_ONLY or not run["manual"]) and not activity.awake(store):
+            raise YieldToForeground("sleeping")
         if (run.get("persona_version") != store.meta_get("persona_version")
                 or run.get("model_generation") != self.service._discovery._generation):
             raise YieldToForeground("runtime_changed")
@@ -305,7 +518,7 @@ class AutonomyCoordinator:
         current = store.conn.execute("SELECT COALESCE(MAX(id),0) FROM turns WHERE role='user'").fetchone()[0]
         if current != latest:
             raise YieldToForeground("new_conversation")
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline or time.time() >= run.get("wall_deadline", float("inf")):
             raise YieldToForeground("run_time_budget")
 
     def _run(self, run, config):
@@ -315,38 +528,49 @@ class AutonomyCoordinator:
         from .context import messages_tokens
         from .llm import chat
         service, search = self.service, None
-        context = {"scope": "gui", "request_id": run["id"], "packet_ids": [], "worker_refs": [],
+        context = {"scope": "gui", "request_id": run["id"], "run_id": run["id"], "packet_ids": [], "worker_refs": [],
                    "recall_queries": [], "recalled_ids": [], "memory_ids": [], "allow_external_recall": True,
-                   "limits": service.store.source_limits()}
-        deadline = time.monotonic() + config["run_seconds"]
+                   "manual_requested": bool(run["manual"]), "autonomy_test": autonomy_policy.TEST_CONTROLS_ONLY,
+                   "limits": autonomy_policy.source_limits(service.store)}
+        with service._lock:
+            info = activity.run_info(service.store, run["id"])
+        mode = info["activity"]
+        permitted = config["activities"][mode]["tools"]
+        seconds = None if autonomy_policy.TEST_CONTROLS_ONLY else min(config["run_seconds"], config["activities"][mode]["seconds"])
+        deadline = float("inf") if seconds is None else time.monotonic() + seconds
+        run["wall_deadline"] = float("inf") if seconds is None else time.time() + seconds
         status, reason = "completed", "no_further_step"
         calls_started = 0
         try:
             with service._lock:
                 store = service.store
-                revision = int(store.meta_get("autonomy_revision") or 0)
+                revision = run["settings_revision"]
+                if run["epoch"] != store.meta_get("session_epoch"):
+                    raise ValueError("session_changed")
                 run["persona_version"] = store.meta_get("persona_version")
                 run["model_generation"] = service._discovery._generation
                 latest = store.conn.execute("SELECT COALESCE(MAX(id),0) FROM turns WHERE role='user'").fetchone()[0]
                 memory = MemoryContext(store, service.cfg, "gui", "")
+                memory.testing = autonomy_policy.TEST_CONTROLS_ONLY
                 memory.history = HistoryContext(memory, boundary={"first_retained_id": latest + 1})
                 context["memory_session"] = memory
                 context["thought_basis"] = json.loads(run["basis"])
                 session = thoughts.ThoughtSession(store, context)
                 context["thought_session"] = session
-                latest_time = store.conn.execute("SELECT COALESCE(MAX(ts),0) FROM turns WHERE role='user'").fetchone()[0]
-                memory_time = store.conn.execute("SELECT COALESCE(MAX(created_at),0) FROM memories").fetchone()[0]
-                candidates = [r for r in thoughts.question_rows(store)
-                              if (r["status"] == "open" or r["status"] == "waiting_user" and latest_time > r["updated_at"]
-                                  or r["status"] == "waiting_source" and memory_time > r["updated_at"])
-                              and thoughts.valid_basis(store, json.loads(r["basis"]))]
+                candidates = [r for r in activity.candidates(store) if activity.assessment(store, r)["activity"] == mode]
                 candidates.sort(key=lambda r: (r["last_considered"], -r["updated_at"]))
                 if run["question_id"]:
                     target = next((r for r in thoughts.question_rows(store, include_closed=True) if r["id"] == run["question_id"]), None)
-                    if target is None:
+                    if target is None or not thoughts.valid_basis(store, json.loads(target["basis"])):
+                        raise ValueError("question_unavailable")
+                    if not run["manual"] and target["id"] not in {r["id"] for r in candidates}:
                         raise ValueError("question_unavailable")
                     candidates = [target] + [r for r in candidates if r["id"] != target["id"]]
                 catalogue = [session.expose(r) for r in candidates[:20]]
+                target = next((r for r in candidates if r["id"] == run["question_id"]), None)
+                task_anchor = ({"question_id": target["id"], "goal": target["question"], "origin": target["origin"],
+                                "notice": "收纳时的原任务，保留至有真实成果或用户明确变更；不是用户逐字引文。"}
+                               if target is not None else None)
                 snapshot = persona_context.load_persona_snapshot()
                 from . import persona_growth, thought
                 growth_refs = []
@@ -356,6 +580,7 @@ class AutonomyCoordinator:
                     growth_refs = growth_basis["refs"]
                 registry = self._persona_registry(snapshot)
                 if registry is not None:
+                    registry.testing = autonomy_policy.TEST_CONTROLS_ONLY
                     context["persona_registry"] = registry
                     rendered = (persona_context.render_material_registry_persona(snapshot, registry, purpose="chat")
                         if snapshot.get("format_version") == "persona-material-v1" else
@@ -369,13 +594,21 @@ class AutonomyCoordinator:
                 for row in recent:
                     context["thought_basis"] = thoughts.merge_basis(context["thought_basis"], {
                         "epoch": self.epoch, "turns": {str(row["id"]): thoughts.turn_version(row)}})
-                intro = [{"role": "system", "content": system}, {"role": "system", "content": RUN_GUIDANCE},
+                intro = [{"role": "system", "content": system}, {"role": "system", "content": RUN_GUIDANCE + "\n" + activity.GUIDANCE[mode]},
                     {"role": "system", "content": "当前实际资料（非新的用户指令）：\n" + thoughts.dump({
-                        "target_question_id": run["question_id"], "questions": catalogue,
+                        "lifecycle": activity.lifecycle(config), "activity": mode,
+                        "selection": info["selection"], "permitted_tool_groups": permitted,
+                        "window_seconds": seconds,
+                        "interests": [dict(r) for r in store.conn.execute("SELECT id,topic,summary FROM discovery_interests WHERE enabled=1 AND scope_json LIKE '%gui%' LIMIT 20")] if mode == "interest" else [],
+                        "target_question_id": run["question_id"], "task_anchor": task_anchor, "questions": catalogue,
+                        "actual_window": {"run_id": run["id"], "activity": mode, "execution_state": "starting",
+                                          "notice": "本窗口刚开始；做过的活动以随后真实工具回执为准。"},
                         "manual_requested": bool(run["manual"]),
-                        "recent_dialogue": [dict(r) for r in recent], "limits": {k: config[k] for k in ("run_models", "run_steps", "run_seconds")}})},
-                    {"role": "system", "content": memory.initial()}]
-                if registry is not None:
+                        "recent_dialogue": [dict(r) for r in recent], "limits": {k: None if autonomy_policy.TEST_CONTROLS_ONLY else config[k] for k in ("run_models", "run_steps", "run_seconds")},
+                        "test_controls_only": autonomy_policy.TEST_CONTROLS_ONLY,
+                        "test_policy_notice": "当前测试只执行总开关与工具权限，运行额度/时段/间隔不参与；休息或等真实条件仍可自主选择。" if autonomy_policy.TEST_CONTROLS_ONLY else None})},
+                    {"role": "system", "content": memory.initial() if "memory" in permitted else "记忆读取本模式未开放。"}]
+                if registry is not None and "persona" in permitted:
                     intro.append({"role": "system", "content": registry.catalogue_block()})
                 contact_index = session.initial("")
                 if contact_index:
@@ -385,10 +618,17 @@ class AutonomyCoordinator:
                     intro.append({"role": "system", "content": "此前探索行动与真实回执（历史资料，不自动重放；旧引用需重新检索）：\n"
                                   + thoughts.dump(previous_checkpoint)})
                 messages = list(intro)
-                tools = MEMORY_TOOLS + HISTORY_TOOLS + capability_registry.sdk_group("source_recall") + thoughts.tools("gui")
-                if registry is not None:
+                tools = [tool for tool in thoughts.tools("gui")
+                         if tool["function"]["name"] != "contact_propose"]
+                if "memory" in permitted:
+                    tools += MEMORY_TOOLS
+                if "history" in permitted:
+                    tools += HISTORY_TOOLS
+                if "sources" in permitted:
+                    tools += capability_registry.sdk_group("source_recall")
+                if registry is not None and "persona" in permitted:
                     tools += capability_registry.sdk_group("persona")
-                if config["allow_external"]:
+                if config["allow_external"] and "search" in permitted:
                     from .dialogue_search import SearchSession
                     search = SearchSession(service._discovery, {"request_id": run["id"], "session_epoch": self.epoch,
                         "channel_id": "gui"}, None, background=True)
@@ -402,10 +642,15 @@ class AutonomyCoordinator:
                         trace.block("background", "autonomous_material", message["content"])
                 basis = thoughts.current_basis(store, context)
                 with store.source_transaction():
+                    started = time.time()
+                    selection = {**info["selection"], "exposed_commands": [t["function"]["name"] for t in tools],
+                                 "window_seconds": seconds, "lifecycle": activity.lifecycle(config)}
+                    store.conn.execute("UPDATE autonomous_activity_runs SET charged=0,started_at=?,deadline=?,input_stamp=?,selection=? WHERE run_id=?",
+                        (started, 0 if seconds is None else started + seconds, activity.input_stamp(store), thoughts.dump(selection), run["id"]))
                     store.conn.execute("UPDATE exploration_runs SET status='running',reason='',basis=?,updated_at=? WHERE id=?",
                                        (thoughts.dump(basis), time.time(), run["id"]))
             performed = 0
-            for round_no in range(config["run_models"]):
+            for round_no in (count() if autonomy_policy.TEST_CONTROLS_ONLY else range(config["run_models"])):
                 with service._lock:
                     self._gate(run, config, revision, basis, latest, deadline)
                     if not session.valid() or not memory.valid() or not persona_growth.refs_valid(store, growth_refs) or registry is not None and not registry.valid():
@@ -447,7 +692,7 @@ class AutonomyCoordinator:
                 for tc in calls:
                     with service._lock:
                         self._gate(run, config, revision, basis, latest, deadline)
-                        if performed >= config["run_steps"]:
+                        if not autonomy_policy.TEST_CONTROLS_ONLY and performed >= config["run_steps"]:
                             raise YieldToForeground("tool_step_budget")
                         error = capability_registry.validate_call(tc.function.name, tc.function.arguments, tools)
                         performed += 1
@@ -463,12 +708,14 @@ class AutonomyCoordinator:
                                 with store.source_transaction():
                                     result = thoughts.dump(error) if error else loop.dispatch_tool(store, tc.function.name,
                                         tc.function.arguments, source_context=context)
+                                    result = tool_receipt(result, tc)
                                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                                     basis = thoughts.current_basis(store, context)
                                     self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
                             else:
                                 result = thoughts.dump(error) if error else loop.dispatch_tool(store, tc.function.name,
                                     tc.function.arguments, source_context=context)
+                                result = tool_receipt(result, tc)
                                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                                 basis = thoughts.current_basis(store, context)
                                 self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
@@ -476,10 +723,15 @@ class AutonomyCoordinator:
                         raw = search.execute(args, tool_call_id=tc.id)
                         with service._lock:
                             self._gate(run, config, revision, basis, latest, deadline)
-                            result = search.attach_locked(raw, context)
+                            result = tool_receipt(search.attach_locked(raw, context), tc)
                             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                             basis = thoughts.current_basis(store, context)
                             self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
+                    if tc.function.name == "activity_finish" and not json.loads(result).get("error"):
+                        reason = "activity_finished"
+                        break
+                if reason == "activity_finished":
+                    break
             else:
                 status, reason = "paused", "model_call_budget"
         except YieldToForeground as exc:
@@ -510,17 +762,55 @@ class AutonomyCoordinator:
                         service.store.conn.execute("UPDATE exploration_runs SET status=?,reason=?,updated_at=? WHERE id=?",
                                                    (status, reason, time.time(), run["id"]))
                         thoughts.event(service.store, "exploration_finished", run["id"], {"status": status, "reason": reason})
+                    self._default_finish_receipt(run["id"])
             if 'trace' in locals() and trace is not None:
                 trace.finish(delivery="background_" + status, rounds=calls_started)
 
+    def _default_finish_receipt(self, run_id):
+        """No receipt from the model: record actual execution, claim no progress.
+
+        Never a paid follow-up call; the tools' real results stay on disk.
+        """
+        store = self.service.store
+        try:
+            from .autonomy_v2 import build
+            from .autonomy_v2.models import FinishDecision, ProgressKind, ProgressReport
+            stack = build(store=store)
+            row = store.conn.execute("SELECT model_calls,steps FROM exploration_runs WHERE id=?", (run_id,)).fetchone()
+            executed = bool(row and (row["model_calls"] or row["steps"]))
+            context = thoughts.execution_context(store, {"request_id": run_id, "run_id": run_id, "scope": "gui"})
+            basis_row = store.conn.execute("SELECT basis FROM exploration_runs WHERE id=?", (run_id,)).fetchone()
+            with store.source_transaction():
+                stack.progress.finish(context, None, ProgressReport(
+                    decision=FinishDecision.CONTINUE, progress_kind=ProgressKind.NONE,
+                    summary="宿主补记：窗口结束未收到结束回执，不确认实质进展"), actual_execution=executed)
+                stack.communication.finish(context, None,
+                    basis=json.loads(basis_row[0]) if basis_row else {})
+        except Exception as exc:  # Receipt bookkeeping must not mask the run status.
+            thoughts.event(store, "activity_receipt_failed", run_id, {"type": type(exc).__name__})
+
     def _save_checkpoint(self, run, checkpoint, basis, *, step=False):
-        raw = thoughts.dump([{k: v for k, v in message.items() if k not in {"reasoning_content", "reasoning"}}
+        raw = thoughts.dump([{k: v for k, v in message.items() if k not in {"reasoning_content", "reason"}}
                              for message in checkpoint])
         if len(raw) > 120000:
             raise YieldToForeground("checkpoint_budget")
         store = self.service.store
         with store.source_transaction():
             before = store.source_usage_bytes()
+            if (not step and checkpoint and checkpoint[-1].get("role") == "assistant"
+                    and not checkpoint[-1].get("tool_calls") and checkpoint[-1].get("content", "").strip()):
+                activity.charge(store, run["id"])
+            if step and checkpoint and checkpoint[-1].get("role") == "tool":
+                raw_result = checkpoint[-1]["content"]
+                try:
+                    result = json.loads(raw_result[raw_result.index("{"):])
+                    meaningful = not result.get("error") and result.get("status") not in {"blocked", "denied", "unavailable", "unknown_ref"}
+                except (ValueError, TypeError, AttributeError):
+                    meaningful = False
+                if meaningful:
+                    # v2: a successful write records actual execution only;
+                    # substantive progress comes solely from finish receipts.
+                    activity.charge(store, run["id"])
             store.conn.execute("UPDATE exploration_runs SET checkpoint=?,basis=?,reason='',steps=steps+?,updated_at=? WHERE id=?",
                                (raw, thoughts.dump(basis), int(step), time.time(), run["id"]))
             thoughts.source_space_after_write(store, before)
@@ -535,38 +825,25 @@ class AutonomyCoordinator:
             return MaterialRegistryContext(self.service.store, cfg, snapshot, scope="gui")
         return PersonaRegistryContext(self.service.store, cfg, snapshot, snapshot["assembly"], snapshot["expression_package"], scope="gui")
 
-    def _deliver_locked(self):
+    def _deliver_invitations_locked(self):
+        """Deliver at most one prepared short invitation per cycle.
+
+        Legacy full-text queued contacts are deliberately no longer delivered:
+        the old bypass is removed; rows stay as historical records pending the
+        explicit migration to re-prepareable intents.
+        """
         store = self.service.store
-        config = thoughts.settings(store)
-        if not config["proactive_enabled"] or not in_window(config["contact_start"], config["contact_end"]):
+        from .autonomy_v2 import build
+        from .autonomy_v2.models import Scope
+        scope = Scope(session_epoch=self.epoch, channel_id="gui")
+        stack = build(store=store)
+        stack.invitations.expire(scope)
+        if activity.active_idle(store):
+            return  # Rest pauses prepared but undelivered autonomous invitations.
+        row = store.conn.execute("SELECT id FROM v2_invitation_attempts WHERE epoch=? AND state='prepared' "
+                                 "ORDER BY created_at LIMIT 1", (self.epoch,)).fetchone()
+        if row is None:
             return
-        now = time.time()
-        latest = store.conn.execute("SELECT COALESCE(MAX(id),0) FROM turns WHERE role='user'").fetchone()[0]
-        rows = store.conn.execute("SELECT * FROM thought_contacts WHERE epoch=? AND status='queued' ORDER BY id LIMIT 20", (self.epoch,)).fetchall()
-        with store.source_transaction():
-            for row in rows:
-                if row["expires_at"] <= now:
-                    store.conn.execute("UPDATE thought_contacts SET status='expired',updated_at=? WHERE id=?", (now, row["id"]))
-                    continue
-                if not config[row["motive"]] or not thoughts.valid_basis(store, json.loads(row["basis"])):
-                    continue
-                q = store.conn.execute("SELECT version FROM thought_questions WHERE id=?", (row["question_id"],)).fetchone()
-                if latest != row["context_turn_id"] or q and q[0] != row["question_version"]:
-                    store.conn.execute("UPDATE thought_contacts SET status='needs_review',version=version+1,updated_at=? WHERE id=?", (now, row["id"]))
-                    thoughts.event(store, "contact_needs_review", row["id"])
-                    continue
-                if not thoughts.contact_capacity(store, config):
-                    return
-                # GUI history is the durable destination. Browser notifications
-                # can announce it, but are not treated as platform/read receipts.
-                cur = store.conn.execute("INSERT INTO turns(ts,role,content) VALUES(?,'assistant',?)", (now, row["message"]))
-                tid = cur.lastrowid
-                packets = json.loads(row["basis"]).get("packets", [])
-                if packets:
-                    from .discovery_memory import SOURCE_SHADOW
-                    store._source_turn_write(tid, row["message"], packets, "gui")
-                    store.conn.execute("UPDATE turns SET content=? WHERE id=?", (SOURCE_SHADOW, tid))
-                store.conn.execute("INSERT INTO proactive_turns VALUES(?,?,?)", (tid, row["id"], self.epoch))
-                store.conn.execute("UPDATE thought_contacts SET status='delivered',turn_id=?,version=version+1,updated_at=? WHERE id=?", (tid, now, row["id"]))
-                thoughts.event(store, "contact_delivered_gui", row["id"], {"turn_id": tid, "receipt": "history_committed"})
-                return
+        context = thoughts.execution_context(store, {"request_id": "invitation_delivery", "scope": "gui"})
+        attempt = stack.invitations.repository.get_attempt(scope, row[0])
+        stack.invitations.deliver(context, attempt)

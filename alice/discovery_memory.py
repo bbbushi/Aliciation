@@ -377,6 +377,11 @@ class SourceStoreMixin:
                 for row in self.conn.execute(f"SELECT basis,length(CAST({fields} AS BLOB)) FROM {table}"):
                     if json.loads(row[0]).get("packets"):
                         total += row[1] or 0
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thought_agenda'").fetchone():
+            for row in self.conn.execute("SELECT q.basis,length(CAST(a.schedule_reason AS BLOB)) "
+                                         "FROM thought_agenda a JOIN thought_questions q ON q.id=a.question_id"):
+                if json.loads(row[0]).get("packets"):
+                    total += row[1] or 0
         return total
 
     def _check_source_space(self, additional: int) -> None:

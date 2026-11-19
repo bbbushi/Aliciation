@@ -711,6 +711,7 @@ class DiscoveryCoordinator:
             task["diagnostic"] = _diagnostic(task.get("diagnostic"))
             task["search_summary"] = _search_summary(task.get("search_summary"))
         return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "learning_preview": learning_preview, "platforms": platforms,
+                "autonomous_scheduler": "lifecycle-v1",
                 "tieba_forum_check": forum_check,
                 "sharing_warning": "资料共享记录异常，已暂停本次会话的资料注入；普通聊天可继续，重新载入服务后再检查。" if self._sharing_failed else "",
                 "interests": interests, "task": task, "cards": cards,
@@ -902,8 +903,8 @@ class DiscoveryCoordinator:
                 settings[key] = ",".join(dict.fromkeys(engines))
             elif key == "clear_provider_key" and _bool(value):
                 settings["provider_key"] = ""
-        if settings["enabled"] and settings["background_enabled"] and settings["daily_models"] != 0 and not settings["allow_paid"]:
-            raise ChannelError(400, "cost_permission_required", "请允许后台模型费用，或将后台模型额度设为0")
+        # Autonomous model permission/quotas now belong to thoughts settings.
+        # The old background_enabled flag is retained for file compatibility.
         self._cancel.set()
         if self._chat_session:
             self._chat_session.cancel.set()
@@ -1162,8 +1163,8 @@ class DiscoveryCoordinator:
                         consolidation.run_if_due(self.service.store,self.service.cfg)
                 revision, settings = self._config_locked()
                 next_tick = time.monotonic() + settings["tick_minutes"] * 60
-                if not self._launch_thought_locked(settings, revision):
-                    self._launch_locked(settings, revision, manual=False)
+                # Autonomous selection belongs to the three-mode coordinator.
+                # Keep this timer for source expiry / non-model housekeeping.
             except Exception:
                 # Settings/conditions are visible through status; never log provider data.
                 pass
@@ -1335,6 +1336,7 @@ class DiscoveryCoordinator:
         model = {"base_url": self.service.cfg.llm.base_url, "api_key": self.service.cfg.llm.resolved_key(),
                  "model": self.service.cfg.llm.cheap_model, "thinking": False, "allow_loopback": True}
         task = {"id": uuid.uuid4().hex, "epoch": self.dataset_id, "revision": revision, "day": _day(),
+                "manual": manual,
                 "state": "queued", "phase": "queued", "reason": "", "started_at": now,
                 "generation": self._generation, "interest_id": interests[0]["id"], "cards": 0}
         with self.service.store.conn:
@@ -1485,12 +1487,16 @@ class DiscoveryCoordinator:
             check_job = (job.get("kind") == "tieba_forum_check" and self._tieba_forum_check
                          and self._tieba_forum_check["task_id"] == job["id"])
         enabled = settings["enabled"] or bool(check_job)
+        if job.get("kind") not in {"chat_search", "exploration_search"} and not check_job and not job.get("manual"):
+            from .activity import awake
+            enabled = enabled and awake(self.service.store, testing_policy=False)
         if job.get("kind") == "chat_search":
             with self.service._channels.condition:
                 enabled = self._chat_search_allowed(job.get("scope"), settings) and self._foreground_allowed(job)
         elif job.get("kind") == "exploration_search":
             from .thought_workspace import settings as autonomy_settings
-            enabled = (settings["enabled"] and job.get("scope") == "gui"
+            from .autonomy_policy import TEST_CONTROLS_ONLY
+            enabled = ((TEST_CONTROLS_ONLY or settings["enabled"]) and job.get("scope") == "gui"
                        and autonomy_settings(self.service.store)["allow_external"]
                        and self.service._channels.activity().get("status") == "ready")
         return revision == job["revision"] and enabled
@@ -1530,9 +1536,12 @@ class DiscoveryCoordinator:
             budget = self._budget_locked(job["day"])
             model = int(op in ("plan", "interpret", "reflect"))
             query = int(op == "search" or query_attempt)
-            if (_exceeds(budget["network"], 1, settings["daily_network"]) or _exceeds(budget["models"], model, settings["daily_models"])
+            from .autonomy_policy import TEST_CONTROLS_ONLY
+            testing = TEST_CONTROLS_ONLY and job.get("kind") == "exploration_search"
+            if (not testing and (_exceeds(budget["network"], 1, settings["daily_network"])
+                    or _exceeds(budget["models"], model, settings["daily_models"])
                     or _exceeds(budget["queries"], query, settings["daily_queries"])
-                    or _exceeds(budget["body_bytes"], maximum, _response_budget(settings))
+                    or _exceeds(budget["body_bytes"], maximum, _response_budget(settings)))
                     or model and not settings["allow_paid"]):
                 raise _Stopped("quota_exceeded")
             if model:

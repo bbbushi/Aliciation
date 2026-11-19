@@ -167,6 +167,8 @@ def _render_stances(store: Store, scope=None, allowed_memory_ids=None, selected_
     lines = []
     rows = (store.memory_rows(purpose="thought", scope=scope, kind="stance") if scope is not None
             else store.memories_in_layer("longterm", kind="stance"))
+    from .thought_workspace import current_stance_rows
+    rows = current_stance_rows(store, rows)
     if selected_ids is not None:
         rows = [m for m in rows if m['id'] in selected_ids]
     if allowed_memory_ids is not None:

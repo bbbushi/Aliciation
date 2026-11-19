@@ -21,7 +21,8 @@ from . import config as appconfig
 from . import consolidation, loop, maintenance, observation, persona, persona_reset, skills, thought
 from .config import Config, load
 from .channels import ChannelCoordinator, ChannelError
-from .config_edit import ConfigConflict, revision, replace_llm_values, replace_channels, replace_persona_mode
+from .config_edit import (ConfigConflict, revision, replace_llm_values, replace_channels,
+                          replace_persona_mode, replace_observation_settings)
 from .llm import make_client, safe_provider_error
 from .evaluation_service import EvaluationCoordinator
 from .discovery import DiscoveryCoordinator
@@ -547,6 +548,46 @@ class ChatService:
                                    request_id=request_id, call_id=call_id)
 
     # ---- 上下文观测插件（20261107 插件设计 §6）：薄命名空间，委托同一核心投影 ----
+
+    def _observation_settings_view_locked(self) -> dict:
+        if self._config_revision is not None:
+            self._check_config_revision_locked(None, required=False)
+        return {"enabled": self.cfg.plugins.context_inspector_enabled,
+                "body_capture": self.cfg.context.observer_body_capture,
+                "metadata_enabled": self.cfg.context.observer_enabled,
+                "revision": self._config_revision, "writable": self._config_revision is not None,
+                "session_epoch": self._channels.epoch, "restart_required": False}
+
+    def observation_settings(self, payload=None) -> dict:
+        """Local GUI control, separate from the read-only observation APIs."""
+        if payload is None:
+            with self._lock:
+                return self._observation_settings_view_locked()
+        if (not isinstance(payload, dict)
+                or set(payload) != {"enabled", "body_capture", "revision", "session_epoch"}
+                or type(payload["enabled"]) is not bool or type(payload["body_capture"]) is not bool
+                or not isinstance(payload["revision"], str) or not isinstance(payload["session_epoch"], str)):
+            raise ValueError("观测设置参数无效，请重新同步设置")
+        # Reject a concurrent foreground request instead of queuing an opaque
+        # settings write. No model calls and no autonomous-work cancellation.
+        token = self._channels.reserve("control", wait=False, notify_foreground=False)
+        try:
+            with self._lock:
+                self._channels.check_epoch(payload["session_epoch"])
+                self._check_config_revision_locked(payload["revision"], required=True)
+                metadata = self.cfg.context.observer_enabled or payload["body_capture"]
+                new_revision = replace_observation_settings(self._config_path,
+                    enabled=payload["enabled"], metadata=metadata,
+                    body_capture=payload["body_capture"], expected_revision=self._config_revision)
+                # Existing traces retain their own immutable CapturePolicy;
+                # these flags govern only newly created traces and the viewer.
+                self.cfg.plugins.context_inspector_enabled = payload["enabled"]
+                self.cfg.context.observer_enabled = metadata
+                self.cfg.context.observer_body_capture = payload["body_capture"]
+                self._config_revision = new_revision
+                return self._observation_settings_view_locked()
+        finally:
+            self._channels.release(token)
 
     def plugin_inspector_status(self, *, scope=None) -> dict:
         from . import context_observation

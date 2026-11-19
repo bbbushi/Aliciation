@@ -103,7 +103,7 @@ class ContextConfig:
     working_set_calls: int = 4
     history_enabled: bool = False  # C3普通旧原文；需indexed，不读归档/未标渠道旧数据
     history_max_chars: int = 8000
-    history_calls: int = 2
+    history_calls: int = 2  # 搜索、正文展开各自的次数上限；0同时关闭，字数总预算共用
     # C3(a) 有来源前情：移出取数窗的原文经模型生成一次性前情卡（默认关，人工验收后开）
     recap_enabled: bool = False
     recap_min_rows: int = 4

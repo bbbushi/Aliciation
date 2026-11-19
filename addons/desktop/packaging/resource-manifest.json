@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 19,
   "stage": "macos-arm64-updater-development-bundle",
   "include": [
     {
@@ -60,6 +60,7 @@
     "claude-agent": "not-packaged",
     "dsh-agent": "not-packaged",
     "updater": "scheduled-check-manual-install-signed-macos",
-    "desktop-bubble": "macos-shortcut-hub-following-sentence-motion"
+    "desktop-bubble": "macos-shortcut-hub-following-source-projection",
+    "autonomous-activity": "window-communication-decisions-test-controls-only"
   }
 }

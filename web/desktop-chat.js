@@ -7,6 +7,7 @@
   let ready = false, activity = null, lastSync = 0, lastState = 0, composing = false;
   let uncertain = null, live = null, draftVersion = 0, epochWarning = false;
   let followLatest = true, followFrame = null, scrollIntentUntil = 0, scrollPointer = false, touchY = null;
+  let sourceTimer = null;
   const turns = new Map();
   const views = new Map();
   const motion = new window.AliceDesktopSentenceMotion();
@@ -53,7 +54,11 @@
     return response;
   }
   const eligible = (turn) => ["gui", "local"].includes(turn.channel) && !turn.proactive && !turn.worker_report;
-  const display = (turn) => turn.source_bound ? "（这条消息包含资料引用，请在主界面查看。）" : turn.content || "（没有正文）";
+  const sourceReadable = (turn) => !turn.source_bound || (!turn.worker_bound && !turn.source_stale
+    && turn.source_available === true && Number(turn.source_expires_at) * 1000 > Date.now());
+  const display = (turn) => turn.worker_bound ? "（这条消息包含协作资料，请在主界面查看。）"
+    : !sourceReadable(turn) ? (turn.source_stale ? "（资料状态待同步，暂不展示正文。）" : "（资料已到期或不可用，正文已隐藏。）")
+    : turn.content || "（没有正文）";
   const turnKey = (turn) => `${epoch}:${turn.request_id || `turn-${turn.id}`}:${turn.role}`;
   const liveKey = () => `${epoch}:${live.requestId}:assistant`;
   function reconcile(parent, nodes) {
@@ -80,10 +85,31 @@
     return node;
   }
   function mergeTurn(turn, {immediate = false} = {}) {
-    turns.set(turn.id, {...turn, content:turn.source_bound ? "" : turn.content});
+    turn = {...turn, content:sourceReadable(turn) && !turn.worker_bound ? turn.content : ""};
+    turns.set(turn.id, turn);
     if (turn.role === "assistant" && eligible(turn)) {
-      speech.set(turnKey(turn), display(turn), {final:true, immediate:immediate || !!turn.source_bound || !!host.main_focused});
+      const masked = !sourceReadable(turn) || !!turn.worker_bound;
+      // A source placeholder discards body text but preserves only the reveal
+      // count. Revalidating old turns must not replay them ahead of a new reply.
+      speech.set(turnKey(turn), display(turn), {final:true, masked,
+        immediate:immediate || masked || !!host.main_focused});
     }
+  }
+  function refreshSourceExpiry({invalidate = false} = {}) {
+    clearTimeout(sourceTimer); sourceTimer = null;
+    let next = Infinity, changed = false;
+    for (const turn of turns.values()) {
+      if (!turn.source_bound || turn.worker_bound || !eligible(turn)) continue;
+      const deadline = Number(turn.source_expires_at) * 1000;
+      if (invalidate || !sourceReadable(turn)) {
+        if (turn.content || (invalidate && !turn.source_stale)) {
+          mergeTurn({...turn, content:"", source_stale:invalidate || turn.source_stale}, {immediate:true});
+          changed = true;
+        }
+      } else next = Math.min(next, deadline);
+    }
+    if (changed) {motion.clear();render();}
+    if (Number.isFinite(next)) sourceTimer = setTimeout(refreshSourceExpiry, Math.max(20, Math.min(2147483647, next - Date.now() + 20)));
   }
   function render(reveal = null) {
     const oldTop = box.scrollTop;
@@ -112,6 +138,7 @@
   function reset(nextEpoch) {
     const changed = epoch && nextEpoch !== epoch;
     epoch = nextEpoch || null; cursor = 0; initial = false; turns.clear(); live = null;speech.clear();motion.clear();views.clear();bottom();
+    clearTimeout(sourceTimer); sourceTimer = null;
     if (changed) {
       uncertain = null; epochWarning = true;
       say("会话已更换，草稿保留。请先打开主界面核对当前会话，再回到这里发送。");
@@ -119,16 +146,22 @@
     render();
   }
   async function sync(force = false) {
+    refreshSourceExpiry();
     const interval = host.expanded ? 1500 : host.background ? 4000 : 15000;
     if (syncing || sending || !host.enabled || !host.available || (!force && Date.now() - lastSync < interval)) return;
     syncing = true; lastSync = Date.now(); buttons();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    // This deadline covers headers and JSON bodies, only for read-only sync.
+    // A chat stream itself has no such deadline and is never resent here.
+    const read = async (path) => (await api(path, {signal:controller.signal})).json();
     try {
-      activity = await (await api("/api/chat/activity")).json();
+      activity = await read("/api/chat/activity");
       $("connection").textContent = activity.status === "busy" ? "Alice 正在处理消息…" : activity.status === "ready" ? "同一段对话 · 已连接" : "Alice 正在准备或退出";
       if (epoch && activity.session_epoch !== epoch) reset(activity.session_epoch);
       if (activity.status !== "ready") return;
       if (!ready || Date.now() - lastState > 30000) {
-        const state = await (await api("/api/state")).json();
+        const state = await read("/api/state");
         ready = state.model_ready === true && !state.needs_seed; lastState = Date.now();
         if (!ready) say("请先在主界面配置模型 API 并安装人格。");
       }
@@ -136,14 +169,16 @@
         const params = new URLSearchParams({limit:"60"});
         if (initial) params.set("after_id", String(cursor));
         if (epoch) params.set("session_epoch", epoch);
-        const history = await (await api(`/api/history?${params}`)).json();
+        const sourceIds = [...turns.values()].filter((turn) => turn.source_bound && eligible(turn)).map((turn) => turn.id);
+        if (sourceIds.length) params.set("source_turn_ids", sourceIds.slice(-100).join(","));
+        const history = await read(`/api/history?${params}`);
         if (epoch && history.session_epoch !== epoch) {reset(history.session_epoch); break;}
         epoch = history.session_epoch;
         const baseline = !initial;
         for (const turn of history.turns || []) {
           if (!Number.isSafeInteger(turn.id)) continue;
           const fresh = turn.id > cursor;
-          // Do not retain externally-bound text in this compact client.
+          // Use only the server's GUI projection, never retrieve raw source packets.
           mergeTurn(turn,{immediate:baseline});
           if (live?.requestId === turn.request_id) {
             if (turn.role === "user") live.userId = turn.id;
@@ -156,6 +191,10 @@
             settleRequest(); live = null; say("原请求的回复已同步，未重复发送。");
           }
         }
+        for (const update of history.source_updates || []) {
+          const previous = turns.get(update.id);
+          if (previous) mergeTurn({...previous, ...update, source_stale:false});
+        }
         if (Number.isSafeInteger(history.next_after_id)) cursor = Math.max(cursor, history.next_after_id);
         initial = true;
         for (const id of [...turns.keys()].sort((a,b) => b-a).slice(100)) turns.delete(id);
@@ -163,16 +202,22 @@
         if (live) retained.add(liveKey());speech.retain(retained);
         if (!history.has_more) break;
       }
+      refreshSourceExpiry();
       render();
     } catch (error) {
       if (error.code === "session_changed") reset(null);
-      else if (!["busy", "status_unavailable"].includes(error.code)) {$("connection").textContent = "暂时无法连接"; say(error.message);}
-    } finally {syncing = false; buttons();}
+      else {
+        refreshSourceExpiry({invalidate:true});
+        if (error.name === "AbortError") {$("connection").textContent = "同步暂未完成，稍后自动重试";}
+        else if (!["busy", "status_unavailable"].includes(error.code)) {$("connection").textContent = "暂时无法连接"; say(error.message);}
+      }
+    } finally {clearTimeout(timeout); syncing = false; buttons();}
   }
   window.bubbleHostState = (state) => {
     const wasExpanded = host.expanded;
     const wasMainFocused = host.main_focused;
     host = state;
+    refreshSourceExpiry();
     speech.setActive(!!state.expanded && !!state.available);
     if (!state.expanded || !state.available) motion.clear();
     if (state.main_focused && !wasMainFocused) speech.showAll();
@@ -231,11 +276,18 @@
         }
         else if (event.type === "done") {
           live.userId = event.user_turn_id;live.assistantId = event.assistant_turn_id;
-          // Canonical history finishes this same queue; done must never dump the full text.
-          if (!event.assistant_turn_id) speech.set(liveKey(), event.reply || live.reply || "（沉默）", {final:true});
-          uncertain = null;say();
+          // Finalize already-streamed text in the SAME paced queue. Otherwise
+          // an unpunctuated tail waits for history, which may be busy/offline.
+          // Source/worker projection is still refreshed from canonical history.
+          if (live.reply) speech.set(liveKey(), live.reply, {final:true, immediate:!!host.main_focused});
+          else if (!event.assistant_turn_id) speech.set(liveKey(), event.reply || "（沉默）", {final:true});
+          uncertain = null;say(!live.reply && event.assistant_turn_id ? "回复已保存，正在同步正文…" : "");
         } else if (event.type === "error") {
           terminalError = true; say(event.message || "这轮未完成，请先核对记录。");
+        } else if (event.type === "search") {
+          if (event.status !== "not_used" && event.phase !== "idle") say(event.phase === "completed"
+            ? (event.message || "查找结束，Alice 正在整理回答…")
+            : ({queued:"正在准备查找网页…", search:"正在搜索网页…", read:"正在读取网页正文…"}[event.phase] || "正在查找资料…"));
         } else if (event.type === "reply_saved") say("回复已保存，正在完成整理…");
         render();
       });
@@ -320,6 +372,7 @@
         const history = await (await api(`/api/history?${new URLSearchParams({after_id:String(status.assistant_turn_id-1),limit:"1",session_epoch:request.epoch})}`)).json();
         if (history.session_epoch !== epoch || uncertain !== request) return;
         for (const turn of history.turns || []) mergeTurn(turn);
+        refreshSourceExpiry();
         settleRequest(); live = null; render(); say("原请求的回复已同步，未重复发送。");
       } else {
         request.canStartNew = ["not_found","failed","interrupted"].includes(status.status);

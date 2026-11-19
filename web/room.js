@@ -1,7 +1,8 @@
 /* 背景：网格伪 3D 房间 + 中央神经球（弹簧粒子群 + 局部小幅聚合散开）。
    纯装饰，不读会话数据、不发请求、不响应指针。
    动效门禁与氛围层一致：设置关闭 / 系统减动效 / 页面隐藏时停帧（留一帧静态画面）；
-   AI 回复中（#chat.is-receiving）粒子群轻微躁动；经典与简洁主题由 CSS 整层停用。 */
+   AI 回复中（#chat.is-receiving）粒子群轻微躁动；仅房间主题绘制——orbit 的常驻场景由
+   orbit-bg.js 接管，经典与简洁主题由 CSS 整层停用。 */
 (() => {
   const root = document.documentElement;
   const chat = document.getElementById("chat");
@@ -291,7 +292,7 @@
 
   // ---------- 尺寸 / 循环 / 门禁 ----------
   let raf = 0, last = 0, excite = 0, speaking = false;
-  const themeOK = () => root.dataset.theme !== "legacy" && root.dataset.theme !== "minimal";
+  const themeOK = () => root.dataset.theme === "room";
   const hardOK = () => root.dataset.motion === "on" && !document.hidden && themeOK();
   const visOK = () => !chat.closest("[inert], .hidden");
 

@@ -64,6 +64,7 @@
                 <label class="discovery-switch"><input id="discovery-chat-search" type="checkbox" role="switch"><span>聊天时按需查找<small>允许 Alice 为回答查找相关资料。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
                 <details class="discovery-setting-fold"><summary>聊天查找的工作量与等待时间</summary><div id="discovery-chat-limits" class="discovery-policy-grid"></div></details>
               </div>
+              <p id="discovery-autonomous-hint" class="discovery-hint hidden"></p>
               <div id="discovery-activity-options" class="discovery-setting-group">
                 <label class="discovery-switch"><input id="discovery-background" type="checkbox" role="switch"><span>空闲时按兴趣自动寻找<small>Alice 保持运行时，关闭网页后也会继续。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
                 <fieldset class="discovery-time-fields">
@@ -197,7 +198,7 @@
     const costText = node("span", "尚未读取后台模型使用许可。"); costText.id = "discovery-settings-cost";
     const costLink = node("button", "调整费用与额度", "link"); costLink.type = "button"; costLink.dataset.discoverySettingsTarget = "budget";
     cost.append(costText, costLink);
-    pane("use").append($("discovery-chat-options"), $("discovery-activity-options"));
+    pane("use").append($("discovery-chat-options"), $("discovery-autonomous-hint"), $("discovery-activity-options"));
     const preferences = $("discovery-preferences");
     preferences.classList.remove("hidden");
     preferences.append($("discovery-interest-learning"));
@@ -614,7 +615,11 @@
     const tiebaEnabled = list(snapshot.platforms).some((p) => p.id === "tieba" && p.enabled);
     text("discovery-tieba-scope", tiebaEnabled ? tiebaScopeLabel(s) : "");
     $("discovery-tieba-scope").classList.toggle("hidden", !tiebaEnabled);
-    text("discovery-mode", s.enabled ? `${s.background_enabled ? `自动寻找已开启 · ${s.window_start === s.window_end ? "全天" : `${s.window_start}–${s.window_end}（北京时间）`}` : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"} · 手动找一轮不限时段` : "内容访问已暂停");
+    const unified = snapshot.autonomous_scheduler === "lifecycle-v1";
+    $("discovery-activity-options").classList.toggle("hidden", unified);
+    $("discovery-autonomous-hint").classList.toggle("hidden", !unified);
+    if (unified) text("discovery-autonomous-hint", "自主寻找由「思想与探索」中的清醒状态、活动时长与权限统一安排；这里管理平台和资料许可，仍可手动找一轮。");
+    text("discovery-mode", s.enabled ? `${unified ? "自主活动由思想与探索统一安排" : s.background_enabled ? "自动寻找已开启" : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"} · 手动找一轮不限时段` : "内容访问已暂停");
     text("discovery-toggle-enabled", s.enabled ? "暂停发现" : "开启发现");
   }
   function updateControls() {
@@ -1351,7 +1356,7 @@
       settings.provider_endpoint = $("discovery-endpoint").value.trim();
       settings.provider_engines = engines.join(",");
     }
-    if (settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请允许后台模型使用，或在每日额度中关闭后台模型请求。", "waiting"); return; }
+    if (snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请允许后台模型使用，或在每日额度中关闭后台模型请求。", "waiting"); return; }
     if (["brave", "searxng"].includes(settings.provider_kind)) {
       if ($("discovery-key").value.trim()) settings.provider_key = $("discovery-key").value.trim();
       if ($("discovery-clear-key").checked) settings.clear_provider_key = true;

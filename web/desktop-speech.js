@@ -20,14 +20,19 @@
   }
   class DesktopSpeech {
     constructor(change) {this.records = new Map(); this.change = change; this.active = false; this.timer = null; this.due = 0;}
-    set(key, text, {final = false, immediate = false} = {}) {
+    set(key, text, {final = false, immediate = false, masked = false} = {}) {
       text = String(text || "");
       let record = this.records.get(key);
-      if (record && record.text === text && record.final === final && !immediate) return;
+      if (record && record.text === text && record.final === final && !!record.masked === masked && !immediate) return;
       if (!record) {record = {text:"", final:false, parts:[], count:0}; this.records.set(key, record);}
-      if (!text.startsWith(record.text) && !record.text.startsWith(text)) record.count = 0;
+      const wasMasked = !!record.masked;
+      if (masked && !wasMasked) record.resumeCount = record.count;
+      if (!masked && wasMasked) record.count = record.resumeCount || 0;
+      else if (!masked && !text.startsWith(record.text) && !record.text.startsWith(text)) record.count = 0;
       record.text = text; record.final = final; record.parts = sentences(text, final);
       record.count = immediate ? record.parts.length : Math.min(record.count, record.parts.length);
+      record.masked = masked;
+      if (!masked) delete record.resumeCount;
       this.wake();
     }
     visible(key) {const record = this.records.get(key); return record ? record.parts.slice(0, record.count) : [];}

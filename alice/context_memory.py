@@ -151,7 +151,7 @@ class MemoryContext:
         return bool(self.issued or self.history is not None and self.history.issued)
 
     def begin_call(self):
-        if self.calls >= self.cfg.context.memory_tool_calls:
+        if not getattr(self, "testing", False) and self.calls >= self.cfg.context.memory_tool_calls:
             return False
         self.calls += 1
         return True
@@ -223,6 +223,8 @@ class MemoryContext:
                     body = {**item, "status": "loaded", "kind": row["kind"],
                             "title": row["title"], "content": conversation_content(row),
                             "recorded_at": datetime.fromtimestamp(row["created_at"]).astimezone().isoformat(),
+                            "evidence_role": "self_view" if row["kind"] == "stance" else "memory_record",
+                            "record_usage": RECORD_USAGE_GUIDANCE,
                             **prior_notice(row)}
                     if len(dump(body)) > self.cfg.context.memory_expanded_chars:
                         item["status"] = "too_large"

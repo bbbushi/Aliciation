@@ -44,7 +44,8 @@ def reserve_model(store, *, force=False):
     with store.source_transaction():
         current_day = day()
         row = store.conn.execute("SELECT models FROM background_usage WHERE day=?", (current_day,)).fetchone()
-        if (row[0] if row else 0) >= config["daily_models"]:
+        from .autonomy_policy import TEST_CONTROLS_ONLY
+        if not (TEST_CONTROLS_ONLY and getattr(_local, "owner", None) == "autonomy") and (row[0] if row else 0) >= config["daily_models"]:
             raise ValueError("background_model_budget_exhausted")
         store.conn.execute("INSERT INTO background_usage(day,models) VALUES(?,1) "
                            "ON CONFLICT(day) DO UPDATE SET models=models+1", (current_day,))
