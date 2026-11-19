@@ -16,7 +16,7 @@ _RAW = (Path(__file__).parent / "capabilities" / "commands.json").read_bytes()
 _DOCUMENT = json.loads(_RAW)
 VERSION = _DOCUMENT["version"]
 SHA256 = hashlib.sha256(_RAW).hexdigest()
-_EXECUTORS = {"ordinary", "search", "source_recall", "memory", "history",
+_EXECUTORS = {"ordinary", "search", "source_recall", "memory", "history", "reply_detail",
               "workspace", "persona", "worker", "learning", "thought"}
 _UNITS = {}
 for _unit in _DOCUMENT["units"]:

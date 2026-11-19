@@ -77,6 +77,7 @@ def chat(
     json_mode: bool = False,
     temperature: float = 0.8,
     retry: bool = True,
+    timeout: float | None = None,
     observation: dict | None = None,
     on_attempt_usage=None,
 ):
@@ -92,6 +93,8 @@ def chat(
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     apply_provider_parameters(cfg, kwargs)
 
     call_id = uuid.uuid4().hex

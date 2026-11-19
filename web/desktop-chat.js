@@ -8,11 +8,13 @@
   let uncertain = null, live = null, draftVersion = 0, epochWarning = false;
   let followLatest = true, followFrame = null, scrollIntentUntil = 0, scrollPointer = false, touchY = null;
   let sourceTimer = null;
+  let syncController = null;
   const turns = new Map();
   const views = new Map();
   const motion = new window.AliceDesktopSentenceMotion();
   const speech = new window.AliceDesktopSpeech((reveal) => render(reveal));
-  const say = (text = "") => {$("notice").textContent = text;};
+  const setText = (node, text) => {if (node.textContent !== text) node.textContent = text;};
+  const say = (text = "") => setText($("notice"), text);
   function settleRequest() {
     if (uncertain?.restoredVersion === draftVersion && input.value.trim() === uncertain.text) {
       input.value = ""; draftVersion++;
@@ -38,7 +40,8 @@
     if (followFrame !== null) {cancelAnimationFrame(followFrame);followFrame = null;}
   }
   function buttons() {
-    $("send").disabled = !ready || !host.available || !host.enabled || sending || syncing
+    // Quiet GET polling is not a user operation and must not pulse the composer.
+    $("send").disabled = !ready || !host.available || !host.enabled || sending
       || !epoch || !!epochWarning || !!uncertain || activity?.status !== "ready";
     input.disabled = sending || !host.available || !host.enabled;
     $("recovery").hidden = !uncertain;
@@ -69,14 +72,16 @@
     let node = views.get(key);
     if (!node) {node = document.createElement("div"); views.set(key,node);}
     if (role === "user") {
-      node.className = `message user${pending ? " pending" : ""}`;
+      const name = `message user${pending ? " pending" : ""}`;
+      if (node.className !== name) node.className = name;
       if (node.textContent !== parts[0]) node.textContent = parts[0];
     } else {
-      node.className = "assistant-turn";
+      if (node.className !== "assistant-turn") node.className = "assistant-turn";
       const content = parts.length ? parts : ["…"];
       const children = content.map((text, index) => {
         const child = node.children[index] || document.createElement("div");
-        child.className = `message assistant${parts.length ? "" : " pending"}`;
+        const name = `message assistant${parts.length ? "" : " pending"}`;
+        if (child.className !== name) child.className = name;
         if (child.textContent !== text) child.textContent = text;
         return child;
       });
@@ -151,13 +156,18 @@
     if (syncing || sending || !host.enabled || !host.available || (!force && Date.now() - lastSync < interval)) return;
     syncing = true; lastSync = Date.now(); buttons();
     const controller = new AbortController();
+    syncController = controller;
     const timeout = setTimeout(() => controller.abort(), 12000);
     // This deadline covers headers and JSON bodies, only for read-only sync.
     // A chat stream itself has no such deadline and is never resent here.
-    const read = async (path) => (await api(path, {signal:controller.signal})).json();
+    const read = async (path) => {
+      const value = await (await api(path, {signal:controller.signal})).json();
+      if (syncController !== controller) throw new DOMException("同步已让位于发送", "AbortError");
+      return value;
+    };
     try {
       activity = await read("/api/chat/activity");
-      $("connection").textContent = activity.status === "busy" ? "Alice 正在处理消息…" : activity.status === "ready" ? "同一段对话 · 已连接" : "Alice 正在准备或退出";
+      setText($("connection"), activity.status === "busy" ? "Alice 正在处理消息…" : activity.status === "ready" ? "同一段对话 · 已连接" : "Alice 正在准备或退出");
       if (epoch && activity.session_epoch !== epoch) reset(activity.session_epoch);
       if (activity.status !== "ready") return;
       if (!ready || Date.now() - lastState > 30000) {
@@ -186,6 +196,7 @@
           }
           if (!baseline && fresh && turn.role === "assistant" && eligible(turn) && !turn.source_bound && host.background && !host.expanded) {
             await invoke("notice", {epoch, id:turn.id, text:turn.content || "Alice 有一条新回复"});
+            if (syncController !== controller) return;
           }
           if (uncertain?.requestId === turn.request_id && turn.role === "assistant") {
             settleRequest(); live = null; say("原请求的回复已同步，未重复发送。");
@@ -205,13 +216,18 @@
       refreshSourceExpiry();
       render();
     } catch (error) {
+      if (syncController !== controller) return; // Superseded read: no stale UI/error/source mask.
       if (error.code === "session_changed") reset(null);
       else {
         refreshSourceExpiry({invalidate:true});
         if (error.name === "AbortError") {$("connection").textContent = "同步暂未完成，稍后自动重试";}
         else if (!["busy", "status_unavailable"].includes(error.code)) {$("connection").textContent = "暂时无法连接"; say(error.message);}
       }
-    } finally {clearTimeout(timeout); syncing = false; buttons();}
+    } finally {
+      clearTimeout(timeout);
+      // A cancelled read must not unlock or overwrite a newer sync owner.
+      if (syncController === controller) {syncController = null; syncing = false; buttons();}
+    }
   }
   window.bubbleHostState = (state) => {
     const wasExpanded = host.expanded;
@@ -254,8 +270,13 @@
   }
   async function send(originalText = null) {
     const text = typeof originalText === "string" ? originalText : input.value.trim();
-    if (!text || sending || syncing || !host.available || activity?.status !== "ready" || !epoch || !ready || epochWarning || uncertain) return;
+    if (!text || sending || !host.available || activity?.status !== "ready" || !epoch || !ready || epochWarning || uncertain) return;
     if (new TextEncoder().encode(text).length > 12000) {say("消息太长，请缩短后发送（最多 12000 字节）。"); return;}
+    // Only abort background GETs. The POST/SSE below has its own request identity
+    // and is never aborted or resent by polling.
+    const previousSync = syncController;
+    syncController = null; syncing = false;
+    previousSync?.abort();
     const request = {requestId:crypto.randomUUID().replaceAll("-",""), text, epoch};
     const version = draftVersion;
     uncertain = request; sending = true; buttons(); say("正在提交…");

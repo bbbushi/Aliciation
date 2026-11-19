@@ -36,7 +36,8 @@ _global_state: dict = {}
 
 def policy_for(cfg) -> CapturePolicy:
     """正文模式由配置显式开启；默认只记有界元数据（基础设计 §原文与存储）。"""
-    capture = "full" if getattr(cfg.context, "observer_body_capture", False) else "none"
+    grant = getattr(cfg.context, "_lab_capture", None)
+    capture = "full" if getattr(cfg.context, "observer_body_capture", False) or grant and grant() else "none"
     return CapturePolicy(text_capture=capture, body_max_chars=BODY_MAX_CHARS)
 
 
@@ -47,11 +48,10 @@ def observer_for(cfg, body_capture=None) -> ContextObserver | NullObserver:
     None 沿用配置；False 时本请求强制只记元数据——不写正文、不冒充完整。
     """
     global _global_observer, _global_policy
-    if not getattr(cfg.context, "observer_enabled", True):
+    if not getattr(cfg.context, "observer_enabled", True) and body_capture is not True:
         return NullObserver()
-    policy = policy_for(cfg)
-    if body_capture is False:
-        policy = CapturePolicy(text_capture="none", body_max_chars=BODY_MAX_CHARS)
+    policy = (policy_for(cfg) if body_capture is None else
+              CapturePolicy(text_capture="full" if body_capture else "none", body_max_chars=BODY_MAX_CHARS))
     with _global_lock:
         if _global_observer is None or _global_policy != policy:
             _global_policy = policy
@@ -152,9 +152,9 @@ def begin_request(store, cfg, *, request_id, scope, session_epoch=None,
                   parent_request_id=None):
     """主对话入口：返回 RequestTrace（或空实现）。观察故障不影响业务。"""
     try:
-        if not getattr(cfg.context, "observer_enabled", True):
+        allowed = policy_for(cfg).text_capture == "full"
+        if not allowed and not getattr(cfg.context, "observer_enabled", True):
             return NullObserver().begin_request(request_id=request_id)
-        allowed = bool(getattr(cfg.context, "observer_body_capture", False))
         if allowed:
             try:
                 _admit_body_request(request_id)

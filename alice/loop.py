@@ -18,7 +18,7 @@ from .llm import chat, thinking_disabled, apply_provider_parameters
 from .store import Store
 from .steps import drive
 from .worker_context import merge_worker_refs
-from . import capability_registry
+from . import capability_registry, reply_annotation_review, reply_sections
 
 from .capability_registry import sdk_group
 
@@ -142,6 +142,7 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     call_id = uuid.uuid4().hex
     stream = None
     last_chunk_had_usage = False
+    finish_reason = None
     # 调用接入：最终 SDK 参数在发送前冻结；SDK 不发送请求，只随业务调用记录
     trace_call = (observation or {}).get("trace_call")
     if trace_call is not None:
@@ -163,7 +164,10 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
                 receipt_usage = u
             if not getattr(chunk, "choices", None):
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            if getattr(choice, "finish_reason", None) is not None:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
             if delta is None:
                 continue
             piece = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
@@ -174,7 +178,8 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
             piece = getattr(delta, "content", None)
             if piece:
                 content_parts.append(piece)
-                on_delta(piece)
+                if on_delta is not None:
+                    on_delta(piece)
             for tc in getattr(delta, "tool_calls", None) or []:
                 slot = calls.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
                 if tc.id:
@@ -223,6 +228,7 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     return SimpleNamespace(
         content="".join(content_parts),
         reasoning="".join(reasoning_parts),
+        finish_reason=finish_reason,
         tool_calls=[
             SimpleNamespace(
                 id=slot["id"] or f"call_{i}",
@@ -271,10 +277,12 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
               request_id=None, on_request_progress=None, on_maintenance_warning=None,
               on_reply_saved=None,
               source_packet_ids=(), source_scope="gui", source_usage_out: dict | None = None,
-              source_allow_external_recall=False, search_session=None, worker_session=None, tool_round_limit=4, working_set=None):
+              source_allow_external_recall=False, search_session=None, worker_session=None, tool_round_limit=4,
+              working_set=None, reply_cache=None):
     ts = ts if ts is not None else time.time()
     started_at = time.monotonic()
     request_id = request_id or uuid.uuid4().hex
+    reply_session = None
     # 上下文观测 SDK（20261107 补充设计）：请求轨迹；观察故障不影响对话
     from . import context_observation
     ctx_trace = context_observation.begin_request(store, cfg, request_id=request_id,
@@ -311,7 +319,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 extra["trace_call"] = ctx_trace.prepare_call(
                     purpose=purpose, tool_round=round_number, messages=messages,
                     tools=active_tools or None,
-                    parameters=parameters)
+                    parameters=parameters,
+                    capture_body=reply_session is None or reply_session.loaded is None)
         return {"store": store, "purpose": purpose, "request_id": request_id, "context": basis, **extra}
     usage_out = usage_out if usage_out is not None else {}
     def attempt_usage(detail=None):
@@ -412,7 +421,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         return ((not source_context.get("thought_basis") or valid_basis(store, source_context["thought_basis"], scope=source_scope))
                 and (source_context.get("thought_session") is None or source_context["thought_session"].valid())
                 and persona_growth.refs_valid(store, growth_refs)
-                and (recap_session is None or recap_session.valid()))
+                and (recap_session is None or recap_session.valid())
+                and (reply_session is None or reply_session.valid()))
     from .learning import learning_tools
     memory_session = (MemoryContext(store, cfg, source_scope, user_text)
                       if cfg.context.assembly_mode == "indexed" else None)
@@ -436,11 +446,22 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     learning_enabled = bool(learning)
     tools = memory_tools + learning + ([SEARCH_TOOL] if search_session is not None else [])
     extra_messages = []
+    if source_scope == "gui" and reply_cache is not None and cfg.context.reply_sections_enabled:
+        fingerprint = persona_snapshot.get("fingerprint") if persona_snapshot else None
+        reply_session = reply_sections.ReplySections(
+            reply_cache, store, store.meta_get("session_epoch"), user_text, fingerprint)
+        extra_messages.append({"role": "system", "content": reply_sections.PROMPT})
+        if reply_session.targets:
+            tools += [capability_registry.sdk_tool(reply_sections.TOOL_NAME)]
+            extra_messages.append({"role": "system", "content":
+                "本轮可追问的近期回复（按时间从近到远，仅定位；对象不明确时先澄清）："
+                + json.dumps(reply_session.index(), ensure_ascii=False)})
     from . import thought_workspace
     if source_scope == "gui":
         thought_session = thought_workspace.ThoughtSession(store, source_context)
         source_context["thought_session"] = thought_session
-        tools += thought_workspace.tools(source_scope)
+        tools += [t for t in thought_workspace.tools(source_scope)
+                  if t['function']['name'] not in {'activity_plan', 'activity_finish'}]
         thought_index = thought_session.initial(user_text)
         if thought_index:
             extra_messages.append({"role": "system", "content": thought_index})
@@ -691,16 +712,21 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         for manifest in manifests:
             for blk in manifest.blocks:
                 ctx_trace.block(blk.kind, blk.name, blk.content, estimated_tokens=blk.tokens)
-    reply = ""
+    reply, final_sections = "", None
+    format_audit = {"status": "not_evaluated"}
+    annotation_audit = {"status": "not_evaluated" if cfg.context.reply_annotation_review else "off"}
     round_number = 0
     while True:
-        closing = tool_round_limit is not None and round_number >= tool_round_limit
+        detail_loaded = reply_session is not None and reply_session.loaded is not None
+        closing = detail_loaded or tool_round_limit is not None and round_number >= tool_round_limit
         active_tools = [] if closing else tools
         if closing:
-            messages = messages + [{'role':'system','content':
+            closing_text = ("已读取本轮所问的续问材料。现在只按所问交付最终三栏回复。"
+                            if detail_loaded else
                 '本轮工具额度已用完。现在根据已有材料和实际回执交付结果，并说明剩余事项。'
                 '宿主确认已保存或复用的记忆ID：'
-                + json.dumps(list(dict.fromkeys(source_context['memory_ids']))) + '。'}]
+                + json.dumps(list(dict.fromkeys(source_context['memory_ids']))) + '。')
+            messages = messages + [{"role": "system", "content": closing_text}]
             for manifest in manifests:
                 manifest.add("stable", "closing_rule", messages[-1]["content"])
             if ctx_trace is not None:
@@ -741,17 +767,21 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                       retry=memory_session is None and not growth_refs and not recap_exposed,
                                       observation=observe("main"), on_attempt_usage=attempt_usage())
             msg = resp.choices[0].message
+            finish_reason = getattr(resp.choices[0], "finish_reason", None)
         else:
             # Task-bound text waits for the post-I/O licence check; a policy
             # revocation during model generation must not publish late deltas.
-            buffered = [] if (source_context.get("thought_basis") or persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
+            buffered = [] if reply_session is None and (source_context.get("thought_basis") or persona_registry is not None or reply_review_selected or source_context["worker_refs"] or growth_refs or recap_exposed
                               or (memory_session and memory_session.exposed)) else None
             buffered_reasoning = [] if buffered is not None else None
             delta_callback = buffered.append if buffered is not None else on_delta
             reasoning_callback = buffered_reasoning.append if buffered_reasoning is not None else on_reasoning
+            if reply_session is not None:
+                delta_callback = reasoning_callback = None
             try:
                 msg = yield lambda: _stream_round(client, cfg, messages, delta_callback, reasoning_callback,
                                                   usage_out, active_tools, observation=observe("main_stream"))
+                finish_reason = getattr(msg, "finish_reason", None)
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
@@ -777,8 +807,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                           observation=observe("main_fallback", fallback=True),
                                           on_attempt_usage=attempt_usage())
                 msg = resp.choices[0].message
+                finish_reason = getattr(resp.choices[0], "finish_reason", None)
                 r = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
-                if (r and on_reasoning and not reply_review_selected and not source_context["worker_refs"] and not growth_refs and not recap_exposed
+                if (reply_session is None and r and on_reasoning and not reply_review_selected and not source_context["worker_refs"] and not growth_refs and not recap_exposed
                         and not (memory_session and memory_session.exposed)):
                     if buffered_reasoning is not None:
                         buffered_reasoning.append(r)  # 回退路径同样不越过许可检查提前发布
@@ -813,11 +844,27 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             for piece in buffered:
                 on_delta(piece)
         if not msg.tool_calls:
-            reply = (msg.content or "").strip()
+            if reply_session is None:
+                reply = (msg.content or "").strip()
+            else:
+                final_sections, format_audit = reply_sections.parse(
+                    msg.content, finish_reason=finish_reason)
+                reply = final_sections[0] if final_sections is not None else reply_sections.FORMAT_FAILURE
+                if cfg.context.reply_annotation_review and final_sections is not None:
+                    annotation_audit = yield from _review_annotation_steps(
+                        store, client, cfg, msg.content, user_text, manifests[0],
+                        request_id, ctx_trace, observe, attempt_usage())
+                    revised = annotation_audit.pop("sections", None)
+                    if revised is not None:
+                        final_sections = revised
+                        reply = revised[0]
+                        format_audit.update(format="annotated_text" if any(revised[1:]) else "plain_text",
+                                            process_comments=len(revised[1]),
+                                            reflection_comments=len(revised[2].splitlines()))
             # Ordinary replies also report "not_selected". The audit must exist
             # even when no rewrite/recap review ran in this turn.
             review_audit = transform_audit if transform_inputs else recap_reply_audit
-            if reply_review_selected:
+            if reply_review_selected and (reply_session is None or final_sections is not None):
                 fallback = '\n'.join(transform_inputs if transform_inputs else recap_session.excerpts)
                 review_audit.update(draft_sha256=hashlib.sha256(reply.encode()).hexdigest(),
                     policy_sha256=hashlib.sha256(grounding.policy('rewrite' if transform_inputs else 'recap_reply').encode()).hexdigest())
@@ -837,11 +884,13 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                                 purpose="rewrite_review" if transform_inputs else "recap_reply_review",
                                                 messages=review_messages,
                                                 parameters={"model": cfg.llm.cheap_model, "json_mode": True,
-                                                            "stream": False})),
+                                                            "stream": False},
+                                                capture_body=reply_session is None or reply_session.loaded is None)),
                         on_attempt_usage=attempt_usage(review_audit['usage']))
                     verdict = grounding.decisions(reviewed.choices[0].message.content or '', 1)[0]
                     review_audit['status'] = 'accepted' if verdict['valid'] else 'original_preserved'
-                    review_audit['reason'] = verdict['reason']
+                    if reply_session is None or reply_session.loaded is None:
+                        review_audit['reason'] = verdict['reason']
                     if not verdict['valid']:
                         reply = fallback
                 except Exception as exc:
@@ -862,13 +911,14 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             break
         if closing:
             # Even a nonconforming provider cannot dispatch another tool here.
-            reply = ('本轮工具操作已停止。' + ('本轮已确认保存或复用了见闻。'
+            reply = (reply_sections.FORMAT_FAILURE if detail_loaded else
+                     '本轮工具操作已停止。' + ('本轮已确认保存或复用了见闻。'
                      if source_context['memory_ids'] else '本轮没有确认新的见闻写入。') + '可以继续讨论。')
             break
         messages = messages + [
             {
                 "role": "assistant",
-                "content": msg.content or "",
+                "content": (msg.content or "") if reply_session is None else "",
                 "tool_calls": [
                     {
                         "id": tc.id,
@@ -895,7 +945,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             if source_context["packet_ids"] and not store.source_packets_for(source_context["packet_ids"], scope=source_scope):
                 reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                 break
-            if on_tool:
+            if on_tool and tc.function.name != reply_sections.TOOL_NAME:
                 on_tool(tc.function.name)
             if memory_session is not None:
                 memory_session.remaining_tokens = (max(0, cfg.context.total_budget_tokens
@@ -909,6 +959,9 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 validation = capability_registry.validate_call(tc.function.name, tc.function.arguments, active_tools)
                 if validation is not None:
                     result = json.dumps(validation, ensure_ascii=False)
+                elif reply_session is not None and tc.function.name == reply_sections.TOOL_NAME:
+                    result = json.dumps(reply_session.read(json.loads(tc.function.arguments or "{}"), source_context),
+                                        ensure_ascii=False)
                 elif capability_registry.executor(tc.function.name) == "search" and search_session is not None:
                     try:
                         args = json.loads(tc.function.arguments or "{}")
@@ -953,11 +1006,40 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     if persona_registry is not None and not persona_registry.valid():
         reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
     reply = reply or "（沉默）"
-    if on_delta is not None and reply_review_selected:
+    if on_delta is not None and reply_review_selected and reply_session is None:
         on_delta(reply)  # Only final, post-review and post-licence-check text.
     assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id,
                                   source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
+    if reply_session is not None:
+        reply = store.turn_display(assistant_id, scope=source_scope) or reply_sections.FORMAT_FAILURE
+        if annotation_audit["status"] == "applied" and final_sections is not None and reply != final_sections[0]:
+            annotation_audit["status"] = "overridden"
+        if final_sections is not None and any(final_sections[1:]):
+            format_audit["cache_status"] = "ineligible"
+            if (reply == final_sections[0] and reply_session.loaded is None
+                    and not source_context["worker_refs"] and not source_context.get("thought_basis")
+                    and not growth_refs and not recap_exposed and not source_context["recalled_ids"]
+                    and not (memory_session and memory_session.exposed)
+                    and not (persona_registry and persona_registry.loaded)):
+                try:
+                    format_audit["cache_status"] = reply_session.cache.save(
+                        store, reply_session.epoch, reply_session.fingerprint, assistant_id,
+                        final_sections, source_context["packet_ids"])
+                except Exception:
+                    format_audit["cache_status"] = "unavailable"
+        format_audit["first_content_ms"] = int((time.monotonic() - started_at) * 1000)
+        format_audit["annotation_review"] = annotation_audit
+        if on_delta is not None:
+            on_delta(reply)
+        if final_sections is not None and reply == final_sections[0]:
+            delivery = "answer"
+        elif reply == reply_sections.FORMAT_FAILURE:
+            delivery = "format_fallback"
+        else:
+            delivery = "other"
+        format_audit.update(version=reply_sections.VERSION, parsed=final_sections is not None,
+                            detail_loaded=reply_session.loaded is not None, delivery=delivery)
     with store.source_transaction():
         # v2 invitations: bind the actually saved reply of the request that
         # accepted them. Unknown or discarded results stay unknown; the
@@ -981,6 +1063,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                         source_context["invitation_expanded"][0], {"reason": "material_changed"})
     _record_source_usage(source_usage_out, source_context, assistant_turn_id=assistant_id, reply_saved=True)
     if ctx_trace is not None:
+        if reply_session is not None:
+            try:
+                ctx_trace.reply_processed(kind="reply_sections", detail=format_audit)
+            except Exception:
+                pass  # Diagnostics cannot affect a saved answer.
         ctx_trace.finish(assistant_turn_id=assistant_id, delivery="saved",
                          rounds=persona_basis["model_rounds_started"])
     if persona_registry is not None:
@@ -1010,6 +1097,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                                "valid_at_finish": growth_valid()}
     basis['transform_review'] = transform_audit
     basis['recap_reply_review'] = recap_reply_audit
+    if reply_session is not None:
+        basis["reply_sections"] = format_audit
     if recap_session is not None:
         basis['recap'] = recap_session.metadata()
         basis['recap'].update(model_calls_attempted=recap_calls, usage=recap_usage)
@@ -1043,6 +1132,49 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         except Exception:
             pass  # 排队检查失败不影响已保存回复；欠账由空闲执行器重新评估
     return reply
+
+
+def _review_annotation_steps(store, client, cfg, raw, user_text, manifest, request_id, trace,
+                             observe, on_attempt_usage):
+    """Run one body-free observed classifier and fail back to the first pass."""
+    from .context import messages_tokens
+
+    audit = {"status": "skipped_draft"}
+    try:
+        recent = [b for b in manifest.blocks if b.kind == "history"][:-1][-2:]
+        history = [{"role": b.name, "text": b.content[-640:]} for b in recent if b.content]
+        receipts = reply_sections._search_receipts(store, store.meta_get("session_epoch"), request_id)
+        prepared = reply_annotation_review.prepare(raw, user_text, history, receipts)
+        if prepared is None:
+            return audit
+        units, review_messages = prepared
+        if (cfg.context.total_budget_tokens and messages_tokens(review_messages)
+                + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+            return {"status": "skipped_budget"}
+    except Exception:
+        return {"status": "fallback", "reason": "preparation"}
+
+    started = time.monotonic()
+    try:
+        response = yield lambda: chat(
+            client, cfg, review_messages, temperature=0, retry=False,
+            timeout=reply_annotation_review.TIMEOUT_SECONDS,
+            observation=observe("annotation_review", trace_call=None if trace is None else trace.prepare_call(
+                purpose="annotation_review", messages=review_messages, capture_body=False)),
+            on_attempt_usage=on_attempt_usage)
+        choice = response.choices[0]
+    except Exception:
+        audit = {"status": "fallback", "reason": "call_failed"}
+    else:
+        try:
+            if getattr(choice, "finish_reason", None) not in (None, "stop"):
+                raise ValueError("incomplete_review")
+            changes, sections = reply_annotation_review.apply(units, choice.message.content)
+            audit = {"status": "applied" if changes else "unchanged", "changes": changes, "sections": sections}
+        except (AttributeError, ValueError):
+            audit = {"status": "fallback", "reason": "invalid_decision"}
+    audit["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return audit
 
 
 def _continuity(store: Store) -> str:

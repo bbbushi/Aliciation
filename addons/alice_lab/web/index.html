@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alice Lab</title><link rel="stylesheet" href="/lab.css"><script src="/lab.js" defer></script></head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><div class="eyebrow">ALICE / WORKBENCH</div><h1>Alice Lab</h1>
+      <p class="muted rail-note">只读观察 Alice 的运行依据，或在独立档案中测试。</p></div>
+    <nav id="topics" aria-label="观察模块">
+      <button data-topic="schedule" aria-pressed="true">调度权重</button>
+      <button data-topic="context">上下文</button>
+      <button data-topic="memory">记忆</button>
+      <button data-topic="questions">疑问</button>
+      <button data-topic="calls">模型调用</button>
+      <button data-topic="persona_operations">人格导入</button>
+    </nav>
+    <div class="rail-foot">
+      <p id="connection" class="muted" role="status">尚未连接</p>
+      <div id="connected-actions" class="rail-actions" hidden>
+        <a id="target" target="_blank" rel="noopener" hidden>打开隔离 Alice</a>
+        <button type="button" id="bench-entry" class="quiet">测试台</button>
+        <button type="button" id="disconnect" class="quiet">断开连接</button>
+      </div>
+      <button id="exit-lab" class="quiet" type="button">退出 Alice Lab</button>
+    </div>
+  </aside>
+
+  <main>
+    <header class="top">
+      <div><h2 id="page-title">连接 Alice</h2><p id="page-sub" class="muted">从 Alice 的设置生成只读授权码，或启动独立测试实例。</p></div>
+      <div class="top-actions"><span id="stamp" class="muted"></span><button id="refresh" type="button" hidden>刷新</button></div>
+    </header>
+
+    <section id="gate" aria-labelledby="gate-title">
+      <h3 id="gate-title" class="sr-only">连接方式</h3>
+      <div id="connection-choices" class="columns">
+        <form id="pair"><h4>观察日常 Alice</h4><p class="muted">从 Alice 的设置生成只读授权码。</p>
+          <label>授权码<input name="key" type="password" required autocomplete="off" placeholder="粘贴完整授权码"></label>
+          <button>连接日常实例</button></form>
+        <form id="start"><h4>测试隔离 Alice</h4><p class="muted">使用全新档案，初始不继承模型凭据。</p>
+          <label class="choice"><input name="relax" type="checkbox">放宽本次后台调度和额度</label>
+          <button>启动隔离实例</button></form>
+      </div>
+      <p class="muted foot-note">日常连接只读元数据；正文需在 Alice 单独勾选。授权 15 分钟过期，撤销后立即拒绝后续读取。</p>
+    </section>
+
+    <section id="observe" aria-labelledby="observe-title" hidden>
+      <h3 id="observe-title" class="sr-only">运行数据</h3>
+      <div id="observations"></div>
+      <details id="body-controls" hidden><summary>查看已授权的记忆正文</summary>
+        <form id="body-form" class="actions">
+          <label>记忆 ID<input name="id" required maxlength="160"></label>
+          <button>读取正文</button>
+        </form><pre id="body-result" hidden></pre>
+      </details>
+    </section>
+
+    <section id="controls" aria-labelledby="controls-title" hidden>
+      <h3 id="controls-title">隔离测试</h3>
+      <p id="bench-note" class="muted" hidden>日常连接只读。测试台仅在隔离实例中可用。</p>
+      <div id="bench-body">
+        <div class="actions">
+          <button data-control="awake">开启后台（可计费）</button><button data-control="sleep">进入睡眠</button>
+          <button data-control="run">请求探索</button><button data-control="pause">暂停探索</button>
+          <button data-control="end_rest">结束发呆</button></div>
+        <div class="actions"><label class="choice"><input type="checkbox" id="capture">从新请求开始留存上下文正文</label>
+          <label class="choice"><input type="checkbox" id="review">复读标注实验（额外模型调用）</label>
+          <label class="choice" id="search-test-label" hidden><input type="checkbox" id="search-quota">放宽搜索额度</label></div>
+        <form id="chat"><label>发送一条测试消息<textarea name="text" rows="3" maxlength="1200" required></textarea></label>
+          <button>发送并记录</button><pre id="chat-reply" hidden></pre></form>
+        <details><summary>收纳或推进指定疑问</summary><form id="question" class="actions">
+          <label>问题<input name="question" required maxlength="300"></label><button>收纳疑问</button></form></details>
+        <details id="p1"><summary>P1 记忆主张核查</summary>
+          <p class="muted">以下操作只作用于当前隔离会话。预备后仅绑定下一条从本页发送的测试消息。</p>
+          <div class="actions"><button id="p1-list">核查记录</button><button id="p1-arm">预备下一轮</button></div>
+          <form id="p1-limit" class="actions"><label>每日模型请求上限<input name="limit" type="number" min="0" max="100" value="0" required></label><label class="choice"><input name="paid" type="checkbox">允许额外评审费用</label><button>保存额度</button></form>
+          <details><summary>记录详情与人工判级</summary><form id="p1-operation" class="actions">
+            <label>操作<select name="action"><option value="detail">查看记录</option><option value="label">保存人工标签</option><option value="cancel">取消</option><option value="calibrations">一致性记录</option><option value="calibrate">确认一致性</option></select></label>
+            <label>该操作的记录参数（JSON）<input name="params" value="{}" maxlength="1800"></label><button>执行</button>
+          </form></details><pre id="p1-output" hidden></pre>
+        </details>
+      </div>
+    </section>
+
+    <p id="feedback" role="status" aria-live="polite"></p>
+  </main>
+</div>
+<dialog id="context-window" aria-label="上下文观测">
+  <div class="context-window-bar"><button id="close-context" class="quiet" type="button" autofocus>返回 Lab</button></div>
+  <div id="context-frame-host"></div>
+</dialog>
+</body></html>

@@ -1,5 +1,5 @@
 {
-  "version": 19,
+  "version": 38,
   "stage": "macos-arm64-updater-development-bundle",
   "include": [
     {
@@ -28,16 +28,6 @@
       ]
     },
     {
-      "source": "addons/context_inspector",
-      "target": "addons/context_inspector",
-      "extensions": [
-        ".json",
-        ".html",
-        ".js",
-        ".css"
-      ]
-    },
-    {
       "source": "config.example.toml",
       "target": "config.example.toml"
     }
@@ -49,9 +39,18 @@
     "user",
     ".git"
   ],
+  "excludeTargets": [
+    "alice/evaluation.py",
+    "alice/evaluation_service.py",
+    "web/observer.js",
+    "web/evaluations.js",
+    "web/context-viewer.js",
+    "web/context-viewer.css"
+  ],
   "components": {
     "core": "packaged",
-    "context-inspector": "packaged",
+    "context-inspector": "external-alice-lab",
+    "p1-evaluation": "external-alice-lab-source-runner",
     "discovery-worker": "packaged",
     "profile-maintenance": "packaged",
     "qq": "not-packaged",
@@ -61,6 +60,10 @@
     "dsh-agent": "not-packaged",
     "updater": "scheduled-check-manual-install-signed-macos",
     "desktop-bubble": "macos-shortcut-hub-following-source-projection",
-    "autonomous-activity": "window-communication-decisions-test-controls-only"
+    "autonomous-activity": "normal-lifecycle-with-lab-socket-compatible-observation",
+    "web-search": "normal-quotas",
+    "reply-sections": "gui-contextual-comment-lines",
+    "reply-annotation-review": "not-enabled-in-desktop",
+    "reply-sections-observation": "external-read-only-authorized"
   }
 }

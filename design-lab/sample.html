@@ -1,0 +1,1363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0d1114">
+<title>Alice 消息流 · 组装样机 · B 舱壁 Bulkhead</title>
+<style>
+/* ==================================================================
+   sample.html — 8 部件组装（P01/P02/P03/P04/P05/P06/P07/P08）
+   拼装契约：parts-impl/0X/FRAGMENT.md；工艺宪法：PRINCIPLES.md。
+   拼装改动逐条记录在 ASSEMBLY-NOTES.md（信号路由表 / 契约适配 / 遗留）。
+   页级入场（choreograph）：唯一动作者 = .app 容器 220ms fade+rise；
+   其余全部 Static 随容器在场（一容器一入场）；历史回填零 stagger。
+   ================================================================== */
+:root{
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg:#0d1114; --srf:#11171d; --panel:#141c24; --panel-user:#151f29;
+  --line:#263443; --line-user:#31424f;
+  --tx:#ccd6dd; --dim:#7d8b96; --faint:#57646e;
+  --acc:#8fb8cc; --acc-dim:#42606f; --ok:#7fa07f; --bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;touch-action:manipulation;
+  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* ===== 页面壳（唯一入场容器；后续重渲染/切档不重放） ===== */
+.app{height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+
+/* ==================================================================
+   08 演示控制器（p08-*）—— 唯一数据源；面板随成品（FRAGMENT 08 §6 逐字）
+   ================================================================== */
+.p08-panel{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px 7px}
+.p08-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.p08-row+.p08-row{margin-top:6px}
+.p08-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.p08-dbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p08-dbtn:active{transform:scale(.97)}
+.p08-dbtn[aria-current]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.p08-sep{width:1px;height:14px;background:var(--line);margin:0 5px}
+.p08-sw{display:inline-flex;align-items:center;gap:8px;background:none;border:0;border-radius:2px;
+  color:var(--dim);font:11.5px/1 var(--sans);padding:5px 4px;
+  transition:color 140ms ease,transform 160ms var(--ease-out)}
+.p08-sw:active{transform:scale(.97)}
+.p08-knob{position:relative;width:30px;height:16px;border-radius:2px;border:1px solid var(--line);
+  background:var(--bg);transition:background-color 160ms ease,border-color 160ms ease}
+.p08-knob::after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:1px;
+  background:var(--dim);transition:transform 200ms var(--ease-in-out),background-color 160ms ease}
+.p08-sw[aria-pressed="true"]{color:var(--acc)}
+.p08-sw[aria-pressed="true"] .p08-knob{background:#17262f;border-color:var(--acc-dim)}
+.p08-sw[aria-pressed="true"] .p08-knob::after{transform:translateX(14px);background:var(--acc)}
+.p08-note{margin:6px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+@media (hover:hover) and (pointer:fine){
+  .p08-dbtn:hover{color:#b9c6cf}
+  .p08-sw:hover{color:#b9c6cf}
+}
+
+/* ==================================================================
+   01 会话头栏（p01-*）—— FRAGMENT 01 §1/§2 逐字；部件零动画
+   ================================================================== */
+.p01-head{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:11px 18px;border-bottom:1px solid var(--line);overflow:hidden}
+.p01-id{display:flex;align-items:center;gap:11px;min-width:0}
+.p01-badge{width:27px;height:27px;flex:none;display:grid;place-items:center;
+  background:#16232c;border:1px solid var(--acc-dim);color:var(--acc);font:12px/1 var(--mono);
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)}
+.p01-t{display:flex;flex-direction:column;gap:3px;min-width:0}
+.p01-name{font-size:14.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p01-sub{font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.12em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p01-linkwrap{flex:none;margin:0;display:flex}
+.p01-link{display:none;font:11px/1 var(--sans);letter-spacing:.03em;color:var(--dim);
+  border:1px solid var(--line);border-radius:2px;padding:6px 10px;white-space:nowrap;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%)}
+.p01-link::before{content:'●';font-size:7px;margin-right:7px;vertical-align:1px}
+/* 可见性白名单：仅 up/closing 各显一条；缺失/非法 → 状态行整体隐藏，不出占位符 */
+.p01-head[data-p01-link="up"] .p01-link[data-p01-on="up"],
+.p01-head[data-p01-link="closing"] .p01-link[data-p01-on="closing"]{display:block}
+.p01-link[data-p01-on="up"]::before{color:var(--ok)}
+.p01-link[data-p01-on="closing"]{color:var(--bad);border-color:#5a3831}
+.p01-link[data-p01-on="closing"]::before{color:var(--bad)}
+
+/* ==================================================================
+   02 消息列表容器（p02-*）—— 唯一滚动面；骨架归属 02（FRAGMENT 02 §CSS 契约）。
+   拼装删除：.p02-root 入场（页面壳 .app 已入场，一容器一入场）与 03 占位气泡样式
+   （.p02-bub/.p02-meta 等由 03 接管，见 ASSEMBLY-NOTES）。
+   ================================================================== */
+.p02-list{flex:1;min-height:0;position:relative;
+  overflow-y:auto;scrollbar-width:thin;overflow-anchor:none;overscroll-behavior-y:contain}
+.p02-col{display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px 20px 30px}
+@media (max-width:560px){.p02-col{padding:12px 14px 24px}}
+.p02-loading{margin:56px auto;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim);text-align:center}
+.p02-fail{margin:56px auto;display:flex;flex-direction:column;align-items:center;gap:14px}
+.p02-fail-t{margin:0;font:12px/1 var(--mono);letter-spacing:.1em;color:var(--dim)}
+.p02-retry{font:12px/1 var(--sans);letter-spacing:.06em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:8px 16px;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%);
+  transition:color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p02-retry:active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){.p02-retry:hover{color:#b9c6cf;border-color:#33465a}}
+.p02-drow{display:flex;align-items:center;gap:14px;margin:26px 0 12px;
+  color:var(--faint);font:10.5px/1 var(--mono);letter-spacing:.14em}
+.p02-drow::before,.p02-drow::after{content:'';flex:1;height:1px;background:var(--line)}
+/* 序列骨架（组间 16px / 组内 6px / 贴日期行与首条 4px）。无任何 transition：
+   历史回填与容器重建一律 instant，不重放入场（PRINCIPLES §2.5/§2.7）。
+   article 双类 p02-msg p03-msg：骨架规则归 02、面板内部归 03（ASSEMBLY-NOTES A2）。 */
+.p02-msg{display:flex;flex-direction:column;max-width:78%;margin-top:16px}
+.p02-msg[data-role="assistant"]{align-self:flex-start;align-items:flex-start}
+.p02-msg[data-role="user"]{align-self:flex-end;align-items:flex-end}
+.p02-msg[data-cont]{margin-top:6px}
+.p02-col>.p02-msg:first-child,.p02-drow+.p02-msg{margin-top:4px}
+
+/* ==================================================================
+   03 单条消息（p03-*）—— FRAGMENT 03 §2/§3 逐字（拼装删除其骨架代演行，
+   骨架由 02 提供；reveal 光标一条来自 04）。规则次序：失败在前、入场在后。
+   ================================================================== */
+.p03-bub{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);background:var(--panel);
+  border:1px solid var(--line);border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.p03-msg[data-role="assistant"] .p03-bub{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.p03-msg[data-role="user"] .p03-bub{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%);transform-origin:100% 100%}
+/* 句单元：内容结构而非视觉分隔（inline、无缝连排、不带可见序号）；中间空单元原样保留 */
+.p03-sent--wait{color:var(--faint)}   /* 首句未到占位「…」（出现/消失时序归 04） */
+.p03-sent--blank{color:var(--dim)}    /* 沉默占位「（沉默）」/ 用户空白兜底「（无内容）」 */
+/* 04 逐句揭示流：揭示中消息本体可点跳过（04 FRAGMENT §7 唯一样式） */
+.p03-msg[data-p04-live]{cursor:pointer}
+/* 元信息行：逐字段可缺省，缺哪个隐藏哪个；全缺省则整行不渲染 */
+.p03-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;
+  font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.p03-ch{border:1px solid var(--line);border-radius:2px;padding:2px 5px}
+.p03-st-send{color:var(--acc)}
+.p03-st-live{color:var(--acc)}
+.p03-st-bad{color:var(--bad)}
+/* 失败（规则在前）：press 挂面板；命中区＝整条 article（本体或状态行均可点） */
+.p03-msg[data-status="failed"]{cursor:pointer}
+.p03-msg[data-status="failed"] .p03-bub{border-color:#5a3831;
+  transition:transform 160ms var(--ease-out),border-color 140ms ease}
+.p03-msg[data-status="failed"]:active .p03-bub{transform:scale(.97)}
+.p03-msg[data-status="failed"] .p03-st-bad{transition:color 140ms ease}
+/* 入场（规则在后，失败+入场同在时清单覆盖全部所需属性）：
+   仅实时尾插加 .p03-enter——重建/回填/原位更新一律不加，同内容只入场一次 */
+.p03-msg.p03-enter .p03-bub{transition:opacity 180ms var(--ease-out),transform 160ms var(--ease-out),border-color 140ms ease}
+.p03-msg.p03-enter[data-role="user"] .p03-bub{transition-duration:140ms,160ms,140ms}
+@starting-style{
+  .p03-msg.p03-enter[data-role="assistant"] .p03-bub{opacity:0;transform:translateY(8px)}
+  .p03-msg.p03-enter[data-role="user"] .p03-bub{opacity:0;transform:scale(.96)}
+}
+@media (hover:hover) and (pointer:fine){
+  .p03-msg[data-status="failed"]:hover .p03-bub{border-color:#6d443b}
+  .p03-msg[data-status="failed"]:hover .p03-st-bad{color:#e08a75}
+}
+
+/* ==================================================================
+   05 composer 输入区（p05-*）—— FRAGMENT 05 §CSS 逐字
+   ================================================================== */
+.p05-comp{background:var(--srf);border-top:1px solid var(--line);
+  padding:10px 18px calc(12px + env(safe-area-inset-bottom,0px))}
+.p05-in{max-width:780px;margin:0 auto}
+/* 处理提示行：预留高度，三态同行切换不叠行、不跳动；文案即时、仅颜色走 140ms ease */
+.p05-hint{min-height:16px;margin:0 0 6px;font:11px/1.4 var(--sans);letter-spacing:.02em;color:var(--acc);
+  transition:color 140ms ease}
+.p05-hint[data-k="fail"],.p05-hint[data-k="close"]{color:var(--bad)}
+.p05-hint[data-k=""]{visibility:hidden}
+/* 输入舱：聚焦=边框冰蓝+井内微亮，纯颜色过渡（输入为高频操作，聚焦/输入零动效） */
+.p05-row{display:flex;align-items:flex-end;gap:10px;background:var(--bg);border:1px solid var(--line);border-radius:3px;
+  padding:8px 8px 8px 12px;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);
+  transition:border-color 180ms ease,background-color 180ms ease}
+.p05-row:focus-within{border-color:var(--acc-dim);background:#10171e}
+.p05-ta{flex:1;min-width:0;background:transparent;border:0;outline:0;resize:none;color:var(--tx);
+  caret-color:var(--acc);font:14px/1.7 var(--sans);max-height:132px;overflow-y:auto;overscroll-behavior:contain;
+  padding:6px 0}
+.p05-ta::placeholder{color:var(--faint)}
+/* 发送键：切角钢件；可发=冰蓝通电，禁用=断电幽灵态；press scale(0.97) 必做 */
+.p05-send{flex:none;font:12.5px/1 var(--sans);letter-spacing:.08em;color:var(--acc);background:#1b2933;
+  border:1px solid var(--acc-dim);border-radius:2px;padding:10px 16px;
+  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p05-send:disabled{color:var(--faint);background:transparent;border-color:var(--line);cursor:default}
+.p05-send:not(:disabled):active{transform:scale(.97)}
+/* 键位提示常驻左，字符计数只在长草稿时出现于右（即时显隐，零动效） */
+.p05-keys{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:6px 2px 0;
+  font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+.p05-count{color:var(--dim)}
+@media (pointer:coarse){
+  .p05-ta{font-size:16px} /* mobile-native：粗指针下 ≥16px，防 iOS 聚焦缩放 */
+}
+@media (hover:hover) and (pointer:fine){
+  .p05-send:not(:disabled):hover{background:#22333f}
+}
+
+/* ==================================================================
+   06 空状态（p06-*）—— FRAGMENT 06 §3 逐字。罕见档一次性编排：总跨度 275ms，
+   错峰 40/35/50 非均匀；容器静止只服务退场；keyframes 仅本一次性编排（§2.5）。
+   ================================================================== */
+.p06{margin:14vh auto 0;max-width:430px;padding:0 20px;text-align:center;
+  transition:opacity 130ms var(--ease-out),transform 130ms var(--ease-out)} /* 仅服务退场；容器不入场 */
+.p06.is-leaving{opacity:0;transform:translateY(8px)}
+.p06-glyph{width:34px;height:34px;margin:0 auto 18px;display:grid;place-items:center;
+  border:1px solid var(--acc-dim);color:var(--acc);font:14px/1 var(--mono);
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%);
+  animation:p06-rise 190ms var(--ease-out) both}
+.p06-title{margin:0;min-width:0;font-size:17px;font-weight:600;color:#e2e9ee;letter-spacing:.02em;
+  animation:p06-rise-lead 200ms var(--ease-out) 40ms both}
+/* 超长称呼只在名字段截断（DOM 保留全文），"，这里还很安静"始终在场 */
+.p06-name{display:inline-block;max-width:22em;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;vertical-align:bottom}
+.p06-desc{margin:12px 0 0;font-size:13px;line-height:1.75;color:var(--dim);
+  animation:p06-rise 190ms var(--ease-out) 75ms both}
+.p06-cta-slot{display:block;margin:24px auto 0;
+  animation:p06-seat 150ms var(--ease-out) 125ms both}
+/* 入场 transform 挂 slot、按压反馈挂内部按钮：避免 fill-mode both 压制 :active */
+.p06-cta{display:inline-block;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12.5px/1 var(--sans);letter-spacing:.06em;padding:10px 20px;border-radius:2px;
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p06-cta:active{transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){
+  .p06-cta:hover{background:#1b2c38;color:#b5d4e4}
+}
+@keyframes p06-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes p06-rise-lead{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes p06-seat{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes p06-fade{from{opacity:0}to{opacity:1}}
+
+/* ==================================================================
+   07 回到最新 pill（p07-*）—— FRAGMENT 07 §CSS；装配定位 fixed;bottom:122px
+   （部件演示舞台内为 absolute;bottom:76px，仅此一行不同，其注释在案）。
+   显 170ms / 隐 110ms（exit 快于 enter），自底部入场，origin 50% 100%。
+   ================================================================== */
+.p07-pill{position:fixed;left:50%;bottom:122px;z-index:20;
+  transform:translate(-50%,100%) scale(.95);transform-origin:50% 100%;opacity:0;pointer-events:none;
+  font:12px/1 var(--sans);letter-spacing:.04em;color:#d5dee6;
+  background:rgba(17,23,29,.96);border:1px solid #33465a;border-radius:2px;padding:10px 16px;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+  transition:opacity 170ms var(--ease-out),transform 170ms var(--ease-out),
+    color 140ms ease,border-color 140ms ease}
+.p07-pill[data-show]{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
+.p07-pill:not([data-show]){transition-duration:110ms}
+.p07-pill:active{transform:translate(-50%,0) scale(.97)}
+.p07-count{color:var(--acc);font-weight:500;margin-left:7px}
+.p07-count:empty{display:none}
+@media (hover:hover) and (pointer:fine){
+  .p07-pill[data-show]:hover{border-color:var(--acc-dim);color:#eaf2f7}
+}
+
+/* ==================================================================
+   全局 reduced-motion（PRINCIPLES §4：一条全局 reduce 块——拼装时把各部件
+   reduce 块合并于此，退化策略一致：留 opacity/颜色，删位移与循环）
+   ================================================================== */
+@media (prefers-reduced-motion:reduce){
+  .app{transition:opacity 160ms var(--ease-out);transform:none}
+  .p03-msg.p03-enter .p03-bub{transition:opacity 160ms var(--ease-out)}
+  @starting-style{.p03-msg.p03-enter .p03-bub{opacity:0;transform:none}}
+  .p03-msg[data-status="failed"] .p03-bub{transition:border-color 140ms ease}
+  .p06{transition:opacity 130ms var(--ease-out)}
+  .p06.is-leaving{transform:none}
+  .p06-glyph,.p06-title,.p06-desc,.p06-cta-slot{animation:p06-fade 160ms var(--ease-out) both}
+  .p07-pill{transition:opacity 120ms var(--ease-out),color 140ms ease,border-color 140ms ease;
+    transform:translate(-50%,0)}
+  .p07-pill:not([data-show]){transition-duration:90ms}
+  .p08-knob::after{transition:background-color 160ms ease}
+  .p08-dbtn,.p08-sw{transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease}
+  .p05-send,.p02-retry{transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== 08 演示控制器（唯一随成品的"装置"；其余 rig 均不入成品） ===== -->
+  <section id="p08-mount"></section>
+
+  <!-- ===== 01 会话头栏（置于 08 之后、02 之前；首帧 data-p01-link="up" 无 JS 也正确） ===== -->
+  <header class="p01-head" data-p01-link="up" data-p01-abnormal="false" aria-label="会话头栏">
+    <div class="p01-id">
+      <span class="p01-badge" aria-hidden="true">A</span>
+      <div class="p01-t">
+        <span class="p01-name">Alice</span>
+        <span class="p01-sub">单一会话 · 记忆持续</span>
+      </div>
+    </div>
+    <p class="p01-linkwrap" role="status">
+      <span class="p01-link" data-p01-on="up">本机已连接</span>
+      <span class="p01-link" data-p01-on="closing">服务正在关闭</span>
+    </p>
+  </header>
+
+  <!-- ===== 02 消息列表容器（唯一滚动面；06 空态在其面内挂载） ===== -->
+  <main id="p02-list" class="p02-list" aria-label="消息列表"></main>
+
+  <!-- ===== 05 composer 输入区（挂载点；P05.mount 自建 .p05-comp） ===== -->
+  <div id="p05-host"></div>
+
+</div>
+
+<!-- ===== 07 回到最新 pill（悬浮层，挂 02 滚动容器外层） ===== -->
+<button class="p07-pill" id="p07Pill" aria-hidden="true" tabindex="-1">回到最新<b class="p07-count" id="p07Count"></b></button>
+
+<script>
+'use strict';
+/* ==================================================================
+   装配总线：{on,emit} 小实现，桥接全部部件信号（PARTS §2.3）。
+   ================================================================== */
+const bus={_m:{},
+  on(sig,fn){(this._m[sig]||(this._m[sig]=[])).push(fn);},
+  emit(sig,detail){const l=this._m[sig];if(l)l.slice().forEach(f=>f(detail));}};
+
+/* ==================================================================
+   03 单条消息（window.P03）—— parts-impl/03/part.html 部件块逐字搬入
+   （仅去掉演示页多余的 window.P03=P03 重复行）。
+   ================================================================== */
+window.P03=(function(){
+  /* —— 切句（规格 §2 规则；02 的未读句计数与 04 的单元边界共用本实现，防两份漂移） —— */
+  const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+  const CLOSES='）」』】)]';
+  const END='。！？…';
+  function splitSent(text){
+    if(typeof text!=='string'||!text.trim())return[];
+    const out=[];let cur='',depth=0;
+    for(const ch of text){                 /* 按码点迭代：代理对/ZWJ 序列不拆 */
+      cur+=ch;
+      if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}   /* 换行强制断 */
+      if(PAIRS[ch]){depth++;continue;}
+      if(CLOSES.includes(ch)){if(depth>0)depth--;continue;}   /* 配对内句末标点不断 */
+      if(END.includes(ch)&&depth===0){out.push(cur);cur='';}
+    }
+    if(cur)out.push(cur);                  /* 规则 2：剩余尾部自成一句 */
+    if(out.length>400){const h=out.slice(0,399);h.push(out.slice(399).join(''));return h;} /* 规则 4 */
+    return out;
+  }
+  /* —— 时间：HH:MM（24 小时制）；null/非法 → null（字段隐藏，永不出 Invalid Date） —— */
+  const p2=n=>String(n).padStart(2,'0');
+  function fmtTime(ms){
+    if(typeof ms!=='number'||!isFinite(ms))return null;
+    const d=new Date(ms);
+    if(isNaN(d.getTime()))return null;
+    return p2(d.getHours())+':'+p2(d.getMinutes());
+  }
+  let bus=null;
+  function init(b){bus=b;}
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+  /* —— 正文：句单元渲染（textContent 原样赋值：【情绪】/(动作)/ZWJ 均不被转义或拆坏） —— */
+  function fillBody(bub,t,revealing){
+    bub.textContent='';
+    const body=revealing?(typeof t.shownText==='string'?t.shownText:''):t.text;
+    if(typeof body!=='string'||!body.trim()){
+      if(revealing){ /* 首句未到占位：句单元存在（data-si=0），节点不缺席，04 可对齐 */
+        const s=el('span','p03-sent p03-sent--wait','…');s.dataset.si='0';bub.append(s);
+        bub.dataset.units='1';return;
+      }
+      const note=t.role==='assistant'?'（沉默）':'（无内容）'; /* 规格文案表 */
+      const s=el('span','p03-sent p03-sent--blank',note);s.dataset.si='0';bub.append(s);
+      bub.dataset.units='1';return;
+    }
+    const units=splitSent(body);
+    units.forEach((s,i)=>{
+      const sp=el('span','p03-sent',s);
+      sp.dataset.si=String(i);
+      bub.append(sp);
+    });
+    bub.dataset.units=String(units.length);
+  }
+  /* —— 元信息行：逐字段可缺省；返回字段数（0 → 整行不渲染） —— */
+  function fillMeta(meta,t,revealing){
+    meta.textContent='';
+    const tm=fmtTime(t.time);
+    if(tm!=null)meta.append(el('span','p03-mt',tm));
+    if(t.channel==='qq')meta.append(el('span','p03-ch','QQ'));
+    if(revealing)meta.append(el('span','p03-st-live','正在回复…'));
+    else if(t.role==='user'&&t.status==='sending')meta.append(el('span','p03-st-send','发送中'));
+    else if(t.role==='user'&&t.status==='failed')meta.append(el('span','p03-st-bad','发送失败 · 点击重试'));
+    return meta.childElementCount;
+  }
+  /* —— fill：把一轮发言渲染进 article 骨架（骨架归 02；可反复调用＝原位更新，不重放入场） —— */
+  function fill(art,t,opts){
+    opts=opts||{};
+    const revealing=opts.revealing===true;
+    art.dataset.role=t.role;
+    art.dataset.id=String(t.id);
+    art.dataset.status=(t.role==='user'&&!revealing&&(t.status==='sending'||t.status==='failed'))?t.status:'ok';
+    if(opts.entrance)art.classList.add('p03-enter');
+    let bub=art.querySelector('.p03-bub');
+    if(!bub){bub=el('div','p03-bub');art.append(bub);}
+    fillBody(bub,t,revealing);
+    let meta=art.querySelector('.p03-meta');
+    if(!meta){meta=el('div','p03-meta');art.append(meta);}
+    if(fillMeta(meta,t,revealing)===0)meta.remove();
+    if(art.dataset.status==='failed'){
+      art.setAttribute('role','button');
+      art.setAttribute('aria-label','发送失败，点击重试');
+      art.tabIndex=0;
+    }else{
+      art.removeAttribute('role');art.removeAttribute('aria-label');art.removeAttribute('tabindex');
+    }
+    if(!art._p03wired){  /* 每节点只绑一次；仅 failed 态放行（防连点重复发信号：状态先行翻转） */
+      art._p03wired=true;
+      art.addEventListener('click',()=>{
+        if(art.dataset.status==='failed'&&bus)bus.emit('retry:send',{id:art.dataset.id});
+      });
+      art.addEventListener('keydown',e=>{
+        if(art.dataset.status!=='failed')return;
+        if(e.key==='Enter'||e.key===' '){e.preventDefault();if(bus)bus.emit('retry:send',{id:art.dataset.id});}
+      });
+    }
+    return art;
+  }
+  return {init,fill,splitSent,fmtTime};
+})();
+
+/* ==================================================================
+   06 空状态（window.P06）—— parts-impl/06/part.html 部件块搬入
+   （唯一适配：bus 由全局改经 P06.init 注入；其余逐字）。
+   ================================================================== */
+window.P06=(function(){
+  let bus=null;
+  const LEAVE_MS=130;
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+  function init(b){bus=b;}
+  function mount(name){
+    const n=el('div','p06');
+    n.setAttribute('role','group');n.setAttribute('aria-label','空会话引导');
+    const g=el('div','p06-glyph','A');g.setAttribute('aria-hidden','true');
+    n.append(g,el('h2','p06-title'),el('p','p06-desc','说第一句话，Alice 会一句一句地回你。'));
+    const slot=el('span','p06-cta-slot');
+    const b=el('button','p06-cta','写下第一句');b.type='button';
+    b.addEventListener('click',()=>{if(bus)bus.emit('focus:composer');}); /* 唯一交互 → 唯一信号 */
+    slot.append(b);n.append(slot);
+    setName(n,name); /* 文案逐字出自 06 规格 §5 */
+    return n;
+  }
+  function setName(n,name){ /* 原地更新：不重挂载、不重放入场（PRINCIPLES §2.5） */
+    const t=n.querySelector('.p06-title');t.textContent='';
+    if(name){
+      const s=el('span','p06-name');s.textContent=name;
+      t.append(s,'，这里还很安静');
+    }else t.textContent='这里还很安静'; /* 无称呼兜底，句子仍通顺 */
+  }
+  function leave(n){n.classList.add('is-leaving');} /* 宿主在 LEAVE_MS 后移除节点并上屏首条 */
+  return{init,mount,setName,leave,LEAVE_MS};
+})();
+
+/* ==================================================================
+   05 composer 输入区（window.P05）—— parts-impl/05/part.html 部件块逐字搬入
+   ================================================================== */
+const P05=(()=>{
+  const MAXH=132;      /* 自增高上限（B 基线），其后内部滚动、永不截断 */
+  const COUNT_AT=400;  /* 字符计数出现阈值（按 Unicode 码点计） */
+  const st={draft:'',busy:false,link:'up',inflight:false,failHint:false,ime:false};
+  const on={};
+  let ta=null,send=null,hint=null,count=null;
+  const emit=(ev,arg)=>{(on[ev]||[]).forEach(fn=>fn(arg));};
+  const snapshot=()=>Object.assign({},st,{chars:[...st.draft].length});
+  function mount(host){
+    host.innerHTML=
+      '<section class="p05-comp" aria-label="输入区">'
+    +   '<div class="p05-in">'
+    +     '<p class="p05-hint" data-k="" role="status"></p>'
+    +     '<div class="p05-row">'
+    +       '<textarea class="p05-ta" rows="1" placeholder="给 Alice 写点什么…" '
+    +         'aria-label="写给 Alice 的消息" enterkeyhint="send"></textarea>'
+    +       '<button type="button" class="p05-send" disabled>发送</button>'
+    +     '</div>'
+    +     '<div class="p05-keys"><span>Enter 发送 · Shift+Enter 换行</span>'
+    +       '<span class="p05-count" aria-hidden="true" hidden></span></div>'
+    +   '</div>'
+    + '</section>';
+    ta=host.querySelector('.p05-ta');
+    send=host.querySelector('.p05-send');
+    hint=host.querySelector('.p05-hint');
+    count=host.querySelector('.p05-count');
+    ta.value=st.draft;
+    ta.addEventListener('input',onInput);
+    ta.addEventListener('compositionstart',()=>{st.ime=true;emit('state:changed',snapshot());});
+    ta.addEventListener('compositionend',()=>{st.ime=false;emit('state:changed',snapshot());});
+    ta.addEventListener('keydown',onKey);
+    send.addEventListener('click',()=>submit());
+    resize();syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function onInput(){
+    st.draft=ta.value;
+    if(st.failHint)st.failHint=false;  /* 开始编辑即确认失败提示（B 基线行为） */
+    resize();syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function onKey(ev){
+    if(ev.key!=='Enter'||ev.shiftKey)return;              /* Shift+Enter → 原生换行，绝不发送 */
+    if(ev.isComposing||ev.keyCode===229||st.ime)return;   /* IME 组合期 Enter = 组字确认，不误发 */
+    ev.preventDefault();
+    submit();
+  }
+  function submit(){
+    if(st.inflight||st.busy||st.link!=='up')return;       /* 在途锁 / busy / closing：信号不得发出 */
+    const v=st.draft.trim();
+    if(!v)return;                                          /* 仅空格换行等同空：不发信号、不动草稿 */
+    st.inflight=true;st.failHint=false;
+    st.draft='';ta.value='';resize();renderHint();updateSend();
+    emit('state:changed',snapshot());
+    emit('submit:text',v);                                 /* 已 trim 的非空草稿 */
+  }
+  function setDraft(v){
+    st.draft=String(v);st.failHint=false;
+    if(ta){ta.value=st.draft;resize();ta.scrollTop=0;}
+    syncCount();renderHint();updateSend();
+    emit('state:changed',snapshot());
+  }
+  function syncCount(){ /* 字符计数：长草稿时出现，即时显隐（数据非状态，零动效） */
+    if(!count)return;
+    const cp=[...st.draft].length;
+    if(cp>=COUNT_AT){count.hidden=false;count.textContent=cp+' 字';}
+    else count.hidden=true;
+  }
+  function renderHint(){ /* 单行三态，优先级：失败 > 关闭 > 处理中；文案即时，仅颜色过渡 */
+    let k='',txt='';
+    if(st.failHint){k='fail';txt='发送失败，草稿已恢复';}
+    else if(st.link==='closing'){k='close';txt='服务正在关闭，暂停接收新消息';}
+    else if(st.busy){k='busy';txt='Alice 正在处理消息；输入会保留';}
+    if(hint){hint.textContent=txt;hint.dataset.k=k;}
+  }
+  function updateSend(){
+    if(send)send.disabled=!(st.draft.trim()&&!st.busy&&st.link==='up'&&!st.inflight);
+  }
+  function resize(){ /* 自增高：瞬变（高频输入零动效，布局属性不挂过渡） */
+    if(!ta)return;
+    ta.style.height='auto';
+    ta.style.height=Math.min(ta.scrollHeight,MAXH)+'px';
+  }
+  function handle(sig,arg){
+    switch(sig){
+      case 'busy:change':   /* 不可发送，但仍可输入——草稿保留能力优先于锁定 */
+        st.busy=!!arg;renderHint();updateSend();emit('state:changed',snapshot());break;
+      case 'link:change':
+        st.link=arg==='closing'?'closing':'up';renderHint();updateSend();
+        emit('state:changed',snapshot());break;
+      case 'send:failed':   /* 失败回执：已 trim 原文逐字回填 + 失败提示 */
+        st.inflight=false;setDraft(String(arg));st.failHint=true;
+        renderHint();updateSend();emit('state:changed',snapshot());break;
+      case 'turn:append':   /* 回执（用户 Turn 上屏，契约既有信号）→ 释放在途锁 */
+        if(arg&&arg.role==='user'&&st.inflight){st.inflight=false;updateSend();emit('state:changed',snapshot());}break;
+      case 'focus:composer': /* 06 空态引导 */
+        if(ta)ta.focus();break;
+    }
+  }
+  window.addEventListener('resize',resize);
+  return {mount,on:(ev,fn)=>{(on[ev]||(on[ev]=[])).push(fn);},handle,setDraft,state:snapshot};
+})();
+window.P05=P05;
+
+/* ==================================================================
+   02 消息列表容器（window.P02）—— parts-impl/02/part.html 部件块搬入，
+   按两份 FRAGMENT 的装配注意完成四处适配（详见 ASSEMBLY-NOTES A1–A5）：
+   A1 切句统一取 P03.splitSent；A2 节点内部交 P03.fill（article 双类）；
+   A3 update 改原位 fill（不 replaceWith）；A4 reveal 收 04 信号并加
+   前缀/完整性守卫（04 FRAGMENT §4 联合守卫）；A5 空态面交 06 挂载并实现
+   「先消失后上屏」让位窗口。
+   ================================================================== */
+window.P02=(function(){
+  const LEAVE=140, BACK=48;   /* 离底/回底滞回阈值 px（判定点不同，防边缘翻转） */
+  const st={turns:[],byId:new Map(),listState:'loading',fail:false,atLatest:true,unread:0,gen:0,
+    userName:'阿澈',emptyExit:false};
+  let root=null,bus=null,col=null,hook=null;
+
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+  const cssEsc=v=>(window.CSS&&CSS.escape)?CSS.escape(String(v)):String(v).replace(/"/g,'\\"');
+  function devHook(){if(hook)hook(api.state());}
+
+  /* A1：切句公共化（03 FRAGMENT §7：02 未读句计数用 P03.splitSent，防漂移） */
+  const splitSent=text=>window.P03.splitSent(text);
+  const sentCount=t=>{
+    const s=t.state==='revealing'?(t.shownText||''):
+      (t.shownText!==undefined&&t.shownText!==''?t.shownText:t.text);
+    return (s&&s.trim())?splitSent(s).length:0;
+  };
+
+  /* —— 时间格式（日期行：02 规格 §5；跨年带年份，当年省略） —— */
+  const p2=n=>String(n).padStart(2,'0');
+  const hm=ms=>{const d=new Date(ms);return p2(d.getHours())+':'+p2(d.getMinutes());};
+  const dayKey=ms=>{const d=new Date(ms);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
+  const dayLabel=ms=>{const d=new Date(ms),n=new Date();
+    return (d.getFullYear()!==n.getFullYear()?d.getFullYear()+'年':'')+(d.getMonth()+1)+'月'+d.getDate()+'日';};
+
+  /* —— Turn 校验（02 规格 §3：非法 role 单条丢弃，列表其余部分完好） —— */
+  function sanitize(raw){
+    if(!raw||typeof raw!=='object')return null;
+    if(typeof raw.id!=='string'||!raw.id)return null;
+    if(raw.role!=='user'&&raw.role!=='assistant')return null;
+    if(typeof raw.text!=='string')return null;
+    return{
+      id:raw.id,role:raw.role,text:raw.text,
+      shownText:typeof raw.shownText==='string'?raw.shownText:undefined,
+      channel:raw.channel==='qq'?'qq':'web',
+      status:['ok','sending','failed','silent'].includes(raw.status)?raw.status:'ok',
+      time:(typeof raw.time==='number'&&isFinite(raw.time))?raw.time:null,
+      state:raw.state==='revealing'?'revealing':undefined
+    };
+  }
+
+  /* A2：节点构建——03 接管面板内部；article 双类保两侧骨架契约；
+     揭示中标记 data-p04-live 与 title 提示由 02 写（04 定样式与交互） */
+  function syncLive(art,t){
+    if(t.state==='revealing'){
+      art.dataset.p04Live='';
+      if(art.getAttribute('title')!=='点击跳过逐句显示')art.title='点击跳过逐句显示';
+    }else{
+      delete art.dataset.p04Live;
+      if(art.getAttribute('title')==='点击跳过逐句显示')art.removeAttribute('title');
+    }
+  }
+  function nodeTurn(t,cont,entrance){
+    const art=el('article','p02-msg p03-msg');
+    if(cont)art.dataset.cont='';
+    window.P03.fill(art,t,{entrance:!!entrance,revealing:t.state==='revealing'});
+    syncLive(art,t);
+    return art;
+  }
+  const nodeDate=ms=>{const d=el('div','p02-drow');d.append(el('span',null,dayLabel(ms)));
+    d.setAttribute('role','separator');return d;};
+
+  /* —— 面（loading / fail / empty / list：整面替换，互斥） —— */
+  function face(node){
+    root.replaceChildren(node);
+    root.setAttribute('aria-busy',st.listState==='loading'?'true':'false');
+  }
+  function faceLoading(){col=null;face(el('p','p02-loading','正在载入对话…'));}
+  function faceFail(){
+    col=null;
+    const w=el('div','p02-fail');
+    w.append(el('p','p02-fail-t','载入失败'));
+    const b=el('button','p02-retry','重试');b.type='button';
+    b.addEventListener('click',()=>bus.emit('retry:load'));
+    w.append(b);
+    face(w);
+  }
+  /* A5：空态面＝06 真实挂载（06 FRAGMENT §6：02 拥有 listState 与挂载点） */
+  function faceEmpty(){
+    col=null;
+    face(window.P06?P06.mount(st.userName):el('p','p02-loading','空会话'));
+  }
+  function recomputeGroups(){
+    let prev=null,g=0;
+    for(const t of st.turns){
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      const cont=!!(prev&&prev.role===t.role&&!cross);
+      if(!cont)g++;
+      t._g=g;t._cont=cont;
+      prev=t;
+    }
+  }
+  function renderList(){ /* 全量重建：无动画重放（同一内容只入场一次），用于切档/乱序重排 */
+    recomputeGroups();
+    col=el('div','p02-col');
+    let prev=null;
+    for(const t of st.turns){
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      if(cross)col.append(nodeDate(t.time));
+      const n=nodeTurn(t,t._cont,false);       /* 重建一律无入场 */
+      col.append(n);
+      prev=t;
+    }
+    col.dataset.turns=st.turns.length;
+    face(col);
+  }
+
+  /* —— 顺序规则：dated 升序稳定排；time=null 恒排队尾、保持到达序 —— */
+  function insertIdx(t){
+    if(t.time==null)return st.turns.length;
+    for(let k=0;k<st.turns.length;k++){
+      const cur=st.turns[k];
+      if(cur.time==null)return k;
+      if(cur.time>t.time)return k;
+    }
+    return st.turns.length;
+  }
+  const sortTurns=arr=>arr.slice().sort((a,b)=>{
+    if(a.time==null)return b.time==null?0:1;
+    if(b.time==null)return -1;
+    return a.time-b.time;
+  });
+
+  /* —— 滚动语义：滞回判定 + 跟随 + 未读 —— */
+  function emitFollow(){bus.emit('follow:change',{atLatest:st.atLatest,unread:st.unread});}
+  function setFollow(v){
+    if(st.atLatest===v)return;
+    st.atLatest=v;
+    if(v)st.unread=0;                  /* 回底清零（02 规格 §4） */
+    emitFollow();devHook();
+  }
+  function checkFollow(){
+    const max=root.scrollHeight-root.clientHeight;
+    if(max<=0){setFollow(true);return;}
+    const d=max-root.scrollTop;
+    if(st.atLatest&&d>LEAVE)setFollow(false);
+    else if(!st.atLatest&&d<=BACK)setFollow(true);
+  }
+  function anchorInsert(node,h0){
+    if(st.atLatest){root.scrollTop=root.scrollHeight;return;}
+    if(!node)return;
+    const top=root.scrollTop,o=node.offsetTop;
+    if(o>=top)return;
+    const dh=root.scrollHeight-h0;
+    root.scrollTop=top+Math.min(dh,Math.max(0,top-o));
+  }
+  function anchorGrowth(node,oldH){
+    if(st.atLatest){root.scrollTop=root.scrollHeight;return;}
+    const top=root.scrollTop,o=node.offsetTop;
+    if(o+oldH<=top)root.scrollTop=top+(node.offsetHeight-oldH);
+  }
+
+  function structural(focusId){
+    const h0=root.scrollHeight;
+    renderList();
+    const node=focusId?col.querySelector('[data-id="'+cssEsc(focusId)+'"]'):null;
+    anchorInsert(node,h0);
+    checkFollow();
+  }
+  function inject(raw){
+    const t=sanitize(raw);
+    if(!t)return false;                                   /* 非法：单条丢弃 */
+    if(st.listState==='loading')return false;             /* loading 是整面替换期，不接增量 */
+    if(st.byId.has(t.id)){                                /* 同 id 重注入=更新 */
+      const patch={};
+      for(const k of['text','shownText','channel','status','time','state'])
+        if(raw[k]!==undefined)patch[k]=t[k];
+      return update(t.id,patch)?'updated':false;
+    }
+    const idx=insertIdx(t);
+    st.turns.splice(idx,0,t);st.byId.set(t.id,t);
+    if(st.emptyExit){devHook();return true;}              /* 让位窗口：数据已入列，让位后统一上屏 */
+    if(st.listState==='empty'||!col||!col.isConnected){   /* A5：0→1 边界——先消失后上屏，绝不同屏 */
+      st.listState='ready';
+      const emp=root.querySelector('.p06');
+      if(emp&&emp.isConnected&&window.P06){
+        st.emptyExit=true;
+        P06.leave(emp);
+        const g=st.gen;
+        setTimeout(()=>{
+          st.emptyExit=false;
+          if(g!==st.gen||!emp.isConnected)return;         /* 期间切档/重置：让位流程作废 */
+          renderList();
+          if(st.atLatest)root.scrollTop=root.scrollHeight;
+          devHook();
+        },P06.LEAVE_MS);
+      }else{
+        renderList();
+        if(st.atLatest)root.scrollTop=root.scrollHeight;
+      }
+    }else if(idx===st.turns.length-1){                    /* 尾插快路：增量 append（保文本选择） */
+      recomputeGroups();
+      const prev=st.turns[st.turns.length-2];
+      const cross=!!(prev&&prev.time!=null&&t.time!=null&&dayKey(prev.time)!==dayKey(t.time));
+      if(cross)col.append(nodeDate(t.time));
+      const n=nodeTurn(t,t._cont,true);                   /* A2：仅实时尾插入场（03 FRAGMENT §7） */
+      col.append(n);
+      col.dataset.turns=st.turns.length;
+      if(st.atLatest)root.scrollTop=root.scrollHeight;    /* 在底跟随（内容义务，非动效） */
+    }else{                                                /* 乱序中插：按值重排（全量重建，instant） */
+      structural(t.id);
+    }
+    if(!st.atLatest){                                     /* 离底：不打断阅读，仅累加未读句 */
+      const n=sentCount(t);
+      if(n){st.unread+=n;emitFollow();}
+    }
+    devHook();
+    return true;
+  }
+  /* A3：update 原位 fill（03 FRAGMENT §7 建议），不 replaceWith、保焦点、不重放入场；
+     A4 守卫：揭示轮的 patch.state 非 revealing → 剥离（done 单一写者，04 FRAGMENT §4） */
+  function update(id,patch){
+    const t=st.byId.get(id);
+    if(!t||!patch||typeof patch!=='object')return false;
+    if(t.state==='revealing'&&patch.state!==undefined&&patch.state!=='revealing'){
+      patch=Object.assign({},patch);delete patch.state;
+      if(!Object.keys(patch).length)return false;
+    }
+    const node=col&&col.isConnected?col.querySelector('[data-id="'+cssEsc(id)+'"]'):null;
+    const oldH=node?node.offsetHeight:0;
+    const resort=patch.time!==undefined&&patch.time!==t.time;
+    Object.assign(t,patch);
+    if(resort){
+      st.turns.splice(st.turns.indexOf(t),1);
+      st.turns.splice(insertIdx(t),0,t);
+      structural(id);
+    }else if(node){
+      window.P03.fill(node,t,{revealing:t.state==='revealing'});
+      syncLive(node,t);
+      anchorGrowth(node,oldH);
+    }
+    devHook();
+    return true;
+  }
+  /* A4：reveal:progress（04 发来）——守卫：连续前缀 + 单调不回退（不变量 1/洪流不回退）；
+     计数只认 progress 事件（每句一次），在底跟随、离底累加 unread */
+  function revealProgress(id,shownText){
+    const t=st.byId.get(id);
+    if(!t||t.state!=='revealing'||typeof shownText!=='string')return false;
+    if(t.text.indexOf(shownText)!==0)return false;
+    if(shownText.length<(t.shownText||'').length)return false;
+    const node=col&&col.isConnected?col.querySelector('[data-id="'+cssEsc(id)+'"]'):null;
+    if(!node)return false;
+    const oldH=node.offsetHeight;
+    t.shownText=shownText;
+    window.P03.fill(node,t,{revealing:true});
+    if(st.atLatest)root.scrollTop=root.scrollHeight;
+    else{anchorGrowth(node,oldH);st.unread++;emitFollow();}
+    devHook();
+    return true;
+  }
+  /* A4：reveal:done（04 发来）——守卫（04 FRAGMENT §4）：前缀未完 → 拒绝整段倒出，
+     引擎按原节奏补全；重写兜底（shown 非前缀）与沉默（text 无实内容）放行；
+     无节点（让位窗口期）→ 只落数据，让位后 renderList 呈现完成态 */
+  function revealDone(id){
+    const t=st.byId.get(id);
+    if(!t||t.state!=='revealing')return false;
+    const node=col&&col.isConnected?col.querySelector('[data-id="'+cssEsc(id)+'"]'):null;
+    const shown=t.shownText||'';
+    if(node){
+      const midReveal=t.text.trim()&&(t.text.indexOf(shown)===0)&&shown.length<t.text.length;
+      if(midReveal)return false;
+    }
+    const oldH=node?node.offsetHeight:0;
+    t.state='done';t.shownText=t.text;
+    if(node){
+      window.P03.fill(node,t,{});
+      syncLive(node,t);
+      anchorGrowth(node,oldH);
+    }
+    devHook();
+    return true;
+  }
+  /* jump:latest（07 发来）：单次受控回底——瞬时跳转（B 基线二选一记录）；
+     该次"用户主动回底"由 04 自行监听同信号触发跳过，02 不代劳 */
+  function jumpLatest(){
+    root.scrollTop=root.scrollHeight;
+    setFollow(true);
+    checkFollow();
+  }
+
+  /* —— listState 迁移（08 驱动；gen 令牌防快速连切竞态） —— */
+  function beginLoad(){
+    st.gen++;st.turns=[];st.byId.clear();
+    st.listState='loading';st.fail=false;st.emptyExit=false;
+    st.atLatest=true;st.unread=0;     /* loading/empty 面：pill 必须不在场（07 规格 §3） */
+    emitFollow();
+    faceLoading();devHook();
+    return st.gen;
+  }
+  function loadDone(g,arr){
+    if(g!==st.gen)return false;
+    st.fail=false;st.emptyExit=false;
+    const clean=(Array.isArray(arr)?arr:[]).map(sanitize).filter(Boolean);
+    if(!clean.length){st.listState='empty';faceEmpty();}
+    else{
+      st.turns=sortTurns(clean);
+      st.byId=new Map(st.turns.map(t=>[t.id,t]));
+      st.listState='ready';renderList();
+      if(st.atLatest)root.scrollTop=root.scrollHeight;
+    }
+    checkFollow();devHook();
+    return true;
+  }
+  function loadFail(g){
+    if(g!==st.gen)return false;
+    st.fail=true;st.listState='loading'; /* 失败面是 loading 流的错误呈现（PARTS §2.2 无 fail 态） */
+    faceFail();devHook();
+    return true;
+  }
+
+  function mount(el,b,opts){
+    root=el;bus=b;
+    if(opts&&typeof opts.userName==='string')st.userName=opts.userName;
+    root.classList.add('p02-list');
+    /* 滚动判定直接同步执行（scroll 事件天然逐帧合并；只读不拦，PRINCIPLES §5 #15）。
+       原部件 demo 用 rAF 合并——后台标签页 rAF 暂停会漏判离底，装配页改为直调。 */
+    root.addEventListener('scroll',()=>checkFollow(),{passive:true});
+    window.addEventListener('resize',checkFollow); /* 仅重算判定，零动效（§1 #13） */
+    faceLoading();
+    return api;
+  }
+
+  const api={
+    mount,inject,update,revealProgress,revealDone,jumpLatest,beginLoad,loadDone,loadFail,
+    state:()=>({listState:st.listState,fail:st.fail,atLatest:st.atLatest,unread:st.unread,turns:st.turns.length,gen:st.gen}),
+    onChange(cb){hook=cb;},
+    sentences:splitSent /* A1：对外亦为 03 公共实现 */
+  };
+  return api;
+})();
+
+/* ==================================================================
+   07 回到最新 pill（window.P07）—— parts-impl/07/part.html p07Mount 搬入，
+   适配：显隐条件补 ctx（turns/listState，来自 02.state()，FRAGMENT 07 装配注意 3
+   「07 只认 follow:change 一个信号」不变，ctx 由装配方经 render() 注入）。
+   ================================================================== */
+window.P07=(function(){
+  const MAXV=1e6;             /* 计数合理上界：非负有限整数且 ≤1e6；出域按非法隐藏 */
+  const st={atLatest:true,unread:0,turns:0,listState:'loading'};
+  let pill=null,count=null,bus=null,shown=false;
+  const valid=n=>Number.isFinite(n)&&Number.isInteger(n)&&n>=0&&n<=MAXV;
+  function apply(){
+    const show=!st.atLatest&&st.turns>0&&st.listState==='ready';
+    if(show!==shown){
+      shown=show;
+      if(show){pill.setAttribute('data-show','');}
+      else{
+        pill.removeAttribute('data-show');
+        if(document.activeElement===pill)pill.blur(); /* 隐藏时持焦点 → 让出 */
+      }
+      pill.setAttribute('aria-hidden',show?'false':'true');
+      pill.tabIndex=show?0:-1;
+    }
+    const n=st.unread;
+    count.textContent=(valid(n)&&n>0)?'＋'+(n>99?'99+':n)+' 句':''; /* 非法值 → 计数段隐藏 */
+  }
+  function mount(o){
+    pill=o.pill;count=o.count;bus=o.bus;
+    bus.on('follow:change',d=>{if(d&&typeof d==='object'){st.atLatest=!!d.atLatest;st.unread=d.unread;}apply();});
+    pill.addEventListener('click',()=>bus.emit('jump:latest')); /* Enter 经 button 原生触发同一 click */
+  }
+  function render(ctx){ /* 装配方在 02 状态变化时注入 turns/listState */
+    if(ctx&&typeof ctx==='object'){
+      if(ctx.turns!==undefined)st.turns=ctx.turns;
+      if(ctx.listState!==undefined)st.listState=ctx.listState;
+    }
+    apply();
+  }
+  return{mount,render,valid};
+})();
+
+/* ==================================================================
+   04 逐句揭示流（window.P04）—— parts-impl/04/part.html 部件块逐字搬入。
+   页面唯一揭示写者；四不变量见 FRAGMENT 04 §3。
+   ================================================================== */
+window.P04=(function(){
+  const CAD={min:240,max:380};      /* 句间隔（B 基线，内容节奏非动画时长） */
+  const THINK={min:600,max:1000};   /* 等待首句 */
+  let bus=null,split=null,skipHost=null;
+  const engines=new Map();
+  const rnd=r=>r.min+Math.random()*(r.max-r.min);
+
+  function init(b,o){
+    bus=b;o=o||{};
+    split=o.sentences||(window.P03&&window.P03.splitSent)||null;
+    bus.on('turn:append',d=>{
+      if(d&&d.role==='assistant'&&d.state==='revealing')begin(d);
+    });
+    bus.on('turn:update',d=>{if(d&&engines.has(d.id))align(d.id,d.patch||{});});
+    bus.on('jump:latest',()=>skipAll());           /* 只有 07 的用户主动回底会发；02 自动跟随不发信号 */
+    bus.on('demo:dataset',stopAll);                /* 切档/重播/清空打断：随旧档清除，无残尸无残余信号 */
+    bus.on('demo:replay',stopAll);
+    bus.on('demo:reset',stopAll);
+    if(o.skipHost&&o.skipHost.addEventListener){   /* 揭示中点击跳过：事件委托，04 不持有节点引用 */
+      skipHost=o.skipHost;
+      skipHost.addEventListener('click',e=>{
+        const t=e.target&&e.target.closest?e.target.closest('[data-role="assistant"][data-id]'):null;
+        if(!t)return;
+        const id=t.getAttribute('data-id');
+        if(engines.has(id))skip(id);
+      });
+    }
+  }
+  function shownOf(eng){let s='';for(let i=0;i<=eng.ui;i++)s+=eng.units[i];return s;}
+  function begin(turn,o){
+    if(!turn||typeof turn.id!=='string'||!turn.id)return null;
+    if(engines.has(turn.id))return null;
+    const text=(typeof turn.text==='string')?turn.text:'';
+    if(!text.trim()){ /* 沉默终点：不进逐句流程，直接 done（不留「…」不留状态行） */
+      bus.emit('reveal:done',{id:turn.id});
+      return null;
+    }
+    const eng={id:turn.id,text,units:split(text),ui:-1,timer:0,done:false,
+      cad:(o&&o.cadence)||CAD,think:(o&&o.think)||THINK};
+    engines.set(turn.id,eng);
+    eng.timer=setTimeout(()=>step(eng),rnd(eng.think));
+    return eng;
+  }
+  function step(eng){
+    if(eng.done||!engines.has(eng.id))return;
+    eng.ui++;
+    bus.emit('reveal:progress',{id:eng.id,shownText:shownOf(eng)});
+    if(eng.ui>=eng.units.length-1)finish(eng);
+    else eng.timer=setTimeout(()=>step(eng),rnd(eng.cad));
+  }
+  function finish(eng){       /* 自然完成：前缀已到全文，done 才置位（不变量 2） */
+    if(eng.done)return;
+    eng.done=true;clearTimeout(eng.timer);
+    engines.delete(eng.id);
+    bus.emit('reveal:done',{id:eng.id});
+  }
+  /* 跳过=立即完整（不变量 3）：先补全前缀（一次 progress 到全文），再 done——
+     02 的 done 守卫要求「全部句单元可见」，补全 progress 是跳过协议的必要半步 */
+  function skip(id){
+    const eng=engines.get(id);
+    if(!eng)return false;
+    clearTimeout(eng.timer);eng.done=true;engines.delete(id);
+    bus.emit('reveal:progress',{id,shownText:eng.text});
+    bus.emit('reveal:done',{id});
+    return true;
+  }
+  function skipAll(){const ids=[...engines.keys()];ids.forEach(id=>skip(id));return ids.length;}
+  function stopAll(){for(const eng of engines.values()){clearTimeout(eng.timer);eng.done=true;}engines.clear();}
+  /* 可对齐（不变量 4）：前缀一致 → 已显示前缀保持，ui 重定位继续按序；
+     前缀不一致（重写）→ 立即 done 兜底（宁可一次性，也要页面与数据一致） */
+  function align(id,patch){
+    const eng=engines.get(id);
+    if(!eng||eng.done)return;
+    if(patch.state!==undefined&&patch.state!=='revealing')return; /* 早期 done：不置终，按原节奏补全 */
+    if(patch.text===undefined||String(patch.text)===eng.text)return;
+    const nt=String(patch.text),cur=shownOf(eng);
+    if(nt.indexOf(cur)===0){
+      eng.text=nt;eng.units=split(nt);
+      if(cur===''){eng.ui=-1;}
+      else{
+        eng.ui=-1;let acc='';
+        for(let i=0;i<eng.units.length;i++){acc+=eng.units[i];if(acc.length>=cur.length){eng.ui=i;break;}}
+        if(eng.ui<0)eng.ui=eng.units.length-1;
+      }
+    }else{
+      clearTimeout(eng.timer);eng.done=true;engines.delete(id);
+      bus.emit('reveal:done',{id});
+    }
+  }
+  function active(){return[...engines.keys()];}
+  function state(id){return engines.has(id)?'revealing':'idle';}
+  return{init,begin,skip,skipAll,stopAll,align,active,state};
+})();
+
+/* ==================================================================
+   08 演示控制器（window.P08）—— parts-impl/08/part.html 部件块逐字搬入。
+   唯一数据源与剧本引擎；对 02 生命周期经 host 适配层直调（FRAGMENT 08 §7）。
+   ================================================================== */
+window.P08=(function(){
+  const LOADING_MS=420;      /* 切档 loading 停留（剧本参数，非动效时长） */
+  const ACK_MS=350;          /* 用户 Turn 回执（sending→ok） */
+  const RETRY_MS=900;        /* retry:send 回执 */
+  const PROACTIVE_MS=1200;   /* 主动消息随 normal 档就绪后注入 */
+  const FLOOD_BATCH=10, FLOOD_GAP=280;  /* 洪流分批到达 */
+
+  const S={dataset:'normal',userName:'阿澈',gen:0,busy:false,busyOwner:null,link:'up',
+    failOnce:false,loadFailArmed:false,playing:false,
+    tAck:0,tRetry:0,tFlood:0,tPro:0,queue:[]};
+  let bus=null,host=null,ui=null,uidN=0;
+
+  /* —— 数据收口（与 02/03 dev 数据集同源；worst 覆盖规格 §2 全部极端） —— */
+  const T=(day,h,m,y)=>new Date(y??2026,10,day,h,m).getTime();
+  const LONG=(()=>{const b='编译在凌晨完成，没有警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。';
+    let s='';while(s.length<1880)s+=b;return s+'以上，长文到此收尾。';})();
+  const URLISH='https://mirror.internal.alice/pkg/'+'a'.repeat(170);
+  const EMOJI='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨ 晚安。';
+  const REPLY='收到，这条回复走逐句揭示。第二句演示离底时的未读句计数。第三句验证自动跟随不劫持手动滚动。【认真】第四句带一个情绪标记原样显示。第五句收尾，揭示到此完整。';
+  const PROACTIVE='刚把上午的安排排好了。升级流程拆成了四步，每步的验收点都列了出来。【放心】随时可以开始，我先盯着自动检查。';
+
+  function floodTurns(){
+    const base=T(16,14,0);
+    const U=['收到。','好，先这样。','这一版我先跑一遍。','嗯，辛苦了。','晚上再对一次？'];
+    const A=['编译通过，起服正常。【安心】日志没有新告警，归档线程写完了今天的索引。','这一段我先记下，等实测数据回来再对一次结论。【认真】','可以。流程走完我把要点整理进档案，明天直接续上。','记好了。这一批跑完我会给你一份对照摘要。'];
+    const S1=['嗯','在','？','好'];
+    const E=['🌊 潮水退了，滩上很静。','✨ 晚安。','👨‍👩‍👧‍👦 都到齐了。'];
+    const out=[];
+    for(let i=0;i<50;i++){
+      const role=Math.floor(i/6)%2===0?'user':'assistant';
+      const pool=role==='user'?U:A;
+      let text;
+      switch(i%5){
+        case 0:text=pool[i%pool.length];break;
+        case 1:text=pool[(i+1)%pool.length];break;
+        case 2:text=S1[i%S1.length];break;
+        case 3:text=E[i%E.length];break;
+        default:text=pool[(i+2)%pool.length];
+      }
+      let time;
+      if(i%9===4)time=null;
+      else if(i%11===7){const prev=out.length?out[out.length-1].time:null;time=typeof prev==='number'?prev:base+i*61e3;}
+      else if((i>=20&&i<23)||(i>=40&&i<43))time=base-6*3600e3+i*61e3;
+      else time=base+i*61e3;
+      out.push({id:'f'+i,role,text,time});
+    }
+    return out;
+  }
+  const DATA={
+    normal:()=>[
+      {id:'n1',role:'user',text:'今天的部署顺利吗？',time:T(15,22,41)},
+      {id:'n2',role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。【安心】部署记录已经归档，明天可以晚点起。',time:T(15,22,42)},
+      {id:'n3',role:'assistant',channel:'qq',text:'早上好。昨夜监控没有异常，桌面 0.1.5 的自动检查十点半会跑第一次。',time:T(16,8,52)},
+      {id:'n4',role:'user',text:'好，那今天陪我把升级流程再过一遍？',time:T(16,8,55)},
+      {id:'n5',role:'assistant',text:'可以。上午先确认更新开关的状态，再走一次同版提示的路径。【认真】卡点我会记下，过完整理进桌面档案。',time:T(16,8,55)}
+    ],
+    worst:()=>[
+      {id:'w1',role:'user',text:URLISH,time:new Date(2026,11,31,23,58).getTime()},
+      {id:'w2',role:'assistant',text:LONG,time:new Date(2027,0,3,9,0).getTime()},
+      {id:'w3',role:'assistant',text:EMOJI,time:new Date(2027,0,3,9,1).getTime()},
+      {id:'w4',role:'user',text:'在吗',time:new Date(2027,0,3,9,2).getTime()},
+      {id:'w5',role:'assistant',text:'嗯',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w6',role:'assistant',text:'',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w7',role:'user',text:'这条是发送失败的用户消息',status:'failed',time:new Date(2027,0,3,9,4).getTime()},
+      {id:'w8',role:'assistant',text:'这一轮没有时间字段，元信息按字段隐藏。',time:null}
+    ],
+    single:()=>[{id:'s1',role:'assistant',text:'只有一条消息的会话，验证 0/1/N 边界与日期行判定的下限。',time:T(16,12,0)}],
+    empty:()=>[],
+    flood:()=>floodTurns()
+  };
+  const NAMES={normal:'日常对话',worst:'最坏数据',single:'单条',empty:'空会话',flood:'洪流 50 条'};
+
+  /* —— 内部工具 —— */
+  const uid=p=>(p||'t')+(++uidN)+'-'+Date.now().toString(36);
+  function emit(sig,d){if(bus)bus.emit(sig,d);}
+  function setBusy(v,owner){
+    if(v){if(S.busy)return;S.busy=true;S.busyOwner=owner||null;}
+    else{if(!S.busy)return;S.busy=false;S.busyOwner=null;}
+    emit('busy:change',S.busy);
+  }
+  function stopScript(){
+    clearTimeout(S.tAck);clearTimeout(S.tRetry);clearTimeout(S.tFlood);clearTimeout(S.tPro);
+    S.playing=false;
+  }
+  function syncUI(){if(ui)ui();}
+
+  /* —— 档位装载（中间档注入可取消：gen 令牌，晚到的旧档数据不得覆盖新档） —— */
+  function deliver(name,g){
+    if(S.loadFailArmed){S.loadFailArmed=false;S.playing=false;host.loadFail(g);syncUI();return;}  /* 载入失败仅触发一次 */
+    const arr=DATA[name]();
+    if(name==='flood'){host.loadDone(g,arr.slice(0,FLOOD_BATCH));startFlood(g,arr);}
+    else{
+      host.loadDone(g,arr);
+      if(name==='normal')scheduleProactive(g);      /* 主动消息随档位/重播 */
+      S.playing=false;
+    }
+    flushQueue();
+    syncUI();
+  }
+  /* loading/失败面期到达的 submit 已被 05 清草稿发出——缓存在此，注入完成后依序执行（不可丢弃） */
+  function flushQueue(){
+    if(S.queue.length&&!S.busy&&S.link==='up'){
+      const text=S.queue.shift();
+      if(S.failOnce){S.failOnce=false;errorScript(text);}
+      else sendScript(text);
+    }
+  }
+  function loadDataset(name){
+    stopScript();
+    S.dataset=name;S.playing=true;
+    emit('demo:dataset',name);                       /* 04 收 → stopAll；面板指示先行更新 */
+    setBusy(false);                                  /* 揭示随旧档清除，busy 一并干净复位 */
+    const g=++S.gen;
+    host.beginLoad();
+    setTimeout(()=>{if(g!==S.gen)return;deliver(name,g);syncUI();},LOADING_MS);
+  }
+  function startFlood(g,arr){
+    let i=FLOOD_BATCH;
+    const batch=()=>{
+      if(g!==S.gen)return;                           /* 注入中途切档/清空：洪流可取消 */
+      for(;i<Math.min(i+FLOOD_BATCH,arr.length);i++)emit('turn:append',arr[i]);
+      i+=FLOOD_BATCH;
+      if(i<arr.length)S.tFlood=setTimeout(batch,FLOOD_GAP);
+      else{S.playing=false;syncUI();}
+    };
+    S.tFlood=setTimeout(batch,FLOOD_GAP);
+  }
+  function scheduleProactive(g){
+    clearTimeout(S.tPro);
+    S.tPro=setTimeout(()=>{if(g!==S.gen)return;injectProactive();},PROACTIVE_MS);
+  }
+  function injectProactive(){   /* 主动消息：无 submit 触发，QQ 渠道 assistant 轮走揭示 */
+    emit('turn:append',{id:uid('pq'),role:'assistant',channel:'qq',text:PROACTIVE,state:'revealing',shownText:'',time:Date.now()});
+    syncUI();
+  }
+
+  /* —— 剧本 —— */
+  function sendScript(text){
+    S.playing=true;syncUI();
+    setBusy(true);                                   /* busy=true：Alice 处理中（05 提示、锁定发送） */
+    const ut={id:uid('u'),role:'user',text,status:'sending',time:Date.now()};
+    emit('turn:append',ut);                          /* 用户 Turn 上屏回执（05 释放在途锁） */
+    const g=S.gen;
+    S.tAck=setTimeout(()=>{
+      if(g!==S.gen)return;
+      emit('turn:update',{id:ut.id,patch:{status:'ok'}});
+      startReply(g);
+    },ACK_MS);
+  }
+  function startReply(g){
+    const at={id:uid('a'),role:'assistant',text:REPLY,state:'revealing',shownText:'',time:Date.now()};
+    S.busyOwner=at.id;
+    emit('turn:append',at);                          /* 04 自动接手：等待首句 → 逐句 → done */
+    syncUI();
+  }
+  function errorScript(text){   /* 发送失败：Turn 以 failed 留在列表（03 重试），原文本回填 05 草稿 */
+    emit('turn:append',{id:uid('u'),role:'user',text,status:'failed',time:Date.now()});
+    emit('send:failed',text);                        /* 已 trim 的提交原文逐字回填 */
+    syncUI();
+  }
+
+  /* —— 对外 API —— */
+  function init(b,h){
+    bus=b;host=h;
+    bus.on('submit:text',text=>{
+      if(S.link!=='up'||S.busy)return;               /* 05 已拦；防御性再拦（锁定边界） */
+      const hs=host.state?host.state():null;
+      if(hs&&hs.listState==='loading'){              /* loading/失败面期到达的 submit：缓存（草稿已清空，不能丢） */
+        S.queue.push(text);syncUI();return;
+      }
+      if(S.failOnce){S.failOnce=false;syncUI();errorScript(text);return;}
+      sendScript(text);
+    });
+    bus.on('retry:send',d=>{                         /* 重发走 send 剧本：置 sending → 回执 → Alice 回复 */
+      if(!d||!d.id)return;
+      const g=S.gen;
+      emit('turn:update',{id:d.id,patch:{status:'sending'}});
+      S.tRetry=setTimeout(()=>{
+        if(g!==S.gen)return;
+        emit('turn:update',{id:d.id,patch:{status:'ok'}});
+        setBusy(true);S.playing=true;syncUI();
+        startReply(g);
+      },RETRY_MS);
+    });
+    bus.on('retry:load',()=>loadDataset(S.dataset)); /* 02 失败面重试 → 重新注入当前档 */
+    bus.on('reveal:done',d=>{                        /* busy 解除与揭示完成对齐（跳过/兜底路径同样发 done） */
+      if(S.busyOwner&&d&&d.id===S.busyOwner){S.playing=false;setBusy(false);syncUI();}
+      flushQueue();
+    });
+  }
+  function setDataset(name){if(DATA[name])loadDataset(name);}
+  function replay(){                                /* 重播当前档：从头跑（含 loading）；装填的载入失败在此生效 */
+    loadDataset(S.dataset);
+  }
+  function clear(){                                 /* 清空：等价切 empty + 停一切剧本；不清草稿 */
+    stopScript();
+    emit('demo:reset');
+    S.dataset='empty';S.playing=false;
+    setBusy(false);
+    const g=++S.gen;
+    host.beginLoad();
+    setTimeout(()=>{if(g!==S.gen)return;host.loadDone(g,[]);syncUI();},LOADING_MS);
+    syncUI();
+  }
+  function toggleFailOnce(){S.failOnce=!S.failOnce;syncUI();return S.failOnce;}
+  function toggleClosing(){                         /* 置位 → linkState=closing；复位 → up */
+    S.link=S.link==='up'?'closing':'up';
+    emit('link:change',S.link);
+    syncUI();
+    return S.link==='closing';
+  }
+  function armLoadFail(){S.loadFailArmed=true;syncUI();}
+  function state(){return{dataset:S.dataset,playing:S.playing,busy:S.busy,link:S.link,
+    failOnce:S.failOnce,closing:S.link==='closing',gen:S.gen,
+    loadFailArmed:S.loadFailArmed,queued:S.queue.length,userName:S.userName};}
+
+  /* —— 面板（文案表唯一来源：规格 §7） —— */
+  function mount(el){
+    el.innerHTML=
+      '<section class="p08-panel" aria-label="演示控制器">'
+    +   '<div class="p08-row">'
+    +     '<span class="p08-cap">演示数据</span>'
+    +     Object.keys(NAMES).map(k=>'<button type="button" class="p08-dbtn" data-p08-ds="'+k+'">'+NAMES[k]+'</button>').join('')
+    +     '<span class="p08-sep" aria-hidden="true"></span>'
+    +     '<button type="button" class="p08-dbtn" data-p08-act="replay">重播当前档位</button>'
+    +     '<button type="button" class="p08-dbtn" data-p08-act="clear">清空会话</button>'
+    +   '</div>'
+    +   '<div class="p08-row">'
+    +     '<span class="p08-cap">开关</span>'
+    +     '<button type="button" class="p08-sw" data-p08-tgl="fail" aria-pressed="false"><span class="p08-knob" aria-hidden="true"></span>模拟发送失败</button>'
+    +     '<button type="button" class="p08-sw" data-p08-tgl="close" aria-pressed="false"><span class="p08-knob" aria-hidden="true"></span>模拟服务关闭</button>'
+    +   '</div>'
+    +   '<p class="p08-note">本页为离线演示，所有消息与状态均为虚构数据。</p>'
+    + '</section>';
+    el.querySelectorAll('[data-p08-ds]').forEach(b=>b.addEventListener('click',()=>setDataset(b.dataset.p08Ds)));
+    el.querySelector('[data-p08-act="replay"]').addEventListener('click',replay);
+    el.querySelector('[data-p08-act="clear"]').addEventListener('click',clear);
+    el.querySelector('[data-p08-tgl="fail"]').addEventListener('click',toggleFailOnce);
+    el.querySelector('[data-p08-tgl="close"]').addEventListener('click',toggleClosing);
+    ui=()=>{
+      el.querySelectorAll('[data-p08-ds]').forEach(b=>{
+        b.dataset.p08Ds===S.dataset?b.setAttribute('aria-current','true'):b.removeAttribute('aria-current');
+      });
+      el.querySelector('[data-p08-tgl="fail"]').setAttribute('aria-pressed',String(S.failOnce));
+      el.querySelector('[data-p08-tgl="close"]').setAttribute('aria-pressed',String(S.link==='closing'));
+    };
+    syncUI();
+  }
+  return{init,mount,setDataset,replay,clear,toggleFailOnce,toggleClosing,armLoadFail,injectProactive,state,DATA,NAMES};
+})();
+
+/* ==================================================================
+   01 会话头栏（p01Render）—— FRAGMENT 01 §3 逐字；接线：link:change + resize
+   ================================================================== */
+function p01Render(state){
+  const head=document.querySelector('.p01-head');
+  if(!head)return;
+  const nameEl=head.querySelector('.p01-name');
+  const title=(typeof state.sessionTitle==='string')?state.sessionTitle:'Alice';
+  nameEl.textContent=title;
+  /* 信息可达：全文经平台标准悬浮提示属性；仅在实际发生截断时挂载 */
+  if(nameEl.scrollWidth>nameEl.clientWidth+1)nameEl.setAttribute('title',title);
+  else nameEl.removeAttribute('title');
+  /* linkState 规范化：非法/缺失 → unknown（CSS 白名单使状态行整体隐藏，不出 "undefined"） */
+  const link=(state.linkState==='up'||state.linkState==='closing')?state.linkState:'unknown';
+  head.dataset.p01Link=link;
+  head.dataset.p01Abnormal=(link==='closing')?'true':'false';
+}
+
+/* ==================================================================
+   装配接线（次序即契约：02 的总线订阅先于 04.init——同帧沉默/兜底 correction
+   依赖注册序；jump:latest 的 02 先 04 后；07 的 ctx 由 P02.onChange 注入）
+   ================================================================== */
+const listEl=document.getElementById('p02-list');
+
+P03.init(bus);
+P06.init(bus);
+
+P02.mount(listEl,bus,{userName:'阿澈'});
+bus.on('turn:append',t=>P02.inject(t));
+bus.on('turn:update',d=>P02.update(d.id,d.patch));
+bus.on('reveal:progress',d=>P02.revealProgress(d.id,d.shownText));
+bus.on('reveal:done',d=>P02.revealDone(d.id));
+bus.on('jump:latest',()=>P02.jumpLatest());
+
+P07.mount({pill:document.getElementById('p07Pill'),count:document.getElementById('p07Count'),bus});
+P02.onChange(s=>P07.render({turns:s.turns,listState:s.listState}));
+P07.render({turns:0,listState:'loading'});
+
+P04.init(bus,{skipHost:listEl,sentences:P03.splitSent});
+
+P05.mount(document.getElementById('p05-host'));
+P05.on('submit:text',v=>bus.emit('submit:text',v));
+bus.on('busy:change',v=>P05.handle('busy:change',v));
+bus.on('link:change',v=>P05.handle('link:change',v));
+bus.on('send:failed',t=>P05.handle('send:failed',t));
+bus.on('turn:append',t=>P05.handle('turn:append',t));
+bus.on('focus:composer',()=>P05.handle('focus:composer'));
+
+let p01Link='up';
+p01Render({sessionTitle:'Alice',linkState:p01Link});
+bus.on('link:change',v=>{p01Link=v;p01Render({sessionTitle:'Alice',linkState:v});});
+window.addEventListener('resize',()=>p01Render({sessionTitle:'Alice',linkState:p01Link}));
+
+P08.mount(document.getElementById('p08-mount'));
+P08.init(bus,{
+  beginLoad:()=>P02.beginLoad(),
+  loadDone:(g,arr)=>P02.loadDone(g,arr),
+  loadFail:g=>P02.loadFail(g),
+  state:()=>P02.state()
+});
+
+/* 启动：首载模拟载入失败一次（08 规格 §5"首载模拟触发一次"）——
+   失败面点「重试」进入日常对话，主动消息随后演示逐句揭示全链 */
+P08.armLoadFail();
+P08.setDataset('normal');
+</script>
+</body>
+</html>

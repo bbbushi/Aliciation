@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上下文观测 · Context Insights</title>
+<link rel="stylesheet" href="inspector.css">
+<link rel="stylesheet" href="context-viewer.css">
+</head>
+<body>
+<header class="ci-top">
+  <div class="ci-head-row">
+    <h1>上下文观测</h1>
+    <button id="ci-full-context" class="ci-btn" type="button" disabled>查看完整上下文</button>
+    <button id="ci-refresh" class="ci-btn" type="button">刷新</button>
+    <p id="ci-status" class="ci-status" role="status">正在读取观测状态…</p>
+  </div>
+  <div id="ci-requestbar" class="ci-requestbar"></div>
+</header>
+<main class="ci-dash">
+  <section id="ci-kpis" class="ci-kpis"></section>
+  <div class="ci-row2">
+    <section class="ci-card">
+      <h2>当前调用组成</h2>
+      <p class="ci-hint">应用提交给模型客户端的参数投影；按字符估算占比着色，估算与供应商 usage 分列。</p>
+      <div id="ci-composition" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+    </section>
+    <section class="ci-card">
+      <div class="ci-card-head">
+        <h2>调用趋势</h2>
+        <span class="ci-modes"><button id="ci-mode-total" class="ci-mode active" type="button">Total</button><button id="ci-mode-delta" class="ci-mode" type="button">Delta</button></span>
+      </div>
+      <p class="ci-hint">每个模型请求一根柱；点柱切换当前调用。</p>
+      <div id="ci-trend" class="ci-card-body"><p class="ci-hint">先选择请求。</p></div>
+    </section>
+  </div>
+  <section class="ci-card">
+    <h2>DNA · 模型读取顺序</h2>
+    <p class="ci-hint">按模型读取顺序逐项平铺；位置编号、类别与开销一目了然。正文需开启正文采集后才留存。</p>
+    <div id="ci-dna" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+  </section>
+  <section class="ci-card">
+    <h2>上下文浏览器</h2>
+    <p class="ci-hint">按类别展开装配块与选择决策；未进入当前调用的材料如实标注。</p>
+    <div id="ci-browser" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+  </section>
+</main>
+<script src="observer-client.js"></script>
+<script src="context-viewer.js"></script>
+<script src="inspector.js"></script>
+</body>
+</html>

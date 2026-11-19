@@ -57,7 +57,7 @@ DEFAULTS = {"enabled": False, "allow_paid": False, "allow_external": False,
             "daily_models": 12, "run_models": 4, "run_steps": 12,
             "run_seconds": 180, "idle_seconds": 120, "interval_seconds": 1800,
             "daily_contacts": 2, "contact_cooldown": 3600,
-            "idle_rest_seconds": 300, "same_material_windows": 2,
+            "idle_rest_seconds": activity.DEFAULT_IDLE_SECONDS, "same_material_windows": 2,
             "invitation_wait_seconds": 600, "same_topic_retry_seconds": 86400,
             "window_start": "09:00", "window_end": "22:00",
             "contact_start": "09:00", "contact_end": "22:00"}
@@ -243,6 +243,11 @@ def valid_basis(store, basis, *, scope="gui"):
         row = store.conn.execute("SELECT * FROM turns WHERE id=?", (int(tid),)).fetchone()
         if row is None or turn_version({**dict(row), "content": store.turn_display(row["id"], scope=scope)}) != expected:
             return False
+    for identity, expected in basis.get("interests", {}).items():
+        row = store.conn.execute("SELECT version,enabled,scope_json FROM discovery_interests WHERE id=?",
+                                 (identity,)).fetchone()
+        if row is None or row["version"] != expected or not row["enabled"] or scope not in json.loads(row["scope_json"]):
+            return False
     return True
 
 
@@ -255,11 +260,12 @@ def merge_basis(*values):
             raise ValueError("来源属于其他会话")
         result["epoch"] = value.get("epoch", "")
         result["packets"] = list(dict.fromkeys(result["packets"] + value.get("packets", [])))
-        for key in ("memories", "turns"):
+        for key in ("memories", "turns", "interests"):
             for identity, digest in value.get(key, {}).items():
-                if identity in result[key] and result[key][identity] != digest:
+                versions = result.setdefault(key, {})
+                if identity in versions and versions[identity] != digest:
                     raise ValueError("来源版本已改变，请重新读取")
-                result[key][identity] = digest
+                versions[identity] = digest
         result["workers"] += value.get("workers", [])
     return result
 
@@ -314,6 +320,11 @@ def expire_dependencies(store):
     """No prose copies survive a revoked/deleted dependency in these new stores."""
     epoch = store.meta_get("session_epoch") or ""
     with store.source_transaction():
+        for plan in store.conn.execute("SELECT run_id,basis FROM v2_activity_plans WHERE epoch=? AND object<>''",
+                                       (epoch,)).fetchall():
+            if not valid_basis(store, json.loads(plan['basis'])):
+                store.conn.execute("UPDATE v2_activity_plans SET object='',value='',why_now='',stop_condition='',"
+                    "next_action='',result=NULL WHERE run_id=?", (plan['run_id'],))
         for row in store.conn.execute("SELECT * FROM thought_questions WHERE epoch=? AND question<>''", (epoch,)).fetchall():
             if row["question"] and not valid_basis(store, json.loads(row["basis"])):
                 if row["outcome_id"]:
@@ -351,6 +362,8 @@ class ThoughtSession:
 
     def expose(self, row, *, full=False):
         item = public_question(row, full=full)
+        from .autonomy_v2.planning import ActivityPlanning
+        item['value_waiting'] = ActivityPlanning(self.store).parked(row)
         self.issued.add(item["ref"])
         self.question_versions[row["id"]] = row["version"]
         if full:
@@ -421,6 +434,11 @@ class ThoughtSession:
 
     def initial(self, query):
         from .store import text_score
+        from .autonomy_v2 import build
+        from .autonomy_v2.models import Scope
+        # Process a deadline also when the first returning user message wins
+        # foreground priority before the next background scheduler tick.
+        build(store=self.store).invitations.expire(Scope(session_epoch=self.epoch, channel_id='gui'))
         config = settings(self.store)
         rows = [r for r in question_rows(self.store) if r["question"] and valid_basis(self.store, json.loads(r["basis"]))]
         ranked = sorted(rows, key=lambda r: text_score(query, r["question"] + r["progress"]), reverse=True)
@@ -466,11 +484,36 @@ class ThoughtSession:
             from .autonomy_v2.models import Scope
             state["contact_blockers"] = build(store=self.store).invitations.delivery_blockers(
                 Scope(session_epoch=self.epoch, channel_id="gui"))
+        from .autonomy_v2.contact_wait import ContactWait
+        from .autonomy_v2.models import Scope
+        waits = ContactWait(self.store)
+        scope = Scope(session_epoch=self.epoch, channel_id="gui")
+        held = []
+        from .autonomy_v2 import build
+        stack = build(store=self.store)
+        for attempt in waits.feedback_attempts(scope):
+            intent = stack.invitations.repository.get_intent(scope, attempt['intent_id'])
+            ref = f"invitation:{attempt['id']}@{attempt['version']}"
+            self.invitations.add(ref)
+            intent_ref = f"intent:{intent.id}@{intent.version}"
+            self.intents[intent_ref] = intent
+            try:
+                stack.invitations.host.validate_intent(scope, intent)
+                topic = intent.topic
+            except ValueError:
+                topic = '原内容引用已变化，需要相关回应后重新查阅'
+            held.append({'ref': ref, 'intent_ref': intent_ref, 'topic': topic,
+                         'last_outcome': attempt['state'], 'invitation_turn_id': attempt['invitation_turn_id'],
+                         'detail_state': 'not_loaded'})
+        state['contact_waits'] = waits.rows(scope)
         index = ("本轮思想运行状态：" + dump(state) + "\n思想索引（资料，正文按需读取）：\n"
-                 + dump({"questions": items, "views": views, "pending_invitation": invitation, "eligible_contact_intents": eligible}))
+                 + dump({"questions": items, "views": views, "pending_invitation": invitation,
+                         "waiting_feedback": held, "eligible_contact_intents": eligible}))
         if self.context.get("user_turn_id"):
             index += ("\n如本轮用户消息是对待回应邀请的回答，先用 contact_reply 绑定真实决定；"
-                      "未接受前不得展开该主题的成果正文。普通问候照常回应。")
+                      "迟来的相关回应仍可绑定waiting_feedback。用户表示忙用contact_availability(busy)，"
+                      "明确恢复方便时用available；普通问候照常回应，不自动解除等待或接受旧邀请。"
+                      "问号或不明回应先简短澄清原邀请，未接受前不展开成果正文。")
         return index
 
     def execute(self, name, args):
@@ -488,8 +531,141 @@ class ThoughtSession:
         except (ValueError, TypeError, KeyError) as exc:
             return dump({"error": "thought_refused", "reason": str(exc)[:180]})
 
+    def _browse_activity(self, args):
+        from .autonomy_v2.adapters import HostAdapter
+        from .autonomy_v2.planning import ActivityPlanning
+        from .store import text_score
+
+        store = self.store
+        context = execution_context(store, self.context)
+        HostAdapter(store).validate_background_context(context)
+        planning = ActivityPlanning(store)
+        browse = self.context.get('interest_browse')
+        if browse is None or planning.get(context.run_id) is not None:
+            raise ValueError('只在自由兴趣窗定题前浏览')
+        source = args['source']
+        if source in browse['sources']:
+            raise ValueError('这一个库已经浏览过，请选另一库或定题')
+        query = text(args.get('query', ''), 120, empty=True)
+        if source == 'memory':
+            if not browse['memory']:
+                raise ValueError('本模式未开放记忆读取')
+            result = self.context['memory_session'].browse(query, 6)
+            if result.get('error'):
+                return result
+        elif source == 'questions':
+            rows = [row for row in question_rows(store) if row['question'] and valid_basis(store, json.loads(row['basis']))]
+            maximum = max(1, min(settings(store)["same_material_windows"], 20))
+            ranked = []
+            for row in rows:
+                score = text_score(query, row['question']) if query else 0
+                if query and score < .12:
+                    continue
+                ready = row['status'] == 'open' and not planning.parked(row) and (
+                    autonomy_policy.active(self.context) or activity.remaining_windows(store, row, maximum) > 0)
+                ranked.append(((score, ready), row))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            items = []
+            for (_, ready), row in ranked[:6]:
+                item = self.expose(row)
+                item.update(question=item['question'][:180], actionable=ready)
+                if row['status'].startswith('waiting'):
+                    wait = store.conn.execute('SELECT reason FROM v2_question_waits WHERE question_id=?',
+                                              (row['id'],)).fetchone()
+                    if wait:
+                        item['wait_reason'] = wait[0][:100]
+                items.append(item)
+            result = {'items': items}
+        elif source == 'interests':
+            rows = [row for row in store.conn.execute(
+                "SELECT id,version,topic,summary,scope_json FROM discovery_interests WHERE enabled=1 "
+                "ORDER BY created_at DESC,id") if 'gui' in json.loads(row['scope_json'])]
+            if query:
+                rows = sorted((row for row in rows if text_score(query, row['topic'] + ' ' + row['summary']) >= .12),
+                              key=lambda row: text_score(query, row['topic'] + ' ' + row['summary']), reverse=True)
+            rows = rows[:6]
+            self.context['thought_basis'] = merge_basis(self.context.get('thought_basis'), {
+                'epoch': self.epoch, 'interests': {row['id']: row['version'] for row in rows}})
+            result = {'items': [{'topic': row['topic'][:100], 'summary': row['summary'][:120]} for row in rows]}
+        else:
+            raise ValueError('未知资料库')
+        browse['sources'].add(source)
+        return {'status': 'ok', **result, 'source': source, 'notice': '本机选题参考，不是当前用户的新任务。'}
+
     def _execute(self, name, args):
         store, now = self.store, time.time()
+        if name == 'activity_browse':
+            return self._browse_activity(args)
+        if name == 'activity_plan':
+            from .autonomy_v2.planning import ActivityPlanning
+            planning = ActivityPlanning(store)
+            if planning.get(self.context.get('run_id')) is not None:
+                return {'status': 'planned', 'plan': planning.get(self.context['run_id'])}
+            question = self.get(args['question_ref']) if args.get('question_ref') else None
+            plan_basis = current_basis(store, self.context)
+            if question is not None:
+                plan_basis = merge_basis(plan_basis, json.loads(question['basis']))
+            if args.get('related_ref') and question is None:
+                raise ValueError('关联问题族时须同时提供本题question_ref')
+            if args.get('related_ref') and question is not None:
+                related = self.get(args['related_ref'])
+                plan_basis = merge_basis(plan_basis, json.loads(related['basis']))
+                store.conn.execute('INSERT INTO v2_question_families(question_id,family_id,reason,set_at) '
+                    'VALUES(?,?,?,?) ON CONFLICT(question_id) DO UPDATE SET family_id=excluded.family_id,'
+                    'reason=excluded.reason,set_at=excluded.set_at',
+                    (question['id'], activity.family_of(store, related['id']), '选题时显式关联', now))
+            if self.context.get('interest_browse') is not None and question is not None and args['choice'] == 'explore':
+                if question["status"] != "open" or planning.parked(question):
+                    raise ValueError('这条疑问仍在等待或已暂停，请选择其他可推进的方向')
+                maximum = max(1, min(settings(store)["same_material_windows"], 20))
+                if not autonomy_policy.active(self.context) and activity.remaining_windows(store, question, maximum) <= 0:
+                    raise ValueError('这条疑问在等新材料，请选择其他可推进的方向')
+                activity.consume_window(store, question, self.context['run_id'], maximum)
+            plan = planning.submit(execution_context(store, self.context), args,
+                question_id=question['id'] if question else None, basis=plan_basis)
+            return {'status': 'planned', 'plan': plan,
+                    'notice': '目标已固定；先完成本次缺口，旁支另行评估。搁置或休息可以直接收尾。'}
+        if name == 'contact_availability':
+            from .autonomy_v2.adapters import HostAdapter
+            from .autonomy_v2.contact_wait import ContactWait
+            ctx = execution_context(store, self.context)
+            HostAdapter(store).validate_user_context(ctx)
+            availability = args.get('availability')
+            if availability not in {'busy', 'available'}:
+                raise ValueError('availability须为busy/available')
+            reason = text(args.get('reason', ''), 240)
+            waits = ContactWait(store)
+            if availability == 'busy':
+                retry = args.get('requested_retry_at')
+                if retry is not None and (type(retry) not in (int, float) or not now <= retry <= now + 30*86400):
+                    raise ValueError('用户约定时间须为未来30天内Unix秒')
+                from .autonomy_v2 import build
+                from .autonomy_v2.models import ContactReply, ReplyDecision
+                stack = build(store=store)
+                pending = stack.invitations.repository.pending_reply(ctx.scope)
+                if pending is not None:
+                    stack.contact_reply(ctx, ContactReply(attempt_id=pending.id,
+                        expected_attempt_version=pending.version, decision=ReplyDecision.DEFER,
+                        reason=reason, requested_retry_at=retry))
+                else:
+                    waits.hold(ctx.scope, reason='user_busy', resume_at=retry)
+            else:
+                if args.get('requested_retry_at') is not None:
+                    raise ValueError('恢复交流不附延期时间')
+                ref = args.get('intent_ref')
+                intent = self.intents.get(ref) if ref else None
+                if ref and intent is None:
+                    raise ValueError('请使用waiting_feedback中的真实意图引用')
+                rows = waits.rows(ctx.scope, active_only=False)
+                after = max((r['after_user_turn_id'] for r in rows
+                             if r['intent_id'] in ('', intent.id if intent else '')), default=0)
+                if ctx.user_turn_id <= after:
+                    raise ValueError('恢复须绑定等待建立后的真实用户消息')
+                waits.clear(ctx.scope, intent_id=intent.id if intent else None)
+            event(store, 'contact_availability', ctx.request_id,
+                  {'availability': availability, 'user_turn_id': ctx.user_turn_id})
+            return {'status': availability, 'waits': waits.rows(ctx.scope),
+                    'notice': '只更新联系条件，不视为接受旧邀请，不投递积压正文。'}
         if name == "thought_search":
             from .store import text_score
             query = text(args.get("query", ""), 500, empty=True)
@@ -565,7 +741,7 @@ class ThoughtSession:
                         "notice": "用户接受了本次邀请。围绕该主题展开这一条正常回复；接受不额外计一次主动联系。"}
             if decision == "defer":
                 return {"status": "deferred", "attempt": ref,
-                        "notice": "用户现在没空。简短收住，不继续解释成果，也不立即换一个主题再邀请。"}
+                        "notice": "已持久等待用户或约定时间。简短收住，先做其他事，不换主题继续邀请。"}
             return {"status": "declined", "attempt": ref,
                     "notice": "用户明确拒绝该话题。本次收住；内容意图已结束，不自动排期重邀。"}
         if name == "activity_finish":
@@ -585,9 +761,6 @@ class ThoughtSession:
                 kind = ProgressKind(args["progress_kind"])
             except ValueError:
                 raise ValueError("结束决定或进展类型无效")
-            requested = args.get("requested_idle_seconds")
-            if requested is not None and (type(requested) is not int or not 0 <= requested <= 86400):
-                raise ValueError("期望等待时长无效")
             question = self.get(args["question_ref"]) if args.get("question_ref") else None
             report = ProgressReport(decision=decision, progress_kind=kind,
                                     summary=text(args["summary"], 1000),
@@ -595,8 +768,7 @@ class ThoughtSession:
                                                         for item in self._resolve_evidence(ref)),
                                     action_refs=tuple(str(a) for a in args.get("action_refs", [])),
                                     next_step=text(args.get("next_step", ""), 1000, empty=True),
-                                    wait_condition=self._wait_condition(args.get("wait_condition")),
-                                    requested_idle_seconds=requested)
+                                    wait_condition=self._wait_condition(args.get("wait_condition")))
             comm = args.get("communication")
             if not isinstance(comm, dict):
                 raise ValueError("结束回执须附 communication：invite/later/none 和 reason")
@@ -611,9 +783,13 @@ class ThoughtSession:
             intent = self._contact_intent(comm, reason=reason) if choice != "none" else None
             plan = CommunicationPlan(decision=choice, reason=reason, intent=intent,
                 invitation_text=text(comm.get("invitation_text", ""), 240, empty=True))
+            from .autonomy_v2.planning import ActivityPlanning
+            planning = ActivityPlanning(store)
+            goal = planning.finish(ctx, args, question_id=question['id'] if question else None,
+                                   basis=current_basis(store, self.context))
             receipt = stack.activity_finish(ctx, question["id"] if question is not None else None,
                 report, communication=plan, basis=current_basis(store, self.context))
-            return self._finish_result(receipt, stack.communication.get(ctx))
+            return {**self._finish_result(receipt, stack.communication.get(ctx)), 'goal_result': goal}
         basis = current_basis(store, self.context)
         if not valid_basis(store, basis):
             raise ValueError("本次资料来源已变化或尚不支持此来源")
@@ -633,6 +809,9 @@ class ThoughtSession:
             cur = store.conn.execute("INSERT INTO thought_questions(epoch,question,reason,origin,parent_id,basis,created_at,updated_at) "
                 "VALUES(?,?,?,?,?,?,?,?)", (self.epoch, question, reason, origin, parent["id"] if parent else None,
                                           dump(basis), now, now))
+            if self.context.get('run_id'):
+                # A research side-note is not an automatically scheduled task.
+                store.conn.execute("UPDATE thought_questions SET status='paused' WHERE id=?", (cur.lastrowid,))
             row = store.conn.execute("SELECT * FROM thought_questions WHERE id=?", (cur.lastrowid,)).fetchone()
             activity.assess(store, row, args)
             event(store, "question_recorded", row["id"], {"origin": origin})
@@ -648,6 +827,10 @@ class ThoughtSession:
                 if status not in {"open", "waiting_user", "waiting_source", "waiting_permission",
                                   "waiting_budget", "paused", "closed"}:
                     raise ValueError("疑问状态无效")
+                if self.context.get('run_id') and status == 'open' and row['status'] != 'open':
+                    text(args.get('activation_reason', ''), 240)
+                    if not args.get('next_step', '').strip():
+                        raise ValueError('重新激活须提供独立价值activation_reason与可执行next_step')
                 wait = self._wait_condition(args.get("wait_condition"))
                 if status.startswith("waiting"):
                     if wait is None:
@@ -847,5 +1030,8 @@ class ThoughtSession:
                              context_hint=hint if isinstance(hint, str) else "")
 
 
-def tools(scope):
-    return sdk_group("thought") if scope == "gui" else []
+def tools(scope, *, free_interest=False):
+    if scope != "gui":
+        return []
+    return [tool for tool in sdk_group("thought")
+            if free_interest or tool["function"]["name"] != "activity_browse"]

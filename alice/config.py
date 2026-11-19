@@ -89,6 +89,8 @@ class ExpressionConfig:
 @dataclass
 class ContextConfig:
     recent_turns: int = 16
+    reply_sections_enabled: bool = True  # GUI 三栏正文协议，关闭后重启可回退。
+    reply_annotation_review: bool = False  # 额外复读标注实验，默认关闭。
     transform_review_enabled: bool = True  # 显式带引文的文本变换：发布前一次角色/条件审查
     assembly_mode: str = "legacy"  # indexed 为 C1 人工试用；不自动改本机配置
     memory_candidate_limit: int = 12
@@ -128,6 +130,10 @@ class ContextConfig:
     longterm_capacity: int = 2000
 
     def __post_init__(self):
+        if type(self.reply_sections_enabled) is not bool:
+            raise ValueError("context.reply_sections_enabled 必须为布尔值")
+        if type(self.reply_annotation_review) is not bool:
+            raise ValueError("context.reply_annotation_review 必须为布尔值")
         if type(self.transform_review_enabled) is not bool:
             raise ValueError('context.transform_review_enabled 必须为布尔值')
         if self.assembly_mode not in ("legacy", "indexed"):

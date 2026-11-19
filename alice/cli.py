@@ -140,6 +140,8 @@ def main(argv: list[str] | None = None) -> int | None:
     p_worker.add_argument("--input-bytes", type=int, default=192 * 1024)
     p_desktop = sub.add_parser("desktop-host", help="桌面宿主专用私有管道入口")
     p_desktop.add_argument("--port", type=int, default=0)
+    p_desktop.add_argument("--lab-session", action="store_true", help="仅在全新临时档案开放 Lab 私有管道")
+    p_desktop.add_argument("--lab-test-controls", action="store_true", help="为隔离 Lab 实例放宽调度和额度")
     p_maintenance = sub.add_parser("maintenance", help="离线备份、更新准备与明确确认后的数据恢复")
     p_maintenance.add_argument("action", choices=["status", "backup", "verify", "prepare", "restore", "rollback", "authorize"])
     p_maintenance.add_argument("--backup-id")
@@ -147,6 +149,13 @@ def main(argv: list[str] | None = None) -> int | None:
     p_maintenance.add_argument("--launch-nonce", help="只授权此一次桌面启动的随机标识")
 
     args = parser.parse_args(argv)
+    if args.cmd == "desktop-host" and args.lab_test_controls and not args.lab_session:
+        parser.error("仅隔离 Lab 实例可使用测试策略")
+    if args.cmd == "desktop-host" and args.lab_session:
+        if args.user_dir is not None or args.config is not None:
+            parser.error("Lab 会话只允许新的独立档案，不能指定已有档案或配置")
+        from tempfile import mkdtemp
+        args.user_dir = mkdtemp(prefix="alice-lab-")
     if args.cmd == "maintenance" and args.user_dir is None:
         parser.error("离线维护必须显式提供 --user-dir 绝对用户根目录")
     if args.cmd == "discovery-worker":
@@ -182,7 +191,9 @@ def main(argv: list[str] | None = None) -> int | None:
             if args.config and config_path.resolve() != (appconfig.USER_DIR / "config.toml").resolve():
                 parser.error("桌面模式配置必须位于选定用户根目录内")
             from .desktop_host import main as desktop_main
-            return desktop_main(port=args.port, config_path=config_path)
+            from .autonomy_policy import configure_lab
+            configure_lab(test_controls=args.lab_test_controls)
+            return desktop_main(port=args.port, config_path=config_path, lab_session=args.lab_session)
         if args.cmd == "serve":
             from .server import run as run_server
 

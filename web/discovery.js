@@ -31,7 +31,7 @@
           <p class="discovery-hint discovery-preferences-note">平台操作即时保存。兴趣用自己的保存按钮，切换分类会保留草稿。</p>
           <details id="discovery-platforms-box" class="discovery-box" open><summary>平台访问</summary>
             <p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p>
-            <p class="discovery-hint">仅在开放的平台查找可读的公开内容。</p>
+            <p class="discovery-hint">默认查询使用已开放的全网入口。要使用全网，先开启全网并确认搜索服务许可；也可限定到已开放的平台。</p>
             <div id="discovery-platforms"><p class="discovery-hint">正在等待读取…</p></div>
           </details>
           <details id="discovery-interests-box" class="discovery-box" open><summary>兴趣主题</summary>
@@ -140,7 +140,7 @@
                 <div class="discovery-setting-group">
                   <div class="discovery-setting-row">
                     <div><label for="discovery-provider">第三方搜索服务</label><p id="discovery-provider-hint" class="discovery-hint"></p></div>
-                    <select id="discovery-provider" aria-describedby="discovery-provider-hint"><option value="native">不使用第三方搜索服务</option><option value="bing_rss">Bing RSS（免费，无需密钥）</option><option value="brave">Brave 搜索服务</option><option value="searxng">SearXNG 搜索服务</option></select>
+                    <select id="discovery-provider" aria-describedby="discovery-provider-hint"><option value="native">默认入口（全网 Bing／平台原生）</option><option value="bing_rss">Bing RSS（免费，无需密钥）</option><option value="brave">Brave 搜索服务</option><option value="searxng">SearXNG 搜索服务</option></select>
                   </div>
                   <div class="discovery-provider-config">
                     <label id="discovery-endpoint-field" class="discovery-field hidden">服务地址<input id="discovery-endpoint" type="url" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="https://搜索服务地址"></label>
@@ -295,7 +295,7 @@
   function stateLabel(value) { return taskLabels[value] || "正在更新活动状态"; }
   function searchSummaryLabel(value) {
     if (!value || value.kind !== "search_results" || value.stage !== "search") return "";
-    const platforms = { wikipedia: "维基百科", bilibili: "B站", zhihu: "知乎", tieba: "贴吧" };
+    const platforms = { web: "全网", wikipedia: "维基百科", bilibili: "B站", zhihu: "知乎", tieba: "贴吧" };
     const providers = { native: "站内搜索", browser: "独立浏览器", bing_rss: "Bing RSS", brave: "Brave", searxng: "SearXNG" };
     const counts = ["received", "accepted", "returned", "rejected", "duplicates", "unsupported"];
     if (!has(platforms, value.platform) || !has(providers, value.provider)
@@ -572,11 +572,11 @@
     if (settingsDirty) return { message: "活动设置尚未保存。", label: "继续编辑", target: "discovery-settings-box" };
     if (interestDirty) return { message: "兴趣尚未保存。", label: "继续编辑", target: "discovery-interest-topic" };
     if (!list(snapshot.platforms).some((p) => p.enabled && p.available && (!p.requires_third_party || p.allow_third_party)))
-      return { message: "先选一个平台，告诉 Alice 去哪里找。", label: "选择平台", target: "discovery-platforms-box" };
+      return { message: "先开启全网搜索，或指定一个平台，告诉 Alice 去哪里找。", label: "选择平台", target: "discovery-platforms-box" };
     if (!list(snapshot.interests).some((i) => i.enabled && i.external_allowed))
       return { message: "添加一个兴趣，Alice 就知道找什么了。", label: "添加兴趣", target: "discovery-interest-topic" };
     if (!s.enabled) return { message: "寻找已暂停，已找到的资料仍可查看。", label: "开启发现", enable: true };
-    if ([s.pool_capacity, s.source_pool_bytes, s.read_candidates, s.active_interest_capacity].some((value) => value === 0))
+    if ([s.active_interest_capacity, ...(snapshot.search_quota_testing ? [] : [s.pool_capacity, s.source_pool_bytes, s.read_candidates])].some((value) => value === 0))
       return { message: "资料容量、读取数或启用兴趣数量设为 0，当前无法寻找。", label: "调整设置", target: "discovery-settings-box" };
     const exhausted = ["queries", "network", "bytes"].find((key) => Number.isFinite(budget[`${key}_limit`]) && budget[`${key}_used`] >= budget[`${key}_limit`]);
     if (exhausted) return { message: "今日寻找额度已用完，可以等下次额度恢复，或自行调整。", label: "查看额度", target: `discovery-policy-${({ queries: "daily_queries", network: "daily_network", bytes: "daily_response_mib" })[exhausted]}` };
@@ -715,7 +715,7 @@
     $("discovery-engines").disabled = provider !== "searxng";
     $("discovery-key").disabled = !keySupported;
     $("discovery-clear-key").disabled = !keySupported;
-    text("discovery-provider-hint", provider === "native" ? "各平台按所选方式访问，仍需单独开放。"
+    text("discovery-provider-hint", provider === "native" ? "全网使用 Bing RSS；指定平台沿用已接入的原生入口。全网及各平台须分别开启，开启全网需允许将搜索词交给 Bing；不保证服务始终可达。"
       : provider === "bing_rss" ? "获准的平台将搜索词交给 Bing 的公开 RSS。平台许可在「平台与兴趣」单独设置。"
       : provider === "brave" ? "获准的平台将搜索词交给 Brave。需要服务密钥，费用以账单为准。"
       : "获准的平台将搜索词交给指定的 SearXNG 服务。请核对服务地址与使用许可。");
@@ -818,7 +818,7 @@
       if (words(p.readable_types)) detail.append(node("p", `可读范围：${words(p.readable_types)}`, "discovery-hint"));
       if (p.discovery_method) detail.append(node("p", `发现方式：${({ native: "平台公开入口", bing_rss: "Bing RSS（免费，无需密钥）", brave: "Brave 搜索服务", searxng: "SearXNG 搜索服务" })[p.discovery_method] || words(p.discovery_method)}`, "discovery-hint"));
       if (p.reason && !browserAccess) (p.available ? detail : card).append(node("p", p.reason, "discovery-hint"));
-      const third = check("允许所选第三方搜索服务寻找此平台的内容", p.allow_third_party);
+      const third = check("允许所选搜索服务查找此范围的公开内容", p.allow_third_party);
       if (needsThirdParty || p.allow_third_party) {
         if (p.third_party_notice) detail.append(node("p", p.third_party_notice, "discovery-hint"));
         const permission = button("保存搜索许可", () => {
@@ -1099,7 +1099,7 @@
     const limit = (budgetKey, settingsKey) => quota(has(budget, budgetKey) ? budget[budgetKey] : s[settingsKey]);
     const responseLimit = has(budget, "bytes_limit") ? budget.bytes_limit === null ? null : budget.bytes_limit / 1048576 : s.daily_response_mib;
     const responseUsed = Number.isFinite(budget.bytes_used) ? budget.bytes_used / 1048576 : undefined;
-    text("discovery-budget", [
+    text("discovery-budget", (data.search_quota_testing ? "测试模式：搜索额度暂不执行，用量仍记录；设置值保留。 " : "") + [
       `今日查询 ${used(budget.queries_used)} / ${limit("queries_limit", "daily_queries")}`,
       `后台模型 ${used(budget.models_used)} / ${limit("models_limit", "daily_models")}`,
       `网络尝试 ${used(budget.network_used)} / ${limit("network_limit", "daily_network")}`,
@@ -1256,7 +1256,7 @@
 
   trigger.addEventListener("click", () => opened ? close() : open());
   $("discovery-close").addEventListener("click", goChat);
-  for (const id of ["chat-nav", "observer-btn", "evaluations-btn"]) $(id).addEventListener("click", () => close(false), true);
+  for (const id of ["chat-nav"]) $(id).addEventListener("click", () => close(false), true);
   $("discovery-refresh").addEventListener("click", refresh);
   $("discovery-settings-refresh").addEventListener("click", refresh);
   $("discovery-settings-open").addEventListener("click", () => showSettings());

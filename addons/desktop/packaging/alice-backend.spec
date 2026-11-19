@@ -16,13 +16,14 @@ datas += copy_metadata("openai", recursive=True)
 sdk_modules = sorted({str(file)[:-3].replace("/", ".").removesuffix(".__init__")
                       for file in distribution("openai").files
                       if file.parts[0] == "openai" and file.suffix == ".py"})
+lab_modules = {"alice.evaluation", "alice.evaluation_service"}
 
 analysis = Analysis(
     [str(packaging / "backend_entry.py")], pathex=[str(root)],
     binaries=[], datas=datas,
-    hiddenimports=collect_submodules("alice") + sdk_modules,
+    hiddenimports=sorted(set(collect_submodules("alice")) - lab_modules) + sdk_modules,
     hookspath=[], runtime_hooks=[],
-    excludes=["matplotlib", "numpy", "PIL", "tkinter", "pytest", "IPython"],
+    excludes=["matplotlib", "numpy", "PIL", "tkinter", "pytest", "IPython", *sorted(lab_modules)],
     noarchive=False,
 )
 pyz = PYZ(analysis.pure)

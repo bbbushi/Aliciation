@@ -17,7 +17,7 @@
   document.body.append(modal);
   modal.querySelector("button").onclick = () => modal.close();
   let dataset = null, active = null, timer = null, expiryTimer = null, sending = false, detailVersion = 0;
-  const names = { tieba: "贴吧", bilibili: "B站", zhihu: "知乎", wikipedia: "维基百科", auto: "已开放的平台" };
+  const names = { web: "全网",  tieba: "贴吧", bilibili: "B站", zhihu: "知乎", wikipedia: "维基百科", auto: "全网" };
   const phases = { queued: "正在准备查找", search: "正在搜索", read: "正在读取正文" };
   function node(tag, text, cls) { const n = document.createElement(tag); n.textContent = text; if (cls) n.className = cls; return n; }
   function sourceLink(url, label) {

@@ -164,6 +164,21 @@
     }
     kpis.append(kpi("状态", request.finished ? "已结束" : "进行中",
       request.assistant_turn_id ? `回复 #${request.assistant_turn_id}` : (request.delivery || "未落库")));
+    const format = window.AliceContextViewer.replySectionsSummary(request.reply_sections);
+    if (format) {
+      const reply = kpi("回复三栏", request.reply_sections.status === "accepted" ? "格式通过"
+        : request.reply_sections.status === "rejected" ? "格式未通过" : "未校验", format);
+      if (request.reply_sections.cache_status === "stored") {
+        const cached = node("button", "查看缓存注释", "ci-btn");
+        cached.type = "button";
+        cached.onclick = () => window.AliceContextViewer.openReplyCache({
+          requestId: request.request_id, scope: window.ContextInspectorClient.getScope(),
+          endpoint: "/api/plugins/context-inspector/reply-cache"
+        });
+        reply.append(cached);
+      }
+      kpis.append(reply);
+    }
   }
 
   function renderComposition(request, call) {

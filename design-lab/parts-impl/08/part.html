@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>08 · 演示控制器 · B 舱壁 Bulkhead · 部件演示</title>
+<style>
+/* ============ 页面 token（与全页 :root 同源；曲线出自 PRINCIPLES §2.2，不自造） ============ */
+:root{
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+  --ease-in-out:cubic-bezier(0.77,0,0.175,1);
+  --bg:#0d1114;--srf:#11171d;--panel:#141c24;
+  --line:#263443;
+  --tx:#ccd6dd;--dim:#7d8b96;--faint:#57646e;
+  --acc:#8fb8cc;--acc-dim:#42606f;--ok:#7fa07f;--bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+.app{min-height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+@media (prefers-reduced-motion:reduce){
+  .app{transition:opacity 160ms var(--ease-out);transform:none}
+}
+
+/* ============ 演示脚手架（lab-*：信号台 / 替身读出 / 剧本台）——组装时整体丢弃 ============ */
+.lab{display:flex;align-items:center;gap:12px;background:var(--srf);border-bottom:1px solid var(--line);padding:10px 18px}
+.lab-b{width:30px;height:30px;flex:none;display:grid;place-items:center;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12px/1 var(--mono);clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.lab-t{margin:0;font-size:13.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em}
+.lab-d{margin:3px 0 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.06em}
+.rig{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px}
+.rig-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.rig-row:first-child{margin-top:0}
+.rig-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.rbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;border:1px solid var(--line);
+  border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.rbtn:active{transform:scale(.97)}
+.rig-note{margin:7px 0 0;font:10.5px/1.5 var(--sans);color:var(--faint);letter-spacing:.02em}
+@media (hover:hover) and (pointer:fine){.rbtn:hover{color:#b9c6cf}}
+.stat{background:var(--srf);border-bottom:1px solid var(--line);padding:7px 18px;display:flex;flex-wrap:wrap;gap:16px;
+  font:10.5px/1 var(--mono);letter-spacing:.06em;color:var(--dim)}
+.stat b{color:var(--tx);font-weight:500;margin-left:5px}
+.trace{flex:1;min-height:0;overflow-y:auto;background:var(--srf);border-top:1px solid var(--line);padding:8px 18px 12px;scrollbar-width:thin}
+.trace h2{margin:0 0 6px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.trace ol{margin:0;padding:0;list-style:none}
+.trace li{font:10.5px/1.8 var(--mono);color:var(--dim);letter-spacing:.03em;white-space:pre-wrap;overflow-wrap:anywhere}
+.trace li.out{color:var(--acc)}        /* 08 发出 */
+.trace li.in{color:#8fa0ad}            /* 08 接收 */
+.trace li.note{color:var(--faint)}
+.trace li.warn{color:var(--bad)}
+.trace li.ok{color:var(--ok)}
+
+/* ============ 08 演示控制器（p08-*：部件本体，见 FRAGMENT.md） ============
+   开关（罕见档 #16）：滑块 200ms --ease-in-out（屏内移动），可中断不重放；
+   档位与动作按钮：press scale(0.97) 底线 + 颜色 140ms ease；状态即时可读零动效。 */
+.p08-panel{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px 7px}
+.p08-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.p08-row+.p08-row{margin-top:6px}
+.p08-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.p08-dbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;
+  border:1px solid var(--line);border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.p08-dbtn:active{transform:scale(.97)}
+.p08-dbtn[aria-current]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.p08-sep{width:1px;height:14px;background:var(--line);margin:0 5px}
+.p08-sw{display:inline-flex;align-items:center;gap:8px;background:none;border:0;border-radius:2px;
+  color:var(--dim);font:11.5px/1 var(--sans);padding:5px 4px;
+  transition:color 140ms ease,transform 160ms var(--ease-out)}
+.p08-sw:active{transform:scale(.97)}
+.p08-knob{position:relative;width:30px;height:16px;border-radius:2px;border:1px solid var(--line);
+  background:var(--bg);transition:background-color 160ms ease,border-color 160ms ease}
+.p08-knob::after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:1px;
+  background:var(--dim);transition:transform 200ms var(--ease-in-out),background-color 160ms ease}
+.p08-sw[aria-pressed="true"]{color:var(--acc)}
+.p08-sw[aria-pressed="true"] .p08-knob{background:#17262f;border-color:var(--acc-dim)}
+.p08-sw[aria-pressed="true"] .p08-knob::after{transform:translateX(14px);background:var(--acc)}
+.p08-note{margin:6px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+@media (hover:hover) and (pointer:fine){
+  .p08-dbtn:hover{color:#b9c6cf}
+  .p08-sw:hover{color:#b9c6cf}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="lab">
+    <span class="lab-b" aria-hidden="true">08</span>
+    <div>
+      <p class="lab-t">演示控制器 · 唯一数据源与剧本引擎：档位 / 重播 / 清空 / 故障开关 / 假数据声明</p>
+      <p class="lab-d">方向 B 舱壁 Bulkhead · 部件实验台 · 离线演示，无网络请求，所有数据均为虚构</p>
+    </div>
+  </header>
+
+  <!-- ↓↓↓ 部件本体挂载点（组装时整块搬走） ↓↓↓ -->
+  <section id="p08-mount"></section>
+  <!-- ↑↑↑ 部件本体结束 ↑↑↑ -->
+
+  <section class="rig" aria-label="剧本台（lab，不随装配）">
+    <div class="rig-row">
+      <span class="rig-cap">四剧本</span>
+      <button type="button" class="rbtn" id="s-send">S1 发送一轮（带逐句揭示）</button>
+      <button type="button" class="rbtn" id="s-loadfail">S2 载入失败一次（装填+重播）</button>
+      <button type="button" class="rbtn" id="s-offbottom">S3 离底读旧句</button>
+      <button type="button" class="rbtn" id="s-sendfail">S4 模拟发送失败（拨开关+发送）</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">联测</span>
+      <button type="button" class="rbtn" id="s-jump">模拟 jump:latest（回底+跳过）</button>
+      <button type="button" class="rbtn" id="s-race">连点三档竞态（normal→worst→empty）</button>
+      <button type="button" class="rbtn" id="s-retry">模拟 retry:load（失败面重试）</button>
+    </div>
+    <p class="rig-note">08 不含聊天界面本体：本页 02/04/05/07 以最小替身消费信号（读出见状态行），信号台按序记录每一次总线收发。装配时替身整体丢弃，由真实部件接管同一总线。载入失败按规格只触发一次（首载模拟 / 装填后重播）。</p>
+  </section>
+
+  <div class="stat" aria-label="替身页面状态读出">
+    <span>dataset<b id="m-ds">–</b></span>
+    <span>listState<b id="m-ls">–</b></span>
+    <span>busy<b id="m-busy">–</b></span>
+    <span>link<b id="m-link">–</b></span>
+    <span>turns<b id="m-tn">–</b></span>
+    <span>atLatest<b id="m-atl">–</b></span>
+    <span>unread<b id="m-un">–</b></span>
+    <span>揭示中<b id="m-live">–</b></span>
+    <span>剧本并发<b id="m-play">–</b></span>
+  </div>
+
+  <footer class="trace" aria-label="总线信号台">
+    <h2>SIGNAL TRACE（→ 08 发出 · ← 08 接收 · 时间序）</h2>
+    <ol id="trace"></ol>
+  </footer>
+
+</div>
+
+<script>
+'use strict';
+/* ================= P08 PART JS（随装配：window.P08） =================
+   部件 08 · 演示控制器（方向 B 舱壁）。demo 的唯一数据源与剧本引擎：
+   档位切换 / 重播 / 清空 / 故障开关 / 假数据声明；离线硬约束——任何操作不发网络请求。
+   对 02 的生命周期经 host 适配层（beginLoad/loadDone/loadFail）驱动；
+   对其他部件一律走总线信号。快速连切以最后选中档为准（gen 令牌取消中间档注入）。 */
+window.P08=(function(){
+  const LOADING_MS=420;      /* 切档 loading 停留（剧本参数，非动效时长） */
+  const ACK_MS=350;          /* 用户 Turn 回执（sending→ok） */
+  const RETRY_MS=900;        /* retry:send 回执 */
+  const PROACTIVE_MS=1200;   /* 主动消息随 normal 档就绪后注入 */
+  const FLOOD_BATCH=10, FLOOD_GAP=280;  /* 洪流分批到达 */
+
+  const S={dataset:'normal',userName:'阿澈',gen:0,busy:false,busyOwner:null,link:'up',
+    failOnce:false,loadFailArmed:false,playing:false,
+    tAck:0,tRetry:0,tFlood:0,tPro:0};
+  let bus=null,host=null,ui=null,uidN=0;
+
+  /* —— 数据收口（与 02/03 dev 数据集同源；worst 覆盖规格 §2 全部极端） —— */
+  const T=(day,h,m,y)=>new Date(y??2026,10,day,h,m).getTime();
+  const LONG=(()=>{const b='编译在凌晨完成，没有警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。';
+    let s='';while(s.length<1880)s+=b;return s+'以上，长文到此收尾。';})();
+  const URLISH='https://mirror.internal.alice/pkg/'+'a'.repeat(170);
+  const EMOJI='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨ 晚安。';
+  const REPLY='收到，这条回复走逐句揭示。第二句演示离底时的未读句计数。第三句验证自动跟随不劫持手动滚动。【认真】第四句带一个情绪标记原样显示。第五句收尾，揭示到此完整。';
+  const PROACTIVE='刚把上午的安排排好了。升级流程拆成了四步，每步的验收点都列了出来。【放心】随时可以开始，我先盯着自动检查。';
+
+  function floodTurns(){
+    const base=T(16,14,0);
+    const U=['收到。','好，先这样。','这一版我先跑一遍。','嗯，辛苦了。','晚上再对一次？'];
+    const A=['编译通过，起服正常。【安心】日志没有新告警，归档线程写完了今天的索引。','这一段我先记下，等实测数据回来再对一次结论。【认真】','可以。流程走完我把要点整理进档案，明天直接续上。','记好了。这一批跑完我会给你一份对照摘要。'];
+    const S1=['嗯','在','？','好'];
+    const E=['🌊 潮水退了，滩上很静。','✨ 晚安。','👨‍👩‍👧‍👦 都到齐了。'];
+    const out=[];
+    for(let i=0;i<50;i++){
+      const role=Math.floor(i/6)%2===0?'user':'assistant';
+      const pool=role==='user'?U:A;
+      let text;
+      switch(i%5){
+        case 0:text=pool[i%pool.length];break;
+        case 1:text=pool[(i+1)%pool.length];break;
+        case 2:text=S1[i%S1.length];break;
+        case 3:text=E[i%E.length];break;
+        default:text=pool[(i+2)%pool.length];
+      }
+      let time;
+      if(i%9===4)time=null;
+      else if(i%11===7){const prev=out.length?out[out.length-1].time:null;time=typeof prev==='number'?prev:base+i*61e3;}
+      else if((i>=20&&i<23)||(i>=40&&i<43))time=base-6*3600e3+i*61e3;
+      else time=base+i*61e3;
+      out.push({id:'f'+i,role,text,time});
+    }
+    return out;
+  }
+  const DATA={
+    normal:()=>[
+      {id:'n1',role:'user',text:'今天的部署顺利吗？',time:T(15,22,41)},
+      {id:'n2',role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。【安心】部署记录已经归档，明天可以晚点起。',time:T(15,22,42)},
+      {id:'n3',role:'assistant',channel:'qq',text:'早上好。昨夜监控没有异常，桌面 0.1.5 的自动检查十点半会跑第一次。',time:T(16,8,52)},
+      {id:'n4',role:'user',text:'好，那今天陪我把升级流程再过一遍？',time:T(16,8,55)},
+      {id:'n5',role:'assistant',text:'可以。上午先确认更新开关的状态，再走一次同版提示的路径。【认真】卡点我会记下，过完整理进桌面档案。',time:T(16,8,55)}
+    ],
+    worst:()=>[
+      {id:'w1',role:'user',text:URLISH,time:new Date(2026,11,31,23,58).getTime()},
+      {id:'w2',role:'assistant',text:LONG,time:new Date(2027,0,3,9,0).getTime()},
+      {id:'w3',role:'assistant',text:EMOJI,time:new Date(2027,0,3,9,1).getTime()},
+      {id:'w4',role:'user',text:'在吗',time:new Date(2027,0,3,9,2).getTime()},
+      {id:'w5',role:'assistant',text:'嗯',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w6',role:'assistant',text:'',time:new Date(2027,0,3,9,3).getTime()},
+      {id:'w7',role:'user',text:'这条是发送失败的用户消息',status:'failed',time:new Date(2027,0,3,9,4).getTime()},
+      {id:'w8',role:'assistant',text:'这一轮没有时间字段，元信息按字段隐藏。',time:null}
+    ],
+    single:()=>[{id:'s1',role:'assistant',text:'只有一条消息的会话，验证 0/1/N 边界与日期行判定的下限。',time:T(16,12,0)}],
+    empty:()=>[],
+    flood:()=>floodTurns()
+  };
+  const NAMES={normal:'日常对话',worst:'最坏数据',single:'单条',empty:'空会话',flood:'洪流 50 条'};
+
+  /* —— 内部工具 —— */
+  const uid=p=>(p||'t')+(++uidN)+'-'+Date.now().toString(36);
+  function emit(sig,d){if(bus)bus.emit(sig,d);}
+  function setBusy(v,owner){
+    if(v){if(S.busy)return;S.busy=true;S.busyOwner=owner||null;}
+    else{if(!S.busy)return;S.busy=false;S.busyOwner=null;}
+    emit('busy:change',S.busy);
+  }
+  function stopScript(){
+    clearTimeout(S.tAck);clearTimeout(S.tRetry);clearTimeout(S.tFlood);clearTimeout(S.tPro);
+    S.playing=false;
+  }
+  function syncUI(){if(ui)ui();}
+
+  /* —— 档位装载（中间档注入可取消：gen 令牌，晚到的旧档数据不得覆盖新档） —— */
+  function deliver(name,g){
+    if(S.loadFailArmed){S.loadFailArmed=false;S.playing=false;host.loadFail(g);syncUI();return;}  /* 载入失败仅触发一次 */
+    const arr=DATA[name]();
+    if(name==='flood'){host.loadDone(g,arr.slice(0,FLOOD_BATCH));startFlood(g,arr);}
+    else{
+      host.loadDone(g,arr);
+      if(name==='normal')scheduleProactive(g);      /* 主动消息随档位/重播 */
+      S.playing=false;
+    }
+    flushQueue();
+    syncUI();
+  }
+  /* loading/失败面期到达的 submit 已被 05 清草稿发出——缓存在此，注入完成后依序执行（不可丢弃） */
+  function flushQueue(){
+    if(S.queue&&S.queue.length&&!S.busy&&S.link==='up'){
+      const text=S.queue.shift();
+      if(S.failOnce){S.failOnce=false;errorScript(text);}
+      else sendScript(text);
+    }
+  }
+  function loadDataset(name){
+    stopScript();
+    S.dataset=name;S.playing=true;
+    emit('demo:dataset',name);                       /* 04 收 → stopAll；面板指示先行更新 */
+    setBusy(false);                                  /* 揭示随旧档清除，busy 一并干净复位 */
+    const g=++S.gen;
+    host.beginLoad();
+    setTimeout(()=>{if(g!==S.gen)return;deliver(name,g);syncUI();},LOADING_MS);
+  }
+  function startFlood(g,arr){
+    let i=FLOOD_BATCH;
+    const batch=()=>{
+      if(g!==S.gen)return;                           /* 注入中途切档/清空：洪流可取消 */
+      for(;i<Math.min(i+FLOOD_BATCH,arr.length);i++)emit('turn:append',arr[i]);
+      i+=FLOOD_BATCH;
+      if(i<arr.length)S.tFlood=setTimeout(batch,FLOOD_GAP);
+      else{S.playing=false;syncUI();}
+    };
+    S.tFlood=setTimeout(batch,FLOOD_GAP);
+  }
+  function scheduleProactive(g){
+    clearTimeout(S.tPro);
+    S.tPro=setTimeout(()=>{if(g!==S.gen)return;injectProactive();},PROACTIVE_MS);
+  }
+  function injectProactive(){   /* 主动消息：无 submit 触发，QQ 渠道 assistant 轮走揭示 */
+    emit('turn:append',{id:uid('pq'),role:'assistant',channel:'qq',text:PROACTIVE,state:'revealing',shownText:'',time:Date.now()});
+    syncUI();
+  }
+
+  /* —— 剧本 —— */
+  function sendScript(text){
+    S.playing=true;syncUI();
+    setBusy(true);                                   /* busy=true：Alice 处理中（05 提示、锁定发送） */
+    const ut={id:uid('u'),role:'user',text,status:'sending',time:Date.now()};
+    emit('turn:append',ut);                          /* 用户 Turn 上屏回执（05 释放在途锁） */
+    const g=S.gen;
+    S.tAck=setTimeout(()=>{
+      if(g!==S.gen)return;                           /* 剧本随旧档取消 */
+      emit('turn:update',{id:ut.id,patch:{status:'ok'}});
+      startReply(g);
+    },ACK_MS);
+  }
+  function startReply(g){
+    const at={id:uid('a'),role:'assistant',text:REPLY,state:'revealing',shownText:'',time:Date.now()};
+    S.busyOwner=at.id;
+    emit('turn:append',at);                          /* 04 自动接手：等待首句 → 逐句 → done */
+    syncUI();
+  }
+  function errorScript(text){   /* 发送失败：Turn 以 failed 留在列表（03 重试），原文本回填 05 草稿 */
+    emit('turn:append',{id:uid('u'),role:'user',text,status:'failed',time:Date.now()});
+    emit('send:failed',text);                        /* 已 trim 的提交原文逐字回填 */
+    syncUI();
+  }
+
+  /* —— 对外 API —— */
+  function init(b,h){
+    bus=b;host=h;
+    bus.on('submit:text',text=>{
+      if(S.link!=='up'||S.busy)return;               /* 05 已拦；防御性再拦（锁定边界） */
+      const hs=host.state?host.state():null;
+      if(hs&&hs.listState==='loading'){              /* loading/失败面期到达的 submit：缓存到注入完成（草稿已清空，不能丢） */
+        S.queue=S.queue||[];S.queue.push(text);syncUI();return;
+      }
+      if(S.failOnce){S.failOnce=false;syncUI();errorScript(text);return;}  /* 一次性，自动复位 */
+      sendScript(text);
+    });
+    bus.on('retry:send',d=>{                         /* 重发走 send 剧本：置 sending → 回执 → Alice 回复 */
+      if(!d||!d.id)return;
+      const g=S.gen;
+      emit('turn:update',{id:d.id,patch:{status:'sending'}});
+      S.tRetry=setTimeout(()=>{
+        if(g!==S.gen)return;
+        emit('turn:update',{id:d.id,patch:{status:'ok'}});
+        setBusy(true);S.playing=true;syncUI();
+        startReply(g);
+      },RETRY_MS);
+    });
+    bus.on('retry:load',()=>loadDataset(S.dataset)); /* 02 失败面重试 → 重新注入当前档 */
+    bus.on('reveal:done',d=>{                        /* busy 解除与揭示完成对齐（跳过/兜底路径同样发 done） */
+      if(S.busyOwner&&d&&d.id===S.busyOwner){S.playing=false;setBusy(false);syncUI();}
+      flushQueue();
+    });
+  }
+  function setDataset(name){if(DATA[name])loadDataset(name);}
+  function replay(){                                /* 重播当前档：从头跑（含 loading）；装填的载入失败在此生效 */
+    loadDataset(S.dataset);
+  }
+  function clear(){                                 /* 清空：等价切 empty + 停一切剧本；不清草稿（草稿属于用户） */
+    stopScript();
+    emit('demo:reset');
+    S.dataset='empty';S.playing=false;
+    setBusy(false);
+    const g=++S.gen;
+    host.beginLoad();
+    setTimeout(()=>{if(g!==S.gen)return;host.loadDone(g,[]);syncUI();},LOADING_MS);
+    syncUI();
+  }
+  function toggleFailOnce(){S.failOnce=!S.failOnce;syncUI();return S.failOnce;}
+  function toggleClosing(){                         /* 置位 → linkState=closing；复位 → up（01 呈现、05 锁定） */
+    S.link=S.link==='up'?'closing':'up';
+    emit('link:change',S.link);
+    syncUI();
+    return S.link==='closing';
+  }
+  function armLoadFail(){S.loadFailArmed=true;syncUI();}
+  function state(){return{dataset:S.dataset,playing:S.playing,busy:S.busy,link:S.link,
+    failOnce:S.failOnce,closing:S.link==='closing',gen:S.gen,
+    loadFailArmed:S.loadFailArmed,queued:(S.queue||[]).length,userName:S.userName};}
+
+  /* —— 面板（文案表唯一来源：规格 §7；指示先行更新，aria-current 可编程识别） —— */
+  function mount(el){
+    el.innerHTML=
+      '<section class="p08-panel" aria-label="演示控制器">'
+    +   '<div class="p08-row">'
+    +     '<span class="p08-cap" id="p08-cap-ds">演示数据</span>'
+    +     Object.keys(NAMES).map(k=>'<button type="button" class="p08-dbtn" data-p08-ds="'+k+'">'+NAMES[k]+'</button>').join('')
+    +     '<span class="p08-sep" aria-hidden="true"></span>'
+    +     '<button type="button" class="p08-dbtn" data-p08-act="replay">重播当前档位</button>'
+    +     '<button type="button" class="p08-dbtn" data-p08-act="clear">清空会话</button>'
+    +   '</div>'
+    +   '<div class="p08-row">'
+    +     '<span class="p08-cap">开关</span>'
+    +     '<button type="button" class="p08-sw" data-p08-tgl="fail" aria-pressed="false"><span class="p08-knob" aria-hidden="true"></span>模拟发送失败</button>'
+    +     '<button type="button" class="p08-sw" data-p08-tgl="close" aria-pressed="false"><span class="p08-knob" aria-hidden="true"></span>模拟服务关闭</button>'
+    +   '</div>'
+    +   '<p class="p08-note">本页为离线演示，所有消息与状态均为虚构数据。</p>'
+    + '</section>';
+    el.querySelectorAll('[data-p08-ds]').forEach(b=>b.addEventListener('click',()=>setDataset(b.dataset.p08Ds)));
+    el.querySelector('[data-p08-act="replay"]').addEventListener('click',replay);
+    el.querySelector('[data-p08-act="clear"]').addEventListener('click',clear);
+    el.querySelector('[data-p08-tgl="fail"]').addEventListener('click',toggleFailOnce);
+    el.querySelector('[data-p08-tgl="close"]').addEventListener('click',toggleClosing);
+    ui=()=>{
+      el.querySelectorAll('[data-p08-ds]').forEach(b=>{
+        b.dataset.p08Ds===S.dataset?b.setAttribute('aria-current','true'):b.removeAttribute('aria-current');
+      });
+      el.querySelector('[data-p08-tgl="fail"]').setAttribute('aria-pressed',String(S.failOnce));
+      el.querySelector('[data-p08-tgl="close"]').setAttribute('aria-pressed',String(S.link==='closing'));
+    };
+    syncUI();
+  }
+  return{init,mount,setDataset,replay,clear,toggleFailOnce,toggleClosing,armLoadFail,injectProactive,state,DATA,NAMES};
+})();
+window.P08=P08;
+</script>
+
+<script>
+'use strict';
+/* ================= lab：02/04/05/07 最小替身 + 剧本台 + 信号台（组装时丢弃） ================= */
+(function(){
+  const $=id=>document.getElementById(id);
+  const traceEl=$('trace');
+  let lines=[];
+  function trace(m,cls){
+    lines.unshift({m,cls:cls||''});lines=lines.slice(0,80);
+    traceEl.replaceChildren(...lines.map(x=>{const li=document.createElement('li');li.textContent=x.m;if(x.cls)li.className=x.cls;return li;}));
+  }
+  const splitSent=(function(){  /* 03 同源切句（替身计数用） */
+    const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+    const CLOSES='）」』】)]';const END='。！？…';
+    return function(text){
+      if(typeof text!=='string'||!text.trim())return[];
+      const out=[];let cur='',depth=0;
+      for(const ch of text){cur+=ch;
+        if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}
+        if(PAIRS[ch]){depth++;continue;}
+        if(CLOSES.includes(ch)){if(depth>0)depth--;continue;}
+        if(END.includes(ch)&&depth===0){out.push(cur);cur='';}}
+      if(cur)out.push(cur);
+      if(out.length>400){const h=out.slice(0,399);h.push(out.slice(399).join(''));return h;}
+      return out;};
+  })();
+
+  /* —— 总线（与装配 {on,emit} 同形） —— */
+  const bus={m:{},
+    on(s,f){(this.m[s]??=[]).push(f);},
+    emit(s,d){
+      const OUT=new Set(['demo:dataset','demo:replay','demo:reset','turn:append','turn:update','busy:change','link:change','send:failed']);
+      const IN=new Set(['submit:text','retry:send','retry:load','reveal:done']);
+      trace((OUT.has(s)?'→ 08 emit  ':'← 08 recv  ')+s+(d!==undefined?' · '+summarize(s,d):''),OUT.has(s)?'out':'in');
+      (this.m[s]||[]).slice().forEach(f=>f(d));
+    }};
+  function summarize(s,d){
+    if(s==='turn:append')return (d.id)+' '+(d.role)+(d.state==='revealing'?' ·揭示':'')+(d.channel==='qq'?' ·QQ':'')+'「'+String(d.text).slice(0,14)+(String(d.text).length>14?'…':'')+'」';
+    if(s==='turn:update')return d.id+' patch '+JSON.stringify(d.patch);
+    if(s==='reveal:done')return d.id;
+    if(s==='busy:change')return String(d);
+    if(s==='link:change')return String(d);
+    if(s==='send:failed')return '「'+String(d).slice(0,14)+'…」';
+    if(s==='demo:dataset'||s==='demo:reset')return String(d);
+    return typeof d==='string'?d.slice(0,20):'';
+  }
+
+  /* —— 替身：02 宿主（beginLoad/loadDone/loadFail/state）+ 04 揭示 + 07 语义 + 05 锁 —— */
+  const M={gen:0,listState:'loading',turns:[],busy:false,link:'up',atLatest:true,unread:0,reveals:new Map(),queue:0};
+  const host={
+    beginLoad(){M.gen++;M.turns=[];M.listState='loading';M.atLatest=true;M.unread=0;sync();return M.gen;},
+    loadDone(g,arr){if(g!==M.gen)return;M.fail=false;M.turns=arr.slice();M.listState=arr.length?'ready':'empty';
+      if(!arr.length)trace('  替身 02：listState=empty（06 挂载）','note');sync();},
+    loadFail(g){if(g!==M.gen)return;M.fail=true;M.listState='loading';trace('  替身 02：载入失败面（重试 → retry:load）','warn');sync();},
+    state(){return{listState:M.listState,fail:!!M.fail,atLatest:M.atLatest,unread:M.unread,turns:M.turns.length,gen:M.gen};}
+  };
+  /* 替身 04：assistant 揭示轮 → 逐句 progress → done（B 节拍 240–380ms） */
+  bus.on('turn:append',t=>{
+    M.turns.push({id:t.id,role:t.role,text:t.text,state:t.state});
+    if(t.state==='revealing'){
+      const parts=splitSent(t.text);let i=0;
+      M.reveals.set(t.id,{n:parts.length});
+      if(parts.length===0){bus.emit('reveal:done',{id:t.id});M.reveals.delete(t.id);}
+      else{
+        const step=()=>{ if(!M.reveals.has(t.id))return;
+          i++;
+          bus.emit('reveal:progress',{id:t.id,shownText:parts.slice(0,i).join('')});
+          if(!M.atLatest)M.unread++;
+          if(i<parts.length)setTimeout(step,240+Math.random()*140);
+          else bus.emit('reveal:done',{id:t.id});
+        };
+        setTimeout(step,600+Math.random()*400);
+      }
+    }else if(!M.atLatest){M.unread+=splitSent(t.text).length;}
+    sync();
+  });
+  bus.on('turn:update',d=>{
+    const t=M.turns.find(x=>x.id===d.id);if(!t)return;
+    Object.assign(t,d.patch);sync();
+  });
+  bus.on('reveal:progress',()=>sync());
+  bus.on('reveal:done',d=>{M.reveals.delete(d.id);sync();});
+  bus.on('jump:latest',()=>{   /* 替身 07：用户主动回底 → 04 跳过（skipAll 语义） */
+    M.atLatest=true;M.unread=0;
+    M.reveals.forEach((v,id)=>{bus.emit('reveal:progress',{id,shownText:(M.turns.find(t=>t.id===id)||{}).text||''});bus.emit('reveal:done',{id});});
+    M.reveals.clear();trace('  替身 07：回底清零 + 揭示跳过（立即完整）','note');sync();
+  });
+  bus.on('busy:change',v=>{M.busy=v;sync();});
+  bus.on('link:change',v=>{M.link=v;sync();});
+  bus.on('send:failed',()=>sync());
+
+  function sync(){
+    $('m-ds').textContent=P08.state().dataset;
+    $('m-ls').textContent=M.fail?'loading·fail':M.listState;
+    $('m-busy').textContent=String(M.busy);
+    $('m-link').textContent=M.link;
+    $('m-tn').textContent=String(M.turns.length);
+    $('m-atl').textContent=String(M.atLatest);
+    $('m-un').textContent=String(M.unread);
+    $('m-live').textContent=String(M.reveals.size);
+    $('m-play').textContent=String(P08.state().playing);
+  }
+
+  /* —— 部件接总线并挂面板 —— */
+  P08.mount($('p08-mount'));
+  P08.init(bus,host);
+
+  /* —— 剧本台 —— */
+  $('s-send').addEventListener('click',()=>{
+    if(M.listState!=='ready'&&M.listState!=='empty'){trace('  当前 loading/失败面：submit 已被 08 缓存，注入完成后执行','note');}
+    bus.emit('submit:text','帮我看看今天的部署记录，重点看共存检查。');
+    trace('  剧本 S1：submit:text（05 已 trim）→ busy → 用户轮回执 → assistant 揭示 → busy 解除','note');
+  });
+  $('s-loadfail').addEventListener('click',()=>{
+    P08.armLoadFail();P08.replay();
+    trace('  剧本 S2：装填载入失败 + 重播 → 失败面 → 点「S 模拟 retry:load」继续','note');
+  });
+  $('s-retry').addEventListener('click',()=>bus.emit('retry:load'));
+  $('s-offbottom').addEventListener('click',()=>{
+    if(M.listState!=='ready'||!M.turns.length){trace('  需先就绪且有消息','warn');return;}
+    M.atLatest=false;
+    P08.injectProactive();
+    trace('  剧本 S3：离底（替身 07 消费 follow:change 语义）+ 主动消息注入 → 未读句逐句累加','note');
+  });
+  $('s-jump').addEventListener('click',()=>{
+    bus.emit('jump:latest');
+    trace('  用户主动回底：pill 点击 → jump:latest（该次回底同时是 04 的跳过触发）','note');
+  });
+  $('s-sendfail').addEventListener('click',()=>{
+    P08.toggleFailOnce();
+    bus.emit('submit:text','这条会发送失败。');
+    trace('  剧本 S4：拨「模拟发送失败」+ 发送 → failed Turn 留列表 + 原文本回填草稿（开关自动复位）','note');
+  });
+  $('s-race').addEventListener('click',()=>{
+    trace('  竞态攻击：300ms 间隔连点三档，最终列表须与最后选中档一致（中间档注入可取消）','note');
+    P08.setDataset('normal');
+    setTimeout(()=>P08.setDataset('worst'),300);
+    setTimeout(()=>P08.setDataset('empty'),600);
+  });
+
+  /* —— 启动：首载模拟载入失败一次（规格 §5 错误行）；重试后进入 normal —— */
+  P08.armLoadFail();
+  P08.setDataset('normal');
+  trace('  首载模拟载入失败一次（规格 §5）→ 失败面点重试（或 S 模拟 retry:load）进入日常对话','note');
+  sync();
+})();
+</script>
+</body>
+</html>

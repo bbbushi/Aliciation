@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from .models import ActivityMode, ModePolicy, Tuning
 
-_IDLE = ("idle_rest_seconds", 300)
 _SAME_MATERIAL = ("same_material_windows", 2)
 _INVITE_WAIT = ("invitation_wait_seconds", 600)
 _TOPIC_RETRY = ("same_topic_retry_seconds", 86400)
@@ -20,15 +19,14 @@ def tuning_from_settings(config_or_store) -> Tuning:
     if not isinstance(config, dict):
         from .. import thought_workspace as thoughts
         config = thoughts.settings(config_or_store)
-    from .. import autonomy_policy
+    from .. import activity, autonomy_policy
     if autonomy_policy.TEST_CONTROLS_ONLY:
-        config = {**config, "idle_rest_seconds": autonomy_policy.TEST_IDLE_SECONDS,
-                  "invitation_wait_seconds": 600, "same_topic_retry_seconds": 0}
+        config = {**config, "invitation_wait_seconds": 600, "same_topic_retry_seconds": 0}
     activities = config.get("activities") or {}
     modes = []
     for mode in ("interest", "problem", "iteration", "idle"):
         if mode == "idle":
-            modes.append(ModePolicy(mode=ActivityMode.IDLE, seconds=_setting(config, _IDLE), tool_groups=()))
+            modes.append(ModePolicy(mode=ActivityMode.IDLE, seconds=activity.fixed_idle_seconds(config), tool_groups=()))
             continue
         item = activities.get(mode) or {}
         modes.append(ModePolicy(mode=ActivityMode(mode), seconds=int(item.get("seconds", 0) or 0),

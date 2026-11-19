@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · 逐句揭示流 · B 舱壁 Bulkhead · 部件演示</title>
+<style>
+/* ============ 页面 token（与全页 :root 同源；曲线出自 PRINCIPLES §2.2，不自造） ============ */
+:root{
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+  --ease-in-out:cubic-bezier(0.77,0,0.175,1);
+  --bg:#0d1114;--srf:#11171d;--panel:#141c24;--panel-user:#151f29;
+  --line:#263443;--line-user:#31424f;
+  --tx:#ccd6dd;--dim:#7d8b96;--faint:#57646e;
+  --acc:#8fb8cc;--acc-dim:#42606f;--ok:#7fa07f;--bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* 页面壳一次性入场（罕见档 #17，220ms，一容器一入场；独立演示页自备，组装进 sample 时由页面壳统一提供） */
+.app{min-height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+@media (prefers-reduced-motion:reduce){
+  .app{transition:opacity 160ms var(--ease-out);transform:none}
+}
+
+/* ============ 演示脚手架（lab-*：实验台 / 信号日志 / 自测表）——组装时整体丢弃 ============ */
+.lab{display:flex;align-items:center;gap:12px;background:var(--srf);border-bottom:1px solid var(--line);padding:10px 18px}
+.lab-b{width:30px;height:30px;flex:none;display:grid;place-items:center;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12px/1 var(--mono);clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.lab-t{margin:0;font-size:13.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em}
+.lab-d{margin:3px 0 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.06em}
+.rig{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px}
+.rig-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.rig-row:first-child{margin-top:0}
+.rig-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.rbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;border:1px solid var(--line);
+  border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.rbtn:active{transform:scale(.97)}
+.rbtn[aria-pressed="true"]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.rig-note{margin:7px 0 0;font:10.5px/1.5 var(--sans);color:var(--faint);letter-spacing:.02em}
+@media (hover:hover) and (pointer:fine){.rbtn:hover{color:#b9c6cf}}
+.stage{flex:1;min-height:0;display:flex;flex-direction:column}
+.stat{background:var(--srf);border-bottom:1px solid var(--line);padding:7px 18px;display:flex;flex-wrap:wrap;gap:16px;
+  font:10.5px/1 var(--mono);letter-spacing:.06em;color:var(--dim)}
+.stat b{color:var(--tx);font-weight:500;margin-left:5px}
+.lamp{display:inline-flex;align-items:center;gap:6px}
+.lamp::before{content:'';width:7px;height:7px;border-radius:1px;background:var(--line)}
+.lamp[data-on]{color:var(--acc)}
+.lamp[data-on]::before{background:var(--acc)}
+.host{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;overflow-anchor:none;position:relative}
+.host-col{display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px 20px 30px}
+.tests{background:var(--srf);border-top:1px solid var(--line);padding:8px 18px 10px}
+.tests h2{margin:0 0 6px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.trow{display:flex;gap:10px;align-items:baseline;padding:4px 0;border-top:1px solid #1b2530;
+  font:11px/1.5 var(--sans);color:var(--dim)}
+.trow:first-of-type{border-top:0}
+.trow b{flex:none;width:11em;font-weight:500;color:var(--tx)}
+.trow .v{flex:none;width:2.2em;font:11px/1 var(--mono)}
+.trow .v[data-ok="1"]{color:var(--ok)}
+.trow .v[data-ok="0"]{color:var(--bad)}
+.trow span.d{font:10.5px/1.5 var(--mono);color:var(--faint);overflow-wrap:anywhere}
+.siglog{background:var(--srf);border-top:1px solid var(--line);padding:7px 18px 9px}
+.siglog h2{margin:0 0 5px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.siglog ol{margin:0;padding:0;list-style:none}
+.siglog li{font:10.5px/1.7 var(--mono);color:var(--dim);letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.siglog li.in{color:var(--acc)}
+.siglog li.out{color:var(--faint)}
+.siglog li.warn{color:var(--bad)}
+
+/* ============ 02+03 宿主语义替身（样式与 03 部件同源；仅证明引擎对真契约成立，组装时丢弃） ============ */
+.hp-msg{display:flex;flex-direction:column;max-width:78%;margin-top:16px}
+.hp-msg[data-role="assistant"]{align-self:flex-start;align-items:flex-start}
+.hp-msg[data-role="user"]{align-self:flex-end;align-items:flex-end}
+.hp-bub{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);background:var(--panel);
+  border:1px solid var(--line);border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.hp-msg[data-role="assistant"] .hp-bub{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.hp-msg[data-role="user"] .hp-bub{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+.hp-msg[data-p04-live]{cursor:pointer}   /* 04 的唯一样式标记：揭示中可点跳过 */
+.p03-sent--wait{color:var(--faint)}
+.p03-sent--blank{color:var(--dim)}
+.hp-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;
+  font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.hp-live{color:var(--acc)}
+/* 分句轮廓（演示视图，静态描边不随装配） */
+body.p04-unitvis .p03-sent{background:#16222d;outline:1px dashed #31485e;outline-offset:-1px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="lab">
+    <span class="lab-b" aria-hidden="true">04</span>
+    <div>
+      <p class="lab-t">逐句揭示流 · Alice 回复的内容时序：按序 / 完整 / 可跳过 / 可对齐</p>
+      <p class="lab-d">方向 B 舱壁 Bulkhead · 部件实验台 · 离线演示，无网络请求，所有数据均为虚构</p>
+    </div>
+  </header>
+
+  <section class="rig" aria-label="演示装置">
+    <div class="rig-row">
+      <span class="rig-cap">揭示剧本</span>
+      <button type="button" class="rbtn" id="b-reveal">常规揭示 · 6 句</button>
+      <button type="button" class="rbtn" id="b-silence">空白回复（沉默）</button>
+      <button type="button" class="rbtn" id="b-nobound">无句界 2000 字</button>
+      <button type="button" class="rbtn" id="b-script">迷你发送剧本（busy 对齐）</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">对齐与跳过</span>
+      <button type="button" class="rbtn" id="b-align-grow">揭示中 turn:update·前缀一致增长</button>
+      <button type="button" class="rbtn" id="b-align-rew">揭示中 turn:update·重写兜底</button>
+      <button type="button" class="rbtn" id="b-ext-done">外部置 done（攻击）</button>
+      <button type="button" class="rbtn" id="b-flood">揭示中洪流 +10 条</button>
+      <button type="button" class="rbtn" id="b-jump">模拟 jump:latest（用户主动回底）</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">宿主替身</span>
+      <button type="button" class="rbtn" id="b-follow" aria-pressed="false">离底（auto-follow 关）</button>
+      <button type="button" class="rbtn" id="b-unitvis" aria-pressed="false">分句轮廓（演示视图）</button>
+      <button type="button" class="rbtn" id="b-reset">重置</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">自测</span>
+      <button type="button" class="rbtn" id="b-selftest">▶ 运行四不变量自测</button>
+    </div>
+    <p class="rig-note">04 是逻辑部件：句单元 span.p03-sent[data-si] 归 03、列表跟随归 02——本页宿主为 02+03 语义替身（progress 前缀守卫 / done 前缀未完拒收 / update 状态剥离三守卫与装配 02 逐字同源）。真实产品教训在案：done 曾「丢弃缓冲+整段重渲」一次性倒出，现改为对齐进缓冲按原节奏补全；揭示中 update 不覆盖已显示前缀；空白回复直达（沉默）。点击揭示中的消息本体即跳过。</p>
+  </section>
+
+  <div class="stat" aria-label="状态读出">
+    <span class="lamp" id="busyLamp">busy</span>
+    <span>atLatest<b id="sFollow">true</b></span>
+    <span>unread<b id="sUnread">0</b></span>
+    <span>揭示中<b id="sLive">0</b></span>
+    <span>已收句<b id="sProg">0</b></span>
+  </div>
+
+  <main class="stage">
+    <div class="host" id="host" aria-label="消息宿主（02+03 语义替身）"><div class="host-col" id="hostCol"></div></div>
+  </main>
+
+  <section class="tests" aria-label="四不变量自测">
+    <h2>SELF-TEST · 完整 / 按序 / 可跳过 / 可对齐（快速节拍运行，结果只存内存）</h2>
+    <div id="testRows"></div>
+  </section>
+
+  <footer class="siglog" aria-label="信号日志">
+    <h2>SIGNAL LOG（← 部件收到 · → 部件发出 · 带删除线=被宿主守卫拒绝）</h2>
+    <ol id="logList"></ol>
+  </footer>
+
+</div>
+
+<script>
+'use strict';
+/* ================= 公共切句（与 03 部件 splitSent 同源；装配时统一取 P03.splitSent，防两份漂移） ================= */
+const splitSent=(function(){
+  const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+  const CLOSES='）」』】)]';
+  const END='。！？…';
+  return function splitSent(text){
+    if(typeof text!=='string'||!text.trim())return[];
+    const out=[];let cur='',depth=0;
+    for(const ch of text){
+      cur+=ch;
+      if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}
+      if(PAIRS[ch]){depth++;continue;}
+      if(CLOSES.includes(ch)){if(depth>0)depth--;continue;}
+      if(END.includes(ch)&&depth===0){out.push(cur);cur='';}
+    }
+    if(cur)out.push(cur);
+    if(out.length>400){const h=out.slice(0,399);h.push(out.slice(399).join(''));return h;}
+    return out;
+  };
+})();
+
+/* ================= P04 PART JS（随装配：window.P04） =================
+   部件 04 · 逐句揭示流（方向 B 舱壁）。页面唯一揭示写者：一切 reveal:progress /
+   reveal:done 仅由本模块发出。内容节拍（240–380ms/句、等待首句 600–1000ms）是内容
+   节奏而非动画时长（PRINCIPLES 不约束；每句出现零过渡，DIRECTIONS 共同决定）。
+   四不变量：按序 / 完整（done 只在全部句单元可见时到达；早到 done 被宿主守卫拒绝、
+   引擎按原节奏补全——真实产品 revealFlush→revealSync 教训）/ 可跳过 / 可对齐。 */
+window.P04=(function(){
+  const CAD={min:240,max:380};      /* 句间隔（B 基线） */
+  const THINK={min:600,max:1000};   /* 等待首句 */
+  let bus=null,split=null,skipHost=null;
+  const engines=new Map();
+  const rnd=r=>r.min+Math.random()*(r.max-r.min);
+
+  function init(b,o){
+    bus=b;o=o||{};
+    split=o.sentences||(window.P03&&window.P03.splitSent)||splitSent;
+    bus.on('turn:append',d=>{
+      if(d&&d.role==='assistant'&&d.state==='revealing')begin(d);
+    });
+    bus.on('turn:update',d=>{if(d&&engines.has(d.id))align(d.id,d.patch||{});});
+    bus.on('jump:latest',()=>skipAll());           /* 只有 07 的用户主动回底会发；02 自动跟随不发信号 */
+    bus.on('demo:dataset',stopAll);                /* 切档/重播/清空打断：随旧档清除，无残尸无残余信号 */
+    bus.on('demo:replay',stopAll);
+    bus.on('demo:reset',stopAll);
+    if(o.skipHost&&o.skipHost.addEventListener){   /* 揭示中点击跳过：事件委托，04 不持有节点引用 */
+      skipHost=o.skipHost;
+      skipHost.addEventListener('click',e=>{
+        const t=e.target&&e.target.closest?e.target.closest('[data-role="assistant"][data-id]'):null;
+        if(!t)return;
+        const id=t.getAttribute('data-id');
+        if(engines.has(id))skip(id);
+      });
+    }
+  }
+
+  /* —— 引擎：eng={id,text,units,ui(已发出的最末单元下标),timer,done}；shown=units[0..ui] 连接 —— */
+  function shownOf(eng){let s='';for(let i=0;i<=eng.ui;i++)s+=eng.units[i];return s;}
+  function begin(turn,o){
+    if(!turn||typeof turn.id!=='string'||!turn.id)return null;
+    if(engines.has(turn.id))return null;
+    const text=(typeof turn.text==='string')?turn.text:'';
+    if(!text.trim()){ /* 沉默终点：不进逐句流程，直接 done（不留「…」不留状态行） */
+      bus.emit('reveal:done',{id:turn.id});
+      return null;
+    }
+    const eng={id:turn.id,text,units:split(text),ui:-1,timer:0,done:false,
+      cad:(o&&o.cadence)||CAD,think:(o&&o.think)||THINK};
+    engines.set(turn.id,eng);
+    eng.timer=setTimeout(()=>step(eng),rnd(eng.think));   /* 等待首句形态由宿主渲染（…+正在回复…） */
+    return eng;
+  }
+  function step(eng){
+    if(eng.done||!engines.has(eng.id))return;
+    eng.ui++;
+    bus.emit('reveal:progress',{id:eng.id,shownText:shownOf(eng)});
+    if(eng.ui>=eng.units.length-1)finish(eng);
+    else eng.timer=setTimeout(()=>step(eng),rnd(eng.cad));
+  }
+  function finish(eng){       /* 自然完成：前缀已到全文，done 才置位（不变量 2） */
+    if(eng.done)return;
+    eng.done=true;clearTimeout(eng.timer);
+    engines.delete(eng.id);
+    bus.emit('reveal:done',{id:eng.id});
+  }
+  /* 跳过=立即完整（不变量 3）：先补全前缀（一次 progress 到全文），再 done——
+     宿主 done 守卫要求「全部句单元可见」，故补全 progress 是跳过协议的必要半步。 */
+  function skip(id){
+    const eng=engines.get(id);
+    if(!eng)return false;
+    clearTimeout(eng.timer);eng.done=true;engines.delete(id);
+    bus.emit('reveal:progress',{id,shownText:eng.text});
+    bus.emit('reveal:done',{id});
+    return true;
+  }
+  function skipAll(){const ids=[...engines.keys()];ids.forEach(id=>skip(id));return ids.length;}
+  function stopAll(){for(const eng of engines.values()){clearTimeout(eng.timer);eng.done=true;}engines.clear();}
+  /* 可对齐（不变量 4）：前缀一致 → 已显示前缀保持，ui 重定位继续按序；前缀不一致（重写）
+     → 立即 done 兜底（宁可一次性，也要页面与数据一致；宿主守卫放行该路径）。 */
+  function align(id,patch){
+    const eng=engines.get(id);
+    if(!eng||eng.done)return;
+    if(patch.state!==undefined&&patch.state!=='revealing')return; /* 早期 done：不置终，按原节奏补全 */
+    if(patch.text===undefined||String(patch.text)===eng.text)return;
+    const nt=String(patch.text),cur=shownOf(eng);
+    if(nt.indexOf(cur)===0){
+      eng.text=nt;eng.units=split(nt);
+      if(cur===''){eng.ui=-1;}
+      else{
+        eng.ui=-1;let acc='';
+        for(let i=0;i<eng.units.length;i++){acc+=eng.units[i];if(acc.length>=cur.length){eng.ui=i;break;}}
+        if(eng.ui<0)eng.ui=eng.units.length-1;
+      }
+    }else{
+      clearTimeout(eng.timer);eng.done=true;engines.delete(id);
+      bus.emit('reveal:done',{id});
+    }
+  }
+  function active(){return[...engines.keys()];}
+  function state(id){return engines.has(id)?'revealing':'idle';}
+  return{init,begin,skip,skipAll,stopAll,align,active,state};
+})();
+
+/* ================= 宿主替身（02+03 语义；三条守卫与装配 02 逐字同源） ================= */
+const host=(function(){
+  const listEl=document.getElementById('host'),col=document.getElementById('hostCol');
+  const turns=new Map();
+  const st={atLatest:true,unread:0};
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+
+  function renderNode(rec){
+    let art=rec.node;
+    if(!art){art=el('article','hp-msg');art.dataset.id=rec.id;rec.node=art;col.append(art);}
+    art.dataset.role=rec.role;
+    art.dataset.status=rec.role==='user'&&(rec.status==='sending'||rec.status==='failed')?rec.status:'ok';
+    if(rec.state==='revealing'){art.dataset.p04Live='';art.title='点击跳过逐句显示';}
+    else{delete art.dataset.p04Live;if(art.getAttribute('title')==='点击跳过逐句显示')art.removeAttribute('title');}
+    let bub=art.querySelector('.hp-bub');
+    if(!bub){bub=el('div','hp-bub');art.append(bub);}
+    bub.textContent='';
+    const body=rec.state==='revealing'?(typeof rec.shownText==='string'?rec.shownText:''):rec.text;
+    if(rec.state==='revealing'&&!body.trim()){
+      const s=el('span','p03-sent p03-sent--wait','…');s.dataset.si='0';bub.append(s);bub.dataset.units='1';
+    }else if(!body.trim()){
+      const s=el('span','p03-sent p03-sent--blank',rec.role==='assistant'?'（沉默）':'（无内容）');
+      s.dataset.si='0';bub.append(s);bub.dataset.units='1';
+    }else{
+      const us=splitSent(body);
+      us.forEach((s,i)=>{const sp=el('span','p03-sent',s);sp.dataset.si=String(i);bub.append(sp);});
+      bub.dataset.units=String(us.length);
+    }
+    let meta=art.querySelector('.hp-meta');
+    if(!meta){meta=el('div','hp-meta');art.append(meta);}
+    meta.textContent='';
+    if(rec.state==='revealing')meta.append(el('span','hp-live','正在回复…'));
+    else if(rec.role==='user'&&rec.status==='sending')meta.append(el('span','hp-live','发送中'));
+    else if(rec.role==='user'&&rec.status==='failed')meta.append(el('span','hp-live','发送失败 · 点击重试'));
+    if(!meta.childElementCount)meta.remove();
+    return art;
+  }
+  /* 状态读出（host IIFE 自持：sFollow/sUnread/sLive） */
+  function refresh(){
+    const q=id=>document.getElementById(id);
+    q('sFollow').textContent=String(st.atLatest);
+    q('sUnread').textContent=String(st.unread);
+    q('sLive').textContent=String(window.P04&&P04.active?P04.active().length:0);
+  }
+  const api={
+    listEl,st,
+    visibleText(id){const r=turns.get(id);if(!r)return '';const b=r.node&&r.node.querySelector('.hp-bub');return b?b.textContent:'';},
+    shownLen(id){const r=turns.get(id);return r&&typeof r.shownText==='string'?r.shownText.length:-1;},
+    nodeOf(id){const r=turns.get(id);return r?r.node:null;},
+    waitPresent(id){const r=turns.get(id);return!!(r&&r.node&&r.node.querySelector('.p03-sent--wait'));},
+    livePresent(id){const r=turns.get(id);return!!(r&&r.node&&r.node.querySelector('.hp-live'));},
+    clear(){turns.clear();col.replaceChildren();st.unread=0;refresh();},
+    append(t){
+      const rec={id:String(t.id),role:t.role,text:String(t.text??''),shownText:'',state:'done',
+        status:(t.role==='user'&&(t.status==='sending'||t.status==='failed'))?t.status:'ok',node:null};
+      if(t.state==='revealing'){rec.state='revealing';rec.shownText=typeof t.shownText==='string'?t.shownText:'';}
+      turns.set(rec.id,rec);renderNode(rec);
+      if(st.atLatest)listEl.scrollTop=listEl.scrollHeight;
+      else if(rec.state!=='revealing'){const n=splitSent(rec.text).length;if(n)st.unread+=n;} /* 02 离底累加语义 */
+      refresh();return rec;
+    },
+    /* turn:update：揭示轮的 patch.state 剥离（状态迁移唯一入口是 reveal:done） */
+    update(id,patch){
+      const r=turns.get(id);if(!r||!patch)return false;
+      const p=Object.assign({},patch);
+      if(r.state==='revealing'&&p.state!==undefined&&p.state!=='revealing')delete p.state;
+      if(p.text!==undefined)r.text=String(p.text);
+      renderNode(r);
+      if(st.atLatest)listEl.scrollTop=listEl.scrollHeight;
+      refresh();return true;
+    },
+    /* reveal:progress 守卫：必须是 text 的连续前缀 + 单调不回退（不变量 1/洪流不回退） */
+    progress(id,shownText){
+      const r=turns.get(id);
+      if(!r||r.state!=='revealing'||typeof shownText!=='string')return false;
+      if(r.text.indexOf(shownText)!==0)return false;
+      if(shownText.length<(r.shownText||'').length)return false;
+      r.shownText=shownText;renderNode(r);
+      if(st.atLatest)listEl.scrollTop=listEl.scrollHeight;else st.unread++;
+      refresh();return true;
+    },
+    /* reveal:done 守卫（不变量 2 硬化）：前缀未完 → 拒绝整段倒出；
+       重写兜底（shown 已不是 text 前缀）与沉默（text 无实内容）放行。 */
+    done(id){
+      const r=turns.get(id);
+      if(!r||r.state!=='revealing')return false;
+      const shown=r.shownText||'';
+      if(r.text.trim()&&r.text.indexOf(shown)===0&&shown.length<r.text.length)return false;
+      r.state='done';r.shownText=r.text;renderNode(r);
+      if(st.atLatest)listEl.scrollTop=listEl.scrollHeight;
+      refresh();return true;
+    },
+    setFollow(v){st.atLatest=v;refresh();}
+  };
+  return api;
+})();
+
+/* ================= 实验台接线（lab：组装时丢弃） ================= */
+(function(){
+  const $=id=>document.getElementById(id);
+  const logList=$('logList');
+  let logs=[];
+  function logSig(m,cls){
+    logs.unshift({m,cls:cls||''});logs=logs.slice(0,16);
+    logList.replaceChildren(...logs.map(x=>{const li=document.createElement('li');li.textContent=x.m;if(x.cls)li.className=x.cls;return li;}));
+  }
+  const bus={h:{},
+    on(t,f){(this.h[t]??=[]).push(f);},
+    emit(t,d){
+      const IN={ 'turn:append':1,'turn:update':1,'reveal:progress':1,'reveal:done':1,'jump:latest':1 };
+      logSig((IN[t]?'← ':'→ ')+t+(d?' · '+(d.id?d.id+' ':'')+(d.shownText!==undefined?'前缀'+d.shownText.length+'字':d.patch?'patch':typeof d==='string'?d.slice(0,18):''):''),'in');
+      (this.h[t]||[]).forEach(f=>f(d));
+    }};
+  let progCount=0;
+
+  /* 部件接总线：宿主订阅在先，P04.init 在后（同帧沉默/兜底 correction 依赖注册序） */
+  bus.on('turn:append',t=>host.append(t));
+  bus.on('turn:update',d=>host.update(d.id,d.patch));
+  bus.on('reveal:progress',d=>{
+    const ok=host.progress(d.id,d.shownText);
+    if(ok){progCount++;$('sProg').textContent=String(progCount);}
+    else logSig('  ↳ reveal:progress 被宿主守卫拒绝（非前缀/回退/态不符）','warn');
+  });
+  bus.on('reveal:done',d=>{
+    const ok=host.done(d.id);
+    if(!ok)logSig('  ↳ reveal:done 被宿主守卫拒绝（前缀未完——不整段倒出，引擎将继续补全）','warn');
+    if(busyOwner===d.id){busyOwner=null;setLamp(false);}   /* busy 解除与 reveal:done 对齐（08 剧本同款） */
+    refresh();
+  });
+  bus.on('jump:latest',()=>host.setFollow(true));
+  P04.init(bus,{skipHost:host.listEl,sentences:splitSent});
+
+  /* 状态读出 */
+  function refresh(){
+    $('sFollow').textContent=String(host.st.atLatest);
+    $('sUnread').textContent=String(host.st.unread);
+    $('sLive').textContent=String(P04.active().length);
+  }
+  /* busy 灯：迷你发送剧本置位，reveal:done 对齐解除（跳过/兜底路径同样发 done，busy 不滞留） */
+  let busyOwner=null;
+  function setLamp(v){$('busyLamp').setAttribute('data-on',v?'1':'0');}
+  function toggleFollow(){
+    const v=!host.st.atLatest;host.setFollow(v);
+    $('b-follow').setAttribute('aria-pressed',String(!v));
+    $('b-follow').textContent=v?'离底（auto-follow 关）':'回底（auto-follow 开）';
+    logSig('宿主替身：auto-follow '+(v?'关（离底，进度累加 unread）':'开（在底，跟随不跳过）'));
+  }
+
+  /* —— 数据 —— */
+  const REVEAL='收到，这条回复走逐句揭示。第二句演示按序与未读计数。【认真】第三句带情绪标记原样显示。第四句（括号内的句号。不断句）保护。换行强制断句：\n下一行自成一句单元。最后一句收尾，全文与单元拼接一致。';
+  const NOBOUND=(()=>{let s='这是一段没有任何句末标点与换行的连续长串';while(s.length<2000)s+='，继续延续没有任何句界';return s;})();
+  const GROW='（追加进来的第六句。前缀一致，不从头再来。）';
+  const REWRITE='这是重写后的全新文本。与已显示前缀完全对不上，按不变量 4 立即整段显示并置 done。';
+  const FLOOD=['洪流第一条。句子二。','洪流第二条，只有一句。','洪流第三条。再一句。结尾。','嗯','洪流第五条。第二句。【认真】第三句。'];
+  let uc=0;
+  const nid=p=>(p||'rv')+(++uc)+'-'+Date.now().toString(36);
+
+  /* —— 剧本按钮 —— */
+  function startReveal(text,label,opts){
+    const id=nid();
+    bus.emit('turn:append',{id,role:'assistant',text,state:'revealing',shownText:'',time:Date.now()});
+    logSig('  揭示开始：'+label+'（'+splitSent(text).length+' 单元）');
+    return id;
+  }
+  $('b-reveal').addEventListener('click',()=>startReveal(REVEAL,'常规 6 句'));
+  $('b-silence').addEventListener('click',()=>startReveal('   ','空白回复（沉默捷径）'));
+  $('b-nobound').addEventListener('click',()=>startReveal(NOBOUND,'无句界 2000 字（一段即一句）'));
+  $('b-script').addEventListener('click',()=>{
+    if(busyOwner){logSig('  上一剧本仍在处理（busy 锁）','warn');return;}
+    setLamp(true);busyOwner=nid('bd');
+    bus.emit('turn:append',{id:nid(),role:'user',text:'帮我看看今天的部署记录。',time:Date.now()});
+    setTimeout(()=>{if(!busyOwner)return;
+      bus.emit('turn:append',{id:busyOwner,role:'assistant',text:REVEAL,state:'revealing',shownText:'',time:Date.now()});
+      logSig('  迷你剧本：busy=true → 用户轮上屏 → assistant 轮建立（…等待首句）');
+    },420);
+  });
+  $('b-align-grow').addEventListener('click',()=>{
+    const ids=P04.active();if(!ids.length){logSig('  当前无揭示中轮次','warn');return;}
+    const id=ids[0];
+    bus.emit('turn:update',{id,patch:{text:'收到，这条回复走逐句揭示。第二句演示按序与未读计数。【认真】第三句带情绪标记原样显示。第四句（括号内的句号。不断句）保护。换行强制断句：\n下一行自成一句单元。最后一句收尾，全文与单元拼接一致。'+GROW}});
+    logSig('  turn:update：前缀一致增长 → 已显示前缀保持，继续按序');
+  });
+  $('b-align-rew').addEventListener('click',()=>{
+    const ids=P04.active();if(!ids.length){logSig('  当前无揭示中轮次','warn');return;}
+    bus.emit('turn:update',{id:ids[0],patch:{text:REWRITE}});
+    logSig('  turn:update：重写 → 兜底：立即整段显示新全文并置 done');
+  });
+  $('b-ext-done').addEventListener('click',()=>{
+    const ids=P04.active();if(!ids.length){logSig('  当前无揭示中轮次','warn');return;}
+    const id=ids[0];
+    const before=host.shownLen(id);
+    bus.emit('reveal:done',{id});   /* 外部攻击：前缀未完就被置 done */
+    const after=host.shownLen(id);
+    logSig('  外部置 done：可见长度 '+before+' → '+after+'（'+(after===before?'守卫拒绝，未倒出':'被接受')+'）',
+      after===before?'':'warn');
+  });
+  $('b-flood').addEventListener('click',()=>{
+    FLOOD.forEach(t=>bus.emit('turn:append',{id:nid('f'),role:'assistant',text:t,time:Date.now()}));
+    logSig('  洪流 +'+FLOOD.length+' 条并发注入（揭示不中断、进度不回退；离底由宿主累加 unread）');
+  });
+  $('b-jump').addEventListener('click',()=>{
+    host.setFollow(false);   /* 先离底，模拟从历史区点回底 */
+    bus.emit('jump:latest'); /* 用户主动回底：02 回底清零 + 04 skipAll（自动跟随不会发此信号） */
+    logSig('  jump:latest：回底清零 + 揭示跳过（立即完整）');
+  });
+  host.listEl.addEventListener('click',e=>{
+    const art=e.target.closest?e.target.closest('.hp-msg'):null;
+    if(art&&art.dataset.p04Live!==undefined)logSig('  点击揭示中消息本体 → P04.skip（事件委托路径）');
+  });
+  $('b-follow').addEventListener('click',toggleFollow);
+  $('b-unitvis').addEventListener('click',e=>{
+    const on=document.body.classList.toggle('p04-unitvis');
+    e.currentTarget.setAttribute('aria-pressed',String(on));
+  });
+  $('b-reset').addEventListener('click',()=>{
+    bus.emit('demo:reset');   /* 04 stopAll：无残尸、无进行中的 reveal 信号 */
+    host.clear();progCount=0;$('sProg').textContent='0';setLamp(false);busyOwner=null;
+    logSig('⟳ 重置（demo:reset → stopAll + 宿主清空）');
+  });
+
+  /* ================= 四不变量自测 ================= */
+  const rows=$('testRows');
+  function row(name,ok,detail){
+    const d=document.createElement('div');d.className='trow';
+    const b=document.createElement('b');b.textContent=name;
+    const v=document.createElement('span');v.className='v';v.dataset.ok=ok?'1':'0';v.textContent=ok?'✓':'✗';
+    const s=document.createElement('span');s.className='d';s.textContent=detail;
+    d.append(b,v,s);rows.append(d);
+  }
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  async function waitFor(fn,timeout){
+    const t0=Date.now();
+    while(!fn()){if(Date.now()-t0>timeout)return false;await sleep(20);}
+    return true;
+  }
+  const W=30000; /* 等待预算：后台标签页定时器节流（≥1s/次）下仍可跑完；前台正常速度 */
+  function tap(sig,fn){bus.on(sig,fn);return()=>{const a=bus.h[sig];const i=a.indexOf(fn);if(i>=0)a.splice(i,1);};}
+  const FAST={cadence:{min:25,max:45},think:{min:30,max:60}};
+  const SIX='第一句落在页面上。第二句继续按序。【认真】第三句带标记。第四句（括号内。不断）保护。第五句收尾，全文到此完整。';
+
+  async function runTests(){
+    rows.replaceChildren();
+    logSig('▶ 自测开始（快速节拍：25–45ms/句）');
+    let pass=0,total=0;
+    const check=(name,ok,detail)=>{total++;if(ok)pass++;row(name,ok,detail);};
+
+    /* T1 按序 + 完整（自然路径） */
+    {
+      host.clear();bus.emit('demo:reset');
+      const evs=[];let doneN=0,afterDone=0,doneSeen=false;
+      const offP=tap('reveal:progress',d=>{if(doneSeen)afterDone++;else evs.push(d.shownText);});
+      const offD=tap('reveal:done',()=>{doneN++;doneSeen=true;});
+      bus.emit('turn:append',{id:'t1',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>!P04.active().includes('t1'),W);
+      await sleep(60);offP();offD();
+      const pre=evs.every(s=>SIX.indexOf(s)===0);
+      const mono=evs.every((s,i)=>i===0||s.length>evs[i-1].length);
+      const full=evs.length&&evs[evs.length-1]===SIX&&host.visibleText('t1')===SIX;
+      check('T1 按序·完整（自然路径）',pre&&mono&&full&&doneN===1&&!afterDone,
+        'progress×'+evs.length+' 全为连续前缀且单调，'+doneN+' 次 done，done 后无残余 progress');
+    }
+    /* T2 完整 · done 补全攻击：揭示中途外部置 done → 不得整段倒出 */
+    {
+      host.clear();bus.emit('demo:reset');
+      bus.emit('turn:append',{id:'t2',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>P04.active().includes('t2')&&host.shownLen('t2')>=2,W); /* ≥2 句可见且仍在揭示 */
+      const before=host.shownLen('t2');
+      bus.emit('reveal:done',{id:'t2'});                /* 攻击：外部置 done */
+      const rejected=host.shownLen('t2')===before;      /* 宿主守卫拒绝：可见前缀一字不动 */
+      const engineAlive=P04.active().includes('t2');    /* 引擎不受外部 done 影响，按自己的账继续 */
+      const lens=[];const off=tap('reveal:progress',d=>lens.push(d.shownText.length));
+      await waitFor(()=>!P04.active().includes('t2'),W);
+      await sleep(60);off();
+      const mono=lens.every((v,i)=>i===0||v>lens[i-1]);
+      const full=host.visibleText('t2')===SIX;
+      check('T2 done 补全攻击',rejected&&engineAlive&&mono&&full,
+        '外部 done 被拒（可见 '+before+' 字不变）→ 引擎按原节奏补全 '+lens.length+' 步单调到达全文');
+    }
+    /* T3 可跳过：点击消息本体（事件委托）+ jump:latest 两条触发路径 */
+    {
+      host.clear();bus.emit('demo:reset');
+      bus.emit('turn:append',{id:'t3',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>host.shownLen('t3')>0,W);
+      const t0=host.shownLen('t3');
+      host.nodeOf('t3').dispatchEvent(new MouseEvent('click',{bubbles:true}));
+      await waitFor(()=>!P04.active().includes('t3'),W);
+      const clickOk=host.visibleText('t3')===SIX&&host.shownLen('t3')===SIX.length&&host.shownLen('t3')>t0;
+      bus.emit('turn:append',{id:'t3b',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>P04.active().includes('t3b')&&host.shownLen('t3b')>0,W);
+      bus.emit('jump:latest');
+      await waitFor(()=>!P04.active().includes('t3b'),W);
+      const jumpOk=host.visibleText('t3b')===SIX;
+      check('T3 可跳过（点击+回底）',clickOk&&jumpOk,
+        '点击本体立即完整（'+t0+'→'+SIX.length+' 字）；jump:latest 同样一次补全，无重复无丢失');
+    }
+    /* T4 可对齐 · 前缀一致增长：不从头再来 */
+    {
+      host.clear();bus.emit('demo:reset');
+      bus.emit('turn:append',{id:'t4',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>host.shownLen('t4')>=2,W);
+      const preLen=host.shownLen('t4');
+      const grown=SIX+GROW;
+      let restarted=false;
+      const off=tap('reveal:progress',d=>{if(d.id==='t4'&&!grown.startsWith(d.shownText))restarted=true;});
+      bus.emit('turn:update',{id:'t4',patch:{text:grown}});
+      await waitFor(()=>!P04.active().includes('t4'),W);
+      await sleep(60);off();
+      const finalOk=host.visibleText('t4')===grown;
+      const grewFrom=host.shownLen('t4')===grown.length;
+      check('T4 可对齐·前缀一致增长',!restarted&&finalOk&&grewFrom,
+        'update 后已显示前缀（'+preLen+' 字）保持，继续按序到新全文；无任何非前缀 shownText');
+    }
+    /* T5 可对齐 · 重写兜底：立即整段显示新全文并置 done */
+    {
+      host.clear();bus.emit('demo:reset');
+      bus.emit('turn:append',{id:'t5',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>host.shownLen('t5')>=2,W);
+      bus.emit('turn:update',{id:'t5',patch:{text:'这是重写后的全新文本。与前缀完全对不上。'}});
+      const doneSync=!P04.active().includes('t5');
+      const newtext='这是重写后的全新文本。与前缀完全对不上。';
+      const ok=host.visibleText('t5')===newtext&&doneSync;
+      check('T5 可对齐·重写兜底',ok,'前缀不一致 → 同帧整段显示新全文并 done（兜底路径，同步收敛）');
+    }
+    /* T6 沉默捷径：全空白回复直达（沉默），不留「…」不留状态行 */
+    {
+      host.clear();bus.emit('demo:reset');
+      bus.emit('turn:append',{id:'t6',role:'assistant',text:'   ',state:'revealing',shownText:'',time:Date.now()});
+      await sleep(50);
+      const ok=host.visibleText('t6')==='（沉默）'&&!host.waitPresent('t6')&&!host.livePresent('t6')&&!P04.active().includes('t6');
+      check('T6 沉默捷径',ok,'不进逐句流程：直达（沉默），等待占位与状态行零滞留');
+    }
+    /* T7 无句界 2000 字：一段即一句，不伪装节奏 */
+    {
+      host.clear();bus.emit('demo:reset');
+      let progN=0;const off=tap('reveal:progress',()=>progN++);
+      bus.emit('turn:append',{id:'t7',role:'assistant',text:NOBOUND,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>!P04.active().includes('t7'),W);
+      await sleep(60);off();
+      const ok=progN===1&&host.visibleText('t7')===NOBOUND;
+      check('T7 无句界 2000 字',ok,'切句结果 1 单元：1 次 progress 即 done，整段可见即完整');
+    }
+    /* T8 揭示中洪流：并发注入不打断、前缀不回退 */
+    {
+      host.clear();bus.emit('demo:reset');host.setFollow(false);
+      const lens=[];
+      const off=tap('reveal:progress',d=>lens.push(d.shownText.length));
+      bus.emit('turn:append',{id:'t8',role:'assistant',text:SIX,state:'revealing',shownText:'',time:Date.now()});
+      await waitFor(()=>host.shownLen('t8')>0,W);
+      FLOOD.forEach(t=>bus.emit('turn:append',{id:nid('tf'),role:'assistant',text:t,time:Date.now()}));
+      await waitFor(()=>!P04.active().includes('t8'),W);
+      await sleep(60);off();
+      const mono=lens.every((v,i)=>i===0||v>lens[i-1]);
+      const floodSent=FLOOD.reduce((n,t)=>n+splitSent(t).length,0);
+      const unreadOk=host.st.unread===lens.length+floodSent;
+      const full=host.visibleText('t8')===SIX;
+      check('T8 揭示中洪流并发',mono&&full&&unreadOk,
+        '洪流 '+FLOOD.length+' 条注入中揭示进度 '+lens.length+' 步单调；离底 unread='+host.st.unread+' 持续累加');
+      host.setFollow(true);
+    }
+    logSig('✓ 自测结束：'+pass+'/'+total+' 过');
+    if(pass<total)logSig('存在未过项，见上表','warn');
+  }
+  $('b-selftest').addEventListener('click',()=>{runTests();});
+
+  /* 启动 */
+  refresh();
+  logSig('部件 04 就绪：宿主=02+03 语义替身（三条守卫与装配 02 同源）；自动跟随不触发跳过');
+})();
+</script>
+</body>
+</html>

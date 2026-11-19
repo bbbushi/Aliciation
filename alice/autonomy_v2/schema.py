@@ -124,6 +124,19 @@ CREATE TABLE IF NOT EXISTS v2_contact_decisions (
  created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS v2_decision_epoch ON v2_contact_decisions(epoch,created_at);
+CREATE TABLE IF NOT EXISTS v2_contact_holds (
+ epoch TEXT NOT NULL, channel_id TEXT NOT NULL, intent_id TEXT NOT NULL DEFAULT '',
+ reason TEXT NOT NULL, attempt_id TEXT, after_user_turn_id INTEGER NOT NULL DEFAULT 0,
+ resume_at REAL, updated_at REAL NOT NULL,
+ PRIMARY KEY(epoch,channel_id,intent_id)
+);
+CREATE TABLE IF NOT EXISTS v2_activity_plans (
+ run_id TEXT PRIMARY KEY, epoch TEXT NOT NULL, question_id INTEGER,
+ choice TEXT NOT NULL, object TEXT NOT NULL, value TEXT NOT NULL,
+ why_now TEXT NOT NULL, stop_condition TEXT NOT NULL, next_action TEXT NOT NULL,
+ basis TEXT NOT NULL, result TEXT, created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS v2_plan_epoch ON v2_activity_plans(epoch,created_at);
 """
 
 

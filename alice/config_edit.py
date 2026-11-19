@@ -165,18 +165,23 @@ def _replace_string_values(path: Path, changes: dict[str, str], expected_revisio
 
 
 def replace_observation_settings(path: Path, *, enabled: bool, metadata: bool,
-                                 body_capture: bool, expected_revision: str) -> str:
-    """Atomically patch only the three observation booleans, preserving TOML."""
+                                 body_capture: bool, expected_revision: str,
+                                 reply_annotation_review: bool | None = None) -> str:
+    """Atomically patch the observation and optional experiment settings."""
     if any(type(v) is not bool for v in (enabled, metadata, body_capture)):
         raise ConfigEditError("观测设置必须为布尔值")
     if body_capture and not metadata:
         raise ConfigEditError("正文采集需要元数据采集")
+    if reply_annotation_review is not None and type(reply_annotation_review) is not bool:
+        raise ConfigEditError("复读标注设置必须为布尔值")
     source = _read(path)
     if hashlib.sha256(source).hexdigest() != expected_revision:
         raise ConfigConflict("配置文件已被其他操作修改，请刷新设置后重试")
     patched, old = _parse(source)
     changes = {"plugins": {"context_inspector_enabled": enabled},
                "context": {"observer_enabled": metadata, "observer_body_capture": body_capture}}
+    if reply_annotation_review is not None:
+        changes["context"]["reply_annotation_review"] = reply_annotation_review
     expected = copy.deepcopy(old)
     for section, values in changes.items():
         patched = _patched_text(patched, _parse(patched.encode("utf-8"))[1], values, section=section)

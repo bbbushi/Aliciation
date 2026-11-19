@@ -28,7 +28,7 @@ from .store import text_score
 
 
 DAY_ZONE = timezone(timedelta(hours=8))
-PLATFORMS = {"wikipedia": "维基百科", "bilibili": "B站", "zhihu": "知乎", "tieba": "贴吧"}
+PLATFORMS = {"web": "全网", "wikipedia": "维基百科", "bilibili": "B站", "zhihu": "知乎", "tieba": "贴吧"}
 _BILI_STAGES = frozenset({"device", "wbi_keys", "search", "video_info"})
 _SEARCH_PROVIDERS = frozenset({"native", "bing_rss", "brave", "searxng", "browser"})
 _SEARCH_COUNTS = ("received", "accepted", "returned", "rejected", "duplicates", "unsupported")
@@ -36,7 +36,7 @@ DEFAULTS = {
     "enabled": False, "allow_paid": False, "window_start": "18:00", "window_end": "23:00",
     "background_enabled": True, "chat_search_enabled": False, "remember_observations": False,
     "chat_search_calls": None, "chat_search_results": 3, "tool_round_limit": 4,
-    "chat_search_timeout_seconds": 300,
+    "chat_search_timeout_seconds": 300, "search_quota_testing": False,
     "observation_ttl_hours": None,
     "daily_queries": 60, "daily_models": 120, "allow_chat_interests": False,
     "share_in_qq": False, "save_memories": False, "provider_kind": "native",
@@ -587,7 +587,7 @@ class DiscoveryCoordinator:
             return False, "B站只读组件缺失，请保留仓库中的addons/bilibili目录"
         if not _third_party(platform, settings):
             return True, ""
-        if settings["provider_kind"] == "native":
+        if settings["provider_kind"] == "native" and platform != "web":
             return False, "需配置并允许第三方搜索通道"
         if settings["provider_kind"] == "brave" and not settings["provider_key"]:
             return False, "请配置搜索服务密钥"
@@ -627,6 +627,7 @@ class DiscoveryCoordinator:
         for identity, label in PLATFORMS.items():
             available, reason = self._available(identity, settings)
             details = {
+                "web": ("全网搜索结果中的公开网页；读取HTML正文或纯文本，不执行脚本、不使用登录态", ["网页正文节选", "纯文本节选"]),
                 "wikipedia": ("公开百科条目", ["条目正文节选"]),
                 "bilibili": ("公开视频信息与文字简介，不含视频理解", ["视频信息", "视频简介"]),
                 "zhihu": ("与链接身份对应的公开问题、回答或文章正文", ["问题描述", "指定回答", "文章正文"]),
@@ -636,6 +637,8 @@ class DiscoveryCoordinator:
             }[identity]
             method = ({"wikipedia": "平台公开接口", "bilibili": "B站站内只读接口", "tieba": "贴吧公开搜索入口"}.get(identity, "")
                       if not _third_party(identity, settings) else settings["provider_kind"])
+            if identity == "web" and settings["provider_kind"] == "native":
+                method = "bing_rss"
             if identity in ("bilibili", "zhihu") and settings[identity + "_access"] == "browser":
                 method = "独立本机浏览器"
                 if identity == "zhihu":
@@ -710,20 +713,23 @@ class DiscoveryCoordinator:
             task["reason_message"] = _reason(task.get("reason", ""))
             task["diagnostic"] = _diagnostic(task.get("diagnostic"))
             task["search_summary"] = _search_summary(task.get("search_summary"))
-        return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "learning_preview": learning_preview, "platforms": platforms,
+        from .autonomy_policy import search_settings, search_quota_active
+        effective = search_settings(settings)
+        return {"status": "ok", "dataset_id": self.dataset_id, "settings": public, "learning_preview": learning_preview,
+                "search_quota_testing": search_quota_active(settings), "platforms": platforms,
                 "autonomous_scheduler": "lifecycle-v1",
                 "tieba_forum_check": forum_check,
                 "sharing_warning": "资料共享记录异常，已暂停本次会话的资料注入；普通聊天可继续，重新载入服务后再检查。" if self._sharing_failed else "",
                 "interests": interests, "task": task, "cards": cards,
                 "discuss_card_id": self._pending["card_id"] if self._pending and self._pending["expires_at"] > now else None,
                 "discuss_expires_at": self._pending["expires_at"] if self._pending and self._pending["expires_at"] > now else None,
-                "budget": {"day": budget["day"], "queries_used": budget["queries"], "queries_limit": settings["daily_queries"],
-                           "models_used": budget["models"], "models_limit": settings["daily_models"],
-                           "network_used": budget["network"], "network_limit": settings["daily_network"],
-                           "bytes_used": budget["body_bytes"], "bytes_limit": _response_budget(settings),
+                "budget": {"day": budget["day"], "queries_used": budget["queries"], "queries_limit": effective["daily_queries"],
+                           "models_used": budget["models"], "models_limit": effective["daily_models"],
+                           "network_used": budget["network"], "network_limit": effective["daily_network"],
+                           "bytes_used": budget["body_bytes"], "bytes_limit": _response_budget(effective),
                            "shares_used": budget["shares"], "shares_limit": settings["daily_shares"],
                            "memory_writes_used": self._memory_writes_locked(), "memory_writes_limit": settings["daily_memory_writes"]},
-                "storage": {"used_bytes": self.service.store.source_usage_bytes(), "limit_bytes": settings["source_pool_bytes"]},
+                "storage": {"used_bytes": self.service.store.source_usage_bytes(), "limit_bytes": effective["source_pool_bytes"]},
                 "note": copy.deepcopy(self._note)}
 
     def _memory_writes_locked(self):
@@ -836,7 +842,7 @@ class DiscoveryCoordinator:
             raise ChannelError(400, "invalid_request", "设置字段无效")
         settings = copy.deepcopy(previous)
         for key, value in changes.items():
-            if key in {"enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies", "tieba_read_nested"}:
+            if key in {"search_quota_testing", "enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies", "tieba_read_nested"}:
                 settings[key] = _bool(value)
             elif key in ("window_start", "window_end"):
                 settings[key] = _clock(value)
@@ -1282,6 +1288,8 @@ class DiscoveryCoordinator:
                             "reason='background_busy',finished_at=? WHERE id=?", (time.time(), job["id"]))
 
     def _launch_locked(self, settings, revision, *, manual, interest_id=None):
+        from .autonomy_policy import search_settings, search_quota_active
+        settings = search_settings(settings)
         def reject(code, message):
             if manual:
                 raise ChannelError(409, code, message)
@@ -1301,7 +1309,7 @@ class DiscoveryCoordinator:
         if activity["status"] != "ready":
             return reject("foreground_busy", "请在Alice已初始化且空闲时开始")
         now = time.time()
-        if not manual:
+        if not manual and not search_quota_active(settings):
             clock = datetime.now(DAY_ZONE).strftime("%H:%M")
             start, end = settings["window_start"], settings["window_end"]
             inside = start <= clock < end if start < end else clock >= start or clock < end
@@ -1361,6 +1369,8 @@ class DiscoveryCoordinator:
         return True
 
     def _launch_tieba_check_locked(self, settings, revision, forums):
+        from .autonomy_policy import search_settings
+        settings = search_settings(settings)
         from .discovery_tieba import normalize_forums
         try:
             forums = normalize_forums(forums)
@@ -1536,8 +1546,8 @@ class DiscoveryCoordinator:
             budget = self._budget_locked(job["day"])
             model = int(op in ("plan", "interpret", "reflect"))
             query = int(op == "search" or query_attempt)
-            from .autonomy_policy import TEST_CONTROLS_ONLY
-            testing = TEST_CONTROLS_ONLY and job.get("kind") == "exploration_search"
+            from .autonomy_policy import search_quota_active
+            testing = search_quota_active(settings)
             if (not testing and (_exceeds(budget["network"], 1, settings["daily_network"])
                     or _exceeds(budget["models"], model, settings["daily_models"])
                     or _exceeds(budget["queries"], query, settings["daily_queries"])
@@ -2108,6 +2118,8 @@ class DiscoveryCoordinator:
             "kind": settings["provider_kind"], "api_key": settings["provider_key"],
             "endpoint": settings["provider_endpoint"], "allow_loopback": True,
             "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
+        if platform == "web" and provider["kind"] == "native":
+            provider["kind"] = "bing_rss"
         browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
         native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
         payload = {"query": query, "limit": limit or settings["search_results"]}
@@ -2146,7 +2158,8 @@ def _coverage(value, doc=None):
                   "text_limit": "达到文字额度，末条可能截断", "pagination_unconfirmed": "后续页码未能确认",
                   "repeated_page": "后续页无新楼层，已停止"}[doc["tieba_read_stop"]]
         return scope + "；" + reason + ("；楼中楼仅为接口附带节选，可能遗漏" if doc["tieba_nested_requested"] else "；未读楼中楼") + "；不含图片或视频，不代表完整讨论"
-    return {"page_text_excerpt": "公开正文节选", "static_page_excerpt": "静态页面文字节选",
+    return {"web_article_excerpt": "公开网页文章正文节选", "plain_text_excerpt": "公开纯文本节选",
+            "page_text_excerpt": "公开正文节选", "static_page_excerpt": "静态页面文字节选",
             "zhihu_answer_excerpt": "知乎指定回答正文节选", "zhihu_article_excerpt": "知乎指定文章正文节选",
             "zhihu_question_excerpt": "知乎问题描述节选，不含回答", "forum_main_post_excerpt": "贴吧主帖文字节选，不含回复",
             "forum_thread_excerpt": "贴吧主帖及获准回复文字节选，不含图片或视频",
@@ -2157,6 +2170,7 @@ def _reason(code):
     return {"ok": "本次资料已整理", "no_new_material": "本轮没有新增资料",
             "chat_search_disabled": "请在发现设置中开启内容访问和对话内搜索",
             "chat_search_limit": "本轮已达到你设置的搜索次数",
+            "no_platform": "请在发现偏好中开放全网搜索，或明确选择已开放的平台",
             "no_readable_content": "搜索找到了候选，但没有读到可用正文",
             "source_failed": "本次来源读取未完成，未用搜索摘要替代正文",
             "material_disabled": "当前资料容量或本轮资料数量设为0，未发起读取",

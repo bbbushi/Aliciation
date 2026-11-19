@@ -20,6 +20,7 @@ from .config_edit import ConfigConflict
 from .channels import ChannelError
 from .local_connector import ConnectorSpec, LocalConnectorManager
 from .service import ChatService
+from .lab_observation import ObservationGrant
 
 WEB_DIR = PROJECT_ROOT / "web"
 DEFAULT_PORT = 8800
@@ -162,6 +163,7 @@ class _DrainingHTTPServer(ThreadingHTTPServer):
 
 
 def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None):
+    observation_grant = ObservationGrant(svc)
     class Handler(BaseHTTPRequestHandler):
         server_version = "AliceGUI/0.1"
 
@@ -243,6 +245,48 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         def _trusted_json(self, intent: str) -> bool:
             """POST helper for shutdown and editable model configuration routes."""
             return self._trusted_intent(intent, json_body=True)
+
+        def _lab_observation(self, *, grant=False):
+            if urlparse(self.path).query:
+                raise ValueError("Lab 接口不接受查询参数")
+            if grant:
+                if (not self._trusted_json("lab-pairing")
+                        or len(self.headers.get_all("Origin", [])) != 1
+                        or len(self.headers.get_all("X-Alice-Intent", [])) != 1):
+                    raise ChannelError(403, "gui_only", "只能在 Alice 窗口授权")
+                body = self._bounded_body(256)
+                if body == {"action": "revoke"}:
+                    observation_grant.revoke()
+                    self._json({"status": "revoked"})
+                elif set(body) == {"action", "mode"} and body["action"] == "issue":
+                    self._json({"status": "ok", **observation_grant.issue(body["mode"]),
+                                "port": self.server.server_port})
+                else:
+                    raise ValueError("观察授权参数无效")
+                return
+            port = self.server.server_port
+            auth = self.headers.get_all("Authorization", [])
+            match = re.fullmatch(r"Bearer ([A-Za-z0-9_-]{43})", auth[0]) if len(auth) == 1 else None
+            if (self.headers.get_all("Host", []) != [f"127.0.0.1:{port}"]
+                    or any(self.headers.get(name) is not None for name in ("Origin", "Sec-Fetch-Site", "X-Alice-Intent"))
+                    or self.headers.get_content_type() != "application/json" or not match):
+                raise ChannelError(403, "observer_only", "仅接受持有授权的本机 Lab 服务")
+            body = self._bounded_body(2048)
+            if set(body) != {"topic", "params"}:
+                raise ValueError("观察请求格式无效")
+            self._json(observation_grant.read(match[1], body["topic"], body["params"]))
+
+        @staticmethod
+        def _public_thoughts(data):
+            if "scheduler" not in data:
+                return data
+            public = {key: value for key, value in data.items()
+                      if key not in ("budget", "events", "communication_decisions", "migration_plan")}
+            public["scheduler"] = {key: data["scheduler"][key] for key in ("status", "idle")}
+            public["runs"] = [{key: run[key] for key in ("id", "status", "reason", "activity_plan")}
+                              | {"activity": {"activity": (run.get("activity") or {}).get("activity")}}
+                              for run in data["runs"]]
+            return public
 
         def _sensitive_body(self) -> dict:
             """Bound the size and shape of credential-bearing requests without echoing them."""
@@ -535,14 +579,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file(path[1:], media[Path(path).suffix])
             elif path == "/room.js":
                 self._file("room.js", "application/javascript; charset=utf-8")
-            elif path == "/observer.js":
-                self._file("observer.js", "application/javascript; charset=utf-8")
-            elif path == "/context-viewer.js":
-                self._file("context-viewer.js", "application/javascript; charset=utf-8")
-            elif path == "/context-viewer.css":
-                self._file("context-viewer.css", "text/css; charset=utf-8")
-            elif path == "/evaluations.js":
-                self._file("evaluations.js", "application/javascript; charset=utf-8")
+            elif path == "/lab-pairing.js":
+                self._file("lab-pairing.js", "application/javascript; charset=utf-8")
             elif path == "/qq.js":
                 self._file("qq.js", "application/javascript; charset=utf-8")
             elif path == "/discovery.js":
@@ -596,34 +634,13 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 if not self._trusted_intent("thoughts"):
                     self._json({"error": "请从本机GUI读取思想与探索", "code": "gui_only"}, 403)
                     return
-                self._json(svc.thoughts())
+                self._json(self._public_thoughts(svc.thoughts()))
             elif path == "/api/maintenance":
                 self._maintenance_route()
             elif path == "/api/persona":
                 self._json(svc.persona_view())
-            elif path == "/addons/context-inspector" or path.startswith("/addons/context-inspector/"):
-                self._addon_static(path)
-            elif path in ("/api/plugins/context-inspector/status", "/api/plugins/context-inspector/requests",
-                          "/api/plugins/context-inspector/request", "/api/plugins/context-inspector/body", "/api/plugins/context-inspector/call"):
-                self._plugin_get(path)
-            elif path in ("/api/observer/snapshot", "/api/observer/list", "/api/observer/detail", "/api/observer/context", "/api/observer/calls", "/api/observer/persona-operations", "/api/observer/requests", "/api/observer/body", "/api/observer/call"):
-                self._observer_get(path)
-            elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
-                self._evaluation_route(path)
             elif path == "/api/settings":
                 self._json({"thinking": svc.thinking_view()})
-            elif path == "/api/observer/settings":
-                if not self._trusted_intent("observer-settings"):
-                    self._json({"error": "请从本机设置页面读取观测配置"}, 403)
-                    return
-                if urlparse(self.path).query:
-                    raise ValueError("观测设置不接受查询参数")
-                try:
-                    self._json(svc.observation_settings())
-                except ConfigConflict as exc:
-                    self._json({"error": str(exc)}, 409)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, 400)
             elif path == "/api/runtime":
                 if not self._trusted_intent("runtime"):
                     self._json({"error": "只能从本机 GUI 读取启动信息"}, 403)
@@ -647,193 +664,6 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             else:
                 self._json({"error": "not found"}, 404)
 
-        def _observer_get(self, path: str) -> None:
-            if not self._trusted_intent("observer"):
-                self._json({"status": "error", "error": "只能从本机 GUI 读取观察数据"}, 403)
-                return
-            allowed = {
-                "/api/observer/snapshot": {"scope"},
-                "/api/observer/list": {"scope", "view", "layer", "kind", "q", "before", "ceiling"},
-                "/api/observer/detail": {"scope", "view", "id", "offset"},
-                "/api/observer/context": {"scope", "limit"},
-                "/api/observer/calls": {"scope", "limit", "request_id"},
-                "/api/observer/persona-operations": {"scope", "limit"},
-                "/api/observer/requests": {"scope", "limit", "request_id"},
-                "/api/observer/body": {"scope", "hash", "request_id"},
-                "/api/observer/call": {"scope", "request_id", "call_id"},
-            }[path]
-            try:
-                query = urlparse(self.path).query
-                if len(query) > 4096:
-                    raise ValueError
-                parsed = parse_qs(query, keep_blank_values=True, max_num_fields=8)
-                if set(parsed) - allowed or any(len(values) != 1 for values in parsed.values()):
-                    raise ValueError
-                params = {key: values[0] for key, values in parsed.items()}
-                scope = params.get("scope")
-                if scope is not None and (len(scope) != 32 or any(ch not in "0123456789abcdef" for ch in scope)):
-                    raise ValueError
-            except ValueError:
-                self._json({"status": "error", "error": "观察请求参数无效"}, 400)
-                return
-            reader = {"/api/observer/snapshot": svc.observer_snapshot,
-                      "/api/observer/list": svc.observer_list,
-                      "/api/observer/detail": svc.observer_detail,
-                      "/api/observer/context": svc.observer_context_basis,
-                      "/api/observer/calls": svc.observer_llm_calls,
-                      "/api/observer/persona-operations": svc.observer_persona_operations,
-                      "/api/observer/requests": svc.observer_context_requests,
-                      "/api/observer/body": svc.observer_context_body,
-                      "/api/observer/call": svc.observer_context_call}[path]
-            self._json(reader(**params))
-
-        # ---- 上下文观测插件（20261107 插件设计 §4/§6）：固定静态托管 + 薄查询命名空间 ----
-
-        ADDON_STATIC_TYPES = {"html": "text/html; charset=utf-8",
-                              "js": "application/javascript; charset=utf-8",
-                              "css": "text/css; charset=utf-8",
-                              "json": "application/json; charset=utf-8"}
-
-        def _addon_static(self, path: str) -> None:
-            """只读托管清单内固定资源；缺文件、禁用或版本不符时给明确状态，聊天照常。"""
-            root = PROJECT_ROOT / "addons" / "context_inspector"
-            try:
-                manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                self._json({"status": "error", "error": "插件资源不可用"}, 404)
-                return
-            if (not svc.cfg.plugins.context_inspector_enabled
-                    or manifest.get("id") != "context-inspector"
-                    or manifest.get("protocol_version") != "ctx-obs/1"):
-                self._json({"status": "disabled", "error": "插件未启用或协议版本不符"}, 404)
-                return
-            rel = path[len("/addons/context-inspector"):].lstrip("/") or (manifest.get("entry") or "index.html")
-            if rel not in (manifest.get("files") or []):
-                self._json({"status": "error", "error": "插件资源不存在"}, 404)
-                return
-            webroot = (root / "web").resolve()
-            target = (webroot / rel).resolve()
-            if (not str(target).startswith(str(webroot) + os.sep) or target.is_symlink()
-                    or not target.is_file()):
-                self._json({"status": "error", "error": "插件资源不存在"}, 404)
-                return
-            ctype = self.ADDON_STATIC_TYPES.get(target.suffix.lstrip("."))
-            if ctype is None or target.stat().st_size > 4 * 1024 * 1024:
-                self._json({"status": "error", "error": "插件资源类型或大小不受支持"}, 404)
-                return
-            try:
-                payload = target.read_bytes()
-            except OSError:
-                self._json({"status": "error", "error": "插件资源不可用"}, 404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            try:
-                self.wfile.write(payload)
-            except OSError:
-                pass
-
-        def _plugin_get(self, path: str) -> None:
-            """插件专用查询：同源观察意图校验 + 启用检查；委托同一核心观察服务。"""
-            if not self._trusted_intent("observer"):
-                self._json({"status": "error", "error": "只能从本机 GUI 读取观察数据"}, 403)
-                return
-            allowed = {
-                "/api/plugins/context-inspector/status": {"scope"},
-                "/api/plugins/context-inspector/requests": {"scope", "limit"},
-                "/api/plugins/context-inspector/request": {"scope", "request_id"},
-                "/api/plugins/context-inspector/body": {"scope", "request_id", "hash"},
-                "/api/plugins/context-inspector/call": {"scope", "request_id", "call_id"},
-            }[path]
-            try:
-                query = urlparse(self.path).query
-                if len(query) > 4096:
-                    raise ValueError
-                parsed = parse_qs(query, keep_blank_values=True, max_num_fields=8)
-                if set(parsed) - allowed or any(len(values) != 1 for values in parsed.values()):
-                    raise ValueError
-                params = {key: values[0] for key, values in parsed.items()}
-                scope = params.get("scope")
-                if scope is not None and (len(scope) != 32 or any(ch not in "0123456789abcdef" for ch in scope)):
-                    raise ValueError
-            except ValueError:
-                self._json({"status": "error", "error": "观察请求参数无效"}, 400)
-                return
-            if not svc.cfg.plugins.context_inspector_enabled:
-                self._json({"status": "disabled", "scope": scope})
-                return
-            reader = {"/api/plugins/context-inspector/status": svc.plugin_inspector_status,
-                      "/api/plugins/context-inspector/requests": svc.plugin_inspector_requests,
-                      "/api/plugins/context-inspector/request": svc.plugin_inspector_request,
-                      "/api/plugins/context-inspector/body": svc.plugin_inspector_body,
-                      "/api/plugins/context-inspector/call": svc.plugin_inspector_call}[path]
-            self._json(reader(**params))
-
-        def _evaluation_route(self, path: str) -> None:
-            posting = self.command == "POST"
-            if not self._trusted_intent("evaluations", json_body=posting):
-                self._json({"status": "error", "error": "只能从本机P1核查面板操作"}, 403)
-                return
-            try:
-                if posting:
-                    params = self._sensitive_body()
-                    if urlparse(self.path).query:
-                        raise ValueError("P1写请求不接受查询参数")
-                else:
-                    query = urlparse(self.path).query
-                    if len(query) > 2048:
-                        raise ValueError("P1查询参数过长")
-                    parsed = parse_qs(query, keep_blank_values=True, max_num_fields=4)
-                    if any(len(v) != 1 for v in parsed.values()):
-                        raise ValueError("P1查询参数重复")
-                    params = {k: v[0] for k, v in parsed.items()}
-                fixed = {
-                    (False, "/api/evaluations"): ("list", {"before", "dataset_id", "filter"}),
-                    (False, "/api/evaluations/settings"): ("settings", {"dataset_id"}),
-                    (True, "/api/evaluations/settings"): ("set_limit", {"dataset_id", "daily_limit", "allow_paid"}),
-                    (True, "/api/evaluations/arm"): ("arm", {"dataset_id", "action_id"}),
-                    (False, "/api/evaluations/calibrations"): ("calibrations", {"dataset_id"}),
-                    (True, "/api/evaluations/calibrations"): ("calibrate", {"dataset_id", "run_ids", "minimum_agreement", "attest"}),
-                }
-                target = fixed.get((posting, path))
-                match = re.fullmatch(r"/api/evaluations/([0-9a-f]{32})(?:/(cancel|delete|labels))?", path)
-                if target is None and match:
-                    identity, suffix = match.groups()
-                    if not posting and suffix is None:
-                        target = ("detail", {"dataset_id", "reveal"})
-                    elif posting and suffix == "cancel":
-                        target = ("cancel", {"dataset_id"})
-                    elif posting and suffix == "delete":
-                        target = ("delete", {"dataset_id"})
-                    elif posting and suffix == "labels":
-                        target = ("label", {"dataset_id", "ordinal", "verdict", "revealed"})
-                    else:
-                        raise ValueError("P1请求方法与路径不匹配")
-                if target is None:
-                    self._json({"status": "error", "error": "P1接口不存在"}, 404)
-                    return
-                action, allowed = target
-                if set(params) - allowed:
-                    raise ValueError("P1请求包含未知参数")
-                dataset = params.pop("dataset_id", None)
-                if dataset is not None and (not isinstance(dataset, str) or not re.fullmatch(r"[0-9a-f]{32}", dataset)):
-                    raise ValueError("会话身份无效")
-                if (posting or action == "detail") and dataset is None:
-                    raise ValueError("请先读取当前会话身份")
-                if action == "detail":
-                    reveal = params.get("reveal", "0")
-                    if reveal not in ("0", "1"):
-                        raise ValueError("揭示选项无效")
-                    params["reveal"] = reveal == "1"
-                if match:
-                    params["id"] = match.group(1)
-                self._json(svc.evaluations(action, dataset_id=dataset, **params))
-            except ValueError as exc:
-                self._json({"status": "error", "error": str(exc)}, 400)
-
         def do_POST(self):
             path = urlparse(self.path).path
             if path == "/api/shutdown":
@@ -852,18 +682,18 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 gate.leave()
 
         def _route_post(self, path: str) -> None:
-            if path == "/api/observer/settings":
-                if not self._trusted_json("observer-settings"):
-                    self._json({"error": "请从本机设置页面修改观测配置"}, 403)
-                    return
-                if urlparse(self.path).query:
-                    raise ValueError("观测设置不接受查询参数")
-                try:
-                    self._json(svc.observation_settings(self._bounded_body(4096)))
-                except ConfigConflict as exc:
-                    self._json({"error": str(exc)}, 409)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, 400)
+            if path == "/api/lab/v1/open":
+                if (not self._trusted_json("lab-pairing") or urlparse(self.path).query
+                        or len(self.headers.get_all("Origin", [])) != 1
+                        or len(self.headers.get_all("X-Alice-Intent", [])) != 1):
+                    raise ChannelError(403, "gui_only", "只能在 Alice 设置里打开 Lab")
+                if self._bounded_body(32) != {}:
+                    raise ValueError("打开 Lab 不接受额外参数")
+                from .lab_launcher import open_registered_lab
+                self._json(open_registered_lab())
+                return
+            if path in ("/api/lab/v1/grant", "/api/lab/v1/read"):
+                self._lab_observation(grant=path.endswith("/grant"))
                 return
             if path == "/api/thoughts":
                 if not self._trusted_json("thoughts"):
@@ -871,8 +701,12 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     return
                 body = self._bounded_body(32768)
                 action = body.pop("action", None)
+                if action in ("migration_prepare", "migration_apply") or (
+                        action == "detail" and body.get("kind") == "run"):
+                    self._json({"error": "运行诊断已移到 Alice Lab"}, 404)
+                    return
                 try:
-                    self._json(svc.thoughts(action, body))
+                    self._json(self._public_thoughts(svc.thoughts(action, body)))
                 except ValueError as exc:
                     self._json({"error": str(exc), "code": "invalid_request"}, 400)
                 return
@@ -908,9 +742,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             if path in GUI_WRITE_PATHS and not self._trusted_json("gui"):
                 self._json({"error": "此操作仅供本机 GUI 使用", "code": "gui_only"}, 403)
                 return
-            if path.startswith("/api/evaluations/"):
-                self._evaluation_route(path)
-            elif path == "/api/persona/residency":
+            if path == "/api/persona/residency":
                 try:
                     self._json(svc.persona_residency(self._body()))
                 except ChannelError:
@@ -997,24 +829,17 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     return
                 self._json(svc.gui_request_status(self._bounded_body(65536)))
             elif path == "/api/chat":
-                if not (self._trusted_json("gui") or self._trusted_json("evaluations")):
+                if not self._trusted_json("gui"):
                     self._json({"error": "请从本机 GUI 聊天；适配器使用渠道接口", "code": "gui_only"}, 403)
                     return
                 body = self._body()
-                if set(body) - {"text", "evaluation_id", "request_id", "session_epoch", "search_intent", "worker_target"} or not isinstance(body.get("text"), str):
+                if set(body) - {"text", "request_id", "session_epoch", "search_intent", "worker_target"} or not isinstance(body.get("text"), str):
                     raise ValueError("聊天请求无效")
                 text = body["text"].strip()
-                evaluation_id = body.get("evaluation_id")
-                if evaluation_id is not None and (
-                    not self._trusted_json("evaluations") or not isinstance(evaluation_id, str)
-                    or not re.fullmatch(r"[0-9a-f]{32}", evaluation_id)
-                ):
-                    self._json({"error": "核查动作无效，请从本机P1面板重新选择下一轮"}, 400)
-                    return
                 if not text:
                     self._json({"error": "空消息"}, 400)
                 else:
-                    self._sse_chat(text, evaluation_id=evaluation_id,
+                    self._sse_chat(text,
                                    request_id=body.get("request_id"), session_epoch=body.get("session_epoch"),
                                    search_intent=body.get("search_intent"), worker_target=body.get("worker_target"))
             elif path == "/api/metrics/toggle":
@@ -1070,7 +895,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         # ---------- SSE 流式对话 ----------
 
-        def _sse_chat(self, text: str, *, evaluation_id=None, request_id=None, session_epoch=None,
+        def _sse_chat(self, text: str, *, request_id=None, session_epoch=None,
                       search_intent=None, worker_target=None) -> None:
             connected = True
             started = False
@@ -1110,7 +935,6 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     on_delta=lambda piece: emit({"type": "delta", "text": piece}),
                     on_tool=lambda name: emit({"type": "tool", "name": name}),
                     on_reasoning=lambda piece: emit({"type": "reasoning", "text": piece}),
-                    evaluation_id=evaluation_id,
                     request_id=request_id, session_epoch=session_epoch,
                     nonblocking=True, on_accepted=start,
                     search_intent=search_intent, on_search_progress=lambda info: emit({"type": "search", **info}),
@@ -1159,9 +983,15 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
     try:
         runtime_info = {"restart_command": _restart_command(config_path, httpd.server_port),
                         "desktop": host_control is not None}
-        svc = ChatService(cfg if cfg is not None else load(config_path), config_path=config_path,
+        effective_cfg = cfg if cfg is not None else load(config_path)
+        if getattr(sys, "frozen", False):
+            effective_cfg.plugins.context_inspector_enabled = False
+            effective_cfg.context.observer_body_capture = False
+            effective_cfg.context.reply_annotation_review = False
+        svc = ChatService(effective_cfg, config_path=config_path,
                           allow_unconfigured=host_control is not None,
-                          _maintenance_activation=bool(host_control and host_control.maintenance_activation))
+                          _maintenance_activation=bool(host_control and host_control.maintenance_activation),
+                          lab_experiments=bool(getattr(host_control, "lab_session", False) and not getattr(sys, "frozen", False)))
         boot_events = svc.prepare()
         # Fixed public addon command; no import of addon code and no request-
         # supplied program, arguments, filesystem path or callback address.

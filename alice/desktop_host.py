@@ -25,17 +25,18 @@ def _unique_object(pairs):
 
 
 class DesktopHost:
-    def __init__(self, reader, writer, nonce: str):
+    def __init__(self, reader, writer, nonce: str, *, lab_session=False):
         if not re.fullmatch(r"[0-9a-f]{32}", nonce):
             raise ValueError("desktop launch identity missing")
         self.reader, self.writer = reader, writer
         self.nonce = nonce
+        self.lab_session = lab_session
         self.instance_id = uuid.uuid4().hex
         self._lock = threading.Lock()
         self._state = "starting"
         self._stop = threading.Event()
         self._reader_thread: threading.Thread | None = None
-        self.extract_on_exit = True
+        self.extract_on_exit = not lab_session
         self.maintenance_activation = False
         self.exit_reason = "quit"
         self._replies: dict[str, tuple[dict, dict]] = {}
@@ -56,8 +57,14 @@ class DesktopHost:
 
         activation_ready(user_root())
         self._state = "ready"
+        capabilities = ["status", "shutdown", "maintenance_status"]
+        lab = {}
+        if self.lab_session:
+            capabilities += ["lab_schedule", "lab_control", "lab_observe", "lab_chat", "lab_experiment"]
+            lab = {"lab_protocol": "alice-lab/1", "lab_profile": str(user_root()),
+                   "lab_experiments": service.lab_experiments_available()}
         self.emit(event="ready", url=f"http://127.0.0.1:{httpd.server_port}",
-                  app_version=__version__, capabilities=["status", "shutdown", "maintenance_status"], updates=False)
+                  app_version=__version__, capabilities=capabilities, updates=False, **lab)
 
         def shutdown(*, lost=False, reserved=False):
             if lost:
@@ -104,11 +111,20 @@ class DesktopHost:
                     allowed = {"protocol", "instance_id", "nonce", "request_id", "op"}
                     if operation == "shutdown":
                         allowed.add("reason")
+                    if operation == "lab_control" and self.lab_session:
+                        allowed.update(("action", "params"))
+                    if self.lab_session and operation == "lab_observe":
+                        allowed.update(("topic", "params"))
+                    if self.lab_session and operation in {"lab_chat", "lab_experiment"}:
+                        allowed.add("params")
                     if set(frame) != allowed:
                         raise ValueError("fields")
                     accepted_shutdown = False
                     if operation == "status":
                         reply = {"request_id": request_id, "status": self._state, "updates": False}
+                    elif (self.lab_session and self._state == "ready"
+                          and operation in {"lab_schedule", "lab_control", "lab_observe", "lab_chat", "lab_experiment"}):
+                        reply = {"request_id": request_id, **self._lab_request(service, operation, frame)}
                     elif operation == "maintenance_status":
                         from .profile_maintenance import status
                         try:
@@ -141,6 +157,85 @@ class DesktopHost:
 
         self._reader_thread = threading.Thread(target=own_reader, name="alice-desktop-control", daemon=True)
         self._reader_thread.start()
+
+    def _lab_request(self, service, operation, frame):
+        from .channels import ChannelError
+        from .lab_observation import read
+        try:
+            if operation == "lab_schedule":
+                return {"status": "ok", "schedule": service.schedule_diagnostics()}
+            params = frame["params"]
+            if not isinstance(params, dict):
+                raise ValueError("请求参数无效")
+            if operation == "lab_observe":
+                return {"status": "ok", "result": read(service, frame["topic"], params, bodies=True,
+                                                       scope=service.observation_scope())}
+            if operation == "lab_chat":
+                if set(params) - {"text", "evaluation_id", "session_epoch"} or not isinstance(params.get("text"), str):
+                    raise ValueError("聊天参数无效")
+                epoch = params.get("session_epoch")
+                if not isinstance(epoch, str):
+                    raise ValueError("请先读取测试会话身份")
+                evaluation = params.get("evaluation_id")
+                if evaluation is not None and (not isinstance(evaluation, str) or not re.fullmatch(r"[0-9a-f]{32}", evaluation)):
+                    raise ValueError("核查身份无效")
+                result = service.send(params["text"], request_id=frame["request_id"], session_epoch=epoch,
+                                      evaluation_id=evaluation, nonblocking=True)
+                return {"status": "ok", "result": {key: result.get(key) for key in
+                        ("reply", "request_id", "assistant_turn_id", "evaluation_id", "evaluation_warning")}}
+            if operation == "lab_experiment":
+                allowed = {"settings": set(), "list": {"before", "filter"}, "detail": {"id", "reveal"},
+                           "set_limit": {"daily_limit", "allow_paid"}, "arm": {"action_id"},
+                           "label": {"id", "ordinal", "verdict", "revealed"}, "cancel": {"id"},
+                           "calibrations": set(), "calibrate": {"run_ids", "minimum_agreement", "attest"}}
+                action = params.get("action")
+                if not isinstance(action, str) or action not in allowed or set(params) - allowed[action] - {"action", "dataset_id"}:
+                    raise ValueError("核查操作无效")
+                args = {key: value for key, value in params.items() if key not in ("action", "dataset_id")}
+                if action == "arm":
+                    args["action_id"] = frame["request_id"]
+                return {"status": "ok", "result": service.evaluations(action, dataset_id=params.get("dataset_id"), **args)}
+            action = frame["action"]
+            if not isinstance(action, str) or action not in {
+                    "awake", "sleep", "run", "pause", "end_rest", "capture", "review", "search_quota", "question"}:
+                return {"status": "unsupported"}
+            if action in {"capture", "review"}:
+                if set(params) != {"enabled"} or type(params["enabled"]) is not bool:
+                    raise ValueError("观测实验设置无效")
+                service.lab_configure_observation(action, params["enabled"])
+                return {"status": "accepted", "action": action}
+            if action == "search_quota":
+                if set(params) != {"enabled"} or type(params["enabled"]) is not bool:
+                    raise ValueError("搜索测试设置无效")
+                state = service.discovery()
+                result = service.discovery("settings", {"revision": state["revision"], "dataset_id": state["dataset_id"],
+                    "settings": {"search_quota_testing": params["enabled"]}})
+                return {"status": "accepted", "action": action, "result": result}
+            status = service.thoughts()
+            payload = {"session_epoch": status["session_epoch"]}
+            if action in {"awake", "sleep"}:
+                awake = action == "awake"
+                payload.update(revision=status["revision"], settings={
+                    "wake_state": "awake" if awake else "sleeping", "allow_paid": awake})
+                service.thoughts("settings", payload)
+            elif action in {"run", "question"}:
+                if action == "run" and params:
+                    if set(params) != {"id", "version"} or any(type(value) is not int for value in params.values()):
+                        raise ValueError("疑问参数无效")
+                elif action == "question" and (set(params) != {"question"} or not isinstance(params["question"], str)):
+                    raise ValueError("请填写疑问")
+                service.thoughts("record" if action == "question" else "run", {**payload, **params})
+            else:
+                if params:
+                    raise ValueError("这个操作不接受额外参数")
+                service.thoughts("idle_wake" if action == "end_rest" else action, payload)
+            return {"status": "accepted", "action": action}
+        except ChannelError as exc:
+            return {"status": "refused", "error": str(exc), "code": exc.code}
+        except ValueError as exc:
+            return {"status": "refused", "error": str(exc)[:180]}
+        except Exception:
+            return {"status": "error", "error": "操作结果未确认，请查看记录，勿重复发送"}
 
     def closed(self, code, result):
         from . import profile_maintenance as maintenance
@@ -176,7 +271,7 @@ class DesktopHost:
                 print("（桌面控制管道尚未释放，结束后台读取等待）", file=sys.stderr)
 
 
-def main(*, port: int = 0, config_path=None) -> int:
+def main(*, port: int = 0, config_path=None, lab_session=False) -> int:
     protocol_output = sys.stdout
     sys.stdout = sys.stderr  # stdout is exclusively the framed public transport.
     host = None
@@ -186,7 +281,8 @@ def main(*, port: int = 0, config_path=None) -> int:
         # Do not let a daemon thread hold sys.stdin's buffered lock during
         # interpreter finalization. The input owner closes this duplicate only.
         control_input = os.fdopen(os.dup(sys.stdin.fileno()), "rb", buffering=0)
-        host = DesktopHost(control_input, protocol_output, os.environ.get("ALICE_DESKTOP_NONCE", ""))
+        host = DesktopHost(control_input, protocol_output, os.environ.get("ALICE_DESKTOP_NONCE", ""),
+                           lab_session=lab_session)
         from .instance_lock import ProfileLease
         from .runtime_paths import user_root
         from . import profile_maintenance as maintenance

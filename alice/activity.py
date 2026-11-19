@@ -20,6 +20,7 @@ from . import autonomy_policy
 
 WORK_MODES = ("interest", "problem", "iteration")
 MODES = WORK_MODES + ("idle",)
+DEFAULT_IDLE_SECONDS = 300
 TOOL_GROUPS = ("memory", "history", "persona", "sources", "search")
 DEFAULT_ACTIVITIES = {
     mode: {"seconds": seconds, "tools": list(TOOL_GROUPS if mode == "interest" else TOOL_GROUPS[:-1])}
@@ -86,8 +87,11 @@ def origin_mode(origin):
 
 def assessment(store, row):
     saved = store.conn.execute("SELECT * FROM thought_agenda WHERE question_id=?", (row["id"],)).fetchone()
-    return dict(saved) if saved else {"activity": origin_mode(row["origin"]), "importance": 1, "urgency": 0,
-                                     "due_at": 0, "schedule_reason": ""}
+    value = dict(saved) if saved else {"activity": origin_mode(row["origin"]), "importance": 1, "urgency": 0,
+                                       "due_at": 0, "schedule_reason": ""}
+    from .autonomy_v2.planning import ActivityPlanning
+    value['value_waiting'] = ActivityPlanning(store).parked(row)
+    return value
 
 
 def assess(store, row, args):
@@ -119,8 +123,10 @@ def candidates(store):
     waits likewise reopen through explicit updates, not timers.
     """
     from . import thought_workspace as thoughts
+    from .autonomy_v2.planning import ActivityPlanning
+    planning = ActivityPlanning(store)
     return [r for r in thoughts.question_rows(store) if r["question"] and r["status"] == "open"
-            and thoughts.valid_basis(store, json.loads(r["basis"]))]
+            and thoughts.valid_basis(store, json.loads(r["basis"])) and not planning.parked(r)]
 
 
 def external_version(store, row):
@@ -190,22 +196,42 @@ def active_idle(store):
     return dict(row)
 
 
-def enter_idle(store, reason, requested_seconds=None, related_run_id=None):
+def fixed_idle_seconds(config):
+    seconds = config.get("idle_rest_seconds", DEFAULT_IDLE_SECONDS)
+    return seconds if type(seconds) is int and 0 <= seconds <= 86400 else DEFAULT_IDLE_SECONDS
+
+
+def enter_idle(store, reason, *, related_run_id=None, scope="gui", selection=None):
     """Persist the rest timer; zero model, tool or memory steps happen here."""
-    from .thought_workspace import settings, event
-    seconds = autonomy_policy.TEST_IDLE_SECONDS if autonomy_policy.TEST_CONTROLS_ONLY else int(settings(store).get("idle_rest_seconds") or 0)
+    from .thought_workspace import settings
+    seconds = fixed_idle_seconds(settings(store))
     if seconds <= 0:
         return None
-    if requested_seconds is not None:
-        seconds = max(1, int(requested_seconds)) if autonomy_policy.TEST_CONTROLS_ONLY else max(1, min(int(requested_seconds), seconds))
     now = time.time()
+    reason = reason[:200]
     with store.source_transaction():
         store.conn.execute("INSERT INTO v2_activity_idle(scope,started_at,until_at,reason,related_run_id) "
-            "VALUES('gui',?,?,?,?) ON CONFLICT(scope) DO UPDATE SET started_at=excluded.started_at,"
+            "VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET started_at=excluded.started_at,"
             "until_at=excluded.until_at,reason=excluded.reason,related_run_id=excluded.related_run_id",
-            (now, now + seconds, reason[:200], related_run_id))
-        record_idle_choice(store, now, seconds, reason)
+            (scope, now, now + seconds, reason, related_run_id))
+        record_idle_choice(store, now, seconds, reason, related_run_id=related_run_id, selection=selection)
     return {"started_at": now, "until_at": now + seconds, "reason": reason}
+
+
+def normalize_legacy_idle(store):
+    from .thought_workspace import event, settings
+    key = "autonomy_fixed_idle_v1"
+    with store.source_transaction():
+        if store.meta_get(key):
+            return
+        seconds = fixed_idle_seconds(settings(store))
+        changed = store.conn.execute(
+            "UPDATE v2_activity_idle SET until_at=started_at+? WHERE scope='gui' "
+            "AND reason='activity_finish_rest' AND until_at>? AND until_at>started_at+?",
+            (seconds, time.time(), seconds)).rowcount
+        if changed:
+            event(store, "legacy_idle_shortened", "gui", {"fixed_seconds": seconds})
+        store.meta_set(key, "1")
 
 
 def clear_idle(store, *, reason="expired"):
@@ -217,21 +243,24 @@ def clear_idle(store, *, reason="expired"):
             event(store, "idle_ended", "gui", {"reason": reason, "was_until": row[0]})
 
 
-def record_idle_choice(store, started_at, seconds, reason):
+def record_idle_choice(store, started_at, seconds, reason, *, related_run_id=None, selection=None):
     """Independent selection receipt for voluntary rest (no model call)."""
     import uuid
     from .thought_workspace import dump
     identity = "idle_" + uuid.uuid4().hex[:16]
     now = time.time()
+    selection = {**(selection or {}), "reason": reason, "idle_seconds": seconds}
+    if related_run_id is not None:
+        selection["related_run_id"] = related_run_id
+    stamp = selection.get("input_stamp") or input_stamp(store)
     store.conn.execute("INSERT INTO exploration_runs(id,epoch,status,reason,question_id,basis,manual,created_at,updated_at) "
         "VALUES(?,?,'completed','idle_rest',NULL,?,0,?,?)",
         (identity, store.meta_get("session_epoch") or "",
          dump({"epoch": store.meta_get("session_epoch") or ""}), now, now))
     store.conn.execute("INSERT INTO autonomous_activity_runs(run_id,activity,selection,input_stamp,started_at,deadline,charged) "
-        "VALUES(?,?,?,?,?,?,1)", (identity, "idle", dump({"reason": reason, "idle_seconds": seconds}),
-        input_stamp(store), started_at, started_at + seconds))
+        "VALUES(?,?,?,?,?,?,1)", (identity, "idle", dump(selection), stamp, started_at, started_at + seconds))
     store.conn.execute("INSERT INTO autonomous_activity_executions(run_id,activity,input_stamp,started_at,progress) "
-        "VALUES(?,?,?,?,0)", (identity, "idle", input_stamp(store), started_at))
+        "VALUES(?,?,?,?,0)", (identity, "idle", stamp, started_at))
 
 
 def weights(store, config):
@@ -277,6 +306,11 @@ def weights(store, config):
             blocked_modes += 1
             continue
         if not item["question_id"]:
+            from .autonomy_v2.planning import ActivityPlanning
+            if ActivityPlanning(store).free_waiting(epoch, mode, stamp):
+                item['reason'] = 'value_waiting'
+                blocked_modes += 1
+                continue
             # Free exploration also has a finite same-material budget. A model
             # must not escape a waiting question by repeatedly choosing no qid.
             free_count = store.conn.execute(
@@ -307,7 +341,7 @@ def weights(store, config):
         if record["progress"]:
             break
         dry += 1
-    idle_seconds = autonomy_policy.TEST_IDLE_SECONDS if autonomy_policy.TEST_CONTROLS_ONLY else int(config.get("idle_rest_seconds") or 0)
+    idle_seconds = fixed_idle_seconds(config)
     idle = result["idle"]
     idle["reason"] = "idle_disabled" if idle_seconds <= 0 else "voluntary_rest"
     idle["content_score"] = 1 + 2*min(dry, 3) + 2*min(blocked_modes, 3)
@@ -315,8 +349,15 @@ def weights(store, config):
         idle["weight"] = round((idle["content_score"]) * (.55 if previous == "idle" else 1), 3)
     for item in result.values():
         item.pop("_rank", None)
-    return {"modes": result, "input_stamp": input_stamp(store), "idle_seconds": idle_seconds,
-            "blocked_modes": blocked_modes, "dry_windows": dry}
+    eligible = [mode for mode in WORK_MODES if result[mode]["weight"] > 0]
+    draw_weights = {}
+    if eligible and not any(result[mode]["priority"] for mode in eligible):
+        draw_weights = {mode: result[mode]["weight"] for mode in eligible}
+        if idle["weight"] > 0:
+            draw_weights["idle"] = idle["weight"]
+    return {"modes": result, "input_stamp": stamp, "idle_seconds": idle_seconds,
+            "blocked_modes": blocked_modes, "dry_windows": dry, "previous_activity": previous,
+            "draw_weights": draw_weights}
 
 
 def choose(store, config, *, question=None):
@@ -326,15 +367,15 @@ def choose(store, config, *, question=None):
         mode = assessment(store, question)["activity"]
         if not autonomy_policy.TEST_CONTROLS_ONLY and not config["activities"][mode]["seconds"]:
             raise ValueError("该问题所属活动时长为0，请先开放")
-        return mode, {**projected, "selected": mode, "question_id": question["id"], "reason": "explicit_task"}
+        return mode, {**projected, "selected": mode, "question_id": question["id"],
+                      "reason": "explicit_task", "draw_weights": {}}
     eligible = [m for m in WORK_MODES if modes[m]["weight"] > 0]
     priority = [m for m in eligible if modes[m]["priority"]]
     if priority:
         mode = max(priority, key=lambda m: modes[m]["weight"])
         return mode, {**projected, "selected": mode, "question_id": modes[mode]["question_id"], "reason": "priority_content"}
-    if eligible:
-        draw = eligible + (["idle"] if modes["idle"]["weight"] > 0 else [])
-        mode = random.choices(draw, weights=[modes[m]["weight"] for m in draw], k=1)[0]
+    if draw := projected["draw_weights"]:
+        mode = random.choices(list(draw), weights=list(draw.values()), k=1)[0]
         return mode, {**projected, "selected": mode, "question_id": modes[mode].get("question_id"),
                       "reason": "weighted_rotation"}
     # No work mode can proceed: voluntary rest when enabled, condition waiting otherwise.

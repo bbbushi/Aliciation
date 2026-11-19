@@ -220,7 +220,8 @@ class SourceStoreMixin:
         for key, default in SOURCE_LIMIT_DEFAULTS.items():
             value = values.get(key, default)
             limits[key] = value if value is None or type(value) is int and value >= 0 else 0
-        return limits
+        from .autonomy_policy import search_source_limits
+        return search_source_limits(limits, values)
 
     @contextmanager
     def source_transaction(self):
@@ -372,7 +373,8 @@ class SourceStoreMixin:
         total += self.conn.execute("SELECT COALESCE(SUM(length(CAST(payload_json AS BLOB))),0) FROM retained_evidence").fetchone()[0]
         import json
         for table, fields in (("thought_questions", "question||reason||progress||next_step"),
-                              ("thought_contacts", "message"), ("exploration_runs", "checkpoint")):
+                              ("thought_contacts", "message"), ("exploration_runs", "checkpoint"),
+                              ("v2_activity_plans", "object||value||why_now||stop_condition||next_action||COALESCE(result,'')")):
             if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                 for row in self.conn.execute(f"SELECT basis,length(CAST({fields} AS BLOB)) FROM {table}"):
                     if json.loads(row[0]).get("packets"):

@@ -434,9 +434,13 @@ class StoreEvidence:
         row = self.store.conn.execute("SELECT checkpoint FROM exploration_runs WHERE id=?", (run_id,)).fetchone()
         messages = _loads(row[0], []) if row else []
         results = {m.get("tool_call_id"): m.get("content", "") for m in messages if m.get("role") == "tool"}
-        called = {call.get("id") for m in messages for call in (m.get("tool_calls") or [])}
+        called = {call.get("id"): call.get('function', {}).get('name')
+                  for m in messages for call in (m.get("tool_calls") or [])}
         ok_calls = set()
-        for call_id in called:
+        from ..capability_registry import executor
+        for call_id, name in called.items():
+            if executor(name) == 'thought' or name in {'context_keep', 'context_release'}:
+                continue  # Planning, bookkeeping and self-writing are not research actions.
             raw = results.get(call_id, "")
             try:
                 body = json.loads(raw[raw.index("{"):])
@@ -671,7 +675,9 @@ class InvitationRepositoryAdapter:
             "AND a.epoch=i.epoch AND a.state IN ('prepared','awaiting_reply','accepted')) "
             "AND (? OR next_eligible_at IS NULL OR next_eligible_at<=?) ORDER BY updated_at DESC LIMIT 50",
             (scope_epoch(scope), int(autonomy_policy.TEST_CONTROLS_ONLY), now_at)).fetchall()
-        return tuple(_intent_from_row(row) for row in rows)
+        from .contact_wait import ContactWait
+        waits = ContactWait(self.store)
+        return tuple(_intent_from_row(row) for row in rows if not waits.blockers(scope, row['id']))
 
     def pending_index(self, scope: Scope):
         from .models import InvitationIndex
@@ -730,10 +736,18 @@ class HostAdapter:
             raise ValueError("自主运行不存在或已切换会话")
 
     def validate_foreground_reply(self, context, attempt: InvitationAttempt) -> None:
-        if attempt.state != InvitationState.AWAITING_REPLY:
+        from .contact_wait import ContactWait
+        if (attempt.state != InvitationState.AWAITING_REPLY
+                and not ContactWait(self.store).is_late_reply(context.scope, attempt.id)):
             raise ValueError("该邀请不在等待回应状态")
-        if attempt.expires_at is not None and attempt.expires_at <= time.time():
-            raise ValueError("邀请已超过等待期限")
+        self.validate_user_context(context)
+        if attempt.scope != context.scope:
+            raise ValueError("邀请回应不属于本次真实请求")
+        if attempt.invitation_turn_id is not None and context.user_turn_id <= attempt.invitation_turn_id:
+            raise ValueError("回应消息必须晚于邀请投递")
+
+    def validate_user_context(self, context) -> None:
+        """Real channel request binding, also used without a pending invitation."""
         turn_id = context.user_turn_id
         if turn_id is None:
             raise ValueError("缺少当前真实用户消息，不能绑定邀请回应")
@@ -743,10 +757,8 @@ class HostAdapter:
         request = self.store.conn.execute(
             "SELECT 1 FROM channel_requests WHERE request_id=? AND user_turn_id=? AND session_epoch=? AND channel_id=?",
             (context.request_id, turn_id, context.scope.session_epoch, context.scope.channel_id)).fetchone()
-        if request is None or attempt.scope != context.scope:
+        if request is None or context.scope.session_epoch != self.store.meta_get('session_epoch'):
             raise ValueError("邀请回应不属于本次真实请求")
-        if attempt.invitation_turn_id is not None and turn_id <= attempt.invitation_turn_id:
-            raise ValueError("回应消息必须晚于邀请投递")
 
     def can_start_work(self, context) -> bool:
         from .. import thought_workspace as thoughts

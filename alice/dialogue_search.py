@@ -58,7 +58,7 @@ def normalize_intent(text, value=None):
     except (DiscoveryError, ValueError):
         raise ChannelError(400, "search_query_invalid", "搜索主题格式无效，请用简短的公开主题") from None
     platform = value.get("platform", "auto")
-    if platform not in {"auto", "tieba", "bilibili", "zhihu", "wikipedia"}:
+    if platform not in {"auto", "web", "tieba", "bilibili", "zhihu", "wikipedia"}:
         raise ChannelError(400, "invalid_platform", "本次搜索的平台无效")
     interest = value.get("interest_id")
     if "fresh" in value and type(value["fresh"]) is not bool:
@@ -124,8 +124,9 @@ class SearchSession:
         self.intent = copy.deepcopy(request.get("search_intent") or {})
         self.revision, self.settings = coordinator._config_locked()
         self.settings = copy.deepcopy(self.settings)
-        from .autonomy_policy import TEST_CONTROLS_ONLY
-        if self.background and TEST_CONTROLS_ONLY:
+        from .autonomy_policy import search_quota_active, search_settings
+        self.settings = search_settings(self.settings)
+        if self.background and search_quota_active(self.settings):
             self.settings.update(chat_search_calls=None, chat_dependency_limit=None,
                                  chat_material_limit=None, read_candidates=2, chat_search_results=2)
         self.cancel = threading.Event()
@@ -144,7 +145,7 @@ class SearchSession:
                      and (not _third_party(p, self.settings) or policy["allow_third_party"])]
         hint = ("用户为本轮提供的查询提示：" + json.dumps(self.intent, ensure_ascii=False) + "。") if self.intent else ""
         return ("本轮搜索权限状态：" + json.dumps({"platforms": platforms}, ensure_ascii=False)
-                + "。查询使用与当前目标相关的公开关键词，引用资料时按实际读取范围标明出处。" + hint)
+                + "。未指定平台时默认全网（web/auto）；用户限定平台时按范围查找。全网未开放时明确说明，不能把平台搜索当全网。查询使用与当前目标相关的公开关键词，引用资料时按实际读取范围标明出处。" + hint)
 
     def emit(self, **values):
         values = copy.deepcopy(values)
@@ -257,7 +258,7 @@ class SearchSession:
             return {**empty, "status": "blocked", "reason_code": "invalid_request", "message": "重新读取选项无效"}
         platform = arguments.get("platform", "auto")
         wanted = settings["chat_search_results"] if arguments.get("limit") is None else arguments["limit"]
-        if platform not in ("auto", "tieba", "bilibili", "zhihu", "wikipedia") or (
+        if platform not in ("auto", "web", "tieba", "bilibili", "zhihu", "wikipedia") or (
                 wanted is not None and (type(wanted) is not int or not 0 <= wanted <= 9007199254740991)):
             return {**empty, "status": "blocked", "reason_code": "invalid_request", "message": "搜索参数无效"}
         requested = self.intent.get("platform", "auto")
@@ -273,7 +274,9 @@ class SearchSession:
         if sort not in ("recent", "relevance") or cutoff is not None and platform not in ("auto", "tieba"):
             return {**empty, "status": "blocked", "reason_code": "invalid_request", "message": "排序须为recent/relevance；发布日期筛选目前仅支持贴吧"}
         if cutoff is not None and platform == "auto":
-            platform = "tieba"  # Never silently return undated sites under a date constraint.
+            return {**empty, "status": "blocked", "reason_code": "invalid_request", "message": "全网尚不支持可靠的发布日期硬筛选；需要贴吧日期筛选时请明确platform=tieba"}
+        if platform == "auto":
+            platform = "web"
         settings["_tieba_search_sort"], settings["_tieba_published_after"] = sort, cutoff
         key = hashlib.sha256(_json(["publication_dates_v1", self.scope, query.casefold(), platform,
             self.intent.get("interest_id"), self.revision, sort, after]).encode()).hexdigest()
@@ -316,7 +319,7 @@ class SearchSession:
                     if cap is not None:
                         wanted = cap if wanted is None else min(wanted, cap)
                 platforms = [p for p, policy in settings["platforms"].items()
-                             if (platform == "auto" or p == platform) and policy["enabled"]
+                             if p == platform and policy["enabled"]
                              and c._available(p, settings)[0] and (not _third_party(p, settings) or policy["allow_third_party"])]
                 if not platforms:
                     raise _Stopped("no_platform")

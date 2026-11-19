@@ -70,7 +70,11 @@ class ProgressService:
             self.evidence.validate_actions(context, report.action_refs)
             substantive, reason = bool(report.action_refs), "actual_action_receipt"
         elif report.progress_kind == ProgressKind.INFERENCE:
-            substantive, reason = True, "bounded_inference"
+            from .planning import ActivityPlanning
+            plan = ActivityPlanning(self.repository.store).get(run_id)
+            result = plan.get('result') if plan else None
+            substantive = bool(result and result.get('change_kind') == 'understanding')
+            reason = "reported_new_understanding" if substantive else "no_new_understanding_reported"
         elif report.progress_kind == ProgressKind.REWRITE:
             reason = "wording_revision_only"
         else:
@@ -113,24 +117,18 @@ class ProgressService:
                         self.repository.store.conn.execute("UPDATE thought_questions SET next_step=? WHERE id=?",
                                                            (report.next_step[:1000], question.id))
                 resulting = status.value
-        if report.decision == FinishDecision.REST:
-            self._enter_rest(context, report.requested_idle_seconds)
         if resulting is not None:
             receipt = replace(receipt, resulting_status=QuestionStatus(resulting))
+        if report.decision == FinishDecision.REST:
+            from ..activity import charge, enter_idle
+            with self.repository.transaction():
+                # A resumed window can finish before its first checkpoint charges it.
+                if receipt.actual_execution:
+                    charge(self.repository.store, receipt.run_id)
+                enter_idle(self.repository.store, "activity_finish_rest",
+                           related_run_id=context.run_id, scope=context.scope.channel_id)
+                return self.repository.save_progress(context, report, receipt)
         return self.repository.save_progress(context, report, receipt)
-
-    def _enter_rest(self, context: ExecutionContext, requested: int | None) -> None:
-        idle_seconds = autonomy_policy.TEST_IDLE_SECONDS if autonomy_policy.TEST_CONTROLS_ONLY else 0
-        for policy in (() if autonomy_policy.TEST_CONTROLS_ONLY else self.tuning.modes):
-            if policy.mode.value == "idle":
-                idle_seconds = policy.seconds
-        if idle_seconds <= 0:
-            return  # Voluntary idle disabled by setting; hard waiting still applies.
-        seconds = idle_seconds if requested is None else max(1, int(requested)) if autonomy_policy.TEST_CONTROLS_ONLY else max(1, min(int(requested), idle_seconds))
-        now = time.time()
-        self.repository.save_idle(IdlePeriod(scope=context.scope, started_at=now, until_at=now + seconds,
-                                             reason="activity_finish_rest",
-                                             related_run_id=context.run_id), scope=context.scope)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -216,24 +214,14 @@ class ActivityScheduler:
                                 reason=projected.get("reason", ""), scores=scores,
                                 question_id=projected.get("question_id"), idle_until_at=idle_until)
 
-    def enter_idle(self, context: ExecutionContext, *, reason: str,
-                   requested_seconds: int | None = None) -> IdlePeriod:
+    def enter_idle(self, context: ExecutionContext, *, reason: str) -> IdlePeriod:
         """Persist the timer; zero model, tool or memory steps."""
-        idle_seconds = autonomy_policy.TEST_IDLE_SECONDS if autonomy_policy.TEST_CONTROLS_ONLY else 0
-        for policy in (() if autonomy_policy.TEST_CONTROLS_ONLY else self.tuning.modes):
-            if policy.mode.value == "idle":
-                idle_seconds = policy.seconds
-        if idle_seconds <= 0:
+        from ..activity import enter_idle
+        period = enter_idle(self.repository.store, reason or "voluntary_rest",
+                            related_run_id=context.run_id, scope=context.scope.channel_id)
+        if period is None:
             raise ValueError("发呆时长设为0，主动抽选发呆已停用")
-        seconds = idle_seconds if requested_seconds is None else max(1, int(requested_seconds)) if autonomy_policy.TEST_CONTROLS_ONLY else max(1, min(int(requested_seconds), idle_seconds))
-        now = time.time()
-        period = IdlePeriod(scope=context.scope, started_at=now, until_at=now + seconds,
-                            reason=(reason or "voluntary_rest")[:200], related_run_id=context.run_id)
-        with self.repository.transaction():
-            self.repository.save_idle(period, scope=context.scope)
-            from ..activity import record_idle_choice
-            record_idle_choice(self.repository.store, period.started_at, seconds, period.reason)
-        return period
+        return IdlePeriod(scope=context.scope, related_run_id=context.run_id, **period)
 
     def reconsider_idle(self, context: ExecutionContext,
                         relevant_refs: tuple[EvidenceRef, ...] = ()) -> ScheduleDecision:
@@ -354,6 +342,9 @@ class InvitationService:
         if intent.state != "active":
             raise ValueError("联系意图已结束，不能准备邀请")
         self.host.validate_intent(context.scope, intent)
+        from .contact_wait import ContactWait
+        if ContactWait(self.repository.store).blockers(context.scope, intent.id):
+            raise ValueError("正在等待用户回应或约定时间，先做其他事情，不准备新邀请")
         now = self._now()
         if not autonomy_policy.TEST_CONTROLS_ONLY and intent.next_eligible_at is not None and intent.next_eligible_at > now:
             raise ValueError("该主题尚在再邀间隔内")
@@ -421,6 +412,8 @@ class InvitationService:
         pending = self.repository.pending_reply(scope)
         if pending is not None and pending.id != attempt_id:
             blocked.append("awaiting_reply")
+        from .contact_wait import ContactWait
+        blocked.extend(ContactWait(store).blockers(scope, intent.id if intent else None))
         if intent is not None:
             try:
                 self.host.validate_intent(scope, intent)
@@ -473,16 +466,18 @@ class InvitationService:
         attempt = self.repository.get_attempt(context.scope, reply.attempt_id)
         if attempt.version != reply.expected_attempt_version:
             raise ValueError("邀请版本已变化，请刷新核对")
-        if attempt.state != InvitationState.AWAITING_REPLY:
+        from .contact_wait import ContactWait
+        waits = ContactWait(self.repository.store)
+        late = waits.is_late_reply(context.scope, attempt.id)
+        if attempt.state != InvitationState.AWAITING_REPLY and not late:
             raise ValueError("该邀请不在等待回应状态")
-        if attempt.expires_at is not None and attempt.expires_at <= self._now():
-            raise ValueError("邀请已超过等待期限")
-        if reply.decision == ReplyDecision.ACCEPT:
+        if reply.decision == ReplyDecision.ACCEPT or context.user_turn_id is not None:
             self.host.validate_foreground_reply(context, attempt)
         now = self._now()
         intent = self.repository.get_intent(context.scope, attempt.intent_id)
         if reply.decision == ReplyDecision.ACCEPT:
             self.host.validate_intent(context.scope, intent)
+            waits.clear(context.scope, intent_id=intent.id)
             updated = replace(attempt, state=InvitationState.ACCEPTED,
                                       reply_user_turn_id=context.user_turn_id,
                                       expansion_request_id=context.request_id)
@@ -495,9 +490,10 @@ class InvitationService:
                                       deferred_reason=(reply.reason or "user_deferred")[:500])
             saved = self.repository.save_attempt(updated, expected_version=attempt.version)
             intent = replace(intent, state="active",
-                                     next_eligible_at=retry if retry is not None
-                                     else now if autonomy_policy.TEST_CONTROLS_ONLY else now + self.tuning.same_topic_retry_seconds)
+                                     next_eligible_at=retry)
             self.repository.save_intent(intent, expected_version=intent.version)
+            waits.hold(context.scope, reason="user_deferred", attempt_id=saved.id,
+                       intent_id=intent.id, resume_at=retry)
         else:
             updated = replace(attempt, state=InvitationState.DECLINED,
                                       deferred_reason=(reply.reason or "user_declined")[:500])
@@ -512,6 +508,10 @@ class InvitationService:
     def expire(self, scope: Scope) -> tuple[InvitationAttempt, ...]:
         """Silent persisted deadline handling; no model call or follow-up."""
         now = self._now()
+        from .contact_wait import ContactWait
+        waits = ContactWait(self.repository.store)
+        with self.repository.transaction():
+            waits.bootstrap(scope)
         expired = []
         for attempt in self.repository.due_timeouts(scope, now_at=now):
             intent = self.repository.get_intent(scope, attempt.intent_id)
@@ -519,8 +519,7 @@ class InvitationService:
                 updated = replace(attempt, state=InvitationState.DEFERRED,
                                           deferred_reason="await_timeout")
                 saved = self.repository.save_attempt(updated, expected_version=attempt.version)
-                intent = replace(intent, next_eligible_at=now if autonomy_policy.TEST_CONTROLS_ONLY else now + self.tuning.same_topic_retry_seconds)
-                self.repository.save_intent(intent, expected_version=intent.version)
+                waits.hold(scope, reason="await_timeout", attempt_id=saved.id, intent_id=intent.id)
             expired.append(saved)
         return tuple(expired)
 
