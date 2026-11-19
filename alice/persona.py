@@ -871,7 +871,17 @@ def prepare_import(client, cfg: Config, doc: str, source: str, is_alice_format: 
     from .persona_growth import replace_bodies, EXPRESSION
     from .persona_context import normalize_section_headings, parse_snapshot, validate_expression, expression_coverage_view
     from .expression_update import validate_budget
-    scan_source(doc, limits=limits_for(cfg))
+    try:
+        scan_source(doc, limits=limits_for(cfg))
+    except ValueError as exc:
+        # This request has not allocated an import operation or reached commit.
+        # Recovery above may have handled older operations; do not infer their
+        # outcome here, or downgrade failures after this read-only preflight.
+        raise ImportPreparationError(str(exc), {
+            "stage": "preflight", "installation_started": False,
+            "can_resume": False, "resumable": False, "resume_op_id": None,
+            "next_stage": "expression", "remaining": {},
+        }) from exc
     op_id = (validate_op_id(resume_op_id) if resume_op_id is not None else
              f"imp_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:6]}")
     audit_dir = PERSONA_IMPORT_DIR / op_id
