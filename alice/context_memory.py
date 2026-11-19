@@ -167,11 +167,7 @@ class MemoryContext:
         if not self.begin_call():
             return dump({"error": "memory_call_limit"})
         if name == "memory_search":
-            old_issued, old_cursors, old_chars = dict(self.issued), dict(self.cursors), self.catalogue_chars
-            result = self.search(args)
-            if self.remaining_tokens is not None and estimate_tokens(dump(result)) > self.remaining_tokens:
-                self.issued, self.cursors, self.catalogue_chars = old_issued, old_cursors, old_chars
-                result = {"error": "budget_exceeded"}
+            result = self._bounded_catalogue(lambda: self.search(args))
         else:
             result = self.load(args)
         self.events.append({"action": name, "status": result.get("status", result.get("error", "ok")),
@@ -179,6 +175,22 @@ class MemoryContext:
                                          "status": x.get("status", "candidate")}
                                         for x in result.get("items", [])]})
         return dump(result)
+
+    def _bounded_catalogue(self, read):
+        old_issued, old_cursors, old_chars = dict(self.issued), dict(self.cursors), self.catalogue_chars
+        result = read()
+        if self.remaining_tokens is not None and estimate_tokens(dump(result)) > self.remaining_tokens:
+            self.issued, self.cursors, self.catalogue_chars = old_issued, old_cursors, old_chars
+            return {"error": "budget_exceeded"}
+        return result
+
+    def browse(self, query, limit):
+        if not self.begin_call():
+            return {"error": "memory_call_limit"}
+        result = self._bounded_catalogue(lambda: self.page(self.ranked(query) if query else self.rows(),
+            min(limit, self.cfg.context.memory_candidate_limit)))
+        self.cursors.pop(result.pop("cursor", None), None)
+        return result
 
     def search(self, args):
         query, limit, cursor = args.get("query"), args.get("limit", 8), args.get("cursor")

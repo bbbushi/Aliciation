@@ -124,12 +124,12 @@ class RequestTrace:
 
     def prepare_call(self, *, purpose: str, tool_round: int = 0, messages=None,
                      tools=None, parameters: dict | None = None,
-                     call_id: str | None = None) -> "PreparedCall":
+                     call_id: str | None = None, capture_body: bool = True) -> "PreparedCall":
         """在实际调用前登记一次调用；最终参数在 freeze_final 边界补齐后才发出事件。"""
         call_id = call_id or ("cc_" + uuid.uuid4().hex)
         return PreparedCall(self, call_id=call_id, purpose=str(purpose)[:80],
                             tool_round=int(tool_round), messages=messages,
-                            tools=tools, base_parameters=dict(parameters or {}))
+                            tools=tools, base_parameters=dict(parameters or {}), capture_body=capture_body)
 
     def reply_processed(self, *, kind: str, detail: dict | None = None) -> None:
         """回复后处理事实：变换审查、回退或替换是否发生（不重跑审查）。"""
@@ -191,9 +191,10 @@ class PreparedCall:
     """一次模型调用的冻结载体；SDK 自身不发送请求。"""
 
     def __init__(self, trace: RequestTrace, *, call_id, purpose, tool_round,
-                 messages, tools, base_parameters: dict):
+                 messages, tools, base_parameters: dict, capture_body: bool = True):
         self._trace = trace
         self._policy = trace._policy
+        self._capture_body = capture_body
         self.call_id = call_id
         self.purpose = purpose
         self.tool_round = tool_round
@@ -216,7 +217,7 @@ class PreparedCall:
             self._final = dict(kwargs or {})
             self._messages = self._final.get("messages", self._messages)
             self._tools = self._final.get("tools", self._tools)
-            capture = self._policy.text_capture
+            capture = self._policy.text_capture if self._capture_body else "none"
             self._frozen_messages = freeze.freeze_messages(
                 self._messages, capture=capture, head_chars=self._policy.head_chars,
                 body_max_chars=self._policy.body_max_chars)
@@ -319,7 +320,7 @@ class NullTrace:
         return None
 
     def prepare_call(self, *, purpose, tool_round=0, messages=None, tools=None,
-                     parameters=None, call_id=None):
+                     parameters=None, call_id=None, capture_body=True):
         return NullPreparedCall(messages=messages, tools=tools, parameters=parameters)
 
     def reply_processed(self, *args, **kwargs):

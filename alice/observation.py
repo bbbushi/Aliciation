@@ -125,7 +125,7 @@ def _aggregate_requests(events, count: int) -> list[dict]:
                       "storage": event.get("storage"), "first_event_at": event.get("ts"),
                       "last_event_at": event.get("ts"), "event_count": 0, "calls": {},
                       "call_order": [], "blocks": [], "selections": [], "gaps": [],
-                      "reply_postprocess": None, "finished": False,
+                      "reply_postprocess": None, "reply_sections": None, "finished": False,
                       "delivery": None, "assistant_turn_id": None}
             order[rid] = bucket
         bucket["last_event_at"] = max(bucket["last_event_at"] or 0, event.get("ts") or 0)
@@ -172,7 +172,10 @@ def _aggregate_requests(events, count: int) -> list[dict]:
                                  ("status", "usage", "usage_state", "duration_ms", "error_type",
                                   "fallback", "model", "model_source")})
         elif etype == "reply_postprocessed":
-            bucket["reply_postprocess"] = data
+            if data.get("kind") == "reply_sections":
+                bucket["reply_sections"] = data.get("detail")
+            else:
+                bucket["reply_postprocess"] = data
         elif etype == "request_finished":
             bucket["finished"] = True
             bucket["delivery"] = data.get("delivery")
@@ -459,6 +462,15 @@ def snapshot(store, cfg) -> dict:
                             "longterm_capacity": cfg.context.longterm_capacity},
         },
     }
+
+
+def lab_memory_metadata(store, *, include_titles=False):
+    now = time.time()
+    fields = MEMORY_META + (",substr(title,1,160) AS title" if include_titles else "")
+    rows = store.conn.execute(f"SELECT {fields} FROM memories WHERE {GUI_MEMORY} "
+                              "ORDER BY id DESC LIMIT 40", (now, now))
+    return {"counts": {layer: store.count_in_layer(layer) for layer in ("active", "warehouse", "longterm")},
+            "items": [dict(row) for row in rows]}
 
 
 def list_items(store, *, view="memories", layer="all", kind="all", q="", before=None, ceiling=None) -> dict:

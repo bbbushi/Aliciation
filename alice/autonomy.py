@@ -14,10 +14,13 @@ from .channels import ChannelError
 
 RUN_GUIDANCE = """这是你的自主探索运行，不是用户刚发来的一条消息。
 从实际疑问、相关记忆或自己的兴趣中选择值得推进的事情，也可以判断暂时没有值得推进的内容，选择休息或等待。
-你决定收纳、选题、方法、解决与否、成果价值和交流意图。先读所需正文，再围绕具体缺口尝试获准的方法。
+你决定收纳、选题、方法、解决与否、成果价值和交流意图。研究前用activity_plan简述：这是什么、有什么价值、为什么现在思考、做到哪里就停，再围绕该缺口使用工具。
+定题前按本窗口允许的方式查看索引；explore才执行研究，defer/rest可直接收尾。兴趣与审美也有价值，不必编造用户需求；还有额度或还能延伸不是继续的理由。
+先对照recent_activity_plans，已有定性解释够用时可结束，精确数字未知可以保留未知。相似问题优先关联related_ref复用，不因换标题、换模式就重新研究。
 可以形成当前看法；关于经历和事实的判断保留真实出处与未知。未解疑问不作为已证实事实。
 有实质变化时用思想能力保存摘要与下一步；等待外部条件时明确等待类型与原因，不靠反复改写制造进展。
-窗口结束前用 activity_finish 提交一次结束回执：说明决定（continue/wait/rest/done）与变化类型（evidence/action/inference/rewrite/none）；
+窗口结束前用 activity_finish 提交一次结束回执：说明决定（continue/wait/rest/done）与变化类型（evidence/action/inference/rewrite/none）；选择休息时，时长按用户设置执行。
+同时用goal_result对照选题：目标是否达到、哪个认识改变、继续是否值得及理由；改写旧结论选restatement。目标达到或继续价值低时收住，旁支先收纳为paused线索，不默认加入活跃队列。
 回执引用逐字使用已载入材料的ref；历史往返由宿主按说话者拆分，自有观点可作参考但不是外部新证据。
 动作使用工具返回的action_receipt.ref，不用函数名或描述拼造ID。表述润色不算实质进展。
 以宿主task_anchor里的原任务为目标推进。未命中只报告本次查询未找到，受限未返回只报告尚未读到；保留目标和下一步，不把材料使用说明推成素材没有原型或原任务无需完成。
@@ -28,10 +31,15 @@ RUN_GUIDANCE = """这是你的自主探索运行，不是用户刚发来的一�
 invite/later 关联已保存的问题ref、观点view_ref，或沿用 eligible_contact_intents 的intent_ref；新内容先收纳，再提交结束回执。
 invite 另附 invitation_text，只简短询问现在是否方便；later 只保留意图不排队发送。即使当前联系受阻，也如实表达意图，由宿主核对权限与投递条件。
 邀请不携带成果正文，用户接受后宿主才会载入展开材料；没有回复不催办。后台不单独调用 contact_propose。
+contact_waits表示正在等待用户；沉默、忙碌时先做独立的事情或发呆，不另换主题连续邀请；恢复以真实相关回应或用户约定为准，测试放宽额度不解除等待。
 收纳或更新具体事项时，可用其调度参数说明所属活动、价值、紧迫性及有依据的截止时间。
 同一批材料上的推演窗口有限：先想清楚再写，窗口用尽时等待新证据而不是换个说法再来一轮。
 不输出原始思维链。
 """
+
+FREE_INTEREST_GUIDANCE = """这是没有指定目标的兴趣窗。已有明确好奇可以直接定题；否则先用activity_browse浏览自己想看的记忆、疑问或兴趣，再用activity_plan定下具体题目。
+近期对话和上轮选题主要帮你避开重复，不是本轮待办。看到某条疑问卡在外部条件时，保留原等待条件；先看看另一库能否给出独立的新方向，再判断整个窗口是否值得继续。
+没有值得推进的方向可以搁置或休息，不必扫完所有库。浏览只读本机索引，定题前最多再展开一项；定题后按原权限执行。"""
 
 
 def in_window(start, end):
@@ -72,6 +80,7 @@ class AutonomyCoordinator:
             store.conn.execute("UPDATE exploration_runs SET status=CASE WHEN reason IN('model_in_flight','tool_in_flight') "
                 "THEN 'unknown' ELSE 'paused' END,reason='process_interrupted',updated_at=? WHERE status='running'", (time.time(),))
             store.conn.execute("UPDATE thought_contacts SET status='pending_next_chat',updated_at=? WHERE status='incorporating'", (time.time(),))
+            activity.normalize_legacy_idle(store)
         self.epoch = store.meta_get("session_epoch")
 
     def start(self):
@@ -98,6 +107,8 @@ class AutonomyCoordinator:
         self.cancel.set()
         store = self.service.store
         with store.source_transaction():
+            store.conn.execute("UPDATE v2_activity_plans SET object='',value='',why_now='',stop_condition='',"
+                               "next_action='',result=NULL")
             for table, field in (("thought_questions", "question='',reason='',progress='',next_step=''"),
                                  ("thought_contacts", "message=''"), ("exploration_runs", "checkpoint='[]'")):
                 for row in store.conn.execute(f"SELECT id,basis FROM {table}").fetchall():
@@ -260,9 +271,36 @@ class AutonomyCoordinator:
             raise ValueError("疑问已变化或来源失效")
         return row
 
+    def schedule_diagnostics(self):
+        service = self.service
+        if not service._lock.acquire(blocking=False):
+            raise ChannelError(503, "busy", "Alice忙碌，稍后读取调度记录")
+        try:
+            store = service.store
+            config = thoughts.settings(store)
+            current = activity.weights(store, config)
+            records = []
+            for row in store.conn.execute(
+                    "SELECT r.id,r.created_at,a.activity,a.selection FROM exploration_runs r "
+                    "JOIN autonomous_activity_runs a ON a.run_id=r.id "
+                    "WHERE r.epoch=? ORDER BY r.created_at DESC LIMIT 30", (self.epoch,)):
+                selection = json.loads(row["selection"])
+                records.append({"id": row["id"], "at": row["created_at"], "activity": row["activity"],
+                                **{key: selection[key] for key in (
+                                    "reason", "modes", "draw_weights", "previous_activity", "dry_windows",
+                                    "blocked_modes", "idle_seconds") if key in selection}})
+            return {"protocol": "alice-lab/schedule-v1", "session_epoch": self.epoch,
+                    "current": {key: value for key, value in current.items() if key != "input_stamp"},
+                    "records": records}
+        finally:
+            service._lock.release()
+
     def _snapshot(self):
+        from .autonomy_v2.planning import ActivityPlanning
+        from .autonomy_v2.contact_wait import ContactWait
         store = self.service.store
-        questions = [thoughts.public_question(r) for r in thoughts.question_rows(store, include_closed=True)
+        questions = [{**thoughts.public_question(r), 'value_waiting': ActivityPlanning(store).parked(r)}
+                     for r in thoughts.question_rows(store, include_closed=True)
                      if r["question"] and thoughts.valid_basis(store, json.loads(r["basis"]))][:100]
         contacts = [{k: r[k] for k in ("id", "version", "question_id", "motive", "message", "mode", "status", "turn_id", "expires_at")}
                     for r in store.conn.execute("SELECT * FROM thought_contacts WHERE epoch=? ORDER BY id DESC LIMIT 50", (self.epoch,))
@@ -271,6 +309,7 @@ class AutonomyCoordinator:
                 "FROM exploration_runs WHERE epoch=? ORDER BY created_at DESC LIMIT 30", (self.epoch,))]
         for run in runs:
             run["activity"] = activity.run_info(store, run["id"])
+            run["activity_plan"] = ActivityPlanning(store).get(run["id"])
             receipt = store.conn.execute("SELECT * FROM v2_progress_receipts WHERE run_id=?", (run["id"],)).fetchone()
             run["finish_receipt"] = dict(receipt) if receipt else None
         events = [dict(r) for r in store.conn.execute("SELECT id,kind,object_id,detail,created_at FROM thought_events "
@@ -343,6 +382,7 @@ class AutonomyCoordinator:
                 "lifecycle": lifecycle, "scheduler": scheduler,
                 "questions": questions, "stances": stances, "contacts": contacts, "runs": runs, "events": events,
                 "intents": intents, "invitations": invitations, "communication_decisions": decisions,
+                "contact_waits": ContactWait(store).rows(scope),
                 "migration_plan": plan_stored,
                 "budget": {"day": day(), "models": usage[0] if usage else 0},
                 "channels": {"gui": True, "next_chat": True, "qq": False, "offline": False}}
@@ -376,13 +416,14 @@ class AutonomyCoordinator:
                         "reason": row["reason"], "model_calls": 0, "steps": 0,
                         "messages": [], "finish_receipt": None,
                         "activity": {"activity": "idle", "started_at": info["started_at"],
-                                     "deadline": info["deadline"], "selection": {
-                                         key: selection[key] for key in ("reason", "idle_seconds") if key in selection}}}
+                                     "deadline": info["deadline"], "selection": selection}}
             if row and thoughts.valid_basis(store, json.loads(row["basis"])):
                 from .autonomy_v2 import build
+                from .autonomy_v2.planning import ActivityPlanning
                 return {"id": row["id"], "status": row["status"], "messages": json.loads(row["checkpoint"]),
                         "activity": info,
                         "communication_receipt": build(store=store).communication.get_for_run(self.epoch, row["id"]),
+                        "activity_plan": ActivityPlanning(store).get(row["id"]),
                         "finish_receipt": dict(receipt) if (receipt := store.conn.execute(
                             "SELECT * FROM v2_progress_receipts WHERE run_id=?", (row["id"],)).fetchone()) else None}
         raise ValueError("记录不存在或来源已失效")
@@ -395,7 +436,7 @@ class AutonomyCoordinator:
         if mode is None:
             raise ValueError("暂无可推进活动；请留下具体问题或等待新资料")
         if mode == "idle":
-            activity.enter_idle(store, selection.get("reason") or "no_actionable_work")
+            activity.enter_idle(store, selection["reason"], selection=selection)
             raise ValueError("当前无可推进事项，已进入发呆；稍后会重新判断")
         qid = qid or selection.get("question_id")
         identity = "explore_" + uuid.uuid4().hex
@@ -474,7 +515,7 @@ class AutonomyCoordinator:
                 if mode is None:
                     return
                 if mode == "idle":
-                    activity.enter_idle(store, selection.get("reason") or "weighted_rotation")
+                    activity.enter_idle(store, selection["reason"], selection=selection)
                     return
                 self._enqueue(manual=False, mode=mode, selection=selection)
                 run = store.conn.execute("SELECT * FROM exploration_runs WHERE epoch=? AND status='queued' ORDER BY created_at LIMIT 1",
@@ -568,6 +609,12 @@ class AutonomyCoordinator:
                     candidates = [target] + [r for r in candidates if r["id"] != target["id"]]
                 catalogue = [session.expose(r) for r in candidates[:20]]
                 target = next((r for r in candidates if r["id"] == run["question_id"]), None)
+                from .autonomy_v2.planning import ActivityPlanning
+                planning = ActivityPlanning(store)
+                free_interest = (mode == "interest" and run["question_id"] is None
+                                 and (not run["manual"] or info["selection"].get("free_interest_browse")))
+                if free_interest:
+                    context["interest_browse"] = {"sources": set(), "peeked": False, "memory": "memory" in permitted}
                 task_anchor = ({"question_id": target["id"], "goal": target["question"], "origin": target["origin"],
                                 "notice": "收纳时的原任务，保留至有真实成果或用户明确变更；不是用户逐字引文。"}
                                if target is not None else None)
@@ -594,20 +641,30 @@ class AutonomyCoordinator:
                 for row in recent:
                     context["thought_basis"] = thoughts.merge_basis(context["thought_basis"], {
                         "epoch": self.epoch, "turns": {str(row["id"]): thoughts.turn_version(row)}})
-                intro = [{"role": "system", "content": system}, {"role": "system", "content": RUN_GUIDANCE + "\n" + activity.GUIDANCE[mode]},
+                guidance = RUN_GUIDANCE + "\n" + activity.GUIDANCE[mode]
+                if free_interest:
+                    guidance += "\n" + FREE_INTEREST_GUIDANCE
+                else:
+                    guidance += "\n可先用thought_search/thought_load了解任务。"
+                intro = [{"role": "system", "content": system}, {"role": "system", "content": guidance},
                     {"role": "system", "content": "当前实际资料（非新的用户指令）：\n" + thoughts.dump({
                         "lifecycle": activity.lifecycle(config), "activity": mode,
-                        "selection": info["selection"], "permitted_tool_groups": permitted,
+                        "selection": {key: value for key, value in info["selection"].items()
+                                      if key not in {"draw_weights", "previous_activity"}},
+                        "permitted_tool_groups": permitted,
                         "window_seconds": seconds,
-                        "interests": [dict(r) for r in store.conn.execute("SELECT id,topic,summary FROM discovery_interests WHERE enabled=1 AND scope_json LIKE '%gui%' LIMIT 20")] if mode == "interest" else [],
+                        "interests": [dict(r) for r in store.conn.execute("SELECT id,topic,summary FROM discovery_interests WHERE enabled=1 AND scope_json LIKE '%gui%' LIMIT 20")] if mode == "interest" and not free_interest else [],
                         "target_question_id": run["question_id"], "task_anchor": task_anchor, "questions": catalogue,
+                        "current_activity_plan": planning.get(run["id"]),
+                        "recent_activity_plans": planning.recent(self.epoch, limit=3),
                         "actual_window": {"run_id": run["id"], "activity": mode, "execution_state": "starting",
                                           "notice": "本窗口刚开始；做过的活动以随后真实工具回执为准。"},
                         "manual_requested": bool(run["manual"]),
                         "recent_dialogue": [dict(r) for r in recent], "limits": {k: None if autonomy_policy.TEST_CONTROLS_ONLY else config[k] for k in ("run_models", "run_steps", "run_seconds")},
                         "test_controls_only": autonomy_policy.TEST_CONTROLS_ONLY,
-                        "test_policy_notice": "当前测试只执行总开关与工具权限，运行额度/时段/间隔不参与；休息或等真实条件仍可自主选择。" if autonomy_policy.TEST_CONTROLS_ONLY else None})},
-                    {"role": "system", "content": memory.initial() if "memory" in permitted else "记忆读取本模式未开放。"}]
+                        "test_policy_notice": "当前测试跳过运行额度/时段/间隔；选题价值、用户等待和工具权限仍生效，可以休息。" if autonomy_policy.TEST_CONTROLS_ONLY else None})},
+                    {"role": "system", "content": ("记忆可在找题时按需浏览。" if free_interest else memory.initial())
+                     if "memory" in permitted else "记忆读取本模式未开放。"}]
                 if registry is not None and "persona" in permitted:
                     intro.append({"role": "system", "content": registry.catalogue_block()})
                 contact_index = session.initial("")
@@ -618,8 +675,8 @@ class AutonomyCoordinator:
                     intro.append({"role": "system", "content": "此前探索行动与真实回执（历史资料，不自动重放；旧引用需重新检索）：\n"
                                   + thoughts.dump(previous_checkpoint)})
                 messages = list(intro)
-                tools = [tool for tool in thoughts.tools("gui")
-                         if tool["function"]["name"] != "contact_propose"]
+                tools = [tool for tool in thoughts.tools("gui", free_interest=free_interest)
+                         if tool["function"]["name"] not in {"contact_propose", "contact_reply", "contact_availability"}]
                 if "memory" in permitted:
                     tools += MEMORY_TOOLS
                 if "history" in permitted:
@@ -643,7 +700,8 @@ class AutonomyCoordinator:
                 basis = thoughts.current_basis(store, context)
                 with store.source_transaction():
                     started = time.time()
-                    selection = {**info["selection"], "exposed_commands": [t["function"]["name"] for t in tools],
+                    selection = {**info["selection"], "free_interest_browse": bool(free_interest),
+                                 "exposed_commands": [t["function"]["name"] for t in tools],
                                  "window_seconds": seconds, "lifecycle": activity.lifecycle(config)}
                     store.conn.execute("UPDATE autonomous_activity_runs SET charged=0,started_at=?,deadline=?,input_stamp=?,selection=? WHERE run_id=?",
                         (started, 0 if seconds is None else started + seconds, activity.input_stamp(store), thoughts.dump(selection), run["id"]))
@@ -695,8 +753,10 @@ class AutonomyCoordinator:
                         if not autonomy_policy.TEST_CONTROLS_ONLY and performed >= config["run_steps"]:
                             raise YieldToForeground("tool_step_budget")
                         error = capability_registry.validate_call(tc.function.name, tc.function.arguments, tools)
+                        args = json.loads(tc.function.arguments or "{}") if error is None else {}
+                        if error is None:
+                            error = planning.tool_error(run['id'], tc.function.name, args, context.get("interest_browse"))
                         performed += 1
-                        args = json.loads(tc.function.arguments) if error is None else {}
                         memory.remaining_tokens = max(0, service.cfg.context.total_budget_tokens - messages_tokens(messages, tools)
                             - service.cfg.context.reply_reserve_tokens) if service.cfg.context.total_budget_tokens else None
                         if tc.function.name == "discovery_search" and error is None:

@@ -25,7 +25,10 @@
   const canvas = document.createElement("canvas");
   canvas.id = "orbit-stage";
   canvas.setAttribute("aria-hidden", "true");
-  canvas.style.cssText = "position:fixed;inset:0;z-index:0;pointer-events:none;display:none";
+  // 画布是替换元素：尺寸 auto 时按内在尺寸（canvas.width/height=视口×DPR）排版。
+  // 高 DPR 下不显式给 CSS 尺寸，画布会被撑成视口的 DPR 倍，球心（画布中心）
+  // 因此落到视口右下角。显式 100% 让 CSS 显示尺寸恒等于视口，与 DPR 解耦。
+  canvas.style.cssText = "position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;display:none";
   document.body.insertBefore(canvas, document.body.firstChild);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -124,8 +127,12 @@
 
   // ---------- 投影（球心固定于视口投影中心；05 轮次 12 全局背景裁定） ----------
   let W = 0, H = 0;
-  let CX = 0, CY = 0, FOVK = 0;
-  const recalcMetrics = () => { FOVK = H * FOV; CX = W / 2; CY = H * 0.5; };   // 05 轮次 12 追记：球/房间/光晕随投影中心精确居中（原 0.47H 是面板几何旧基准，屏心偏上 3%）
+  let CX = 0, CY = 0, FOVK = 0, FOV_BASE = 0;
+  // 镜头拉近（P4 设置页 3D 环绕）：focusTarget 由 OrbitBG.setFocus 设置，focusCur 每帧平滑趋近。
+  // 只放大投影焦距（球与房间等比变大、中心不动），驱动呼吸的物理量不变。
+  let focusTarget = 1, focusCur = 1;
+  const FOCUS_SETTINGS = 1.32;
+  const recalcMetrics = () => { FOV_BASE = H * FOV; FOVK = FOV_BASE * focusCur; CX = W / 2; CY = H * 0.5; };   // 05 轮次 12 追记：球/房间/光晕随投影中心精确居中（原 0.47H 是面板几何旧基准，屏心偏上 3%）
   const project = (x, y, z) => {
     const zz = z + CAM_DIST;
     const f = FOVK / zz;
@@ -286,6 +293,8 @@
 
   // ---------- 主绘制 ----------
   function draw(t, dt) {
+    focusCur += (focusTarget - focusCur) * Math.min(1, dt * 3.2);
+    FOVK = FOV_BASE * focusCur;
     ctx.clearRect(0, 0, W, H);
     drawRoom(1, 0);
     const gr = ctx.createRadialGradient(CX, CY, 0, CX, CY, H * 0.28);
@@ -371,6 +380,12 @@
   window.OrbitBG = {
     setPage(name) {   // 05 轮次 12：背景全局化，页档不再驱动球位；保留接口兼容 orbit.js 切页五连
       (window.__bgLog = window.__bgLog || []).push(["setPage-idle", name]);
+    },
+    setFocus(name) {  // P4 设置页镜头拉近：其余页回常态；动效关/reduce 时直接落位
+      focusTarget = name === "settings" ? FOCUS_SETTINGS : 1;
+      const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (still || root.dataset.motion === "off") { focusCur = focusTarget; FOVK = FOV_BASE * focusCur; }
+      if (!raf && W) paintStatic();
     },
     setState(patch) {
       for (const k of Object.keys(patch)) signals[k] = patch[k];

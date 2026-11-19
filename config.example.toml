@@ -15,6 +15,8 @@ name = "Alice"       # AI 的名字
 evolve_every_memories = 15
 
 [context]
+reply_sections_enabled = true # 前台三栏回复与追问缓存，关闭后重启可回退
+reply_annotation_review = false # 实验性前台复读标注，每条可审阅回复增加一次调用
 transform_review_enabled = true # 显式带引文改写/翻译：增加一次有界审查，失败保留原句，不流出未审草稿
 assembly_mode = "legacy"      # C1人工试用设indexed；不自动重装人格或迁移记忆
 total_budget_tokens = 100000   # 长度启发式估算；含工具/资料，非精确token上界；0关闭守卫

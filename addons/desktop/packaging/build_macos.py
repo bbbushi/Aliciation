@@ -65,6 +65,8 @@ def resources(manifest, overrides=None):
             if not path.is_file() or (item.get("extensions") and path.suffix not in item["extensions"]):
                 continue
             target = Path(item["target"]) / relative
+            if target.as_posix() in manifest.get("excludeTargets", ()):
+                continue
             if target.is_absolute() or ".." in target.parts or target.as_posix() in seen:
                 raise ValueError(f"Invalid or duplicate resource: {target}")
             seen.add(target.as_posix())
@@ -166,7 +168,10 @@ def main():
     parser.add_argument("--freeze-chat-ui-at-head", action="store_true",
                         help="冻结 HEAD 的 web/app.js，排除另一棒未提交的聊天界面修改；保留其原工作文件")
     parser.add_argument("--freeze-main-ui-from-build",
-                        help="沿用指定本机包的主页 HTML/CSS 与 room.js，排除另一棒正在修改的主界面；不改工作文件")
+                        help="沿用指定本机包的主页 HTML/CSS、room.js及已有Orbit背景，排除另一棒主界面修改；不改工作文件")
+    parser.add_argument("--keep-source-ui", action="append", default=[],
+                        choices=("web/index.html", "web/orbit.js"),
+                        help="从旧包冻结主页时，仍使用当前的指定入口文件")
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64" or sys.version_info[:2] != (3, 14):
         raise SystemExit("This build requires macOS arm64 with the locked CPython 3.14 environment")
@@ -207,7 +212,12 @@ def main():
         if previous["build_id"] != previous_id:
             raise ValueError("Previous bundle build identity mismatch")
         digests = {item["target"]: item["sha256"] for item in previous["resources"]}
-        for name in ("web/index.html", "web/style.css", "web/room.js"):
+        main_resources = ["web/index.html", "web/style.css", "web/room.js"]
+        main_resources.extend(name for name in ("web/orbit-bg.js", "web/orbit.js", "web/theme-orbit.css")
+                              if name in digests)
+        for name in main_resources:
+            if name in args.keep_source_ui:
+                continue
             source = previous_app / "Contents/Resources/backend/_internal" / name
             if sha(source) != digests.get(name):
                 raise ValueError(f"Previous bundle resource mismatch: {name}")
@@ -257,7 +267,12 @@ def main():
     shutil.copytree(BUILD / "pyinstaller-dist/alice-backend", content / "Resources/backend", symlinks=True)
     iconset = BUILD / "Alice.iconset"
     run(sys.executable, PACKAGING / "make_icon.py", "--iconset", iconset)
-    run("/usr/bin/iconutil", "-c", "icns", iconset, "-o", content / "Resources/Alice.icns")
+    # iconutil 在输出文件所在卷创建临时文件；包在工作区卷时会被开发环境沙箱拦截临时文件删除。
+    # 先生成到系统盘再拷回，产物字节一致，仅绕开沙箱对工作区卷临时文件的监控。
+    icns_tmp = Path("/private/tmp") / f"alice-icon-{os.getpid()}.icns"
+    run("/usr/bin/iconutil", "-c", "icns", iconset, "-o", icns_tmp)
+    shutil.copyfile(icns_tmp, content / "Resources/Alice.icns")
+    icns_tmp.unlink(missing_ok=True)
     plist = {"CFBundleIdentifier": config["identifier"], "CFBundleName": "Alice", "CFBundleDisplayName": "Alice",
              "CFBundleExecutable": "alice-desktop", "CFBundleIconFile": "Alice.icns", "CFBundlePackageType": "APPL",
              "CFBundleShortVersionString": config["version"], "CFBundleVersion": config["version"],

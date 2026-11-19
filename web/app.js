@@ -508,7 +508,6 @@ function renderTurnMetadata(node) {
   if (!fromQQ) {
     if (node.dataset.workerBound === "true") meta.textContent += unavailable ? " · 协作任务正文当前不可用" : " · 含协作任务资料";
     // GUI 回复在此提前返回；入口必须挂在本分支内（插件仅本机 GUI 通道提供）
-    if (assistant && channel === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
     return;
   }
   if (assistant) {
@@ -523,132 +522,6 @@ function renderTurnMetadata(node) {
     meta.textContent += ` · ${assistant ? "原回复" : "原消息"}当前不可在此展示（${reason}）；${assistant ? "投递" : "消息"}记录保留`;
   }
 }
-
-// 上下文观测插件入口（20261107 插件设计 §7）：从回复携带 request_id 进入；缺 ID 只能进列表。
-let inspectorEnabled = null;
-let inspectorGeneration = 0;
-async function inspectorProbe() {
-  if (inspectorEnabled !== null) return inspectorEnabled;
-  const generation = inspectorGeneration;
-  try {
-    const r = await fetch("/api/plugins/context-inspector/status",
-      { headers: { "X-Alice-Intent": "observer" }, cache: "no-store" });
-    const d = await r.json().catch(() => ({}));
-    if (generation !== inspectorGeneration) return inspectorEnabled === true;
-    if (r.ok && (d.status === "disabled" || (d.status === "ok" && d.plugin)))
-      inspectorEnabled = d.status === "ok" && d.plugin.enabled === true;
-  } catch { /* A transient read failure must not permanently hide the entry. */ }
-  return inspectorEnabled === true;
-}
-
-function openContextInspector(requestId = null) {
-  const url = "/addons/context-inspector/" + (requestId ? `?request_id=${encodeURIComponent(requestId)}` : "");
-  if (!window.__TAURI_INTERNALS__?.invoke) {window.open(url, "_blank", "noopener");return;}
-  const dialog = $("#context-inspector-dialog"), frame = $("#context-inspector-frame");
-  frame.src = url;
-  try {if (!dialog.open) dialog.showModal();}
-  catch {frame.src = "about:blank";toast("观测窗口未能打开，请重新进入设置后重试。");}
-}
-
-function bindInspectorLink(link, requestId = null) {
-  link.href = "/addons/context-inspector/" + (requestId ? `?request_id=${encodeURIComponent(requestId)}` : "");
-  link.target = "_blank"; link.rel = "noopener";
-  link.onclick = (event) => {
-    if (window.__TAURI_INTERNALS__?.invoke) {event.preventDefault();openContextInspector(requestId);}
-  };
-}
-
-$("#context-inspector-close").onclick = () => $("#context-inspector-dialog").close();
-$("#context-inspector-dialog").addEventListener("close", () => {$("#context-inspector-frame").src = "about:blank";});
-$("#context-inspector-dialog").addEventListener("keydown", (event) => {if (event.key === "Escape") event.stopPropagation();});
-
-function refreshInspectorLinks(enabled) {
-  inspectorGeneration++; inspectorEnabled = enabled;
-  for (const link of document.querySelectorAll("#msgs .ci-jump")) {
-    const separator = link.previousSibling;
-    if (separator?.nodeType === Node.TEXT_NODE && separator.textContent === " · ") separator.remove();
-    link.remove();
-  }
-  if (enabled) for (const node of document.querySelectorAll("#msgs .msg.assistant")) {
-    if ((node.dataset.channel || "gui") === "gui" && !node.classList.contains("worker-report")) noteInspectorLink(node);
-  }
-}
-
-function noteInspectorLink(node) {
-  const requestId = node.dataset.requestId;
-  if (!requestId) return;
-  const meta = node.querySelector(".message-meta");
-  if (!meta || meta.querySelector(".ci-jump")) return;
-  inspectorProbe().then((ok) => {
-    // 追加时刻再去重：连续两次渲染会在探针 resolve 前都通过调用时守卫
-    const target = node.querySelector(".message-meta");
-    if (!ok || inspectorEnabled !== true || !node.isConnected || node.dataset.requestId !== requestId
-        || !target || target.querySelector(".ci-jump")) return;
-    const link = document.createElement("a");
-    link.className = "link ci-jump";
-    bindInspectorLink(link, requestId);
-    link.textContent = "查看本轮上下文";
-    target.append(document.createTextNode(" · "), link);
-  });
-}
-
-(() => {
-  const form = $("#observer-settings-form"), enabled = $("#observer-settings-enabled"), body = $("#observer-settings-body");
-  const save = $("#observer-settings-save"), refresh = $("#observer-settings-refresh"), open = $("#observer-settings-open");
-  const result = $("#observer-settings-result");
-  let view = null, working = false, dirty = false, needsSync = false;
-  const describe = () => view ? `查看入口${view.enabled ? "已启用" : "已关闭"} · 正文${view.body_capture ? "留存已开启" : "不留存"}` : "尚未读取设置";
-  function note(message, error = false) {result.textContent = message;result.classList.toggle("error", error);}
-  function controls() {
-    enabled.disabled = body.disabled = working || !view?.writable || needsSync;
-    save.disabled = working || !view?.writable || !dirty || needsSync;
-    save.textContent = working ? "正在同步…" : "保存设置";
-    refresh.disabled = working;
-    refresh.textContent = dirty ? "放弃草稿并同步" : "同步状态";
-    open.disabled = working || !view?.enabled || needsSync;
-    form.setAttribute("aria-busy", String(working));
-  }
-  function apply(next) {
-    if (typeof next.enabled !== "boolean" || typeof next.body_capture !== "boolean"
-        || typeof next.metadata_enabled !== "boolean" || typeof next.writable !== "boolean"
-        || typeof next.session_epoch !== "string") throw new Error("设置状态不完整，请更新服务后重试。");
-    view = next;dirty = false;needsSync = false;
-    enabled.checked = next.enabled;body.checked = next.body_capture;
-    $("#observer-settings-metadata").textContent = `调用元数据采集${next.metadata_enabled ? "已开启" : "已关闭"}；开启正文留存会同时启用元数据采集。关闭查看入口不会停止正文留存。`;
-    refreshInspectorLinks(next.enabled);
-  }
-  async function request(payload = null) {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
-    try {
-      return await api("/api/observer/settings", {method:payload ? "POST" : "GET", signal:controller.signal,
-        headers:{"X-Alice-Intent":"observer-settings", ...(payload ? {"Content-Type":"application/json"} : {})},
-        ...(payload ? {body:JSON.stringify(payload)} : {})});
-    } finally {clearTimeout(timer);}
-  }
-  async function load() {
-    if (working) return;
-    working = true;controls();note("正在读取当前实例的观测设置…");
-    try {apply(await request());note(`${describe()}${view.writable ? "。" : "；此服务未绑定可写配置，仅可查看。"}`);}
-    catch (error) {needsSync = true;note(`读取未完成：${error.name === "AbortError" ? "同步超时，请稍后重试" : error.message}`, true);}
-    finally {working = false;controls();}
-  }
-  form.addEventListener("change", () => {
-    dirty = !!view && (enabled.checked !== view.enabled || body.checked !== view.body_capture);
-    note(dirty ? "有未保存的修改，当前运行设置仍保持原值。" : describe());controls();
-  });
-  form.onsubmit = async (event) => {
-    event.preventDefault();if (working || !view?.writable || !dirty || needsSync) return;
-    const payload = {enabled:enabled.checked, body_capture:body.checked, revision:view.revision, session_epoch:view.session_epoch};
-    working = true;controls();save.textContent = "正在保存…";note("正在保存到当前实例的配置…");
-    try {apply(await request(payload));note(`已保存 · ${describe()}。入口立即更新，采集从新请求开始，无需重启。`);}
-    catch (error) {needsSync = true;note(`保存未能确认：${error.name === "AbortError" ? "连接超时" : error.message}。请同步状态核对后再操作。`, true);}
-    finally {working = false;controls();}
-  };
-  refresh.onclick = load;
-  open.onclick = () => {if (view?.enabled && !needsSync) openContextInspector();};
-  window.AliceObserverSettings = {setVisible(on) {if (on && !dirty) load();}};
-  controls();
-})();
 
 function redactSourceNode(node, pending = false) {
   renderTurnBubbles(node, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
@@ -746,7 +619,7 @@ function invalidateSourceDisplays() {
 }
 
 window.addEventListener("alice:sources-changed", invalidateSourceDisplays);
-window.addEventListener("alice:discussion-saved", () => { syncHistory(); window.AliceObserver?.refreshAfterTurn(); });
+window.addEventListener("alice:discussion-saved", () => { syncHistory(); });
 
 function markTurn(node, turn) {
   if (Number.isSafeInteger(turn.id) && turn.id > 0) {
@@ -2181,10 +2054,6 @@ async function renderResidency(view) {
     body.append(node("h4", "实际活动目录"), node("pre", d.material_preview.catalogue || "无场景，只使用核心"));
     for (const item of d.material_preview.excluded || []) body.append(node("p", `${item.bundle_id}：${item.reason}`, "hint"));
   }
-  const observerLink = document.createElement("a");
-  bindInspectorLink(observerLink);
-  observerLink.textContent = "查看上下文观测器";
-  body.append(observerLink);
   body.append(node("p", d.material ? "原文分类已在导入时保存；可直接切换支持的装配模式，无需再准备旧式分层。调整核心和场景请返回人格，选择编辑原文分类。" : "操作顺序：准备分层 → 核对并保存 → 启用按需。切换模式不调用模型，无需重启。", "hint"));
   body.append(node("p", "新版准备区分默认语感与专题反应；已有分层不会自动变化。旧表达的全局规则若被收窄，请先从原稿更新表达，再准备分层。", "hint"));
   body.append(node("p", "每次准备最多初次分类加一次修订；失败明细会保留，刷新可查看。原稿与表达条目不因分层改写。", "hint"));
@@ -2753,8 +2622,6 @@ $("#exit-btn").onclick = async () => {
   $("#settings-modal").classList.add("hidden");
   window.AliceClaudeSettings?.setVisible(false);
   window.AliceQQ?.close();
-  window.AliceObserver?.shutdown();
-  window.AliceEvaluations?.shutdown();
   window.AliceWorkers?.shutdown();
   $("#shutdown-screen").classList.remove("hidden");
   $("#shutdown-title").textContent = "正在退出 Alice";
@@ -2986,11 +2853,9 @@ function handleEvent(ev, node, userNode, requestId) {
     markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui",
       ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
     markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
-    noteInspectorLink(node);  // request_id 此时才确定；新回复的入口在完成时补挂（元数据行不会自行重渲染）
     confirmComposerRequest(id);
     setChatNotice("");
     scrollBottom();
-    window.AliceObserver?.refreshAfterTurn();
   } else if (ev.type === "error") {
     revealComplete(node.querySelector("details.think .r-txt"));
     revealFlush(node);
@@ -2998,7 +2863,6 @@ function handleEvent(ev, node, userNode, requestId) {
     if (!raw().trim() && !hasVisibleText) node.remove();
     sysline(ev.message);
     setChatNotice("本次处理未能完成确认；请先同步历史记录。再次发送相同文字会沿用原请求，不自动重新生成。");
-    window.AliceObserver?.refreshAfterTurn();
   }
 }
 
@@ -3020,10 +2884,6 @@ async function send() {
     setChatNotice("上一条任务引用消息的结果尚未确认，不能更换文字或目标后作为重试发送。请先同步记录，或核对原请求结果。");
     return;
   }
-  if (window.AliceEvaluations?.canSend() === false) {
-    toast("核查许可正在登记，请等待登记完成再发送。", 4000);
-    return;
-  }
   const retry = uncertainSend?.text === text && uncertainSend.epoch === sessionEpoch ? uncertainSend : null;
   busy = true;
   connectionStatus("正在提交", "busy");
@@ -3031,14 +2891,11 @@ async function send() {
   const reference = retry ? retry.workerReference : composerWorkerReference;
   const workerReference = reference ? { ...reference } : null;
   const workerTarget = workerReference ? { collaborator: workerReference.collaborator, task_id: workerReference.taskId } : null;
-  // 查询旧请求不能挪用后来新授权的 P1；原请求没有许可时明确保持空值。
-  const evaluationId = retry ? retry.evaluationId : window.AliceEvaluations?.peekForSend();
   const payload = { text, request_id: requestId,
     ...(sessionEpoch ? { session_epoch: sessionEpoch } : {}),
-    ...(evaluationId ? { evaluation_id: evaluationId } : {}),
     ...(workerTarget ? { worker_target: workerTarget } : {}) };
   const epochAtSend = sessionEpoch;
-  uncertainSend = { requestId, text, evaluationId, epoch: epochAtSend, workerReference, draftUnchanged: true };
+  uncertainSend = { requestId, text, epoch: epochAtSend, workerReference, draftUnchanged: true };
   renderComposerWorkerReference();
   window.AliceChatSearch?.begin(requestId, epochAtSend);
   $("#chat-new-attempt").classList.add("hidden");
@@ -3052,7 +2909,7 @@ async function send() {
   try {
     const r = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Alice-Intent": evaluationId ? "evaluations" : "gui" },
+      headers: { "Content-Type": "application/json", "X-Alice-Intent": "gui" },
       body: JSON.stringify(payload),
     });
     if (!r.ok) {
@@ -3081,7 +2938,6 @@ async function send() {
     }
     accepted = true;
     connectionStatus("正在回复", "busy");
-    window.AliceEvaluations?.consumeForSend(evaluationId);
     input.value = "";
     resizeComposer();
     setChatNotice("");
@@ -3126,19 +2982,16 @@ async function send() {
     replyMotion(node, false);
     connectionStatus("结果待确认", "error");
     setChatNotice("连接中断，结果尚未确认。请先同步记录；不要把断线当成没有处理。再次发送相同文字会沿用原请求。");
-    window.AliceObserver?.refreshAfterTurn();
     if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
   } finally {
     replyMotion(node, false);
     // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
-    if (!accepted && !rejected) window.AliceEvaluations?.consumeForSend(evaluationId);
     busy = false;
     if (uncertainSend?.requestId === requestId && uncertainSend.workerReference && !input.value.trim()) {
       input.value = uncertainSend.text; resizeComposer();
     }
     renderComposerWorkerReference();
     window.AliceChatSearch?.setBusy(false);
-    window.AliceEvaluations?.afterTurn();
     if (!shuttingDown) {
       input.disabled = false;
       $("#send").disabled = false;
@@ -3211,7 +3064,6 @@ boot().catch(showStartupError);
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceThoughts?.setVisible(section === "thoughts" && !byId("settings-modal").classList.contains("hidden"));
-    window.AliceObserverSettings?.setVisible(section === "observer" && !byId("settings-modal").classList.contains("hidden"));
   }
   window.AliceUI = { selectSettings, openSettings, closeSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
@@ -3233,38 +3085,18 @@ boot().catch(showStartupError);
     }
   }, true);
   new ResizeObserver(() => revealSettingsButton(settingsNav.querySelector('[aria-pressed="true"]'))).observe(settingsNav);
-  // Keep one-turn paid permission visible even when developer navigation is closed.
-  function syncEvaluationNotice() {
-    const armed = !byId("eval-disarm").classList.contains("hidden");
-    const uncertain = !byId("eval-forget-uncertain").classList.contains("hidden");
-    const notice = byId("composer-evaluation");
-    notice.classList.toggle("hidden", !armed && !uncertain);
-    notice.textContent = armed ? "P1 已授权 · 下一轮附加核查（最多 2 请求）· 查看"
-      : uncertain ? "P1 授权结果未确认 · 查看与处理" : "";
-  }
-  new MutationObserver(syncEvaluationNotice).observe(byId("eval-binding"), { childList: true, subtree: true, characterData: true });
-  byId("composer-evaluation").addEventListener("click", () => {
-    if (byId("evaluations").classList.contains("hidden")) byId("evaluations-btn").click();
-    focus(byId("eval-close"));
-  });
-  syncEvaluationNotice();
-
-  function navigationToggle() {
-    return byId(app.classList.contains("observer-workspace") ? "obs-nav-toggle" : "nav-toggle");
-  }
   function setNav(open, returnFocus = true) {
     open = open && narrow.matches;
     app.classList.toggle("nav-open", open);
     byId("nav-backdrop").classList.toggle("hidden", !open);
-    for (const id of ["nav-toggle", "obs-nav-toggle"]) byId(id).setAttribute("aria-expanded", String(open));
+    byId("nav-toggle").setAttribute("aria-expanded", String(open));
     // On a small screen the navigation overlays the page, so its background is inert.
-    for (const id of ["chat", "observer", "evaluations"]) byId(id).inert = open;
+    byId("chat").inert = open;
     document.querySelectorAll(".worker-panel").forEach((panel) => { panel.inert = open; });
     if (open) focus(byId("nav-close"));
-    else if (returnFocus) focus(navigationToggle());
+    else if (returnFocus) focus(byId("nav-toggle"));
   }
   byId("nav-toggle").addEventListener("click", () => setNav(!app.classList.contains("nav-open")));
-  byId("obs-nav-toggle").addEventListener("click", () => setNav(!app.classList.contains("nav-open")));
   byId("nav-close").addEventListener("click", () => setNav(false));
   byId("nav-backdrop").addEventListener("click", () => setNav(false));
   narrow.addEventListener("change", () => {
@@ -3280,8 +3112,6 @@ boot().catch(showStartupError);
     if (app.classList.contains("nav-open")) setNav(false);
   });
   byId("chat-nav").addEventListener("click", () => {
-    window.AliceObserver?.close();
-    window.AliceEvaluations?.close();
     window.AliceWorkers?.close(false);
     setNav(false, false);
     focus(byId("input"));
@@ -3310,7 +3140,7 @@ boot().catch(showStartupError);
       byId("welcome").inert = false;
       modals.forEach((el) => { el.inert = false; });
       if (visible(modalReturn)) focus(modalReturn);
-      else if (!app.classList.contains("hidden")) focus(narrow.matches ? navigationToggle() : byId(app.classList.contains("observer-workspace") ? "obs-close" : "input"));
+      else if (!app.classList.contains("hidden")) focus(narrow.matches ? byId("nav-toggle") : byId("input"));
       modalReturn = null;
     }
   }
@@ -3320,20 +3150,6 @@ boot().catch(showStartupError);
   modalObserver.observe(byId("modal-foot"), { childList: true });
   modalObserver.observe(shutdownScreen, { attributes: true, attributeFilter: ["class"] });
 
-  // Desktop developer panels are non-modal. Move focus in/out without trapping it.
-  for (const [panelId, buttonId, closeId] of [["observer", "observer-btn", "obs-close"], ["evaluations", "evaluations-btn", "eval-close"]]) {
-    const panel = byId(panelId);
-    let wasOpen = false;
-    new MutationObserver(() => {
-      const open = !panel.classList.contains("hidden");
-      if (open === wasOpen) return;
-      wasOpen = open;
-      if (open) { byId("developer-nav").open = true; focus(byId(closeId)); }
-      else if (panel.contains(document.activeElement) || document.activeElement === document.body) {
-        focus(narrow.matches ? byId("nav-toggle") : byId(buttonId));
-      }
-    }).observe(panel, { attributes: true, attributeFilter: ["class"] });
-  }
   document.addEventListener("keydown", (e) => {
     if (document.querySelector("dialog.ui-window[open]")) return;
     const navOpen = app.classList.contains("nav-open");
@@ -3345,8 +3161,7 @@ boot().catch(showStartupError);
         if (activeModal === byId("settings-modal")) byId("settings-x").click();
         else if (activeModal) byId("modal-x").click();
         else setNav(false);
-      } else if (byId("observer").contains(document.activeElement)) byId("obs-close").click();
-      else if (byId("evaluations").contains(document.activeElement)) byId("eval-close").click();
+      }
       return;
     }
     if (e.key !== "Tab" || !root) return;

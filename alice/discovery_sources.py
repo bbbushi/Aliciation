@@ -32,8 +32,9 @@ MAX_RESULTS = 5
 MAX_QUERY_CHARS = 500
 MAX_HEADER_BYTES = 32768
 MAX_URL_CHARS = 2048
-PLATFORM_LABELS = {"wikipedia": "维基百科", "bilibili": "哔哩哔哩", "zhihu": "知乎", "tieba": "贴吧"}
+PLATFORM_LABELS = {"web": "全网", "wikipedia": "维基百科", "bilibili": "哔哩哔哩", "zhihu": "知乎", "tieba": "贴吧"}
 _HOSTS = {
+    "web": (),
     "wikipedia": ("zh.wikipedia.org", "en.wikipedia.org"),
     "bilibili": ("www.bilibili.com",),
     "zhihu": ("www.zhihu.com", "zhuanlan.zhihu.com"),
@@ -81,6 +82,7 @@ def platform_catalog() -> list[dict]:
              "coverage": "百科公开正文节选" if key == "wikipedia" else
              "公开视频简介或公开专栏文字；不观看视频" if key == "bilibili" else
              "帖子主楼文字节选，不含回复或楼中楼" if key == "tieba" else
+             "公开网页正文节选；不执行脚本、不使用登录态" if key == "web" else
              "实际可读取的指定问题、回答或文章正文"}
             for key, label in PLATFORM_LABELS.items()]
 
@@ -130,12 +132,12 @@ def _split_url(url: str, *, local: bool = False, max_chars: int = MAX_URL_CHARS)
 def validate_read_url(platform: str, url: str) -> str:
     """Pure validation for parent-side admission; DNS is checked in the worker."""
     parts, host, _, _ = _split_url(url)
-    if not isinstance(platform, str) or platform not in _HOSTS or host not in _HOSTS[platform]:
+    if not isinstance(platform, str) or platform not in _HOSTS or platform != "web" and host not in _HOSTS[platform]:
         _fail("platform_scope", "内容地址不属于已选平台")
     path = unquote(parts.path)
     if any(ord(c) < 32 or ord(c) == 127 or c == "\\" for c in path):
         _fail("invalid_url", "内容路径不受支持")
-    allowed = False
+    allowed = platform == "web"
     if platform == "wikipedia":
         # Namespace pages and executable/index actions are outside this connector.
         allowed = path.startswith("/wiki/") and len(path) > 6 and ":" not in path[6:]
@@ -182,7 +184,7 @@ def normalize_candidate(candidate: dict, platform: str | None = None) -> dict:
             and not any(ord(c) <= 32 or ord(c) == 127 for c in raw_url) and "\\" not in raw_url):
         try:
             parts = urlsplit(raw_url)
-            if (parts.hostname in _HOSTS[actual] and parts.username is None and parts.password is None
+            if (parts.hostname and (actual == "web" or parts.hostname in _HOSTS[actual]) and parts.username is None and parts.password is None
                     and parts.scheme in ("http", "https") and parts.port in (None, 80 if parts.scheme == "http" else 443)):
                 raw_url = urlunsplit(("https", parts.hostname, parts.path, parts.query, ""))
         except ValueError:
@@ -282,7 +284,7 @@ class _Reader:
 def request_bytes(url: str, *, usage: Usage, timeout: float, limit: int,
                   method: str = "GET", body: bytes = b"", headers: dict | None = None,
                   allow_loopback: bool = False, bilibili_public_session: bool = False,
-                  network_proxy: str = "") -> tuple[bytes, dict[str, str]]:
+                  network_proxy: str = "", public_web: bool = False) -> tuple[bytes, dict[str, str]]:
     """One bounded HTTP/1.1 exchange. Caller must kill the process at its deadline.
 
     Socket timeouts alone cannot bound system DNS or slowly delivered lines.
@@ -309,7 +311,19 @@ def request_bytes(url: str, *, usage: Usage, timeout: float, limit: int,
             if parts.scheme != "https" or port != 443 or local:
                 _fail("proxy_scope", "本机代理仅支持固定公开平台的 HTTPS 访问")
             try:
-                sock = connect_via_proxy(network_proxy, host, deadline=deadline)
+                # General pages resolve locally and pin a public IP through CONNECT.
+                # Fixed platform connectors retain their existing proxy resolution.
+                public_ip = None
+                if public_web:
+                    try:
+                        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                    except socket.gaierror:
+                        _fail("dns_resolution", "无法解析网页域名")
+                    if not addresses or len(addresses) > 32 or any(
+                            a[0] not in (socket.AF_INET, socket.AF_INET6) or not _public_address(a[4][0]) for a in addresses):
+                        _fail("dns_non_public", "网页域名未解析到可访问的公网地址")
+                    public_ip = sorted(addresses, key=lambda a: a[0] != socket.AF_INET)[0][4][0]
+                sock = connect_via_proxy(network_proxy, host, deadline=deadline, public_ip=public_ip)
             except NetworkRouteError as exc:
                 _fail(exc.code, exc.message)
         else:
@@ -529,6 +543,38 @@ class _TextParser(HTMLParser):
         return "\n".join(self.parts)[:self.limit]
 
 
+class _PageParser(_TextParser):
+    """Prefer semantic article/main content; never run scripts or load subresources."""
+    _SKIP = _TextParser._SKIP | {"header", "iframe", "object", "template"}
+
+    def __init__(self, limit):
+        super().__init__(limit)
+        self.focus = []
+        self.main_parts, self.main_size = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        if tag in {"article", "main"}:
+            self.focus.append(tag)
+
+    def handle_endtag(self, tag):
+        super().handle_endtag(tag)
+        if tag in self.focus:
+            del self.focus[len(self.focus) - 1 - self.focus[::-1].index(tag):]
+
+    def handle_data(self, data):
+        if self.focus and not self.skip and not self.in_title and self.main_size < self.limit:
+            text = _clean(data, self.limit - self.main_size)
+            if text:
+                self.main_parts.append(text)
+                self.main_size += len(text) + 1
+        super().handle_data(data)
+
+    @property
+    def main_text(self):
+        return "\n".join(self.main_parts)[:self.limit]
+
+
 def _plain(markup: object, limit: int) -> str:
     if not isinstance(markup, str):
         return ""
@@ -637,8 +683,8 @@ def search(platform: str, query: str, provider: dict, *, usage: Usage,
     elif kind in ("bing_rss", "brave", "searxng"):
         # This is a provider hint, not an authorization gate: every result is filtered below.
         scope = {"wikipedia": "wikipedia.org", "bilibili": "bilibili.com",
-                 "zhihu": "zhihu.com", "tieba": "tieba.baidu.com"}[platform]
-        scoped_query = f"{query} site:{scope}"
+                 "zhihu": "zhihu.com", "tieba": "tieba.baidu.com"}.get(platform)
+        scoped_query = query if platform == "web" else f"{query} site:{scope}"
         if kind == "bing_rss":
             url = "https://cn.bing.com/search?" + urlencode({"q": scoped_query, "format": "rss"})
             body, _ = request_bytes(url, usage=usage, timeout=timeout, limit=response_bytes,
@@ -759,14 +805,14 @@ def read(candidate: dict, *, usage: Usage, timeout: float = 20, response_bytes: 
     else:
         body, headers = request_bytes(url, usage=usage, timeout=timeout, limit=response_bytes,
                                       headers={"Accept": "text/html,application/xhtml+xml,text/plain"},
-                                      network_proxy=network_proxy)
+                                      network_proxy=network_proxy, public_web=platform == "web")
         markup = _decode(body, headers)
         if platform == "zhihu":
             from . import discovery_zhihu
             parsed = discovery_zhihu.extract(candidate, markup)
             title, text, coverage = parsed["title"], parsed["text"], parsed["coverage"]
         else:
-            parser = _TextParser(MAX_TEXT_CHARS)
+            parser = _PageParser(MAX_TEXT_CHARS) if platform == "web" else _TextParser(MAX_TEXT_CHARS)
             parser.feed(markup)
             parser.close()
             title = _clean(" ".join(parser.title_parts), 300) or title
@@ -774,7 +820,14 @@ def read(candidate: dict, *, usage: Usage, timeout: float = 20, response_bytes: 
                 text, coverage = parser.description, "video_description_only"
             else:
                 text, coverage = parser.text, "static_page_excerpt"
-                if len(text) < 160 and parser.description:
+                if platform == "web":
+                    if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "text/plain":
+                        text, coverage = markup[:MAX_TEXT_CHARS], "plain_text_excerpt"
+                    elif len(parser.main_text) >= 80:
+                        text, coverage = parser.main_text, "web_article_excerpt"
+                    if re.search(r"just a moment|access denied|verify.*human|安全验证|访问验证", title, re.I):
+                        _fail("verification_required", "页面返回访问验证，未取得正文")
+                if platform != "web" and len(text) < 160 and parser.description:
                     text, coverage = parser.description, "page_description_only"
     if len(text) < 80:
         _fail("unreadable", "未取得足够公开文字；可能需要登录、脚本或平台暂不支持")

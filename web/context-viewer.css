@@ -3,6 +3,7 @@
   background: #f6f8fb; color: #1c2733; box-shadow: 0 16px 70px #10263c55; overflow: hidden;
   font: 14px/1.6 system-ui, -apple-system, "PingFang SC", sans-serif; }
 .acv-dialog[open] { display: flex; flex-direction: column; }
+.acv-dialog.acv-cache-dialog { width: min(680px, 96vw); height: auto; max-height: 86vh; }
 .acv-dialog::backdrop { background: #15233399; }
 .ci-settings-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #f6f8fb; }
 .acv-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #dce3eb; }

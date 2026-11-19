@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · 单条消息 · B 舱壁 Bulkhead · 部件演示</title>
+<style>
+/* ============ 页面 token（与全页 :root 同源；取值逐字同 02/05/06；曲线出自 PRINCIPLES §2.2，不自造） ============ */
+:root{
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+  --ease-in-out:cubic-bezier(0.77,0,0.175,1);
+  --bg:#0d1114;--srf:#11171d;--panel:#141c24;--panel-user:#151f29;
+  --line:#263443;--line-user:#31424f;
+  --tx:#ccd6dd;--dim:#7d8b96;--faint:#57646e;
+  --acc:#8fb8cc;--acc-dim:#42606f;--ok:#7fa07f;--bad:#c9705c;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc-dim);outline-offset:2px}
+
+/* 页面壳一次性入场（罕见档 #17，与兄弟部件同值 220ms；组装时若页面壳已有则删除，部件不重放） */
+.app{min-height:100dvh;display:flex;flex-direction:column;
+  transition:opacity 220ms var(--ease-out),transform 220ms var(--ease-out)}
+@starting-style{.app{opacity:0;transform:translateY(6px)}}
+
+/* ================================================================
+   演示脚手架（实验台 / 分区 / 信号日志）—— 不属于部件 03，组装时整体丢弃
+   ================================================================ */
+.lab{display:flex;align-items:center;gap:12px;background:var(--srf);border-bottom:1px solid var(--line);padding:10px 18px}
+.lab-b{width:30px;height:30px;flex:none;display:grid;place-items:center;background:#16232c;border:1px solid var(--acc-dim);
+  color:var(--acc);font:12px/1 var(--mono);clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.lab-t{margin:0;font-size:13.5px;font-weight:600;color:#e2e9ee;letter-spacing:.02em}
+.lab-d{margin:3px 0 0;font:10.5px/1 var(--mono);color:var(--faint);letter-spacing:.06em}
+
+.rig{background:var(--srf);border-bottom:1px solid var(--line);padding:8px 18px}
+.rig-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.rig-row:first-child{margin-top:0}
+.rig-cap{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);margin-right:8px}
+.rbtn{font:11.5px/1 var(--sans);letter-spacing:.02em;color:var(--dim);background:none;border:1px solid var(--line);
+  border-radius:2px;padding:6px 11px;
+  transition:color 140ms ease,background-color 140ms ease,border-color 140ms ease,transform 160ms var(--ease-out)}
+.rbtn:active{transform:scale(.97)}
+.rbtn[aria-pressed="true"]{color:var(--acc);border-color:var(--acc-dim);background:#16232c}
+.rig-note{margin:7px 0 0;font:10.5px/1.4 var(--sans);color:var(--faint);letter-spacing:.02em}
+
+.sec{border-bottom:1px solid var(--line)}
+.sec-cap{max-width:780px;margin:0 auto;padding:16px 20px 4px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.sec-sub{max-width:780px;margin:0 auto;padding:0 20px 2px;font:10.5px/1.5 var(--sans);color:var(--faint);letter-spacing:.02em}
+.gcol{max-width:780px;margin:0 auto;padding:8px 20px 26px;display:flex;flex-direction:column}
+
+.siglog{background:var(--srf);padding:7px 18px 9px}
+.siglog h2{margin:0 0 5px;font:10px/1 var(--mono);letter-spacing:.16em;color:var(--faint)}
+.siglog ol{margin:0;padding:0;list-style:none}
+.siglog li{font:10.5px/1.7 var(--mono);color:var(--dim);letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.siglog li:first-child{color:var(--acc)}
+@media (hover:hover) and (pointer:fine){
+  .rbtn:hover{color:#b9c6cf}
+  .rbtn[aria-pressed="true"]:hover{color:var(--acc)}
+}
+
+/* ================================================================
+   P03 PART CSS（随装配）。外层序列骨架（.p03-msg 对齐/宽度/组距）在装配时由 02 提供；
+   此处代演同值以保证本演示自足。03 自有：面板内部（句单元/占位/meta）、入场、失败重试。
+   工具阶梯：CSS transition + @starting-style 即够（PRINCIPLES 白名单第一档）——
+   中频反复触发禁 keyframes（§2.5），不引库、无 rAF。
+   ================================================================ */
+
+/* —— 02 序列骨架（代演同值）：组间 16px / 组内 6px；方向只由 data-role 决定（可编程识别） —— */
+.p03-msg{display:flex;flex-direction:column;max-width:78%;margin-top:16px}
+.p03-msg[data-role="assistant"]{align-self:flex-start;align-items:flex-start}
+.p03-msg[data-role="user"]{align-self:flex-end;align-items:flex-end}
+.p03-msg[data-cont]{margin-top:6px}
+.gcol>.p03-msg:first-child{margin-top:10px}
+
+/* —— 面板（舱壁切角，B 基线同值）：句单元在内部无缝连排 —— */
+.p03-bub{padding:10px 14px;font-size:14px;line-height:1.75;color:var(--tx);
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.p03-msg[data-role="assistant"] .p03-bub{clip-path:polygon(13px 0,100% 0,100% 100%,0 100%,0 13px)}
+.p03-msg[data-role="user"] .p03-bub{background:var(--panel-user);border-color:var(--line-user);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,0 100%)}
+
+/* 句单元：内容结构而非视觉分隔（不带可见序号；产品视图零样式）。
+   中间空单元（连续换行）原样保留，pre-wrap 呈现为空行；不丢字。 */
+.p03-sent--wait{color:var(--faint)}   /* 首句未到占位「…」（揭示中且 shownText 空；出现/消失时序归 04） */
+.p03-sent--blank{color:var(--dim)}    /* 沉默占位「（沉默）」/ 用户空白兜底「（无内容）」 */
+
+/* —— 元信息行：逐字段可缺省，缺哪个隐藏哪个；全缺省则整行不渲染 —— */
+.p03-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;
+  font:10.5px/1 var(--mono);letter-spacing:.05em;color:var(--dim)}
+.p03-ch{border:1px solid var(--line);border-radius:2px;padding:2px 5px}      /* 渠道 · QQ */
+.p03-st-send{color:var(--acc)}   /* 发送中（仅用户侧；状态即时可读，零动效） */
+.p03-st-live{color:var(--acc)}   /* 正在回复…（揭示中；挂在 meta，时序归 04） */
+.p03-st-bad{color:var(--bad)}    /* 发送失败 · 点击重试（仅用户侧） */
+
+/* —— 失败重试：整条消息为命中区（消息本体或状态行均可点，规格 §4）。
+   press 反馈挂面板（B 基线：:active 时 .bubble scale(.97)，160ms）；meta/状态文字瞬时变化不挂过渡。 —— */
+.p03-msg[data-status="failed"]{cursor:pointer}
+.p03-msg[data-status="failed"] .p03-bub{border-color:#5a3831;
+  transition:transform 160ms var(--ease-out),border-color 140ms ease}
+.p03-msg[data-status="failed"]:active .p03-bub{transform:scale(.97)}
+.p03-msg[data-status="failed"] .p03-st-bad{transition:color 140ms ease}
+
+/* —— 入场（中频，PRINCIPLES §1 #5/#6；方向 B 基线 .msg.live 同形）：
+   transform 挂在 .p03-bub，入场类挂在 article——press 与入场共用一条 transform 通道，
+   统一 160ms（press 内聚，§4 一致性），opacity 分档 140（用户·按压档）/180（Alice·小浮层档）。
+   失败规则在前、入场规则在后：两者同在时（注入即失败）入场清单含全部所需属性。 —— */
+.p03-msg.p03-enter .p03-bub{transition:opacity 180ms var(--ease-out),transform 160ms var(--ease-out),border-color 140ms ease}
+.p03-msg.p03-enter[data-role="user"] .p03-bub{transition-duration:140ms,160ms,140ms}
+.p03-msg[data-role="user"] .p03-bub{transform-origin:100% 100%} /* 用户面板锚定右下（来自 composer 方向）：入场 scale 与 press 同一装配锚点 */
+@starting-style{
+  .p03-msg.p03-enter[data-role="assistant"] .p03-bub{opacity:0;transform:translateY(8px)} /* 沿内容流自下，≤8px，有初始 transform */
+  .p03-msg.p03-enter[data-role="user"] .p03-bub{opacity:0;transform:scale(.96)}           /* 按压档：fade+scale，无位移 */
+}
+/* 不重放：入场仅由「实时尾插」加 .p03-enter；重建/回填/原位更新不添加该类 → 无 @starting-style 即瞬时（§2.5/§2.7/验收 #10）。
+   @starting-style 不支持的浏览器＝消息直接出现，无动画、不破损（优雅退化）。 */
+
+/* —— reduced-motion：入场折叠为纯 fade 160ms（B 基线 reduce 同值；删位移/scale）；
+   press 去掉 transform 过渡（scale 瞬时，反馈仍在），保留颜色过渡 —— */
+@media (prefers-reduced-motion:reduce){
+  .p03-msg.p03-enter .p03-bub{transition:opacity 160ms var(--ease-out)}
+  @starting-style{.p03-msg.p03-enter .p03-bub{opacity:0;transform:none}}
+  .p03-msg[data-status="failed"] .p03-bub{transition:border-color 140ms ease}
+}
+/* 演示专用镜像：页面内模拟系统 reduce（切档会重触发一次过渡，演示伪影，非部件行为） */
+html.sim-reduce .p03-msg.p03-enter .p03-bub{transition:opacity 160ms var(--ease-out)}
+@starting-style{html.sim-reduce .p03-msg.p03-enter .p03-bub{opacity:0;transform:none}}
+html.sim-reduce .p03-msg[data-status="failed"] .p03-bub{transition:border-color 140ms ease}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="lab">
+    <span class="lab-b" aria-hidden="true">03</span>
+    <div>
+      <p class="lab-t">单条消息 · 一轮发言的静态结构：方向 / 句单元 / 元信息 / 占位与沉默</p>
+      <p class="lab-d">方向 B 舱壁 Bulkhead · 部件实验台 · 离线演示，无网络请求，所有数据均为虚构</p>
+    </div>
+  </header>
+
+  <!-- 演示装置（不随装配） -->
+  <section class="rig" aria-label="演示装置">
+    <div class="rig-row">
+      <span class="rig-cap">形态视图</span>
+      <button type="button" class="rbtn" id="b-unitvis" aria-pressed="false">分句轮廓（演示视图）</button>
+      <button type="button" class="rbtn" id="b-reduce" aria-pressed="false">模拟 reduce</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">入场演示</span>
+      <button type="button" class="rbtn" id="b-inj-u">注入用户消息</button>
+      <button type="button" class="rbtn" id="b-inj-a">注入 Alice 回复（逐句）</button>
+      <button type="button" class="rbtn" id="b-flood">连发 10 条</button>
+      <button type="button" class="rbtn" id="b-update">原位更新·不重放</button>
+      <button type="button" class="rbtn" id="b-rebuild">整页重建·无入场</button>
+    </div>
+    <div class="rig-row">
+      <span class="rig-cap">失败重试</span>
+      <button type="button" class="rbtn" id="b-fail">注入一条失败消息</button>
+      <button type="button" class="rbtn" id="b-rearm">重置 C 区失败态</button>
+    </div>
+    <p class="rig-note">检查位：hover/press 只发生在失败消息上（细指针门控，触屏无假 hover）；重试命中区＝消息本体＋状态行，Enter/空格可触发；入场——用户 fade+scale(0.96) 140/160ms 无位移，Alice fade+translateY(8px) 180/160ms 自下；静态分区＝历史回填语义（无入场）；reduce 下入场为纯 fade。分句轮廓仅为演示视图，非产品视觉。</p>
+  </section>
+
+  <main>
+    <section class="sec" aria-label="实时注入区">
+      <h2 class="sec-cap">LIVE · 实时注入 —— 入场 / 连发 / 原位更新 / 重试链路</h2>
+      <p class="sec-sub">注入即入场（每回合一次）；连发 10 条同帧入场、无 stagger、每条 ≤180ms；「原位更新」与「整页重建」证明同内容不重放。</p>
+      <div class="gcol" id="g-live"></div>
+    </section>
+
+    <section class="sec" aria-label="双向与会话流">
+      <h2 class="sec-cap">A · 双向与会话流 —— 连续分组 / 元信息行</h2>
+      <p class="sec-sub">用户右 / Alice 左（对齐不承载语义，角色由 data-role 可编程识别）；相邻同侧连续分组。【情绪】/(动作) 历史标记原样显示，不转义不吞字。</p>
+      <div class="gcol" id="g-a"></div>
+    </section>
+
+    <section class="sec" aria-label="句单元结构">
+      <h2 class="sec-cap">B · 句单元结构 —— 04 逐句揭示的静态预留</h2>
+      <p class="sec-sub">句单元＝span.p03-sent[data-si]，产品视图无缝连排；开「分句轮廓」查看边界（括号内句号不断 / 换行强断）。等待占位「…」在句单元内，「正在回复…」挂 meta——出现与消失的时序归 04。</p>
+      <div class="gcol" id="g-b"></div>
+    </section>
+
+    <section class="sec" aria-label="状态矩阵">
+      <h2 class="sec-cap">C · 状态矩阵 —— 发送中 / 失败重试 / 沉默 / 空白兜底</h2>
+      <p class="sec-sub">失败消息整条可点（重试 → status 回 sending → 回执）；assistant 空白＝（沉默）；用户空白（数据层兜底）＝（无内容）；字段全缺省时 meta 整行不渲染。</p>
+      <div class="gcol" id="g-c"></div>
+    </section>
+
+    <section class="sec" aria-label="最坏数据">
+      <h2 class="sec-cap">D · 最坏数据 —— 2000 字 / 无句界长串 / 纯 emoji / 单字符 / 混排</h2>
+      <p class="sec-sub">2000 字全文在场（滚动阅读归 02）；无句界长串整串一句、单元内折行——信息完整优先；ZWJ 组合 emoji 不拆坏；单字符正常；emoji 混 CJK 同规则切句。</p>
+      <div class="gcol" id="g-d"></div>
+    </section>
+
+    <section class="sec" aria-label="边界字段">
+      <h2 class="sec-cap">E · 边界字段 —— time=null / 非法 channel / 仅标点 / 仅空白 / 超长失败</h2>
+      <p class="sec-sub">非法与缺失字段静默隐藏，无 undefined / NaN / Invalid Date；仅标点同规则切句；仅空白走沉默；超长失败消息的重试命中区仍可达。</p>
+      <div class="gcol" id="g-e"></div>
+    </section>
+  </main>
+
+  <footer class="siglog" aria-label="信号日志">
+    <h2>SIGNAL LOG</h2>
+    <ol id="logList" role="log" aria-live="polite"></ol>
+  </footer>
+
+</div>
+
+<script>
+'use strict';
+/* ================= P03 PART JS（随装配：window.P03） =================
+   部件 03 · 单条消息（方向 B 舱壁）。对外仅依赖：article 骨架元素 + 总线 {on,emit}。
+   职责：气泡内部（句单元/占位）、元信息行、入场类、失败重试交互、公共切句实现。
+   信号：仅发出 retry:send(id)；其余字段全部由宿主（02）经 fill() 传入。 */
+window.P03=(function(){
+  /* —— 切句（规格 §2 规则；02 的未读句计数与 04 的单元边界共用本实现，防两份漂移） —— */
+  const PAIRS={'（':'）','「':'」','『':'』','【':'】','(':')','[':']'};
+  const CLOSES='）」』】)]';
+  const END='。！？…';
+  function splitSent(text){
+    if(typeof text!=='string'||!text.trim())return[];
+    const out=[];let cur='',depth=0;
+    for(const ch of text){                 /* 按码点迭代：代理对/ZWJ 序列不拆 */
+      cur+=ch;
+      if(ch==='\n'){out.push(cur);cur='';depth=0;continue;}   /* 换行强制断 */
+      if(PAIRS[ch]){depth++;continue;}
+      if(CLOSES.includes(ch)){if(depth>0)depth--;continue;}   /* 配对内句末标点不断 */
+      if(END.includes(ch)&&depth===0){out.push(cur);cur='';}
+    }
+    if(cur)out.push(cur);                  /* 规则 2：剩余尾部自成一句 */
+    if(out.length>400){const h=out.slice(0,399);h.push(out.slice(399).join(''));return h;} /* 规则 4：宁可单元超长，不可丢字 */
+    return out;
+  }
+  /* —— 时间：HH:MM（24 小时制）；null/非法 → null（字段隐藏，永不出 Invalid Date） —— */
+  const p2=n=>String(n).padStart(2,'0');
+  function fmtTime(ms){
+    if(typeof ms!=='number'||!isFinite(ms))return null;
+    const d=new Date(ms);
+    if(isNaN(d.getTime()))return null;
+    return p2(d.getHours())+':'+p2(d.getMinutes());
+  }
+
+  let bus=null;
+  function init(b){bus=b;}
+  const el=(t,c,txt)=>{const n=document.createElement(t);if(c)n.className=c;if(txt!=null)n.textContent=txt;return n;};
+
+  /* —— 正文：句单元渲染（textContent 原样赋值：【情绪】/(动作)/ZWJ 均不被转义或拆坏） —— */
+  function fillBody(bub,t,revealing){
+    bub.textContent='';
+    const body=revealing?(typeof t.shownText==='string'?t.shownText:''):t.text;
+    if(typeof body!=='string'||!body.trim()){
+      if(revealing){ /* 首句未到占位：句单元存在（data-si=0），节点不缺席，04 可对齐 */
+        const s=el('span','p03-sent p03-sent--wait','…');s.dataset.si='0';bub.append(s);
+        bub.dataset.units='1';return;
+      }
+      const note=t.role==='assistant'?'（沉默）':'（无内容）'; /* 规格文案表 */
+      const s=el('span','p03-sent p03-sent--blank',note);s.dataset.si='0';bub.append(s);
+      bub.dataset.units='1';return;
+    }
+    const units=splitSent(body);
+    units.forEach((s,i)=>{
+      const sp=el('span','p03-sent',s);
+      sp.dataset.si=String(i);
+      bub.append(sp);
+    });
+    bub.dataset.units=String(units.length);
+  }
+  /* —— 元信息行：逐字段可缺省；返回字段数（0 → 整行不渲染） —— */
+  function fillMeta(meta,t,revealing){
+    meta.textContent='';
+    const tm=fmtTime(t.time);
+    if(tm!=null)meta.append(el('span','p03-mt',tm));
+    if(t.channel==='qq')meta.append(el('span','p03-ch','QQ'));  /* web 默认不打扰；非法值静默隐藏 */
+    if(revealing)meta.append(el('span','p03-st-live','正在回复…'));
+    else if(t.role==='user'&&t.status==='sending')meta.append(el('span','p03-st-send','发送中'));
+    else if(t.role==='user'&&t.status==='failed')meta.append(el('span','p03-st-bad','发送失败 · 点击重试'));
+    return meta.childElementCount;
+  }
+  /* —— fill：把一轮发言渲染进 article 骨架（骨架归 02；本函数可反复调用＝原位更新，不重放入场） ——
+     opts.entrance  仅实时尾插为 true（加 .p03-enter）；重建/回填/更新一律 false
+     opts.revealing 揭示中（04 经 02 传入）；此时正文取 t.shownText，assistant 无 sending/failed */
+  function fill(art,t,opts){
+    opts=opts||{};
+    const revealing=opts.revealing===true;
+    art.dataset.role=t.role;
+    art.dataset.id=String(t.id);
+    art.dataset.status=(t.role==='user'&&!revealing&&(t.status==='sending'||t.status==='failed'))?t.status:'ok';
+    if(opts.entrance)art.classList.add('p03-enter');
+    let bub=art.querySelector('.p03-bub');
+    if(!bub){bub=el('div','p03-bub');art.append(bub);}
+    fillBody(bub,t,revealing);
+    let meta=art.querySelector('.p03-meta');
+    if(!meta){meta=el('div','p03-meta');art.append(meta);}
+    if(fillMeta(meta,t,revealing)===0)meta.remove();
+    if(art.dataset.status==='failed'){
+      art.setAttribute('role','button');
+      art.setAttribute('aria-label','发送失败，点击重试');
+      art.tabIndex=0;
+    }else{
+      art.removeAttribute('role');art.removeAttribute('aria-label');art.removeAttribute('tabindex');
+    }
+    if(!art._p03wired){  /* 每节点只绑一次；仅在 failed 态放行（防连点重复发信号：状态先行翻转） */
+      art._p03wired=true;
+      art.addEventListener('click',()=>{
+        if(art.dataset.status==='failed'&&bus)bus.emit('retry:send',{id:art.dataset.id});
+      });
+      art.addEventListener('keydown',e=>{
+        if(art.dataset.status!=='failed')return;
+        if(e.key==='Enter'||e.key===' '){e.preventDefault();if(bus)bus.emit('retry:send',{id:art.dataset.id});}
+      });
+    }
+    return art;
+  }
+  return {init,fill,splitSent,fmtTime};
+})();
+window.P03=P03;
+</script>
+
+<script>
+'use strict';
+/* ================= P03 DEV JS（不随装配：实验台接线 / 数据 / 分区渲染 / 信号日志） ================= */
+(function(){
+  const $=id=>document.getElementById(id);
+  const logList=$('logList');let logs=[];
+  function logSig(m){
+    logs.unshift(m);logs=logs.slice(0,14);
+    logList.replaceChildren(...logs.map(x=>{const li=document.createElement('li');li.textContent=x;return li;}));
+  }
+  /* 演示总线（真实页为 PARTS §2.3 总线，此处同语义） */
+  const bus={h:{},
+    on(t,f){(this.h[t]??=[]).push(f);},
+    emit(t,d){logSig('→ '+t+(d&&d.id?'('+d.id+')':''));(this.h[t]||[]).forEach(f=>f(d));}};
+  P03.init(bus);
+
+  /* —— 数据（文案虚构；与 02 dev 数据集同源：LONG/URLISH/EMOJI_MIXED 同串，08 收口直接沿用） —— */
+  const T=(h,m)=>new Date(2026,10,16,h,m).getTime();
+  const LONG=(()=>{const b='编译在凌晨完成，没有警告。起服日志滚过三百行，端口监听正常，内存停在四十一兆。归档线程按计划写完了三份索引。';
+    let s='';while(s.length<1880)s+=b;return s+'以上，长文到此收尾。';})();
+  const URLISH='https://mirror.internal.alice/pkg/'+'a'.repeat(170);
+  const EMOJI_PURE='👨‍👩‍👧‍👦🌊🧊✨🫡🙂‍↕️';
+  const EMOJI_MIXED='👨‍👩‍👧‍👦 都到齐了。🌊 潮水退了，滩上很静。✨ 晚安。';
+  const REVEAL_TXT='收到，这条回复走逐句揭示。第二句演示单元边界与【情绪】标记原样显示。第三句里有（括号内的句号。不断句）保护。换行强制断句：\n下一行自成一句单元。最后一句收尾，全文与单元拼接一致。';
+  const REVEAL_LIVE='这是实时注入的回复，逐句上屏。每一步都是原位更新，不重播入场。句单元边界可用分句轮廓查看。【认真】最后一句带标记收尾。';
+  const FAIL_LONG='这条超长失败消息验证：正文再长，重试命中区仍然覆盖整条消息、可达可点。'+'后续内容继续占位，确保命中区域不被正文淹没。'.repeat(6);
+  const RU=P03.splitSent(REVEAL_TXT);
+
+  /* —— 上屏（代演 02 尾插快路：article 骨架 + data-cont 分组 + P03.fill） —— */
+  const gLive=$('g-live'),gA=$('g-a'),gB=$('g-b'),gC=$('g-c'),gD=$('g-d'),gE=$('g-e');
+  const turnsById=new Map();
+  function addTurn(col,t,opts){
+    opts=opts||{};
+    const art=document.createElement('article');art.className='p03-msg';
+    const last=col.lastElementChild;
+    if(last&&last.classList.contains('p03-msg')&&last.dataset.role===t.role)art.dataset.cont='';
+    P03.fill(art,t,{entrance:!!opts.entrance,revealing:!!opts.revealing});
+    col.append(art);
+    turnsById.set(String(t.id),{t,art});
+    if(opts.scroll)art.scrollIntoView({block:'nearest'});
+    return art;
+  }
+
+  function buildStatic(){ /* 静态分区＝历史回填语义：entrance 一律 false，无任何入场 */
+    gA.replaceChildren();gB.replaceChildren();gC.replaceChildren();gD.replaceChildren();gE.replaceChildren();
+    /* A 双向与分组 */
+    addTurn(gA,{id:'a1',role:'user',text:'今天的部署顺利吗？',time:T(14,32)});
+    addTurn(gA,{id:'a2',role:'assistant',text:'顺利。编译和起服都一次过，共存检查没有报错。【安心】部署记录已经归档，明天可以晚点起。',time:T(14,33)});
+    addTurn(gA,{id:'a3',role:'assistant',text:'（点头）早些休息，凌晨的告警我盯着。(摆手) 去吧。',time:T(14,33)});
+    addTurn(gA,{id:'a4',role:'user',text:'收到。',time:T(14,35)});
+    addTurn(gA,{id:'a5',role:'user',text:'那我先把明天的清单发你。',time:T(14,35)});
+    addTurn(gA,{id:'a6',role:'user',text:'晚上对一次时间。',time:T(14,36)});
+    /* B 句单元：完整 / 等待「…」 / 揭示中（前 2/6 句） / 完成态 */
+    addTurn(gB,{id:'b1',role:'assistant',text:REVEAL_TXT,time:T(14,40)});
+    addTurn(gB,{id:'b2',role:'assistant',text:REVEAL_TXT,shownText:'',time:T(14,41)},{revealing:true});
+    addTurn(gB,{id:'b3',role:'assistant',text:REVEAL_TXT,shownText:RU.slice(0,2).join(''),time:T(14,41)},{revealing:true});
+    addTurn(gB,{id:'b4',role:'assistant',text:REVEAL_TXT,time:T(14,42)});
+    /* C 状态矩阵 */
+    addTurn(gC,{id:'c1',role:'user',text:'这条还在路上——演示发送中状态。',status:'sending',time:T(14,41)});
+    addTurn(gC,{id:'c2',role:'user',text:'这条发送失败了：点消息本体或状态行都会重试。',status:'failed',time:T(14,41)});
+    addTurn(gC,{id:'c3',role:'assistant',text:'',time:T(14,42)});
+    addTurn(gC,{id:'c4',role:'user',text:'',time:T(14,42)});
+    addTurn(gC,{id:'c5',role:'assistant',text:'这一轮 time=null 且默认渠道——元信息行整行不渲染，不出占位错误。',time:null});
+    /* D 最坏数据 */
+    addTurn(gD,{id:'d1',role:'assistant',text:LONG,time:T(9,0)});
+    addTurn(gD,{id:'d2',role:'user',text:URLISH,time:T(9,1)});
+    addTurn(gD,{id:'d3',role:'assistant',text:EMOJI_PURE,time:T(9,2)});
+    addTurn(gD,{id:'d4',role:'user',text:'嗯',time:T(9,3)});
+    addTurn(gD,{id:'d5',role:'assistant',text:'？',time:T(9,3)});
+    addTurn(gD,{id:'d6',role:'assistant',text:EMOJI_MIXED,time:T(9,4)});
+    /* E 边界字段 */
+    addTurn(gE,{id:'e1',role:'assistant',text:'这一轮没有时间字段，渠道是 QQ——元信息只剩渠道徽标。',channel:'qq',time:null});
+    addTurn(gE,{id:'e2',role:'assistant',text:'channel=wechat 是非法值——渠道字段静默隐藏，其余照常。',channel:'wechat',time:T(14,50)});
+    addTurn(gE,{id:'e3',role:'user',text:'？？？',time:T(14,51)});
+    addTurn(gE,{id:'e4',role:'assistant',text:'   \n\n  ',time:T(14,51)});
+    addTurn(gE,{id:'e5',role:'user',text:FAIL_LONG,status:'failed',time:T(14,52)});
+  }
+
+  /* —— 重试链路：retry:send → status 回 sending（即时可读）→ 回执 ok（均原位 fill，无入场重放） —— */
+  bus.on('retry:send',d=>{
+    const rec=turnsById.get(String(d.id));if(!rec)return;
+    const {t,art}=rec;
+    if(t.status!=='failed')return;
+    t.status='sending';P03.fill(art,t,{});
+    logSig('  status → sending（重试期间，状态即时可读）');
+    setTimeout(()=>{
+      if(t.status!=='sending')return;
+      t.status='ok';P03.fill(art,t,{});
+      logSig('  ✓ 重试回执：status → ok（原位更新，无入场重放）');
+    },900);
+  });
+
+  /* —— 装置按钮 —— */
+  let lv=0;
+  $('b-inj-u').addEventListener('click',()=>{
+    addTurn(gLive,{id:'lv'+(++lv),role:'user',text:'这是刚发出的用户消息：按压档入场（fade + scale 0.96，无位移，140/160ms）。',time:Date.now()},{entrance:true,scroll:true});
+    logSig('turn:append → 用户消息入场（每回合一次；后续更新不重放）');
+  });
+  $('b-inj-a').addEventListener('click',()=>{
+    const t={id:'lv'+(++lv),role:'assistant',text:REVEAL_LIVE,time:Date.now()};
+    const art=addTurn(gLive,t,{entrance:true,scroll:true});
+    logSig('turn:append → Alice 回复入场（180ms）+ 揭示走 reveal:progress 原位 fill');
+    const units=P03.splitSent(REVEAL_LIVE);let i=0;
+    const step=()=>{
+      i++;t.shownText=units.slice(0,i).join('');
+      P03.fill(art,t,{revealing:i<units.length});
+      logSig('  reveal:progress '+i+'/'+units.length+'（原位，无重放）');
+      if(i<units.length)setTimeout(step,260+Math.round(Math.random()*120));
+      else{delete t.shownText;logSig('  ✓ reveal:done —— meta「正在回复…」移除，全文在场');}
+    };
+    setTimeout(step,600);
+  });
+  $('b-flood').addEventListener('click',()=>{
+    for(let i=0;i<10;i++){
+      const role=i<5?'user':'assistant';
+      addTurn(gLive,{id:'lv'+(++lv),role,text:role==='user'?'连发第 '+(i+1)+' 条。':'连发回复 '+(i-4)+'。',time:Date.now()},{entrance:true,scroll:i===9});
+    }
+    logSig('连发 10 条：同帧入场、无 stagger，每条 ≤180ms（PRINCIPLES §3 #11）');
+  });
+  $('b-update').addEventListener('click',()=>{
+    const ids=[...turnsById.keys()].filter(k=>k.indexOf('lv')===0);
+    if(!ids.length){logSig('实时区为空：先注入一条消息');return;}
+    const rec=turnsById.get(ids[ids.length-1]);
+    rec.t.channel='qq';rec.t.time=Date.now();
+    P03.fill(rec.art,rec.t,{});
+    logSig('turn:update → 原位修正（渠道/时间）：节点不动、入场不重放');
+  });
+  $('b-rebuild').addEventListener('click',()=>{
+    buildStatic();
+    logSig('整页重建（历史回填语义）：entrance=false —— 无任何入场重放');
+  });
+  $('b-fail').addEventListener('click',()=>{
+    addTurn(gLive,{id:'lv'+(++lv),role:'user',text:'这条注入即失败——失败态与入场动效并存，重试整条可点。',status:'failed',time:Date.now()},{entrance:true,scroll:true});
+    logSig('turn:append(failed) → 入场后整条消息可点（hover/press 请手动实测）');
+  });
+  $('b-rearm').addEventListener('click',()=>{
+    const rec=turnsById.get('c2');if(!rec)return;
+    rec.t.status='failed';P03.fill(rec.art,rec.t,{});
+    logSig('C 区 c2 已重置为 failed（可再次试完整重试链路）');
+  });
+  $('b-unitvis').addEventListener('click',e=>{
+    const on=document.body.classList.toggle('p03-unitvis');
+    e.currentTarget.setAttribute('aria-pressed',String(on));
+    logSig('分句轮廓 = '+on+'（演示视图：span.p03-sent[data-si]，非产品视觉）');
+  });
+  $('b-reduce').addEventListener('click',e=>{
+    const on=document.documentElement.classList.toggle('sim-reduce');
+    e.currentTarget.setAttribute('aria-pressed',String(on));
+    logSig('模拟 reduce = '+on+'（入场折叠为纯 fade 160ms，删位移/scale）');
+  });
+
+  /* 分句轮廓（演示视图）：句单元边界可视化，静态描边、无过渡、不随装配 */
+  const st=document.createElement('style');
+  st.textContent='body.p03-unitvis .p03-sent{background:#16222d;outline:1px dashed #31485e;outline-offset:-1px}';
+  document.head.append(st);
+
+  /* 启动 */
+  buildStatic();
+  logSig('部件 03 就绪：静态分区为「历史回填」语义（无入场）；入场仅发生于实时注入');
+})();
+</script>
+</body>
+</html>

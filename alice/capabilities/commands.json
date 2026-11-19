@@ -1,6 +1,42 @@
 {
-  "version": 7,
+  "version": 12,
   "units": [
+    {
+      "command": "reply_detail",
+      "summary": "仅在当前用户明确追问某条已保存回答的过程或反省时读取一栏。使用宿主列出的回复轮次，引用当前用户原话。可用材料未曾发布，无结果时按已有证据回答。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "turn_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "section": {
+            "type": "string",
+            "enum": [
+              "task_process",
+              "reflection"
+            ]
+          },
+          "user_quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "required": [
+          "turn_id",
+          "section",
+          "user_quote"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "reply_detail",
+        "operation": "reply_detail"
+      }
+    },
     {
       "command": "recall",
       "summary": "检索并读取获准使用的本机记忆。",
@@ -65,7 +101,7 @@
     },
     {
       "command": "discovery_search",
-      "summary": "查找并读取开放平台的公开资料。",
+      "summary": "搜索并读取公开网页，默认全网，可限定已开放的平台；结果以实际读取的正文节选与来源为准。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -77,11 +113,13 @@
             "type": "string",
             "enum": [
               "auto",
+              "web",
               "tieba",
               "bilibili",
               "zhihu",
               "wikipedia"
-            ]
+            ],
+            "description": "省略或auto均使用web全网；仅在用户要求特定平台时选择对应平台。各范围须已获准，关闭全网时不自动退回平台搜索。"
           },
           "limit": {
             "type": [
@@ -773,7 +811,7 @@
     },
     {
       "command": "thought_record",
-      "summary": "收纳值得继续的疑问，也可以记录自主好奇。",
+      "summary": "收纳值得继续的疑问，也可以记录自主好奇。 自主窗口的新问题先作为搁置线索；旁支用parent_ref保留关系。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -946,6 +984,12 @@
             "minLength": 1,
             "maxLength": 80,
             "description": "提议把该疑问显式关联到另一问题族（同族共享同依据推演窗口）。"
+          },
+          "activation_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "后台把搁置/等待问题改open时必填：独立价值或真实条件变化；另附可执行next_step。"
           }
         },
         "required": [
@@ -1134,8 +1178,51 @@
       }
     },
     {
+      "command": "contact_availability",
+      "summary": "按当前真实用户消息记录忙碌或恢复方便；普通问候不解除等待，恢复不等于接受旧邀请。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "availability": {
+            "type": "string",
+            "enum": [
+              "busy",
+              "available"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "真实用户消息如何表达当前是否方便。"
+          },
+          "requested_retry_at": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 253402300799,
+            "description": "用户明确约定的恢复时间，Unix秒；不自行猜测。"
+          },
+          "intent_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "仅available按相关回应解除某话题等待时填waiting_feedback中的引用；省略只恢复全局方便状态。"
+          }
+        },
+        "required": [
+          "availability",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "contact_availability"
+      }
+    },
+    {
       "command": "contact_reply",
-      "summary": "把用户对当前邀请的回应绑定到本次真实消息：接受后载入展开材料，没空或拒绝收住。",
+      "summary": "绑定用户对当前或延后邀请的真实回应：接受才展开，没空持久等待，不明回应先澄清。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1162,7 +1249,7 @@
             "type": "number",
             "minimum": 0,
             "maximum": 253402300799,
-            "description": "用户明确说了晚点/明天时的再邀时间（Unix秒）。"
+            "description": "仅用户明确约定再次联系时间时填Unix秒；未约定则持续等待回应。"
           }
         },
         "required": [
@@ -1177,8 +1264,102 @@
       }
     },
     {
+      "command": "activity_browse",
+      "summary": "仅在自由兴趣窗定题前浏览一个本机库的索引。可无关键词浏览；记忆须已授权，等待中的疑问只供参考。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["memory", "questions", "interests"]
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": ["source"],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "activity_browse"
+      }
+    },
+    {
+      "command": "activity_plan",
+      "summary": "自主研究前简述对象、价值、为何现在与停止条件；兴趣也可成立，不值得继续可搁置或休息。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "choice": {
+            "type": "string",
+            "enum": [
+              "explore",
+              "defer",
+              "rest"
+            ]
+          },
+          "object": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "具体要弄清什么，一句即可。"
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "具体用途或兴趣价值，不虚构用户需求。"
+          },
+          "why_now": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "为何此刻值得处理；没有新价值可说明搁置原因。"
+          },
+          "stop_condition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "做到何处就停，哪些旁支先放回。"
+          },
+          "next_action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "explore必填：下一步可执行的方法。"
+          },
+          "question_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "本次问题引用；已有task_anchor时必填并对应原任务。"
+          },
+          "related_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "与本题同一研究线的已有问题引用，用于显式关联问题族。"
+          }
+        },
+        "required": [
+          "choice",
+          "object",
+          "value",
+          "why_now",
+          "stop_condition"
+        ],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "activity_plan"
+      }
+    },
+    {
       "command": "activity_finish",
-      "summary": "自主窗口收尾：一次提交进展和交流决定（现在邀请/留待以后/无需联系），附简短理由。",
+      "summary": "自主窗口对照选题提交目标结果、实际进展与交流决定。可提议休息，由宿主按用户设定的时长执行。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1270,12 +1451,6 @@
             ],
             "additionalProperties": false
           },
-          "requested_idle_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 86400,
-            "description": "选择rest时可提供期望等待时长，受用户上限约束。"
-          },
           "communication": {
             "type": "object",
             "description": "每个工作窗口须作交流判断；none 只填 decision/reason；invite/later 关联本轮取得的 ref/view_ref 或 intent_ref。",
@@ -1340,13 +1515,56 @@
               "reason"
             ],
             "additionalProperties": false
+          },
+          "goal_result": {
+            "type": "object",
+            "properties": {
+              "goal_met": {
+                "type": "boolean",
+                "description": "本次设定的目标是否已达到，不等于所有事实已验证。"
+              },
+              "change_kind": {
+                "type": "string",
+                "enum": [
+                  "understanding",
+                  "restatement",
+                  "none"
+                ],
+                "description": "认识有变化、只重述旧结论或无变化。"
+              },
+              "change": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400,
+                "description": "相较选题前具体改变了什么；不必重复全文。"
+              },
+              "worth_continuing": {
+                "type": "boolean",
+                "description": "当前目标是否仍值得继续；目标达到或低价值旁支给false。"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240,
+                "description": "继续或停止的具体价值理由。"
+              }
+            },
+            "required": [
+              "goal_met",
+              "change_kind",
+              "change",
+              "worth_continuing",
+              "reason"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "decision",
           "progress_kind",
           "summary",
-          "communication"
+          "communication",
+          "goal_result"
         ],
         "additionalProperties": false
       },

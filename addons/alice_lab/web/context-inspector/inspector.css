@@ -1,0 +1,108 @@
+/* 上下文观测插件 · 仪表板形态（复刻 dsh-context 版式）。
+   本页自包含：不链接聊天应用的 style.css（那里 body overflow:hidden 是内部滚动布局，
+   会锁死本页滚动；主题变量也与本页冲突）。 */
+:root {
+  --ci-bg: #f2f4f8; --ci-card: #ffffff; --ci-line: #e4e8ef; --ci-ink: #1c2733;
+  --ci-sub: #67788c; --ci-accent: #4C72B0;
+}
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: var(--ci-bg); color: var(--ci-ink);
+  font-size: 14px; line-height: 1.6; font-weight: 450;
+  min-height: 100vh; overflow-y: auto; overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-weight: 650; color: var(--ci-ink); }
+p { margin: 4px 0; }
+pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+button { font-family: inherit; }
+a { color: var(--ci-accent); }
+details > summary { list-style: revert; }
+
+.ci-top { padding: 16px 22px 8px; }
+.ci-head-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.ci-head-row h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+.ci-status { margin: 0; font-size: 12.5px; color: var(--ci-sub); }
+.ci-status.warn { color: #B0432F; }
+
+.ci-requestbar { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 6px; }
+.ci-req { flex: none; border: 1px solid var(--ci-line); background: var(--ci-card); border-radius: 10px;
+  padding: 7px 12px; cursor: pointer; font: inherit; text-align: left; }
+.ci-req.active { border-color: var(--ci-accent); box-shadow: 0 0 0 1px var(--ci-accent) inset; }
+.ci-req .t { font-size: 12px; font-weight: 600; }
+.ci-req .s { font-size: 11.5px; color: var(--ci-sub); margin-top: 2px; }
+
+.ci-dash { padding: 4px 22px 32px; display: flex; flex-direction: column; gap: 14px; }
+.ci-row2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 1020px) { .ci-row2 { grid-template-columns: 1fr; } }
+
+.ci-card { background: var(--ci-card); border: 1px solid var(--ci-line); border-radius: 12px;
+  padding: 14px 16px; box-shadow: 0 1px 3px rgba(28,39,51,.05); }
+.ci-card h2 { margin: 0 0 4px; font-size: 14.5px; }
+.ci-card-head { display: flex; justify-content: space-between; align-items: center; }
+.ci-card-body { margin-top: 8px; }
+.ci-hint { font-size: 12px; color: var(--ci-sub); margin: 3px 0; }
+
+/* KPI 行 */
+.ci-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.ci-kpi { background: var(--ci-card); border: 1px solid var(--ci-line); border-radius: 12px; padding: 10px 14px; }
+.ci-kpi .k { font-size: 11.5px; color: var(--ci-sub); }
+.ci-kpi .v { font-size: 19px; font-weight: 650; margin-top: 2px; }
+.ci-kpi .s { font-size: 11.5px; color: var(--ci-sub); margin-top: 1px; }
+
+/* 模式切换 */
+.ci-modes { display: inline-flex; border: 1px solid var(--ci-line); border-radius: 8px; overflow: hidden; }
+.ci-mode { font: inherit; font-size: 12px; border: 0; background: #f6f7fa; padding: 3px 12px; cursor: pointer; color: var(--ci-sub); }
+.ci-mode.active { background: var(--ci-accent); color: #fff; }
+
+/* 分类颜色 */
+.k-stable { background: #7B5EA7; } .k-index { background: #4C72B0; }
+.k-background { background: #DD8452; } .k-history { background: #55A868; }
+.k-tool { background: #8C8C00; } .k-assistant { background: #A8579B; }
+.k-user { background: #C44E52; } .k-other { background: #9A9A9A; }
+.k-neg { background: repeating-linear-gradient(45deg, #cfd6e2 0 4px, #eef0f4 4px 8px); }
+
+/* 组成堆叠条 */
+.ci-band { display: flex; width: 100%; height: 18px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--ci-line); background: #eef0f4; margin: 6px 0; }
+.ci-seg { display: inline-block; height: 100%; min-width: 3px; }
+.ci-seg:hover { outline: 1.5px solid #1c2733; outline-offset: -1.5px; }
+.ci-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; }
+.ci-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #3c4a5c; }
+.ci-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; }
+
+/* 趋势图：竖向堆叠柱 */
+.ci-chart { display: flex; align-items: flex-end; gap: 10px; height: 150px; padding: 6px 2px 0; overflow-x: auto; }
+.ci-colwrap { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 46px; cursor: pointer; }
+.ci-colwrap.active .ci-col { outline: 2px solid var(--ci-accent); outline-offset: 1px; }
+.ci-col { display: flex; flex-direction: column-reverse; width: 30px; height: var(--h, 100px);
+  border-radius: 6px; overflow: hidden; border: 1px solid var(--ci-line); background: #eef0f4; }
+.ci-col .ci-seg { width: 100%; }
+.ci-colwrap .lbl { font-size: 11px; color: var(--ci-sub); text-align: center; line-height: 1.25; }
+.ci-deltabadge { font-size: 10.5px; color: #235; background: #e8eefb; border: 1px solid #c8d6f2;
+  border-radius: 999px; padding: 0 7px; }
+
+/* DNA */
+.ci-dna { display: flex; flex-direction: column; gap: 5px; }
+.ci-dna-row { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--ci-line);
+  border-radius: 9px; padding: 6px 10px; background: #fbfcfe; }
+.ci-pos { flex: none; width: 24px; height: 24px; border-radius: 7px; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 650; }
+.ci-dna-mid { flex: 1; min-width: 0; }
+.ci-dna-mid p { margin: 1px 0; font-size: 12.5px; }
+.ci-dna-bar { height: 6px; border-radius: 3px; margin-top: 3px; min-width: 4px; }
+
+/* 浏览器树 */
+.ci-tree details { border: 1px solid var(--ci-line); border-radius: 9px; padding: 4px 12px; margin: 6px 0; background: #fbfcfe; }
+.ci-tree summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 3px 0; }
+.ci-tree .cnt { color: var(--ci-sub); font-weight: 400; font-size: 12px; }
+.ci-tree p { margin: 3px 0; font-size: 12.5px; }
+
+.ci-btn { font: inherit; font-size: 12px; border: 1px solid var(--ci-line); border-radius: 7px;
+  background: #f6f7fa; padding: 1px 9px; cursor: pointer; }
+.ci-btn:hover { border-color: #89a; }
+.ci-body { display: block; white-space: pre-wrap; word-break: break-word; font-size: 12px;
+  background: #f6f7fa; border: 1px solid var(--ci-line); border-radius: 7px; padding: 8px; margin-top: 6px;
+  max-height: 300px; overflow: auto; }
+.ci-body[hidden] { display: none; }

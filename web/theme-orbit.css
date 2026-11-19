@@ -18,8 +18,13 @@ html[data-theme=orbit] {
   /* 页壳玻璃面（05 轮次 12）：房间+球全局背景化后，大页壳低透让场景透出（对齐 room 的
      「球在正文正后全亮度」观感，玻璃仅保留文字护面）；窗/浮层仍用实面 */
   --orbit-surface-glass: #0d162466;
-  --orbit-surface-window: #121d2ff2;
+  --orbit-surface-window: #121d2ff2;   /* 仍在用：浮层/停机卡等需要实底的地方 */
   --orbit-surface-float: #182540;
+  /* 窗玻璃（2026-11-19 用户裁定：设置子窗统一到「内容发现」那种半透明面板）
+     窗=同一块材质略实一档（表单要读），窗后压暗降到 65% 让房间与球仍可辨 */
+  --orbit-surface-win: #0d1624b8;      /* 窗玻璃 72%：与页同材质、略实一档（表单要读） */
+  --orbit-veil: #060e1bc4;             /* 窗后压暗 ~77%：房间/球可辨，背后卡片不再抢读 */
+  --orbit-win-head-bg: #0d1624f5;      /* 粘性窗头：不够实的话内容会从标题下滑过 */
   /* 文字三级 */
   --ink: #d9e2f4; --muted: #a2b2cc; --orbit-faint: #8298b8;
   /* 强调（沿用 room 族） */
@@ -67,11 +72,13 @@ html[data-theme=orbit] .orbit-page {
 }
 html[data-theme=orbit] .orbit-window {
   width: min(860px, calc(100vw - 40px)); max-height: calc(100dvh - 48px);
-  background: var(--orbit-surface-window);
+  /* 2026-11-19 用户裁定：设置子窗统一到「内容发现」那层半透明面板。
+     窗比页实一档（表单要读），窗后压暗降到 veil，房间与球仍可辨。 */
+  background: var(--orbit-surface-win);
   border: 1px solid var(--orbit-line-strong); border-radius: var(--orbit-radius-m);
   box-shadow: var(--orbit-shadow-window); color: var(--ink); overflow: auto;
 }
-html[data-theme=orbit] .orbit-window::backdrop { background: #05080fd9; }
+html[data-theme=orbit] .orbit-window::backdrop { background: var(--orbit-veil); }
 /* 浮层滚动例外（05 轮次 5 + 轮次 8 追认）：挂 data-orbit-scroll 的动态列表浮层壳
    （S10/S11 窗口族及同类）可内滚动并放宽宽度帽；仍无 backdrop 压暗 */
 html[data-theme=orbit] .orbit-float[data-orbit-scroll] { overflow: auto; }
@@ -104,6 +111,7 @@ html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: rela
   position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none;
   background: repeating-linear-gradient(to bottom, #01040b38 0 1px, transparent 1px 3px);
   opacity: .22;
+  transition: opacity var(--orbit-dur) var(--orbit-ease);
 }
 .orbit-dock-cluster { display: flex; align-items: center; gap: 4px; }
 .orbit-dock-cluster + .orbit-dock-cluster { border-left: 1px solid var(--orbit-line-faint); padding-left: 16px; }
@@ -152,6 +160,105 @@ html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: rela
 .orbit-dot[data-state=error]   { background: var(--danger); }
 .orbit-dot[data-state=unknown] { background: var(--neutral); }
 
+/* ===== §1b-2 dock 收纳（2026-11-18 用户要求）：整条轨道可收成底部小把手 =====
+   展开＝56 高、三条站点图标；收起＝44×34、**无壳**：只有一枚淡色 chevron 悬在
+   房间地面上，悬停/聚焦才浮现软底片（.orbit-icon 的 hover 态）。--orbit-dock-tuck
+   与 orbit.js:setDockTucked 的钉宽逻辑对齐（把手 28 + 左右内边距 16）。 */
+html[data-theme=orbit] #orbit-dock {
+  --orbit-dock-tuck: 44px;
+  transition: width var(--orbit-dur) var(--orbit-ease),
+              height var(--orbit-dur) var(--orbit-ease),
+              padding var(--orbit-dur) var(--orbit-ease),
+              background-color var(--orbit-dur) var(--orbit-ease),
+              border-color var(--orbit-dur) var(--orbit-ease),
+              box-shadow var(--orbit-dur) var(--orbit-ease);
+}
+/* 收起后同时回收底部预留：把手顶在 46px，62 = 46 + 16 呼吸；页面壳/聊天卡片随之
+   向下延伸（输入框随卡片底边一起下移）。展开回到 96。 */
+html[data-theme=orbit][data-dock="tucked"] { --orbit-dock-clear: 62px; }
+html[data-theme=orbit] #orbit-dock[data-tucked] {
+  width: var(--orbit-dock-tuck); height: 34px; padding: 3px 8px;
+  /* 无壳：底片/阴影/边框全撤（边框留透明占位，避免尺寸跳 2px） */
+  background: transparent; box-shadow: none; border-color: transparent;
+}
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-texture { opacity: 0; }
+/* 无壳态的可发现性：箭头不提淡到 faint（地面是深色，要压住背景噪点），
+   触屏无 hover 兜底，常驻提到 muted 档 */
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-toggle { color: var(--muted); opacity: .8; }
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-toggle:hover,
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-toggle:focus-visible { opacity: 1; }
+@media (pointer: coarse) {
+  html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-toggle { opacity: 1; }
+}
+/* 两侧延伸线随收纳淡出（收起时把手不需要轨道线） */
+html[data-theme=orbit] #orbit-dock::before,
+html[data-theme=orbit] #orbit-dock::after { transition: opacity var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] #orbit-dock[data-tucked]::before,
+html[data-theme=orbit] #orbit-dock[data-tucked]::after { opacity: 0; }
+/* 站点簇：宽度随轨道收窄（flex 可缩），图标被横向裁在簇边界内——裁切放在簇上而不是
+   轨道上，否则轨道两侧的延伸线也会被裁掉；竖向留 8px 给右上角徽标。
+   收起后 visibility 一并移出 Tab 序。 */
+html[data-theme=orbit] #orbit-dock .orbit-dock-cluster {
+  flex: 0 1 auto; min-width: 0;
+  clip-path: inset(-8px -6px);
+  transition: opacity var(--orbit-dur-quick) var(--orbit-ease), visibility 0s;
+}
+html[data-theme=orbit] #orbit-dock .orbit-dock-cluster > .orbit-icon { flex: 0 0 auto; }
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-cluster {
+  opacity: 0; visibility: hidden;
+  transition: opacity var(--orbit-dur-quick) var(--orbit-ease), visibility 0s linear var(--orbit-dur);
+}
+/* 把手：28×28 轻档按钮，chevron 沿用口径 4 的双边框线（禁实心方块） */
+html[data-theme=orbit] .orbit-dock-toggle { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 9px; }
+html[data-theme=orbit] .orbit-dock-chevron {
+  width: 8px; height: 8px;
+  border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg);                        /* 展开：指向下（可以收起） */
+  transition: transform var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-chevron {
+  transform: rotate(-135deg);                      /* 收起：指向上（可以展开） */
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #orbit-dock,
+  html[data-theme=orbit] #orbit-dock::before,
+  html[data-theme=orbit] #orbit-dock::after,
+  html[data-theme=orbit] #orbit-dock .orbit-dock-cluster,
+  html[data-theme=orbit] .orbit-dock-chevron { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] #orbit-dock,
+html[data-theme=orbit][data-motion=off] #orbit-dock::before,
+html[data-theme=orbit][data-motion=off] #orbit-dock::after,
+html[data-theme=orbit][data-motion=off] #orbit-dock .orbit-dock-cluster,
+html[data-theme=orbit][data-motion=off] .orbit-dock-chevron { transition: none; }
+/* 收纳联动的布局属性（#app 底距 / 页壳 max-height / toast·gate 底位）同样受动效门禁 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #app,
+  html[data-theme=orbit] #orbit-main,
+  html[data-theme=orbit] .orbit-page,
+  html[data-theme=orbit] #toast,
+  html[data-theme=orbit] [data-orbit-surface="gate"],
+  html[data-theme=orbit] #orbit-page-onboarding,
+  html[data-theme=orbit] #orbit-page-welcome { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] #app,
+html[data-theme=orbit][data-motion=off] #orbit-main,
+html[data-theme=orbit][data-motion=off] .orbit-page,
+html[data-theme=orbit][data-motion=off] #toast,
+html[data-theme=orbit][data-motion=off] [data-orbit-surface="gate"],
+html[data-theme=orbit][data-motion=off] #orbit-page-onboarding,
+html[data-theme=orbit][data-motion=off] #orbit-page-welcome { transition: none; }
+/* 载入时恢复收纳态：80ms 免过渡窗口（避免首帧后再滑一次） */
+html[data-theme=orbit][data-dock-instant] #orbit-dock,
+html[data-theme=orbit][data-dock-instant] #orbit-dock .orbit-dock-cluster,
+html[data-theme=orbit][data-dock-instant] #app,
+html[data-theme=orbit][data-dock-instant] #orbit-main,
+html[data-theme=orbit][data-dock-instant] .orbit-page,
+html[data-theme=orbit][data-dock-instant] #toast,
+html[data-theme=orbit][data-dock-instant] [data-orbit-surface="gate"],
+html[data-theme=orbit][data-dock-instant] #orbit-page-onboarding,
+html[data-theme=orbit][data-dock-instant] #orbit-page-welcome { transition: none !important; }
+
 /* 窄屏通栏形态 */
 @media (max-width: 720px) {
   #orbit-dock { left: 8px; right: 8px; transform: none; border-radius: 20px;
@@ -159,6 +266,12 @@ html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: rela
   #orbit-dock::-webkit-scrollbar { display: none; }
   #orbit-dock::before, #orbit-dock::after { display: none; }
   .orbit-dock-cluster + .orbit-dock-cluster { padding-left: 8px; }
+  /* 通栏态不收纳：把手隐藏，万一残留收起态也强制回展开形态 */
+  html[data-theme=orbit] .orbit-dock-toggle { display: none; }
+  html[data-theme=orbit] #orbit-dock[data-tucked] {
+    width: auto; height: 56px; padding: 8px 12px; overflow-x: auto;
+  }
+  html[data-theme=orbit] #orbit-dock[data-tucked] .orbit-dock-cluster { opacity: 1; visibility: visible; }
 }
 @media (forced-colors: active) {
   #orbit-dock { border-color: CanvasText; background: Canvas; }
@@ -186,7 +299,11 @@ html[data-theme=orbit] #orbit-dock > *:not(.orbit-dock-texture) { position: rela
 
 /* ===== §2 大页面组（03b；包装/标记节点登记见 03b §0.5——grid 只挂 .orbit-body/.orbit-drawer-stack 包装容器） ===== */
 /* 大页骨架通用增量（03b §0.3；底让位 94 = dock-clear 96 − 页边距修正 2，R3 P1-3 推导口径） */
-html[data-theme=orbit] #app { padding: 52px 14px calc(var(--orbit-dock-clear) - 2px); }
+html[data-theme=orbit] #app {
+  padding: 52px 14px calc(var(--orbit-dock-clear) - 2px);
+  /* 收纳时底部预留从 96 → 68：与 dock 收缩同节奏，输入框随卡片底边下移而不是跳一下 */
+  transition: padding-bottom var(--orbit-dur) var(--orbit-ease);
+}
 html[data-theme=orbit] .orbit-page {
   position: relative; z-index: 1;
   width: min(1080px, 100%); margin: 0 auto;
@@ -195,6 +312,7 @@ html[data-theme=orbit] .orbit-page {
   padding: var(--den-pad);
   display: flex; flex-direction: column; gap: var(--den-gap);
   font: 500 var(--fs-body)/var(--den-lead) var(--font);
+  transition: max-height var(--orbit-dur) var(--orbit-ease);   /* 随 --orbit-dock-clear 同步（同缓动=同帧值） */
 }
 /* 页头统一语言（P2/P3/P4 共用；P1 顶栏沿用 chat header） */
 html[data-theme=orbit] .orbit-page-head {
@@ -250,21 +368,45 @@ html[data-theme=orbit] .chat-atmosphere,
 html[data-theme=orbit] .atmosphere-thoughts { display: none; }   /* orbit-bg 接管 */
 
 /* --- P1 对话主页（壳内原生皮形；.chat 2px 边与 ::after 角标不动，仅按 03a §六授权换底色） --- */
+/* 去页壳（用户裁定）：无外框/无投影/无背景，消息气泡直接浮在全局房间+神经球上 */
 html[data-theme=orbit] #orbit-main {
   position: relative; z-index: 1;
   width: min(1080px, 100%); margin: 0 auto;
   max-height: calc(100dvh - 52px - var(--orbit-dock-clear) + 2px);
-  box-shadow: var(--orbit-shadow-page), inset 0 1px 0 #ffffff0a;   /* 页影 44：P1 唯一影 */
+  box-shadow: none;
   display: flex;
+  transition: max-height var(--orbit-dur) var(--orbit-ease);   /* 同 #app 底让位，dock 收纳时同步长高 */
 }
-html[data-theme=orbit] #orbit-main > .chat { flex: 1; min-height: 0; background: var(--orbit-surface-glass); }   /* 05 轮次 12 玻璃壳 */
+html[data-theme=orbit] #orbit-main > .chat {
+  flex: 1; min-height: 0;
+  background: transparent; border: 0;   /* 去 2px 外框与玻璃底片 */
+}
+/* 去外框后四角装饰角标悬空，一并隐藏 */
+html[data-theme=orbit] .chat::after { display: none; }
 /* 眉标装饰隐藏（R3 P1-7；文本随 dock「对话」图标 tip 呈现，计入 02a 还原表 #19） */
 html[data-theme=orbit] .chat::before { content: none; }
-/* 顶栏身分行 + 动作图标排 */
-html[data-theme=orbit] .chat > header { border-bottom-color: var(--orbit-line-faint); }
+/* 顶栏身分行 + 动作图标排（去下边框：与同步条下边框、.chat 外框三线重复，用户裁定精简） */
+html[data-theme=orbit] .chat > header { border-bottom: 0; }
+/* 顶栏导航钮：app-nav 在 orbit 已隐藏，☰ 点了无效；CSS !important 压过 .mobile-only 的 grid!important */
+html[data-theme=orbit] #nav-toggle { display: none !important; }
 html[data-theme=orbit] .chat-subtitle { display: none; }   /* 02a R1 */
 html[data-theme=orbit] .chat-header-actions { display: flex; align-items: center; gap: var(--sp-2); }
 html[data-theme=orbit] .who { font: 600 var(--fs-section)/1.5 var(--font); }
+/* 对话句气泡（用户裁定）：Alice 回复也包气泡，浮在背景上；沿用 room 的圆角/尺寸语言，
+   换成 orbit 玻璃令牌。纯 CSS，不动 .txt 节点/句级揭示 DOM 契约。 */
+html[data-theme=orbit] .msg .txt {
+  max-width: min(94%, 52em); font-weight: 500; line-height: 1.8;
+  background: var(--orbit-surface-glass);
+  border: 1px solid var(--orbit-line-faint);
+  border-radius: 15px 15px 15px 4px;
+  padding: 11px 17px;
+  box-shadow: 0 2px 12px #04091a66;
+}
+html[data-theme=orbit] .msg.user .txt {
+  background: var(--accent-soft);
+  border-color: var(--orbit-line-strong);
+  border-radius: 15px 15px 4px 15px;
+}
 /* 图标入口（idle 中档 .8） */
 html[data-theme=orbit] .orbit-icon-entry {
   display: grid; place-items: center; width: 40px; height: 40px; padding: 0;
@@ -277,7 +419,7 @@ html[data-theme=orbit] .orbit-icon-entry svg { width: 20px; height: 20px; stroke
 html[data-theme=orbit] .orbit-icon-entry:hover,
 html[data-theme=orbit] .orbit-icon-entry:focus-visible { color: var(--ink); background: var(--soft); opacity: 1; }
 /* 信号行：activity 状态点 + 待确认短文案 + 同步图标（右缘与身分行动作对齐） */
-html[data-theme=orbit] .chat-sync-bar { border-bottom: 1px solid var(--orbit-line-faint); gap: var(--sp-3); }
+html[data-theme=orbit] .chat-sync-bar { border-bottom: 0; gap: var(--sp-3); }
 html[data-theme=orbit] #chat-activity { display: inline-flex; align-items: center; gap: var(--sp-2);
   font: 500 var(--fs-tip)/1.5 var(--font); color: var(--muted); overflow-wrap: anywhere; }
 html[data-theme=orbit] #chat-activity::before { content: ''; width: 7px; height: 7px; flex: 0 0 7px;
@@ -330,22 +472,60 @@ html[data-theme=orbit] .composer-permission .link {
 }
 
 /* --- P2 内容发现（#orbit-page-discovery 挂 data-density=wide，orbit.js 标注） --- */
+/* 页面是唯一滚动容器（2026-11-19 排版修）：#discovery 不再定高、内层 .discovery-scroll
+   不再自滚，所有块按内容高度往下排，避免「外层滚 + 内层滚 + 行被均分压缩」三重叠。 */
+html[data-theme=orbit] #orbit-page-discovery { overflow-y: auto; }
+html[data-theme=orbit] #discovery {
+  display: flex; flex-direction: column; gap: var(--sp-4);
+  flex: 0 0 auto; height: auto; min-height: 0;
+}
+html[data-theme=orbit] #discovery .discovery-scroll {
+  display: contents;   /* 摘掉内层盒子：status/next/bound 升为页主列，不再自成 69px 滚动条 */
+  overflow: visible;
+}
 html[data-theme=orbit] .discovery-header {
   display: flex; align-items: flex-start; gap: var(--sp-4);
-  padding-bottom: var(--sp-5); border-bottom: 1px solid var(--orbit-line-faint);
+  padding-bottom: var(--sp-4); border-bottom: 1px solid var(--orbit-line-faint);
 }
-html[data-theme=orbit] .discovery-header h1 { margin: 0; font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; }
+html[data-theme=orbit] .discovery-header h1 { margin: 3px 0 2px; font: 600 var(--fs-page)/1.35 var(--font); letter-spacing: .5px; }
+html[data-theme=orbit] .discovery-intro { margin: 0; color: var(--muted); font: 500 var(--fs-sub)/1.6 var(--font); }
 html[data-theme=orbit] .discovery-header .card-x { color: var(--orbit-faint); }
 /* 双列只挂包装容器 .orbit-body（03b §0.5；header/status/warning/bound 仍为 #discovery 直接子节点横贯——防棋盘化 R3 P1-2） */
 html[data-theme=orbit] #discovery .orbit-body {
-  min-height: 0; display: grid; gap: var(--den-gap);
-  grid-template-columns: 300px minmax(0, 1fr);   /* 行定义删除（R5b C6/R5d P1-1：两项自动放置挤一行，第二行空置） */
+  min-height: 0; display: grid; gap: var(--sp-5);
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  grid-auto-rows: max-content; align-content: start;   /* 行高按内容，不被 stretch 均分成 120/120 */
 }
-html[data-theme=orbit] #discovery .orbit-body-side { display: flex; flex-direction: column; gap: var(--den-gap); min-height: 0; }
+/* 左列：行动卡 + 折叠行栈；间距压到 8，读作一组而不是七块散件 */
+html[data-theme=orbit] #discovery .orbit-body-side {
+  display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0;
+}
 html[data-theme=orbit] #discovery .orbit-body-main { min-height: 0; }
-@media (max-width: 900px) { html[data-theme=orbit] #discovery .orbit-body { grid-template-columns: minmax(0, 1fr); } }
+/* 偏好编辑器（主列结果之上）：宽卡而非 320px 浮层；关闭时整块不占位（曾留 2px 空边） */
+html[data-theme=orbit] #discovery .orbit-float {
+  max-width: none; margin: 0 0 var(--sp-5); padding: var(--sp-4);
+  background: #0b142299; border-color: var(--orbit-line-faint);
+  border-radius: var(--orbit-radius-m);
+}
+html[data-theme=orbit] #discovery .orbit-float:not(:has(.discovery-controls:not(.hidden))) { display: none; }
+html[data-theme=orbit] #discovery .discovery-controls { gap: var(--sp-4); }
+html[data-theme=orbit] #discovery .discovery-box {
+  border: 1px solid var(--orbit-line-faint); background: #0b142266;
+  border-radius: var(--radius); padding: var(--sp-3) var(--sp-4);
+}
+@media (max-width: 980px) { html[data-theme=orbit] #discovery .orbit-body { grid-template-columns: minmax(0, 1fr); } }
 /* 行动区与入口排 */
-html[data-theme=orbit] .discovery-overview { display: flex; flex-direction: column; gap: var(--sp-3); }
+html[data-theme=orbit] .discovery-overview {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--orbit-line-faint); border-radius: var(--orbit-radius-m);
+  background: #0b142280;                          /* 行动卡：与页玻璃同族、略沉一档 */
+}
+/* 修 bug：discovery.css 的 flex: 1 1 240px 是横向布局的 basis，overview 改列向后
+   变成 240px 高度，把整块撑成 309px。 */
+html[data-theme=orbit] .discovery-overview-copy { flex: 0 0 auto; }
+html[data-theme=orbit] .discovery-overview-copy #discovery-context { font: 600 var(--fs-sub)/1.6 var(--font); }
+html[data-theme=orbit] .discovery-overview .discovery-actions { gap: var(--sp-2); }
 html[data-theme=orbit] .orbit-entry-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 html[data-theme=orbit] .orbit-entry-row .btn.ghost { min-height: var(--den-ctl); font: 600 var(--fs-sub)/1.5 var(--font); }
 html[data-theme=orbit] .discovery-overview[data-enabled=on] #discovery-toggle-enabled { color: var(--accent); font-weight: 600; }  /* R3 P2-7 钩子 */
@@ -367,15 +547,30 @@ html[data-theme=orbit] #discovery-cancel:not(.hidden) {
 }
 /* 结果空态（81/90 时刻）：虚线托盘 */
 html[data-theme=orbit] .discovery-empty {
-  display: grid; place-content: center; gap: var(--sp-2); min-height: 200px;
-  padding: var(--sp-6); text-align: center;
-  border: 1px dashed var(--orbit-line-faint); border-radius: var(--radius);
+  display: grid; place-content: center; gap: var(--sp-2); min-height: 180px;
+  margin: 0; padding: var(--sp-6); text-align: center;
+  border: 1px dashed var(--orbit-line-faint); border-radius: var(--orbit-radius-m);
   font: 500 var(--fs-sub)/1.7 var(--font); color: var(--muted); overflow-wrap: anywhere;
 }
+/* 左列折叠行（策略/见闻维护/活动记录）统一成抽屉行；间距已由 side gap 控制 */
+html[data-theme=orbit] #discovery .orbit-body-side > details { margin: 0; }
+html[data-theme=orbit] #discovery .orbit-body-side > details > summary { min-height: 38px; }
 html[data-theme=orbit] #discovery details > summary { overflow-wrap: anywhere; }
 
 /* --- P3 思想与探索（#orbit-page-thoughts 挂 data-density=wide） --- */
 html[data-theme=orbit] #orbit-page-thoughts .orbit-page-head { align-items: center; }
+/* P3 页头关闭钮（05 轮次 12 追记：dock 收纳化后页面需显式出口；回对话页） */
+html[data-theme=orbit] #orbit-page-thoughts .orbit-page-head { position: relative; }
+html[data-theme=orbit] #orbit-page-thoughts .orbit-page-head .orbit-state-chip { margin-right: 44px; }
+html[data-theme=orbit] .orbit-page-close {
+  position: absolute; right: 0; top: 50%; translate: 0 -50%;
+  width: 34px; height: 34px; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: var(--orbit-radius-m); background: transparent;
+  color: var(--orbit-faint); cursor: pointer;
+  transition: color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .orbit-page-close:hover,
+html[data-theme=orbit] .orbit-page-close:focus-visible { color: var(--ink); background: var(--soft); }
 /* 清醒睡眠徽标（03a 十.3：睡眠=待机） */
 html[data-theme=orbit] .orbit-state-chip {
   display: inline-flex; align-items: center; gap: var(--sp-2);
@@ -446,12 +641,158 @@ html[data-theme=orbit] .orbit-hub-item[data-open] { border-color: var(--orbit-li
 html[data-theme=orbit][data-motion=off] .orbit-hub-item,
 html[data-theme=orbit][data-motion=off] .orbit-hub-item::after { transition: none; }
 
+/* --- P4 3D 球面（用户裁定 2026-11-18）：设置入口贴在神经球面上，随球朝向（不正对镜头），
+      背面卡片被遮挡核挡住；自动缓转 + 上下左右拖拽；窄屏(<900px)降级平面网格。
+      overflow 必须 visible，否则 flatten 掉 3D。JS 写 --lon/--lat/--spin/--tilt。 --- */
+/* 设置页去框：背景/边框/阴影全去，球与卡片直接浮在全局场景上 */
+html[data-theme=orbit] #orbit-page-settings {
+  background: transparent; border: 0; border-radius: 0; box-shadow: none;
+}
+html[data-theme=orbit] #orbit-page-settings .orbit-page-head { border-bottom: 0; }
+@property --press { syntax: '<length>'; inherits: false; initial-value: 0px; }   /* 半按位移可过渡 */
+@media (min-width: 900px) {
+  html[data-theme=orbit] #orbit-page-settings { perspective: 1200px; perspective-origin: 50% 50%; overflow: visible; }
+  html[data-theme=orbit] #orbit-page-settings .orbit-hub-grid.orbit-hub-orbit {
+    position: relative; display: block;
+    width: 100%; height: min(560px, calc(100dvh - 220px)); min-height: 360px;
+    transform-style: preserve-3d;
+    transform: rotateX(var(--tilt, 12deg));
+    cursor: grab; touch-action: none;
+  }
+  html[data-theme=orbit] #orbit-page-settings .orbit-hub-grid.orbit-hub-orbit:active { cursor: grabbing; }
+  /* 金字塔分层徽章：三层正圆同轴对齐（同一圆心，仅靠 translateZ 分层），中心图标，
+     z 轴小箭头，第三层瞄准准星。hover 准星收缩 + 整体下压（半按）。 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item {
+    --press: 0px;   /* 半按位移：hover 时由 0 → -12px */
+    position: absolute; left: 50%; top: 50%;
+    width: 96px; height: 96px; padding: 0; margin: -48px 0 0 -48px;
+    border-radius: 50%;
+    will-change: transform, opacity;
+    transform: rotateY(calc(var(--lon, 0deg) + var(--spin, 0deg)))
+               rotateX(var(--lat, 0deg))
+               translateZ(calc(var(--radius, 300px) + var(--press)));
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+    background: transparent; border: 0;
+    display: grid; place-items: center;
+    transition: --press 170ms var(--orbit-ease);
+  }
+  /* 三层圆严格同轴：left/top 50% + 负半边距，无 translateY */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item::before {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 80px; height: 80px; margin: -40px 0 0 -40px; border-radius: 50%;
+    border: 1.5px solid #7f77dd99; background: transparent;
+    box-shadow: 0 0 12px #7f77dd33;
+    transform: translateZ(0);
+  }
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item::after {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%;
+    border: 1.5px solid #b9cdffcc; background: transparent;
+    box-shadow: 0 0 14px #638dff66, inset 0 0 8px #638dff33;
+    transform: translateZ(20px);
+  }
+  /* 第三层：瞄准准星（四角卡尺 + 刻度环 + 十字瞄准线），JS 生成 span；hover 时收缩锁定 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item .glyph-ring {
+    position: absolute; left: 50%; top: 50%;
+    width: 92px; height: 92px; margin: -46px 0 0 -46px;
+    transform: translateZ(11px);
+    /* 四角卡尺 */
+    background:
+      linear-gradient(#9fc0ff,#9fc0ff) left   top    / 12px 1.5px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) left   top    / 1.5px 12px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) right  top    / 12px 1.5px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) right  top    / 1.5px 12px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) left   bottom / 12px 1.5px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) left   bottom / 1.5px 12px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) right  bottom / 12px 1.5px no-repeat,
+      linear-gradient(#9fc0ff,#9fc0ff) right  bottom / 1.5px 12px no-repeat;
+    opacity: .6;
+    transition: scale 170ms var(--orbit-ease), opacity 170ms var(--orbit-ease);
+    animation: glyph-spin 24s linear infinite;
+    pointer-events: none;
+  }
+  /* 刻度环：锥向细密刻度，遮罩只留环带 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item .glyph-ring::before {
+    content: ''; position: absolute; inset: 6px; border-radius: 50%;
+    background: repeating-conic-gradient(from 0deg, #9fc0ff 0deg .5deg, transparent .5deg 10deg);
+    -webkit-mask: radial-gradient(circle, transparent 66%, #000 68%, #000 73%, transparent 75%);
+    mask: radial-gradient(circle, transparent 66%, #000 68%, #000 73%, transparent 75%);
+    opacity: .55;
+  }
+  /* 十字瞄准线：四个方向短线，中心留空对准图标 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item .glyph-ring::after {
+    content: ''; position: absolute; inset: 0;
+    background:
+      linear-gradient(#b9cdff,#b9cdff) 50% 20% / 1px 14px no-repeat,
+      linear-gradient(#b9cdff,#b9cdff) 50% 80% / 1px 14px no-repeat,
+      linear-gradient(#b9cdff,#b9cdff) 20% 50% / 14px 1px no-repeat,
+      linear-gradient(#b9cdff,#b9cdff) 80% 50% / 14px 1px no-repeat;
+    opacity: .8;
+  }
+  @keyframes glyph-spin { to { rotate: 360deg; } }
+  /* z 轴细线：沿 z 轴朝观察者立起的一根细线，无箭头（JS 生成 span） */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item .glyph-beam {
+    position: absolute; left: 50%; top: 50%;
+    width: 1px; height: 26px; margin: -13px 0 0 -0.5px;
+    transform-origin: 50% 100%;
+    transform: translateZ(14px) rotateX(-68deg);
+    background: linear-gradient(to top, #9fc0ff22 0%, #b9cdff99 70%, #cfe0ff 100%);
+    pointer-events: none;
+  }
+  /* 中心图标 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item .orbit-symbol {
+    position: relative; z-index: 2; transform: translateZ(24px);
+    width: 22px; height: 22px; color: #dce8ff; stroke-width: 1.5;
+    filter: drop-shadow(0 0 4px #638dff99);
+  }
+  /* 名称铭牌：黑色横条标签，浮在徽章下方 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item strong {
+    position: absolute; top: calc(100% + 6px); left: 50%; translate: -50% 0;
+    z-index: 3; transform: translateZ(6px);
+    font: 600 10px/1.5 var(--font); white-space: nowrap; letter-spacing: .3px;
+    color: #dce8ff; background: #0a1020e8; border: 1px solid var(--orbit-line-strong);
+    padding: 2px 8px; border-radius: 3px;
+  }
+  /* hover：整体半按 + 准星收缩锁定 + 环提亮 */
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:hover,
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:focus-visible { --press: -12px; }
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:hover .glyph-ring,
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:focus-visible .glyph-ring { scale: .74; opacity: 1; }
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:hover::before,
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:focus-visible::before { border-color: var(--accent); }
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:hover::after,
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:focus-visible::after {
+    box-shadow: 0 0 18px #91b8ff99, inset 0 0 10px #91b8ff55;
+  }
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:hover .orbit-symbol,
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item:focus-visible .orbit-symbol { color: #fff; }
+  /* 球形遮挡核（真遮挡）：参与同一 3D 上下文，z=0。背后卡片(z<0)被它盖住；
+     半透明让真实粒子球透出，视觉上=卡片转到球背后被挡。尺寸由 JS 写 --core-size。 */
+  html[data-theme=orbit] .orbit-hub-orbit::before {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: var(--core-size, 280px); height: var(--core-size, 280px);
+    margin: calc(var(--core-size, 280px) / -2) 0 0 calc(var(--core-size, 280px) / -2);
+    border-radius: 50%; transform: translateZ(0);
+    /* 半透明：背后真实粒子球能透出，同时足够深以遮住转到球后的卡片
+       （05 轮次 12 追记：用户裁定「球体不能完全把背面入口挡住」——核体只做削弱不做遮死，
+       背面按钮可见度下限≈50%；真球粒子全程透出） */
+    background: radial-gradient(circle at 50% 45%, #0c14248c 0%, #080d17b0 72%, #080d17d9 100%);
+    box-shadow: 0 0 50px 10px #050810cc;
+    pointer-events: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .orbit-hub-orbit .orbit-hub-item { transition: none; }
+}
+
 /* --- OB1/OB2 引导页（03b §五；舞台透出 + 底让位 = dock-clear 直引） --- */
 html[data-theme=orbit] #orbit-page-onboarding,
 html[data-theme=orbit] #orbit-page-welcome {
   position: fixed; inset: 0; z-index: 10; overflow: auto;
   display: flex; align-items: center; justify-content: center;
   padding: 24px 24px var(--orbit-dock-clear);
+  transition: padding-bottom var(--orbit-dur) var(--orbit-ease);
 }
 html[data-theme=orbit] #onboarding, html[data-theme=orbit] #welcome {
   position: static; background: transparent; padding: 0; display: contents;
@@ -505,7 +846,9 @@ html[data-theme=orbit] .orbit-win-head {
   position: sticky; top: 0; z-index: 2;
   display: flex; align-items: center; gap: var(--sp-3);
   min-height: var(--orbit-win-head-h); padding: 0 var(--den-pad);
-  background: inherit; border-bottom: 1px solid var(--orbit-line-faint);
+  /* 窗身改半透明后 inherit 会透出滚动内容：窗头单给近实底，滚过标题时不糊字 */
+  background: var(--orbit-win-head-bg);
+  border-bottom: 1px solid var(--orbit-line-faint);
 }
 html[data-theme=orbit] .orbit-win-title { font: 600 var(--fs-page)/1.4 var(--font); letter-spacing: .5px; color: var(--ink);
   min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -662,63 +1005,9 @@ html[data-theme=orbit] #obs-detail dl { margin: var(--sp-3) 0; display: grid; gr
 html[data-theme=orbit] #obs-detail dt { font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted); }
 html[data-theme=orbit] #obs-detail dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 
-/* M10 DSH 协作（03c §四；窗壳零过渡与拖动态见 §4 M-13；窗高底距 88 = dock-clear − 8，R3 P2-3） */
-html[data-theme=orbit] #orbit-win-workers { height: min(720px, calc(100dvh - 48px - var(--orbit-dock-clear) + 8px)); }
-html[data-theme=orbit] #orbit-win-workers .worker-workspace {
-  display: grid; grid-template-columns: 264px 1fr; height: 100%; min-height: 480px;
-}
-html[data-theme=orbit] #orbit-win-workers .worker-sidebar {
-  border-right: 1px solid var(--orbit-line-faint); padding: var(--sp-3);
-  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
-}
-/* 会话筛选分段控件（aria-pressed 互斥；色变降级见 §4 M-19） */
-html[data-theme=orbit] #orbit-win-workers .worker-list-filter {
-  display: inline-flex; gap: 2px; padding: 2px; align-self: flex-start;
-  border: 1px solid var(--line); border-radius: var(--radius);
-}
-html[data-theme=orbit] #orbit-win-workers .worker-list-filter button {
-  height: 32px; padding: 0 var(--sp-3); border: 0; border-radius: 4px;
-  background: transparent; color: var(--muted); font: 600 var(--fs-sub)/1 var(--font); cursor: pointer;
-  transition: color var(--orbit-dur) var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease);
-}
-html[data-theme=orbit] #orbit-win-workers .worker-list-filter button[aria-pressed="true"] {
-  background: var(--accent-soft); color: var(--accent);
-}
-/* 工具头＝拖动区（无标题文本，硬约束） */
-html[data-theme=orbit] #orbit-win-workers .worker-head {
-  display: flex; align-items: center; min-height: var(--orbit-win-head-h);
-  padding: 0 var(--sp-3); border-bottom: 1px solid var(--orbit-line-faint);
-  cursor: grab; user-select: none;
-}
-html[data-theme=orbit] #orbit-win-workers .worker-head[data-dragging] { cursor: grabbing; }
-html[data-theme=orbit] #orbit-win-workers .worker-head-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
-/* 任务状态 chip（色/底成对令牌） */
-html[data-theme=orbit] #orbit-win-workers .worker-task-state {
-  display: inline-block; padding: 2px 10px; border-radius: 999px;
-  font: 700 11px/1.5 var(--mono);
-}
-html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="ready"]   { background: var(--ok-bg);      color: var(--ok); }
-html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="busy"],
-html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="waiting"] { background: var(--warning-bg); color: var(--warning); }
-html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="error"]   { background: var(--danger-bg);  color: var(--danger); }
-html[data-theme=orbit] #orbit-win-workers .worker-task-state[data-state="unknown"] { background: var(--neutral-bg); color: var(--neutral); }
-/* 「更多」popover：下开上展、浮层语言、320px 内滚（浮层纪律例外登记 8.3-iii） */
-html[data-theme=orbit] #orbit-win-workers .worker-task-menu { position: relative; }
-html[data-theme=orbit] #orbit-win-workers .worker-task-menu-popover {
-  position: absolute; bottom: calc(100% + var(--orbit-float-offset)); right: 0; z-index: 5;
-  width: min(320px, calc(100vw - 48px)); max-height: 320px; overflow-y: auto;
-  background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
-  border-radius: var(--orbit-radius-l); box-shadow: var(--orbit-shadow-float);
-  padding: var(--sp-3); display: grid; gap: var(--sp-3);
-  overflow-wrap: anywhere; min-width: 0;
-}
-html[data-theme=orbit] #orbit-win-workers .worker-task-menu-popover .worker-actions + .worker-actions {
-  border-top: 1px solid var(--orbit-line-faint); padding-top: var(--sp-3);
-}
-html[data-theme=orbit] #orbit-win-workers .worker-management-confirm {
-  background: var(--orbit-surface-page); border: 1px solid var(--orbit-line-faint);
-  border-radius: 8px; padding: var(--sp-3);
-}
+/* M10 DSH 协作：窗口壳已不启用（2026-11-18 用户裁定与 Claude 面板同构，见 orbit.js
+   installWindows），原 #orbit-win-workers 段落整组删除；面板按 worker-tasks.css 的
+   浮动卡片几何自行排版。仍保留的只有本节末的固定预览条。 */
 /* 固定预览条（右贴边左圆角，竖排提示） */
 html[data-theme=orbit] #workers-dock-preview {
   position: fixed; right: 0; top: 50%; translate: 0 -50%; z-index: 50;
@@ -729,14 +1018,6 @@ html[data-theme=orbit] #workers-dock-preview {
 html[data-theme=orbit] #workers-dock-preview span {
   writing-mode: vertical-rl; font: 500 var(--fs-tip)/1.5 var(--font); color: var(--accent);
 }
-/* 头像钮（152px 图收起形态） */
-html[data-theme=orbit] #orbit-win-workers .worker-window-avatar {
-  width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--orbit-line-strong);
-  overflow: hidden; padding: 0; cursor: pointer; background: transparent;
-}
-html[data-theme=orbit] #orbit-win-workers .worker-window-avatar img { width: 100%; height: 100%; object-fit: cover; }
-html[data-theme=orbit] #orbit-win-workers .worker-window-avatar:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
-
 /* S1 全局确认框（红线：只换肤不重构；backdrop 档归 §4 --orbit-backdrop-2） */
 html[data-theme=orbit] [data-orbit-surface="confirm"] {
   width: min(320px, calc(100vw - 32px));
@@ -770,6 +1051,7 @@ html[data-theme=orbit] [data-orbit-surface="gate"] {
   background: var(--orbit-surface-float); border: 1px solid var(--orbit-line-strong);
   border-left: 2px solid var(--warning); border-radius: var(--orbit-radius-l);
   box-shadow: var(--orbit-shadow-float); color: var(--ink); padding: var(--den-pad);
+  transition: bottom var(--orbit-dur) var(--orbit-ease);   /* 随 dock 收纳同步 */
 }
 html[data-theme=orbit] [data-orbit-surface="gate"] [id^="claude-gate-load-error"],
 html[data-theme=orbit] [data-orbit-surface="gate"] .orbit-error-slot {
@@ -796,6 +1078,9 @@ html[data-theme=orbit] #toast {
   color: var(--ink); font: 500 var(--fs-tip)/1.55 var(--font);
   overflow-wrap: anywhere; min-width: 0;
 }
+/* 收起态：clear 降了 28，但把手顶只降了 16，沿用 clear−12 会贴到把手（4px）；
+   改成 clear−4 = 64 = 把手顶 52 + 12，与展开态一致 */
+html[data-theme=orbit][data-dock="tucked"] #toast { bottom: calc(var(--orbit-dock-clear) - 4px); }
 html[data-theme=orbit] #toast::before {
   content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px;
   background: var(--neutral);
@@ -834,8 +1119,21 @@ html[data-theme=orbit] {
 /* 通用关键帧（04a orbit-fade-in/out、orbit-check-draw 与 04b orbit-fade/orbit-draw 同体各并一枚） */
 @keyframes orbit-fade-in  { from { opacity: 0; } to { opacity: 1; } }
 @keyframes orbit-fade-out { from { opacity: 1; } to { opacity: 0; } }
-@keyframes orbit-page-in  { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
-@keyframes orbit-win-in   { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+/* 入场：240ms 内完成「上浮 10px」，但透明度在 45%（≈108ms）就到 1——旧页 125ms 淡出期间
+   两页文字会叠在一起，让新页尽快变实，叠影窗口只留在前 100ms，观感更像「旧页化开」。 */
+@keyframes orbit-page-in  {
+  0%   { opacity: 0; transform: translateY(10px); }
+  45%  { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+/* 退场只淡出、不做位移/缩放：退场页已被 JS 冻结成 fixed 盒子叠在新页上（#app 是 flex-row，
+   两页同时在流里会被对半分宽）。旧版 scale(.985) 在对半宽时还会把整块面板往中间吸一下。 */
+@keyframes orbit-page-out { to { opacity: 0; } }
+@keyframes orbit-win-in   {   /* 与页同支：上浮 10px，45% 就到实（2026-11-19 统一过渡手感） */
+  0%   { opacity: 0; transform: translateY(10px); }
+  45%  { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
 @keyframes orbit-win-out  { from { opacity: 1; } to { opacity: 0; } }
 @keyframes orbit-spin     { to { transform: rotate(1turn); } }
 @keyframes orbit-check-draw { to { stroke-dashoffset: 0; } }
@@ -859,7 +1157,9 @@ html[data-theme=orbit] {
   0%, 100% { box-shadow: 0 0 0 0 transparent; }
   50% { box-shadow: 0 0 6px 1px #e4c08040; }
 }
-/* 页转场（04a §一）：入场 scale(.97)+淡入 240ms；旧页即隐无退场帧（05 轮次 7 裁定 1） */
+/* 页转场（04a §一；05 轮次 12 追记用户裁定重启退场帧）：入场改上浮 10px+淡入 240ms（全宽面板
+   scale 显糊，上浮=面板落回全局场景）；旧页 125ms 淡出微缩后隐藏（--orbit-dur-quick），期间
+   沉到新页层下避免交叉叠影；动效关/减动效在 writePage JS 门控为瞬时切 */
 html[data-theme=orbit] .orbit-page.is-entering,
 html[data-theme=orbit] #orbit-main.is-entering,
 html[data-theme=orbit] #orbit-page-onboarding.is-entering,
@@ -867,6 +1167,13 @@ html[data-theme=orbit] #orbit-page-welcome.is-entering {
   animation: orbit-page-in var(--orbit-dur-page) var(--orbit-ease) both;
   transform-origin: 50% 50%;
   will-change: transform, opacity;   /* 仅入场期；animationend 移除类即清（04a §六.3） */
+}
+html[data-theme=orbit] .orbit-page.is-leaving,
+html[data-theme=orbit] #orbit-main.is-leaving {
+  animation: orbit-page-out var(--orbit-dur-quick) var(--orbit-ease) both;
+  z-index: 0;                        /* 退场期沉到入场页（z=1）之下 */
+  pointer-events: none;
+  will-change: opacity;              /* 只动 opacity：退场页走合成器，不重排 */
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme=orbit] .orbit-page.is-entering,
@@ -886,30 +1193,27 @@ html[data-theme=orbit][data-motion=off] #orbit-page-welcome.is-entering {
   animation-duration: var(--orbit-dur-quick);
   will-change: opacity;
 }
-/* 召唤窗入场/退场 B 案（05 轮次 5 裁定 5：[data-closing] ≤120ms 淡出后真关；退场期 pointer-events:none） */
+/* 召唤窗入场/退场（05 轮次 5 裁定 5 的 B 案保留；2026-11-19 用户裁定与页转场同支：
+   进场 240ms 上浮、45% 到实；退场 125ms 纯淡出后真关；退场期 pointer-events:none） */
 html[data-theme=orbit] .orbit-window[data-opening] {
-  animation: orbit-win-in var(--orbit-dur) var(--orbit-ease) both;
-  transform-origin: var(--orbit-win-ox, 50%) var(--orbit-win-oy, 50%);   /* origin 由 orbit.js 写入（04a §3.1） */
+  animation: orbit-win-in var(--orbit-dur-page) var(--orbit-ease) both;
   will-change: transform, opacity;
 }
-html[data-theme=orbit] .orbit-window[data-opening]::backdrop { animation: orbit-fade-in var(--orbit-dur) var(--orbit-ease) both; }
+html[data-theme=orbit] .orbit-window[data-opening]::backdrop { animation: orbit-fade-in var(--orbit-dur-page) var(--orbit-ease) both; }
 html[data-theme=orbit] .orbit-window[data-closing] {
-  animation: orbit-win-out 120ms var(--orbit-ease) both;
+  animation: orbit-win-out var(--orbit-dur-quick) var(--orbit-ease) both;
   pointer-events: none; will-change: opacity;
 }
-html[data-theme=orbit] .orbit-window[data-closing]::backdrop { animation: orbit-fade-out 120ms var(--orbit-ease) both; }
-html[data-theme=orbit] #orbit-win-workers[data-opening] { animation-name: orbit-fade-in; transform: none; }   /* M10 仅 opacity（甲-10） */
+html[data-theme=orbit] .orbit-window[data-closing]::backdrop { animation: orbit-fade-out var(--orbit-dur-quick) var(--orbit-ease) both; }
 /* S1 第二层浅 backdrop（04a §3.3；05 轮次 7 裁定 2 采纳 --orbit-backdrop-2，取代 03c §5.9 transparent 档） */
 html[data-theme=orbit] #action-confirm::backdrop { background: var(--orbit-backdrop-2); }
 @media (prefers-reduced-motion: reduce) {
-  html[data-theme=orbit] .orbit-window[data-opening],
-  html[data-theme=orbit] #orbit-win-workers[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
+  html[data-theme=orbit] .orbit-window[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
   html[data-theme=orbit] .orbit-window[data-opening]::backdrop { animation-duration: var(--orbit-dur-quick); }
   html[data-theme=orbit] .orbit-window[data-closing] { animation: none; opacity: 0; }   /* reduce 不播退场，JS 直接 close() */
   html[data-theme=orbit] .orbit-window[data-closing]::backdrop { animation: none; }
 }
-html[data-theme=orbit][data-motion=off] .orbit-window[data-opening],
-html[data-theme=orbit][data-motion=off] #orbit-win-workers[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
+html[data-theme=orbit][data-motion=off] .orbit-window[data-opening] { animation: orbit-fade-in var(--orbit-dur-quick) both; }
 html[data-theme=orbit][data-motion=off] .orbit-window[data-opening]::backdrop { animation-duration: var(--orbit-dur-quick); }
 html[data-theme=orbit][data-motion=off] .orbit-window[data-closing] { animation: none; opacity: 0; }
 html[data-theme=orbit][data-motion=off] .orbit-window[data-closing]::backdrop { animation: none; }
@@ -1045,7 +1349,8 @@ html[data-theme=orbit] .discovery-overview[data-just-toggled] #discovery-toggle-
 html[data-theme=orbit][data-motion=off] #discovery-toggle-enabled { transition: none; }
 html[data-theme=orbit][data-motion=off] .discovery-overview[data-just-toggled] #discovery-toggle-enabled::before { animation: none; }
 /* M-08 toast 生命周期（进入/退出 180ms；danger 竖条 2.4s 一次性播完静止；data-show 过桥归 orbit.js，06 核对项） */
-html[data-theme=orbit] #toast { transition: opacity var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] #toast { transition: opacity var(--orbit-dur) var(--orbit-ease),
+                                              bottom var(--orbit-dur) var(--orbit-ease); }   /* bottom 随 dock 收纳同步 */
 html[data-theme=orbit] #toast[data-show] { opacity: 1; }
 html[data-theme=orbit] #toast:not([data-show]) { opacity: 0; }
 html[data-theme=orbit] #toast[data-tone="danger"]::before {
@@ -1067,9 +1372,8 @@ html[data-theme=orbit] .orbit-win-head[data-landmark]::after {
   html[data-theme=orbit] .orbit-win-head[data-landmark]::after { animation: none; opacity: 0; }
 }
 html[data-theme=orbit][data-motion=off] .orbit-win-head[data-landmark]::after { animation: none; opacity: 0; }
-/* M-13 M10 拖动与预览（窗壳零过渡：left/top 1:1 跟手；甲-10 全程无 transform） */
+/* M-13 M10 拖动与预览（left/top 1:1 跟手；甲-10 全程无 transform） */
 html[data-theme=orbit] #workers-dock-preview { transition: opacity var(--orbit-dur) var(--orbit-ease); }
-html[data-theme=orbit] #orbit-win-workers { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme=orbit] #workers-dock-preview { transition-duration: var(--orbit-dur-quick); }
 }
@@ -1088,11 +1392,6 @@ html[data-theme=orbit][data-motion=off] #boot-status[data-done] { transition: no
   html[data-theme=orbit] [data-orbit-surface="avatar-card"] { transition: none; }
 }
 html[data-theme=orbit][data-motion=off] [data-orbit-surface="avatar-card"] { transition: none; }
-/* M-19 M10 分段控件色变 reduce/off 即时 */
-@media (prefers-reduced-motion: reduce) {
-  html[data-theme=orbit] #orbit-win-workers .worker-list-filter button { transition: none; }
-}
-html[data-theme=orbit][data-motion=off] #orbit-win-workers .worker-list-filter button { transition: none; }
 
 /* ===== §5 集成补遗（主代理） ===== */
 /* composer-foot 聚焦浮现（02a P1 预算要求常驻 0 字；仅控可见性，不碰 composer 内部样式——
@@ -1103,11 +1402,47 @@ html[data-theme=orbit] .composer:focus-within + .composer-foot { opacity: 1; vis
   html[data-theme=orbit] .composer-foot { transition: none; }
 }
 
-/* composer 包裹层（#chat > footer）：侧距对齐 #msgs 的 880px 消息列（同款公式），
-   使输入框与消息流同列对齐；composer 本体样式不动（03a 负面清单） */
+/* composer 包裹层（#chat > footer）：侧距对齐 #msgs 的 880px 消息列（同款公式） */
 html[data-theme=orbit] #chat > footer.orbit-composer-wrap {
-  padding: 14px max(28px, calc((100% - 880px) / 2)) max(15px, env(safe-area-inset-bottom));
+  padding: 8px max(28px, calc((100% - 880px) / 2)) max(10px, env(safe-area-inset-bottom));
 }
+/* 输入框轻玻璃条（用户裁定：原实心厚框太大太重）。只改视觉令牌，不动 textarea 的
+   inline height（app.js 自动撑高用）、不碰事件与 DOM。 */
+html[data-theme=orbit] .composer {
+  padding: 6px 8px 6px 14px;
+  gap: 8px;
+  background: var(--orbit-surface-glass);
+  border: 1px solid var(--orbit-line-faint);
+  border-radius: 18px;
+  box-shadow: none;
+  backdrop-filter: blur(6px);
+  transition: border-color var(--orbit-dur) var(--orbit-ease);
+}
+html[data-theme=orbit] .composer:focus-within {
+  border-color: var(--orbit-line-strong);
+  box-shadow: 0 0 0 2px #91b8ff1f;
+}
+html[data-theme=orbit] .composer textarea {
+  border: 0; background: transparent;
+  padding: 6px 0; line-height: 1.7;
+  font-size: 15px;
+}
+html[data-theme=orbit] .composer textarea:focus { outline: 0; }
+/* 发送钮精简为圆形图标（用户裁定）：藏直接文本「发送」，只留 ↑；JS 仍绑 #send，功能不变 */
+html[data-theme=orbit] #send {
+  position: relative;
+  min-height: 34px; width: 34px; height: 34px; padding: 0;
+  border-radius: 50%; font-size: 0;   /* 隐藏直接文本节点「发送」 */
+  flex-shrink: 0;
+}
+/* 文本节点即使 font-size:0 仍占布局位；用绝对定位让 ↑ 独占整钮并真正居中 */
+html[data-theme=orbit] #send span {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  padding: 0; font-size: 17px; line-height: 1;
+}
+/* composer-foot 提示字去掉（用户裁定：信息价值低、占空间） */
+html[data-theme=orbit] .composer-foot { display: none; }
 
 /* S7 协作者卡（DSH/Claude）：worker-tasks.js 状态轮询会持续写回内联 inset（room 遗留
    top 定位把卡压到右上遮消息区），JS 首装重置不可持久——CSS !important 作最终裁决：
@@ -1150,14 +1485,20 @@ html[data-theme=orbit] .discovery-overview { align-items: stretch; }
 html[data-theme=orbit] #discovery .discovery-header { padding: 0 0 var(--sp-5); }
 /* B-05：结果卡旧 margin 与 --den-gap 双距 */
 html[data-theme=orbit] .discovery-results .orbit-card { margin: 0; }
-/* B-06：状态带/引导带旧皮收薄（2px 边+实底 → 1px+透明），间距交给页内 gap */
+/* B-06：状态带收成正文级提示（无边框，不与 next 行动带抢视觉）；行动带保留强调条 */
 html[data-theme=orbit] #discovery .discovery-status {
-  border: 1px solid var(--orbit-line-faint); border-left-width: 2px;
-  background: transparent; margin: 0 0 var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  border: 0; background: transparent; margin: 0; padding: 0 var(--sp-1);
+  font: 500 var(--fs-sub)/1.6 var(--font); color: var(--muted);
 }
+html[data-theme=orbit] #discovery .discovery-status[data-kind=error] { color: var(--danger); }
+html[data-theme=orbit] #discovery .discovery-status[data-kind=waiting] { color: var(--warning); }
 html[data-theme=orbit] #discovery .discovery-next {
-  border: 1px solid var(--orbit-line-faint); border-left-width: 2px; margin-bottom: 0;
+  border: 1px solid var(--orbit-line-faint); border-left-width: 2px;
+  border-radius: var(--radius); background: #1b2e4966;
+  margin: 0; padding: 10px 12px;
 }
+html[data-theme=orbit] #discovery .discovery-next p { font: 500 var(--fs-sub)/1.6 var(--font); }
+html[data-theme=orbit] #discovery .discovery-next .btn { min-height: 32px; padding: 0 12px; font-size: var(--fs-sub); }
 /* B-10/B-11：P3 抽屉与疑问表单的 legacy margin 双距 */
 html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer,
 html[data-theme=orbit] #orbit-page-thoughts .orbit-drawer details { margin: 0; }
@@ -1176,9 +1517,87 @@ html[data-theme=orbit] .orbit-page-head .page-title { font: 600 var(--fs-page)/1
    此处先压掉均布防其他复用窗被撕开 */
 html[data-theme=orbit] .orbit-win-head { justify-content: flex-start; }
 html[data-theme=orbit] .orbit-win-tools { display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; }
-/* A1：M2–M7 是 div.modal 非 dialog，::backdrop 全链失效——压暗对齐令牌档
-   （无入退场动画为已知偏差，登记 06） */
-html[data-theme=orbit] .modal { background: #05080fd9; }   /* div 窗无 ::backdrop，直接压暗（与 dialog 窗同档） */
+/* A1：M2–M7 是 div.modal 非 dialog，::backdrop 全链失效——压暗对齐令牌档 */
+html[data-theme=orbit] .modal { background: var(--orbit-veil); }   /* div 窗无 ::backdrop，直接压暗（与 dialog 窗同档） */
+/* 设置子窗与 dialog 窗同一支过渡（2026-11-19 用户裁定）：开=压暗 + 卡片上浮 10px（240ms、
+   45% 到实），关=125ms 纯淡出。.hidden 是 display:none !important，用 allow-discrete 让
+   display 陪跑完再消失；退场期不吃点击。 */
+html[data-theme=orbit] .modal {
+  transition: opacity var(--orbit-dur-quick) var(--orbit-ease),
+              display var(--orbit-dur-quick) allow-discrete;
+}
+html[data-theme=orbit] .modal.hidden { opacity: 0; pointer-events: none; }
+@starting-style {
+  html[data-theme=orbit] .modal:not(.hidden) { opacity: 0; }
+}
+html[data-theme=orbit] .modal > .modal-card {
+  transition: opacity var(--orbit-dur-page) var(--orbit-ease),
+              transform var(--orbit-dur-page) var(--orbit-ease);
+}
+/* 通用 modal（人格等）也换到窗玻璃：与设置子窗同一块材质 */
+html[data-theme=orbit] #modal > .modal-card {
+  background: var(--orbit-surface-win);
+  border: 1px solid var(--orbit-line-strong);
+  border-radius: var(--orbit-radius-m);
+  box-shadow: var(--orbit-shadow-window);
+}
+html[data-theme=orbit] #modal > .modal-card > .modal-head { background: var(--orbit-win-head-bg); }
+@starting-style {
+  html[data-theme=orbit] .modal:not(.hidden) > .modal-card {
+    opacity: 0; transform: translateY(10px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] .modal,
+  html[data-theme=orbit] .modal > .modal-card { transition: none; }
+}
+html[data-theme=orbit][data-motion=off] .modal,
+html[data-theme=orbit][data-motion=off] .modal > .modal-card { transition: none; }
+/* ===== 设置子面板统一到「内容发现」面板语言（2026-11-19 用户明确裁定）=====
+   发现页配方：#0b142280/66 玻璃 + --orbit-line-faint 1px + --orbit-radius-m 圆角 + sp 节奏。
+   原来设置子面板用 legacy var(--line) 实底卡，与发现页玻璃割裂——这里逐类对齐。 ===== */
+html[data-theme=orbit] #settings-modal .settings-group,
+html[data-theme=orbit] #settings-modal .settings-rows {
+  background: #0b142280;                          /* 与 .discovery-overview 同档玻璃 */
+  border: 1px solid var(--orbit-line-faint);
+  border-radius: var(--orbit-radius-m);
+}
+html[data-theme=orbit] #settings-modal .settings-row { gap: var(--sp-4); }
+/* 行分隔线跟随玻璃：legacy var(--line) → faint */
+html[data-theme=orbit] #settings-modal .settings-rows > .settings-row + .settings-row { border-top-color: var(--orbit-line-faint); }
+html[data-theme=orbit] #settings-modal .settings-fieldset + .settings-fieldset,
+html[data-theme=orbit] #settings-modal .settings-help,
+html[data-theme=orbit] #settings-modal .settings-qq { border-top-color: var(--orbit-line-faint); }
+/* 状态条（worker/qq/status）：与发现页 .discovery-box 同材质 */
+html[data-theme=orbit] #settings-modal :is(.worker-status, .qq-status, .discovery-status, .settings-result) {
+  background: #0b142266; border-color: var(--orbit-line-faint); border-radius: var(--radius);
+}
+/* 输入控件边框收敛到 faint，贴合玻璃（legacy 2px --line 过重） */
+html[data-theme=orbit] #settings-modal .settings-section :is(input:not([type=checkbox]), select, textarea) {
+  border-color: var(--orbit-line-faint); border-radius: var(--radius);
+}
+/* 说明区/页头提示：去实底 soft，用透明 */
+html[data-theme=orbit] #settings-modal .settings-mode { background: #0b142266; border: 1px solid var(--orbit-line-faint); }
+
+/* ===== 子面板切换动效（occasional 档，eligible）：内容淡入 + 8px 上浮，180ms ease-out =====
+   hidden 是 display:none !important，transition 无法跨 display，改用 animation 绑在"刚显示"的 section。 */
+@keyframes orbit-settings-section-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+html[data-theme=orbit] #settings-modal .settings-section:not(.hidden) {
+  animation: orbit-settings-section-in var(--orbit-dur) var(--orbit-ease) both;
+}
+/* 按钮按压反馈：150ms ease-out + scale(0.97)，只精确命中 transform */
+html[data-theme=orbit] #settings-modal .btn,
+html[data-theme=orbit] .orbit-step { transition: transform 150ms var(--orbit-ease), background-color var(--orbit-dur) var(--orbit-ease), border-color var(--orbit-dur) var(--orbit-ease); }
+html[data-theme=orbit] #settings-modal .btn:active,
+html[data-theme=orbit] .orbit-step:active { transform: scale(0.97); }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme=orbit] #settings-modal .settings-section:not(.hidden) { animation: none; }
+}
+html[data-theme=orbit][data-motion=off] #settings-modal .settings-section:not(.hidden) { animation: none; }
+
 /* C2/D3：步点条接管 legacy margin（settings-nav margin 24 双重缩进→0）；
    横向保留 den-pad 内衬使首格与标题/分区左缘对齐（364→388） */
 html[data-theme=orbit] .settings-nav.orbit-step-dots { margin: 0 0 var(--den-gap); padding: 0 var(--den-pad); }
@@ -1196,11 +1615,6 @@ html[data-theme=orbit] .orbit-win-head .orbit-icon .orbit-symbol { width: 18px; 
 html[data-theme=orbit] .orbit-win-back { margin-right: var(--sp-2); }
 
 /* --- §6.4 R5d/R5a：杂项几何 --- */
-/* F7：M10 矮视口钳制（100dvh<616 时窗底越界不可达） */
-html[data-theme=orbit] #orbit-win-workers .worker-workspace,
-html[data-theme=orbit] #orbit-win-workers .orbit-window-body {
-  min-height: min(480px, calc(100dvh - 48px - var(--orbit-dock-clear)));
-}
 /* E2：S9 启动条对齐浮层宽帽纪律 + 换行态 */
 html[data-theme=orbit] #boot-status { max-width: min(320px, calc(100vw - 48px)); border-radius: 999px; }
 html[data-theme=orbit] #boot-status[data-wrap] { border-radius: 10px; }
@@ -1216,4 +1630,45 @@ html[data-theme=orbit] .orbit-step-pane h3[role=button],
 html[data-theme=orbit] [data-settings-section=workers] h3[role=button] {
   cursor: pointer; color: var(--accent); font: 600 var(--fs-section)/1.5 var(--font);
   padding: var(--sp-1) 0; border-bottom: 1px solid var(--orbit-line-faint); margin-bottom: var(--sp-2);
+}
+
+/* ===== 搬进自建窗的 observer 面板撑满窗宽（2026-11-19 布局修复）：
+   .observer 原生 width:clamp(360px,39vw,580px) + flex-shrink:0 + 2px 边框 + 四角角标，
+   搬进 dialog 后不撑满 → 右侧大块空白 + 与窗壳双边框。这里解码：宽度撑满、去自身边框/角标。 ===== */
+/* 观察器类窗的 body 统一给内边距（原本靠 observer 自带 20px，去掉后转移到 body） */
+html[data-theme=orbit] #orbit-win-evaluations .orbit-window-body,
+html[data-theme=orbit] #orbit-window-observer .orbit-window-body { padding: var(--sp-4) var(--den-pad); }
+html[data-theme=orbit] .orbit-window .observer {
+  width: 100%; flex-shrink: 1; height: auto; min-height: 0;
+  border: 0; padding: 0; background: transparent;
+}
+html[data-theme=orbit] .orbit-window .observer::after { content: none; }   /* 去四角角标 */
+/* 记忆概览（S2）：#memory.mem 原为聊天页的绝对定位浮泡（right:0;top:34px;300px 帽），
+   搬进 dialog 后仍按定位上下文飞出窗身（窗 420×84、正文 0 高，内容错位到右下）。
+   这里解掉定位与自身皮，正文交给窗壳。 */
+html[data-theme=orbit] .orbit-window #memory.mem {
+  position: static; width: auto; max-width: none; padding: 0;
+  border: 0; background: transparent; box-shadow: none;
+  font: 500 var(--fs-sub)/2 var(--font); color: var(--muted);
+}
+
+/* ===== M8b P1 核查窗适肤（#orbit-win-evaluations）——2026-11-19 布局核查：
+   基座 .eval-section 左右零内衬（显示标签/分页按钮贴边）、区卡圆角 0/6 混用、
+   状态横幅全宽高亮块；按观察器窗（M8）同口径收敛。 ===== */
+/* P1 核查窗头：原生 #eval-close 未包进 .orbit-win-tools，单给 margin-left 推到右上角 */
+html[data-theme=orbit] #orbit-win-evaluations .obs-head #eval-close { margin-left: auto; }
+html[data-theme=orbit] #orbit-win-evaluations .eval-section {
+  padding: 12px 14px;                            /* 左右内衬 14：显示/筛选/分页不再贴边 */
+  border-radius: var(--radius);                  /* 区卡圆角统一（原 0/6 混用） */
+}
+html[data-theme=orbit] #orbit-win-evaluations .orbit-entry-row { padding: 0 14px; }
+html[data-theme=orbit] #orbit-win-evaluations .obs-scroll { padding-bottom: var(--sp-3); }
+html[data-theme=orbit] #orbit-win-evaluations .obs-status {
+  margin: 0 0 var(--sp-2); padding: 0;
+  background: transparent; border-radius: 0;     /* 状态降权重：色块仅 error/busy 态（M8 同口径） */
+  color: var(--muted);
+}
+html[data-theme=orbit] #orbit-win-evaluations .obs-status[data-state="error"] {
+  color: var(--danger); background: var(--danger-bg);
+  border-radius: var(--radius); padding: var(--sp-2) var(--sp-3);
 }

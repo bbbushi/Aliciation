@@ -46,7 +46,7 @@ MAX_OUTPUT_BYTES = 192 * 1024
 MAX_MODEL_INPUT_BYTES = 112 * 1024
 MAX_INTEREST_CHARS = 600
 _TIMEOUTS = {"plan": 60.0, "search": 15.0, "read": 20.0, "interpret": 60.0, "reflect":60.0, "bili_http": 30.0, "tieba_forum_check": 20.0, "tieba_page": 20.0}
-_COVERAGE = {"page_text_excerpt", "static_page_excerpt", "video_description_only", "page_description_only",
+_COVERAGE = {"web_article_excerpt", "plain_text_excerpt", "page_text_excerpt", "static_page_excerpt", "video_description_only", "page_description_only",
              "zhihu_answer_excerpt", "zhihu_article_excerpt", "zhihu_question_excerpt", "forum_main_post_excerpt", "forum_thread_excerpt"}
 
 

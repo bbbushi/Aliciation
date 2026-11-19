@@ -296,21 +296,69 @@
 
   const PAGE_KEYS = ["chat", "discovery", "thoughts", "settings"];
   const pages = {};            // key → 容器元素（install 时填充）
+  const pageHooks = [];        // 页级副作用（如 P4 球面引擎的启停）：切页时按最终页名回调
   let currentPage = "chat";
+  let pageToken = 0;           // 切页令牌：过期退场计时器不得再动 DOM
+
+  /* 退场页必须先脱离文档流再淡出：#app 是 flex-row，#orbit-main 与 .orbit-page 都是
+     width: min(1080px, 100%)，两页同时在场会被对半分宽（772 → 各 363px），一秒内再把新页
+     弹回全宽——2026-11-19 用户报「页面之间的过渡不流畅」即此。冻结成 fixed 盒子（位置/尺寸
+     取切换前一帧的 rect，视觉零位移）后新旧页不再互相挤压，退场只是叠在上面淡出。 */
+  const FREEZE_PROPS = ["position", "left", "top", "width", "height", "maxHeight", "margin"];
+  function freezePage(el) {
+    if (el.dataset.orbitFrozen) return;
+    const r = el.getBoundingClientRect();
+    el.style.position = "fixed";
+    el.style.left = r.left + "px";
+    el.style.top = r.top + "px";
+    el.style.width = r.width + "px";
+    el.style.height = r.height + "px";
+    el.style.maxHeight = "none";
+    el.style.margin = "0";
+    el.dataset.orbitFrozen = "1";
+  }
+  function unfreezePage(el) {
+    if (!el.dataset.orbitFrozen) { el.classList.remove("is-leaving"); return; }
+    delete el.dataset.orbitFrozen;
+    for (const p of FREEZE_PROPS) el.style[p] = "";
+    el.classList.remove("is-leaving");
+  }
 
   function writePage(name) {
     document.body.dataset.orbitPage = name;
+    // 每次切页领一个令牌：退场计时器只对「最后一次切页」生效。
+    // 原本按写入时捕获的页名判断（key !== name），启动时 onboarding→chat 的竞态会让
+    // 旧计时器把刚显示出来的 chat 又藏掉（刷新后消息页空白，2026-11-19 用户报障）。
+    const token = ++pageToken;
+    const reduce = root.dataset.motion !== "on" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // 先量后动：退场页的 rect 必须在「新页显示出来之前」取，否则已经被挤成半宽
+    const leaving = reduce ? [] : PAGE_KEYS
+      .map((key) => [key, pages[key]])
+      .filter(([key, el]) => el && key !== name && !el.hidden && el.style.display !== "none");
+    for (const [, el] of leaving) {
+      freezePage(el);
+      el.classList.add("is-leaving");
+      later(() => {
+        if (token !== pageToken) return;      // 期间又切过页：交由最新那次收尾
+        unfreezePage(el);
+        el.hidden = true; el.style.display = "none";
+      }, 150);
+    }
     for (const key of PAGE_KEYS) {
       const el = pages[key];
       if (!el) continue;
       if (key === name) {
+        unfreezePage(el);                     // 快速往返：退场中重返则撤销冻结与退场
         el.hidden = false; el.style.display = "";
         el.classList.add("is-entering");
         el.addEventListener("animationend", () => el.classList.remove("is-entering"), { once: true });
         later(() => el.classList.remove("is-entering"), 400); // 动画被 display:none 打断时兜底（04a §1.6）
       } else {
-        el.hidden = true; el.style.display = "none"; // 旧页即隐；display 双保险（.orbit-page 类 display:flex 会盖掉 [hidden]）
         el.classList.remove("is-entering");
+        if (leaving.some(([k]) => k === key)) continue;   // 已冻结在退场层，等计时器收尾
+        if (!el.hidden || el.style.display !== "none") {
+          el.hidden = true; el.style.display = "none"; // 双保险归位（.orbit-page 类 display:flex 会盖掉 [hidden]）
+        }
       }
     }
     // dock aria-current（同帧）
@@ -319,6 +367,8 @@
       if (btn) { if (key === name) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current"); }
     }
     if (window.OrbitBG && typeof window.OrbitBG.setPage === "function") window.OrbitBG.setPage(name);
+    if (window.OrbitBG && typeof window.OrbitBG.setFocus === "function") window.OrbitBG.setFocus(name);
+    for (const hook of pageHooks) { try { hook(name); } catch (_) { /* 页级钩子互不牵连 */ } }
     syncThoughtsVisible(); // 切页时机：P3 可见性重申（02b 三时机之二）
   }
 
@@ -361,8 +411,81 @@
     return b;
   }
 
-  let dock = null;
+  /* dock 收纳（2026-11-18 用户要求：底部 dock 可收成小把手）
+     几何：展开＝56 高整条轨道；收起＝52×40、只剩 chevron（把手宽由 --orbit-dock-tuck 定）。
+     auto 宽度无法过渡，所以收/开都先把当前宽度钉成像素，过渡完再交还 CSS。 */
+  const DOCK_TUCK_KEY = "alice.orbit.dock.v1";
+  let dock = null, dockToggle = null, dockTucked = false, dockTuckSeq = 0;
+
+  function dockTuckWidth() {
+    const n = parseFloat(getComputedStyle(dock).getPropertyValue("--orbit-dock-tuck"));
+    return Number.isFinite(n) && n > 0 ? n : 52;
+  }
+  function setDockTucked(next, animate = true) {
+    if (!dock || next === dockTucked) return;
+    const motion = animate && !reduceMotion();
+    // 载入时恢复上次收纳态不该播动画（页面已画过一帧）：开一个短免过渡窗口
+    if (!animate) {
+      root.dataset.dockInstant = "";
+      later(() => { delete root.dataset.dockInstant; }, 80);
+    }
+    const from = dock.getBoundingClientRect().width;
+    if (motion) { dock.style.width = from + "px"; void dock.offsetWidth; }
+    dockTucked = next;
+    dock.toggleAttribute("data-tucked", next);
+    // 底部预留跟着收：--orbit-dock-clear 96 → 68，页面壳/聊天卡片长高，输入框随之下移
+    root.dataset.dock = next ? "tucked" : "open";
+    // 贴底阅读时把消息列一起钉到底：卡片长高的 28px 不该变成最新消息下方的空白
+    const msgs = $("#msgs");
+    const pinnedToBottom = !!msgs && msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    if (dockToggle) {
+      const label = next ? "展开导航" : "收起导航";
+      dockToggle.setAttribute("aria-expanded", String(!next));
+      dockToggle.setAttribute("aria-label", label);
+      dockToggle.setAttribute("data-tip", label);
+      // 键盘路径：焦点还在被收起的图标上时交回把手，避免焦点掉到 body
+      if (next && dock.contains(document.activeElement) && document.activeElement !== dockToggle) {
+        dockToggle.focus({ preventScroll: true });
+      }
+    }
+    try { localStorage.setItem(DOCK_TUCK_KEY, next ? "tucked" : "open"); } catch (_) { /* 隐私模式忽略 */ }
+    // 待确认消息徽标挂在「对话」图标上，收起后图标不可见——暂时挪到把手上，展开再还回去
+    const badge = badges.mail, chatIcon = dockIcons.primary.chat;
+    if (badge && dockToggle && chatIcon) {
+      const host = next ? dockToggle : chatIcon;
+      if (badge.parentElement !== host) host.appendChild(badge);
+    }
+    if (!motion) { dock.style.width = ""; if (pinnedToBottom) msgs.scrollTop = msgs.scrollHeight; return; }
+    if (pinnedToBottom) {
+      // 过渡期间每帧跟到底（高度在 180ms 内连续变化）
+      const stick = () => { msgs.scrollTop = msgs.scrollHeight; };
+      stick();
+      const until = performance.now() + 320;
+      const tick = () => {
+        if (!dock || performance.now() > until) return;
+        stick();
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
+    if (next) {
+      dock.style.width = dockTuckWidth() + "px";
+    } else {
+      const pinned = dock.style.width;               // 收起态像素宽
+      dock.style.width = "max-content";              // 量一次展开后的自然宽
+      const to = dock.getBoundingClientRect().width;
+      dock.style.width = pinned;
+      void dock.offsetWidth;
+      dock.style.width = to + "px";
+    }
+    const seq = ++dockTuckSeq;                       // 快速连点时只让最后一次交还 CSS
+    const release = () => { if (dock && seq === dockTuckSeq) dock.style.width = ""; };
+    dock.addEventListener("transitionend", release, { once: true });
+    later(release, 260);
+  }
+
   function buildDock() {
+    dockTucked = false;
     dock = document.createElement("div");
     dock.id = "orbit-dock";
     dock.setAttribute("role", "navigation");
@@ -370,83 +493,60 @@
     const texture = document.createElement("div");
     texture.className = "orbit-dock-texture";
     dock.appendChild(texture);
-    const mkCluster = (name) => {
-      const c = document.createElement("div");
-      c.className = "orbit-dock-cluster";
-      c.dataset.cluster = name;
-      dock.appendChild(c);
-      return c;
-    };
-    const cPrimary = mkCluster("primary");
-    const cPersona = mkCluster("persona");
-    const cTools = mkCluster("tools");
-    const cSystem = mkCluster("system");
+    // 收纳把手常驻轨道最左：收起后它是唯一可见的按钮（chevron 收起向下、展开向上）
+    dockToggle = document.createElement("button");
+    dockToggle.type = "button";
+    dockToggle.className = "orbit-icon orbit-dock-toggle";
+    dockToggle.setAttribute("aria-controls", "orbit-dock-cluster");
+    dockToggle.setAttribute("aria-expanded", "true");
+    dockToggle.setAttribute("aria-label", "收起导航");
+    dockToggle.setAttribute("data-tip", "收起导航");
+    const chevron = document.createElement("span");
+    chevron.className = "orbit-dock-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    dockToggle.appendChild(chevron);
+    wire(dockToggle, "click", () => setDockTucked(!dockTucked));
+    dock.appendChild(dockToggle);
+    // 三站 dock：设置 / 对话 / 退出（用户裁定精简；单簇无分隔线）
+    const cluster = document.createElement("div");
+    cluster.className = "orbit-dock-cluster";
+    cluster.id = "orbit-dock-cluster";
+    cluster.dataset.cluster = "primary";
+    dock.appendChild(cluster);
 
-    // 簇① 一级四图标（点击走切页五连，鼠标键盘同路径）
-    const primaries = [
-      ["chat", "chat", "我们的对话 · 01 / conversation", "对话"],
-      ["discovery", "search", "内容发现", "发现"],
-      ["thoughts", "stars", "思想与探索", "思想"],
-      ["settings", "gear", "设置", "设置"],
-    ];
-    for (const [key, icon, label, tip] of primaries) {
-      const b = dockButton({ icon, label, tip, cluster: cPrimary });
-      wire(b, "click", () => route(key));
-      dockIcons.primary[key] = b;
-    }
-    // 簇② 人格（召 M1：代理原 #persona-btn，节点保留）
-    const persona = dockButton({ icon: "diamond", label: "人格", tip: "人格", idle: "mid", cluster: cPersona });
-    wire(persona, "click", () => { const t = $("persona-btn"); if (t) t.click(); });
-    dockIcons.persona = persona;
-    // 簇③ 工具簇：记忆观察器 / P1 核查（N2）+ P1 待绑定徽标
-    const obs = dockButton({ icon: "layers", label: "记忆观察器", tip: "记忆观察器", idle: "mid", cluster: cTools });
-    wire(obs, "click", () => { const t = $("observer-btn"); if (t) t.click(); });
-    const p1 = dockButton({ icon: "shield", label: "P1 核查", tip: "P1 核查", idle: "mid", cluster: cTools });
-    wire(p1, "click", () => { const t = $("evaluations-btn"); if (t) t.click(); });
-    dockIcons.tools.observer = obs; dockIcons.tools.p1 = p1;
-    // 簇④ 系统簇：QQ / DSH / Claude / 清醒睡眠 状态 + 待确认徽标 + 退出（N2）
-    const qq = dockButton({ icon: "qq", label: "QQ 连接", tip: "QQ 连接", idle: "mid", cluster: cSystem });
-    wire(qq, "click", () => { const t = $("qq-btn"); if (t) t.click(); });
-    const dsh = dockButton({ icon: "dsh", label: "DSH 授权", tip: "DSH 授权", idle: "mid", cluster: cSystem });
-    wire(dsh, "click", () => window.AliceUI && window.AliceUI.openSettings("workers"));
-    const cl = dockButton({ icon: "claude", label: "Claude 授权", tip: "Claude 授权", idle: "mid", cluster: cSystem });
-    wire(cl, "click", () => { const t = $("settings-btn"); if (t) t.click(); window.AliceUI && window.AliceUI.selectSettings("claude"); });
-    const wake = dockButton({ icon: "moon", label: "清醒 / 睡眠", tip: "清醒 / 睡眠", idle: "mid", cluster: cSystem });
-    wire(wake, "click", () => route("thoughts"));
-    const mail = dockButton({ icon: "mail", label: "待确认消息", tip: "待确认消息", cluster: cSystem });
-    wire(mail, "click", () => {
-      route("chat");
-      const n = $("chat-notice");
-      if (n && !n.classList.contains("hidden")) n.focus && n.focus();
-    });
-    const exit = dockButton({ icon: "exit", label: "退出 Alice", tip: "退出 Alice", cluster: cSystem });
+    const settings = dockButton({ icon: "gear", label: "设置", tip: "设置", cluster });
+    wire(settings, "click", () => route("settings"));
+    const chat = dockButton({ icon: "chat", label: "我们的对话 · 01 / conversation", tip: "对话", cluster });
+    wire(chat, "click", () => route("chat"));
+    const exit = dockButton({ icon: "exit", label: "退出 Alice", tip: "退出 Alice", cluster });
     wire(exit, "click", () => { const t = $("exit-btn"); if (t) t.click(); });
-    dockIcons.system = { qq, dsh, claude: cl, wake, mail, exit };
-    // 徽标挂点：待确认（warn）挂信封；P1 待绑定（info）挂工具簇 P1；DSH 未读（warn）挂 DSH
-    for (const [key, tone] of [["mail", "warn"], ["p1", "info"], ["dsh", "warn"]]) {
-      const holder = key === "p1" ? p1 : dockIcons.system[key];
-      const badge = document.createElement("span");
-      badge.className = "orbit-badge";
-      badge.dataset.tone = tone;
-      badge.hidden = true;
-      badge.addEventListener("animationend", (e) => {
-        if (e.animationName === "orbit-badge-glow") badge.setAttribute("data-attention", "done"); // 播完永久静止
-      });
-      holder.appendChild(badge);
-      badges[key] = badge;
-    }
-    // 状态点：QQ / DSH / Claude / 清醒睡眠（data-state 镜像）
-    const dots = {};
-    for (const [key, holder] of [["qq", qq], ["dsh", dsh], ["claude", cl], ["wake", wake]]) {
-      const d = document.createElement("span");
-      d.className = "orbit-dot";
-      d.dataset.state = "unknown";
-      holder.appendChild(d);
-      dots[key] = d;
-    }
-    dockIcons.dots = dots;
+
+    dockIcons.primary.settings = settings;
+    dockIcons.primary.chat = chat;
+    dockIcons.system.exit = exit;
+    // 待确认消息徽标改挂「对话」（待确认消息本就在对话页处理，语义一致）
+    const badge = document.createElement("span");
+    badge.className = "orbit-badge";
+    badge.dataset.tone = "warn";
+    badge.hidden = true;
+    badge.addEventListener("animationend", (e) => {
+      if (e.animationName === "orbit-badge-glow") badge.setAttribute("data-attention", "done");
+    });
+    chat.appendChild(badge);
+    badges.mail = badge;
+    dockIcons.dots = {};   // 状态点随图标下架；mirrorState 有 dots[key] 守卫
     document.body.appendChild(dock);
     undos.push(() => dock.remove());
+    // 恢复上次收纳状态；窄窗（≤720 通栏态）一律保持展开，JS 也随视口变化收回展开
+    let savedTuck = null;
+    try { savedTuck = localStorage.getItem(DOCK_TUCK_KEY); } catch (_) { savedTuck = null; }
+    const narrow = matchMedia("(max-width: 720px)");
+    root.dataset.dock = "open";
+    if (savedTuck === "tucked" && !narrow.matches) setDockTucked(true, false);
+    const onNarrow = () => { if (narrow.matches && dockTucked) setDockTucked(false); };
+    narrow.addEventListener("change", onNarrow);
+    undos.push(() => narrow.removeEventListener("change", onNarrow));
+    undos.push(() => { delete root.dataset.dock; delete root.dataset.dockInstant; });
     // 主题首次进入：dock 整体 180ms 仅淡入（04a §1.5 顺序注）
     dock.classList.add("is-entering");
     dock.addEventListener("animationend", () => dock.classList.remove("is-entering"), { once: true });
@@ -695,15 +795,18 @@
     if (evalHead) subClass(evalHead, "orbit-win-head");
     follow("evaluations", evalWin, { dockFallback: dockIcons.tools.p1 });
 
-    const workerWin = makeWindow({ id: "orbit-win-workers", ariaLabel: "DSH 协作会话" }); // 窗头无标题文本（03c 硬约束）
-    workerWin._orbitDockFallback = dockIcons.system.dsh;
-    follow("worker-tasks", workerWin, { dockFallback: dockIcons.system.dsh });
+    // M10 DSH 协作会话：不再套自建窗壳。面板自带浮动卡片几何（worker-tasks.css
+    // `.worker-panel[data-presentation=floating]` 宽 min(960px, 100% - 48px)），塞进
+    // 窗壳后 960px 面板撑破 760px 窗身、详情列被挤出窗外，与 Claude 面板呈现不一致。
+    // 现与 Claude（claude-agent 克隆模板）共用同一张协作者卡片：开合、拖拽、位置
+    // 均由 worker-tasks.js 的 data-presentation 驱动，orbit 只保留 dock 图标入口。
+    // theme-orbit.css 的 #orbit-win-workers 段落已于同日整组清除。
   }
 
   /* ---------- 十、设置窗增强（M2–M7 复用 #settings-modal；02c 权威口径） ---------- */
 
   const SECTION_NAMES = {
-    general: "对话与模型", appearance: "外观", discovery: "联网搜索", observer: "上下文观测",
+    general: "对话与模型", appearance: "外观", discovery: "联网搜索", observer: "外部观察",
     qq: "QQ 连接", workers: "DSH 授权", claude: "Claude 授权", thoughts: "思想与探索",
   };
   let switching = false; // M-10 switchStep 纪元重入守卫
@@ -740,19 +843,21 @@
         const parts = sectionTips[key] || [];
         card._orbitInfoTip.setAttribute("data-tip", parts.length ? parts.join(" ｜ ") : "本分区无附加说明");
       };
-      // R5c B2：返回钮（03c 1.2 必备）——复用关闭链路（与 Esc 同源语义）
-      const back = document.createElement("button");
-      back.type = "button";
-      back.className = "orbit-win-btn orbit-win-back";
-      back.setAttribute("aria-label", "返回");
-      back.setAttribute("data-tip", "返回");
-      back.appendChild(svg("x", ""));
-      back.querySelector("svg").style.width = "18px";
-      back.querySelector("svg").style.height = "18px";
-      wire(back, "click", () => { if (x) x.click(); });
-      head.insertBefore(back, title);
-      undos.push(() => back.remove());
+      /* R5c B2 返回钮已移除（05 轮次 12 追记）：与右侧 × 图标视觉相同，读作「两个关闭」；
+         关闭即回设置页，无需独立返回。 */
     }
+    // 设置窗关闭必回设置页（05 轮次 12 追记用户裁定）：modal 挂 body 级，可从任意页打开
+    // （如 P2「联网搜索设置」）——关闭时若当前页非设置则路由回设置。app.js 以类/样式隐藏
+    // div.modal、无统一 close 事件，故观察可见性翻转。
+    let modalVisible = getComputedStyle(modal).display !== "none";
+    new MutationObserver(() => {
+      const hiddenNow = modal.classList.contains("hidden") || getComputedStyle(modal).display === "none";
+      if (!hiddenNow) { modalVisible = true; return; }
+      if (modalVisible) {
+        modalVisible = false;
+        if ((document.body.dataset.orbitPage || "") !== "settings") route("settings");
+      }
+    }).observe(modal, { attributes: true, attributeFilter: ["class", "style"] });
 
     // 步点条：原 nav.settings-nav 已在窗头下方，只挂类 + 图标化（监听全保留，02c 0.3）
     const nav = card.querySelector("nav.settings-nav");
@@ -761,7 +866,7 @@
     let moveIndicator = () => {};
     if (nav) {
       subClass(nav, "orbit-step-dots");
-      const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", observer: "layers", qq: "qq", workers: "dsh" };
+      const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", observer: "layers", qq: "qq", workers: "dsh", claude: "claude" };
       for (const b of nav.querySelectorAll("button[data-settings]")) {
         subClass(b, "orbit-step");
         const key = b.getAttribute("data-settings");
@@ -877,6 +982,13 @@
     p2.setAttribute("data-density", "wide");
     app.insertBefore(p2, app.querySelector(".terminal-foot") || null);
     undos.push(() => p2.remove());
+    // 05 轮次 12 追记：P2 ×（discovery.js goChat 会切回房间视图并聚焦输入框）——orbit 下
+    // 捕获段拦截改道，关闭必回设置页；其余按钮（含 #discovery-go-chat「回到对话」）不受影响
+    p2.addEventListener("click", (e) => {
+      if (e.target.closest("#discovery-close")) { e.stopPropagation(); route("settings"); }
+    }, true);
+    const dclose = $("discovery-close");
+    if (dclose) { subAttr(dclose, "aria-label", "关闭内容发现页，回到设置"); subAttr(dclose, "data-tip", "关闭"); }
     if (discovery) {
       moveNode(discovery, p2);
       subFlag(discovery, "hidden", false); // 面板可见性归页容器（还原表 02b #1：回原 hidden）
@@ -899,13 +1011,13 @@
       const box = $("discovery-settings-box");
       if (box) moveNode(box, drawer);
       // 左列 = 行动区（03b §2.1/R5b J1：开关+主按钮+入口排 overview 为首位），
-      // 右主列仅结果流；偏好浮层包装节点物理在左列（窗口召唤，R5d P1-1 分组重排）
+      // 右主列 = 偏好编辑器 + 结果流（2026-11-19 排版修：偏好是两列表单，
+      // 放进 300px 左列会挤成 150px 的双栏，改挂主列结果之上）
       const overview = discovery.querySelector(".discovery-overview");
       const results = discovery.querySelector(".discovery-results");
       const prefs = $("discovery-preferences");
       moveNode(overview, side);
       moveNode(results, mainCol);
-      moveNode(prefs, side);
       // 导语精简 1 字（P2 91→90 贴线，05 轮次 11）：原句入悬停
       const intro = discovery.querySelector(".discovery-intro");
       if (intro) { subText(intro, "找点感兴趣的，留着一起聊"); subAttr(intro, "title", "找点你感兴趣的，留着一起聊。"); }
@@ -923,9 +1035,13 @@
       }
       // 左列余项：见闻维护 / 活动用量 / 策略抽屉（依次其后，R5b J1）
       const learn = $("discovery-learning-preview");
-      const task = document.querySelector("details.discovery-task");
+      // 注意：results 已搬进尚未挂树的 mainCol，文档级 querySelector 找不到子树内的
+      // details.discovery-task（曾因此一直没被搬动）；必须从 results 引用内查。
+      const task = results ? results.querySelector("details.discovery-task") : null;
       moveNode(learn, side);
+      subClass(learn, "orbit-drawer");   // 与策略抽屉同一行语言（2026-11-19 排版统一）
       moveNode(task, side);
+      subClass(task, "orbit-drawer");
       moveNode(drawer, side);
       // interests-box 初始 open 移除（02b 裁定请求 3，还原恢复）
       const interests = $("discovery-interests-box");
@@ -940,12 +1056,13 @@
         foldDetail(drawer); foldDetail(task);
         const ib = $("discovery-interests-box"); if (ib) foldDetail(ib);
       });
-      // 偏好浮层包装：CSS 呈浮层抽屉（节点留在面板内）；S10 族动态列表浮层挂滚动例外钩子（R5d P3 组）
+      // 偏好编辑器：主列结果之上（关闭时整块隐藏，不占行）
       if (prefs) {
         const f = document.createElement("div");
         f.className = "orbit-float";
         f.setAttribute("data-orbit-scroll", "");
         wrapNode(prefs, f);
+        moveNode(f, mainCol, results);
       }
       body.appendChild(side);
       body.appendChild(mainCol);
@@ -999,7 +1116,17 @@
     const chip = document.createElement("span");
     chip.className = "orbit-state-chip";
     chip.setAttribute("data-state", "awake");
-    thoughtHead.append(thoughtTitle, chip);
+    /* 05 轮次 12 追记：dock 收纳化后 P3 无显式出口（dock 仅剩设置/对话/电源）——页头补关闭钮，回对话页 */
+    const thoughtClose = document.createElement("button");
+    thoughtClose.type = "button";
+    thoughtClose.className = "orbit-page-close";
+    thoughtClose.setAttribute("aria-label", "关闭思想与探索页，回到设置");
+    thoughtClose.setAttribute("data-tip", "关闭");
+    thoughtClose.appendChild(svg("x", ""));
+    thoughtClose.querySelector("svg").style.width = "16px";
+    thoughtClose.querySelector("svg").style.height = "16px";
+    wire(thoughtClose, "click", () => route("settings"));   /* 05 轮次 12 追记：设置子页关闭统一回设置 */
+    thoughtHead.append(thoughtTitle, chip, thoughtClose);
     p3.appendChild(thoughtHead);
     undos.push(() => thoughtHead.remove());
     // chip 只读镜像 #thought-lifecycle 的 data-state（05 轮次 7 星线裁定同路径；原节点收纳）
@@ -1159,10 +1286,113 @@
     jump.append(js, jn);
     wire(jump, "click", () => route("thoughts"));
     grid.appendChild(jump);
+    // 三站 dock 后补回的一级页/工具入口（人格·观察器·P1核查原挂侧栏，orbit 隐藏侧栏后失联）
+    const EXTRA = [
+      ["内容发现", "search", () => route("discovery")],
+      ["人格", "diamond", () => { const t = $("persona-btn"); if (t) t.click(); }],
+    ];
+    for (const [name, icon, onOpen] of EXTRA) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "orbit-hub-item";
+      b.setAttribute("data-tip", name);
+      const s = svg(icon);
+      const strong = document.createElement("strong");
+      strong.textContent = name;
+      b.append(s, strong);
+      wire(b, "click", onOpen);
+      grid.appendChild(b);
+    }
     p4.append(head, grid);
     app.insertBefore(p4, app.querySelector(".terminal-foot") || null);
     undos.push(() => p4.remove());
     pages.settings = p4;
+
+    // —— P4 3D 球面引擎（用户裁定）：入口贴在神经球面上随球朝向（不正对镜头），背面被遮挡核挡住；
+    //    自动缓转 + 上下左右拖拽；窄屏(<900px)留原平面网格。只写 CSS 变量，不碰卡的 DOM/点击。 ——
+    const wide = window.matchMedia("(min-width: 900px)");
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const cards = [...grid.querySelectorAll(".orbit-hub-item")];
+    // 每张徽章补装饰环 + 光柱（一次性，纯装饰）
+    for (const c of cards) {
+      const ring = document.createElement("span"); ring.className = "glyph-ring"; c.appendChild(ring);
+      const beam = document.createElement("span"); beam.className = "glyph-beam"; c.appendChild(beam);
+    }
+    let spin = 0, dragSpin = 0, tilt = 12, dragTilt = 0;
+    let dragging = false, dragStartX = 0, dragStartY = 0, dragStartSpin = 0, dragStartTilt = 0;
+    let rafHub = 0, lastT = 0, CORE = 300, RADIUS = 300;
+    const N = cards.length;
+    // 球面经纬分布：按卡数自动分层（3 层：上/赤道/下），每层经度均分并错开半格
+    const latBands = [-34, 0, 34];
+    const layout = () => {
+      CORE = Math.max(220, Math.min(window.innerHeight * 0.38, 360));
+      RADIUS = CORE / 2 + 66;                          // 球面半径 = 球半径 + 徽章半深余量
+      grid.style.setProperty("--core-size", CORE.toFixed(0) + "px");
+      grid.style.setProperty("--radius", RADIUS.toFixed(0) + "px");
+      const perBand = Math.ceil(N / latBands.length);
+      cards.forEach((c, i) => {
+        const band = Math.min(latBands.length - 1, Math.floor(i / perBand));
+        const idxInBand = i - band * perBand;
+        const bandCount = Math.min(perBand, N - band * perBand);
+        const lon = (idxInBand / bandCount) * 360 + (band % 2 ? 180 / bandCount : 0);
+        c.style.setProperty("--lon", lon.toFixed(1) + "deg");
+        c.style.setProperty("--lat", (-latBands[band]).toFixed(1) + "deg");
+      });
+    };
+    const paint = () => {
+      grid.style.setProperty("--spin", (spin + dragSpin).toFixed(2) + "deg");
+      grid.style.setProperty("--tilt", Math.max(-72, Math.min(72, tilt + dragTilt)).toFixed(2) + "deg");
+    };
+    const frame = (ts) => {
+      rafHub = 0;
+      const dt = lastT ? Math.min(0.05, (ts - lastT) / 1000) : 0.016;
+      lastT = ts;
+      if (!still.matches && !dragging) spin = (spin + dt * 6) % 360;   // 约 60s 一圈
+      paint();
+      rafHub = requestAnimationFrame(frame);
+    };
+    const prepare = () => {
+      if (!wide.matches) {
+        grid.classList.remove("orbit-hub-orbit");
+        cards.forEach((c) => { c.style.cssText = ""; });
+        grid.style.cssText = "";
+        return;
+      }
+      grid.classList.add("orbit-hub-orbit");
+      layout(); paint();
+    };
+    const start = () => {
+      prepare();
+      if (rafHub) return;
+      if (!wide.matches) return;                        // 窄窗走平面网格，不需要逐帧
+      lastT = 0;
+      rafHub = requestAnimationFrame(frame);
+    };
+    const stop = () => { if (rafHub) { cancelAnimationFrame(rafHub); rafHub = 0; } };
+    // 双轴拖拽：水平改经度 spin，垂直改整体俯仰 tilt；点在卡上不拖（保留点击）
+    wire(grid, "pointerdown", (e) => {
+      if (!wide.matches || e.target.closest(".orbit-hub-item")) return;
+      dragging = true;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      dragStartSpin = dragSpin; dragStartTilt = dragTilt;
+      try { grid.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    wire(grid, "pointermove", (e) => {
+      if (!dragging) return;
+      dragSpin = dragStartSpin + (e.clientX - dragStartX) * 0.45;
+      dragTilt = dragStartTilt - (e.clientY - dragStartY) * 0.35;
+      dragTilt = Math.max(-72 - tilt, Math.min(72 - tilt, dragTilt));
+      paint();
+    });
+    const endDrag = () => { dragging = false; };
+    wire(grid, "pointerup", endDrag);
+    wire(grid, "pointercancel", endDrag);
+    const onWide = () => { if (document.body.dataset.orbitPage === "settings") start(); else prepare(); };
+    wide.addEventListener ? wide.addEventListener("change", onWide) : wide.addListener(onWide);
+    prepare();   // 隐藏态先把球面版式算好：入场那一帧不用再算布局（切页更顺）
+    // 逐帧自转只在设置页在场时跑：以前常驻 60fps，在别的页也在写 CSS 变量
+    pageHooks.push((name) => { if (name === "settings") start(); else stop(); });
+    undos.push(() => { stop(); grid.classList.remove("orbit-hub-orbit"); cards.forEach(c => { c.style.cssText = ""; }); grid.style.cssText = ""; });
 
     // OB1/OB2：fixed 包装（03b §五；#onboarding/#welcome 转 display:contents 由 CSS 承接）
     for (const [screenId, wrapId] of [["onboarding", "orbit-page-onboarding"], ["welcome", "orbit-page-welcome"]]) {
@@ -1186,6 +1416,9 @@
     subStyle($("app-nav"), "display:none");
     subStyle(document.querySelector(".terminal-bar"), "display:none");
     subStyle(document.querySelector(".terminal-foot"), "display:none");
+    // 用户裁定：顶栏去掉导航钮（app-nav 已隐藏，☰ 点了无效）与记忆概览入口（记忆概览窗不再需要）
+    subStyle($("nav-toggle"), "display:none");
+    subStyle(document.querySelector("details.memory-summary"), "display:none");
 
     // OB 期间 #app hidden ↔ 路由回 onboarding
     const appEl = $("app");
@@ -1517,7 +1750,16 @@
       for (const [full, short] of DSH_SHORT) {
         const label = [...dshSection.querySelectorAll("label")]
           .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
-        if (label) { subText(label, short); subAttr(label, "title", full); }
+        // 只换文案、保住 label 内的 checkbox：subText 走 textContent 会连 <input> 一起替换，
+        // 使 #workers-sync-archive/#workers-sync-delete 从 DOM 消失（updateControls 抛 TypeError）
+        if (label) {
+          stripTexts(label);
+          subAttr(label, "title", full);
+          const t = document.createElement("span");
+          t.textContent = short;
+          label.appendChild(t);
+          undos.push(() => t.remove());
+        }
       }
       for (const hid of ["#workers-sync-archive-hint", "#workers-credential-state"]) {
         const el = dshSection.querySelector(hid);

@@ -257,6 +257,16 @@
       + (request.assistant_turn_id ? ` · 回复 #${request.assistant_turn_id}` : "")
       + (request.gaps && request.gaps.length ? ` · 观测缺口 ${request.gaps.length}` : "");
     card.append(meta);
+    const format = window.AliceContextViewer.replySectionsSummary(request.reply_sections);
+    if (format) card.append(node("p", `回复三栏 · ${format}`, "obs-hint"));
+    if (request.reply_sections?.cache_status === "stored") {
+      const cached = node("button", "查看缓存注释", "btn ghost");
+      cached.type = "button";
+      cached.onclick = () => window.AliceContextViewer.openReplyCache({
+        requestId: request.request_id, scope, endpoint: "/api/observer/reply-cache"
+      });
+      card.append(cached);
+    }
     const full = node("button", "查看完整上下文", "btn ghost");
     full.type = "button";
     full.disabled = !request.calls.length;

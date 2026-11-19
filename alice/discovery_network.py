@@ -1,4 +1,4 @@
-"""Explicit local HTTP proxy routing for fixed discovery destinations only.
+"""Explicit local HTTP proxy routing for fixed origins or pinned public page IPs.
 
 System proxy discovery is read-only. It never probes a port, uses a PAC script,
 inherits proxy credentials, or falls back to direct access after a route failure.
@@ -59,13 +59,22 @@ def resolve_system_proxy() -> str:
     return normalize_proxy_endpoint(endpoint) if endpoint else ""
 
 
-def connect_via_proxy(endpoint: str, target_host: str, *, deadline: float) -> socket.socket:
-    """Connect once to a local proxy and tunnel one allowlisted HTTPS origin.
+def connect_via_proxy(endpoint: str, target_host: str, *, deadline: float, public_ip: str | None = None) -> socket.socket:
+    """Tunnel one fixed origin or a caller-resolved public IP through a local proxy.
 
     The trusted local proxy resolves the fixed target. This does not claim to
     perform the direct route's public-IP validation on that remote resolution.
+    General pages instead supply a validated IP; TLS still uses their domain.
     """
-    if target_host not in _TARGET_HOSTS:
+    if public_ip is not None:
+        try:
+            ip = ipaddress.ip_address(public_ip)
+            valid = ip.is_global and not ip.is_multicast and not ip.is_reserved
+        except ValueError:
+            valid = False
+        if not valid:
+            raise NetworkRouteError("proxy_scope", "网页代理只接受已验证的公网地址")
+    elif target_host not in _TARGET_HOSTS:
         raise NetworkRouteError("proxy_scope", "此目标不支持通过内容发现的本机代理访问")
     parts = urlsplit(normalize_proxy_endpoint(endpoint))
 
@@ -93,7 +102,8 @@ def connect_via_proxy(endpoint: str, target_host: str, *, deadline: float) -> so
     try:
         sock.settimeout(remaining())
         sock.connect(address)
-        target = f"{target_host}:443"
+        address_host = (f"[{public_ip}]" if ":" in public_ip else public_ip) if public_ip else target_host
+        target = f"{address_host}:443"
         request = f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"
         sock.settimeout(remaining())
         sock.sendall(request.encode("ascii"))

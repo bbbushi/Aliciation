@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/discovery.css">
 <link rel="stylesheet" href="/worker-tasks.css">
-<link rel="stylesheet" href="/context-viewer.css">
 <link rel="stylesheet" href="/thoughts.css">
 <link rel="stylesheet" href="/theme-orbit.css">
 </head>
@@ -105,10 +104,6 @@
   : l i c e a l i :
     ' + i c e + '
        ' : '</pre><p>从一句「你好」，<br>到一个有你的世界。</p><span class="nav-cursor" aria-hidden="true">▌</span></div>
-    <details id="developer-nav" class="developer-nav"><summary>开发者工具</summary><div class="nav-group">
-      <button id="observer-btn" class="nav-item" type="button" aria-expanded="false" aria-controls="observer">记忆观察器</button>
-      <button id="evaluations-btn" class="nav-item" type="button" aria-expanded="false" aria-controls="evaluations">P1 核查</button>
-    </div></details>
     <div class="nav-bottom">
       <button id="qq-btn" class="nav-item" type="button" aria-controls="qq-settings"><span class="nav-symbol" aria-hidden="true">↗</span>连接 QQ</button>
       <button id="settings-btn" class="nav-item" type="button"><span class="nav-symbol" aria-hidden="true">⚙</span>设置</button>
@@ -173,7 +168,6 @@
     </div>
     <div class="latest-wrap"><button id="chat-latest" class="btn ghost hidden" type="button">↓ 回到最新消息</button></div>
     <footer>
-      <div class="composer-permission" role="status"><button id="composer-evaluation" class="link hidden" type="button" aria-controls="evaluations"></button></div>
       <div id="composer-worker-reference" class="composer-worker-reference hidden" role="group" aria-label="本条消息引用的协作任务">
         <button id="composer-worker-open" class="composer-worker-open" type="button"><span id="composer-worker-label"></span><span id="composer-worker-status"></span></button>
         <button id="composer-worker-clear" class="card-x" type="button" aria-label="取消任务引用">×</button>
@@ -233,133 +227,6 @@
     <div class="worker-toolbar"><p id="workers-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p><button id="workers-refresh" class="link" type="button">同步记录</button></div>
   </aside>
   <div id="workers-dock-preview" class="worker-dock-preview hidden" aria-hidden="true"><span>松开固定到右侧</span></div>
-  <aside id="observer" class="observer hidden" aria-label="记忆观察器">
-    <div class="obs-head obs-workspace-head">
-      <button id="obs-nav-toggle" class="card-x mobile-only" type="button" aria-label="打开主导航" aria-expanded="false" aria-controls="app-nav">☰</button>
-      <h2>记忆观察器</h2><span class="obs-readonly">只读</span>
-      <button id="obs-close" class="btn ghost" type="button" title="关闭并清空本页观察，不删除 Alice 的记忆">‹ 回到对话</button>
-    </div>
-    <div class="obs-sampling">
-      <p id="obs-time" class="obs-hint"></p>
-      <div class="obs-tools"><label><input id="obs-auto" type="checkbox" checked> 自动刷新</label><button id="obs-refresh" class="btn ghost" type="button">刷新到最新</button></div>
-    </div>
-    <p id="obs-status" class="obs-status" role="status">等待首次快照</p>
-    <div class="obs-workspace">
-      <nav id="obs-nav" class="obs-nav" aria-label="观察内容">
-        <span class="obs-nav-label">观察</span>
-        <button type="button" data-obs-view="overview" aria-controls="obs-overview" aria-pressed="false">变化与进度</button>
-        <button type="button" data-obs-view="memories" aria-controls="obs-browser" aria-pressed="true">记忆与观点</button>
-        <button type="button" data-obs-view="persona" aria-controls="obs-persona" aria-pressed="false">人格与思想</button>
-        <span class="obs-nav-label">核对记录</span>
-        <button type="button" data-obs-view="history" aria-controls="obs-browser" aria-pressed="false">人格历史</button>
-        <button type="button" data-obs-view="tombstones" aria-controls="obs-browser" aria-pressed="false">遗忘记录</button>
-        <button type="button" data-obs-view="skills" aria-controls="obs-browser" aria-pressed="false">技能记录</button>
-        <button type="button" data-obs-view="traces" aria-controls="obs-traces" aria-pressed="false">调用轨迹</button>
-      </nav>
-      <select id="obs-view" class="hidden" aria-label="观察视图">
-        <option value="overview">变化与触发进度</option><option value="memories" selected>记忆 / 观点</option><option value="persona">人格 / 思想状态</option><option value="history">人格历史快照</option><option value="tombstones">遗忘墓碑（实际记录）</option><option value="skills">技能（次级观察）</option><option value="traces">调用轨迹（SDK 观测）</option>
-      </select>
-      <div id="obs-workbench" class="obs-workbench obs-list-view">
-        <section id="obs-overview" class="obs-pane hidden">
-          <h3>变化与进度</h3><p id="obs-counts"></p><p id="obs-coverage" class="obs-hint"></p>
-          <h3>本次观察的变化</h3><p class="obs-hint">相邻快照净差异，时间为观测区间；实际删除请查遗忘记录。</p><ol id="obs-changes" class="obs-changes"></ol>
-          <details class="obs-section-help"><summary>为什么可能还没变化</summary><div id="obs-progress"></div></details>
-          <details class="obs-section-help"><summary>数据与判断状态</summary>
-            <dl class="obs-evidence-types">
-              <div><dt>原始状态</dt><dd><strong>已接入</strong>：存储原文、字段与计数；快照差异由程序比较。</dd></div>
-              <div><dt>模型裁定</dt><dd><strong>独立 P1 工作区</strong>提供手动实验性建议；本只读页不自动产生裁定，日志中的模型说明不是独立裁定。</dd></div>
-              <div><dt>人工标签</dt><dd><strong>独立 P1 工作区</strong>记录人工标签，与模型建议分开保存。</dd></div>
-              <div><dt>校准指标</dt><dd><strong>未校准不出指标</strong>；P1 可记录人工校准，未计算不代表零分，也不等于整体诚实度。</dd></div>
-            </dl>
-            <p class="obs-hint">存储存在不证明现实真伪。记忆内容、人格及重要性 / 压力标记可能由模型生成；条目数和字段变化不构成诚实度、人机感或人格质量评分，也不等于人格成长、污染或退化。</p>
-          </details>
-        </section>
-        <section id="obs-browser" class="obs-list-pane">
-          <div class="obs-list-heading"><h3 id="obs-list-title">记忆与观点</h3><span class="obs-hint">只读查阅</span></div>
-          <form id="obs-search" class="obs-filters">
-            <input id="obs-query" type="search" maxlength="200" placeholder="搜索标题 / 正文" aria-label="检索文本"><button class="btn ghost" type="submit">检索</button>
-            <div id="obs-filter-selects" class="obs-filter-selects"><select id="obs-layer" aria-label="记忆层级"><option value="all">全部层级</option><option value="active">活跃</option><option value="warehouse">仓库</option><option value="longterm">长期</option></select><select id="obs-kind" aria-label="记忆类型"><option value="all">事件和观点</option><option value="event">事件</option><option value="stance">观点</option></select></div>
-          </form>
-          <p id="obs-list-time" class="obs-hint"></p><div id="obs-list"></div>
-          <div class="obs-pagination"><button id="obs-first" class="btn ghost" type="button">首页</button><button id="obs-next" class="btn ghost" type="button" disabled>下一页</button></div>
-          <details class="obs-section-help"><summary>查阅说明</summary><p id="obs-list-hint" class="obs-hint"></p></details>
-        </section>
-        <section id="obs-persona" class="obs-pane hidden">
-          <h3>人格与思想</h3><p id="obs-persona-meta" class="obs-hint"></p>
-          <div class="obs-persona-tools"><button id="obs-persona-full" class="btn ghost" type="button">查看各部分状态</button><button id="obs-persona-expand" class="btn ghost" type="button">展开各节内容</button><button id="obs-persona-collapse" class="btn ghost" type="button">收起各节内容</button></div>
-          <div id="obs-persona-reading"><nav id="obs-persona-toc" class="obs-persona-toc" aria-label="跳转人格状态卡"></nav><p id="obs-persona-reading-note" class="obs-hint"></p><div id="obs-persona-sections"></div></div>
-          <details class="obs-section-help"><summary>最近一次人格变化</summary>
-            <p id="obs-persona-diff-meta" class="obs-hint"></p>
-            <details><summary>删除 / 增加的原文片段</summary><div id="obs-persona-diff"></div></details>
-            <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
-            <details><summary>已有变更记录（原文；模型说明不是独立裁定）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
-          </details>
-          <details id="obs-persona-advanced"><summary>高级：核对文件源码</summary><p class="obs-hint">这里用于逐字核对，不是状态面板。当前快照最多 64000 字符；分段读取每次最多 8000 字符，各段可能来自不同采样时刻，不自动拼成同一版本全文。</p><details id="obs-persona-source"><summary>显示本次快照的 Markdown 源码</summary><pre id="obs-persona-text" class="obs-text" aria-label="本次人格快照 Markdown 源码"></pre></details><button id="obs-persona-file" class="btn ghost" type="button">分段核对当前文件</button></details>
-          <details class="obs-section-help"><summary>人格状态与历史的说明</summary><p class="obs-hint">状态只描述当前原文是否存在，不评价成熟度或事实真伪。摘录直接取自原文；变化时间是本页看到差异的区间，不是各部分的实际更新时间。</p><p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p></details>
-        </section>
-        <section id="obs-traces" class="obs-pane hidden"><h3>调用轨迹</h3><p class="obs-hint">请求 → 模型调用 → 尝试</p><div id="obs-traces-list"></div><details class="obs-section-help"><summary>调用轨迹的观察范围</summary><p class="obs-hint">只读投影：快照是应用交给模型客户端的参数，不是供应商内部上下文；无正文处如实显示未留存。打开与刷新不触发模型调用或维护。</p></details></section>
-        <div id="obs-detail-empty" class="obs-detail-empty"><h3>选择一条记忆</h3><p class="obs-hint">在此查看当前正文与字段信息。</p></div>
-        <section id="obs-detail" class="obs-detail-pane hidden" aria-label="条目详情">
-          <button id="obs-detail-back" class="link obs-detail-back" type="button">‹ 返回列表</button>
-          <div class="obs-head"><span id="obs-detail-kind" class="obs-hint">当前正文</span><button id="obs-detail-close" class="card-x" type="button" aria-label="收起详情" title="收起详情">×</button></div>
-          <h3 id="obs-detail-title" tabindex="-1">条目详情</h3><p id="obs-detail-tags" class="obs-detail-tags"></p><p id="obs-detail-time" class="obs-hint"></p>
-          <div id="obs-detail-reading-tools" class="obs-persona-tools hidden"><label for="obs-detail-mode">当前片段</label><select id="obs-detail-mode"><option value="reading">分块查看</option><option value="source">核对片段源码</option></select></div>
-          <div id="obs-detail-reading" class="hidden"></div><pre id="obs-detail-text" class="obs-text"></pre>
-          <div class="obs-pagination"><button id="obs-detail-first" class="btn ghost" type="button">正文开头</button><button id="obs-detail-next" class="btn ghost" type="button" disabled>下一段正文</button></div>
-          <details id="obs-detail-fields" class="obs-section-help"><summary>字段与来源信息</summary><dl id="obs-detail-meta"></dl></details>
-          <p id="obs-detail-scope" class="obs-hint"></p>
-          <details class="obs-section-help"><summary>分段读取与时间说明</summary><p class="obs-hint">每段最多 8000 字符；翻段重新读取当前存储，可能与前段不是同一版本。记忆无精确入库时间、修改时间或来源轮次；created_at 可能是提取批末消息时间。</p></details>
-        </section>
-      </div>
-    </div>
-    <footer class="obs-workspace-footer">
-      <div class="obs-footer-tools"><details class="obs-help"><summary>观察范围与保留规则</summary><p>只读，不调用模型或 recall，也不触发提取或维护。自动刷新每 5 秒尝试，本页回复结束也刷新；单写者锁忙时只保留最后快照。空闲且连接正常时，通常在下一次轮询加请求耗时后可见；长轮次、断线和后台标签页无固定最大延迟。</p><p>变化是两次快照之间的净差异，不是完整事件流；无法还原期间多次改写、精确原因或关联轮次。仅跟踪最近至多 2000 个存活 ID，正文指纹只比较各字段前 16000 字及长度，超长尾部同长度改写不可见。</p><p>临时保留相邻基线、最近一次人格前后原文与最多 100 条变化摘要；不保存记忆旧正文，不写本地存储或文件。关闭、清空、会话/服务身份变化、刷新页面都会清除本页观察，不删除 Alice 的记忆。网络中断保留最后有效快照并标注未知间隔。</p></details><button id="obs-clear" class="link" type="button" title="只清空观察器临时记录，不删除 Alice 的记忆">清空本页观察</button></div>
-    </footer>
-  </aside>
-  <aside id="evaluations" class="observer hidden" aria-label="P1 记忆主张核查实验">
-    <div class="obs-head"><strong>P1 · 记忆主张核查实验</strong><button id="eval-close" class="card-x" type="button" title="折叠核查面板">×</button></div>
-    <p id="eval-status" class="obs-status" role="status">尚未读取</p>
-    <p id="eval-binding" class="obs-hint">本页没有待绑定的核查。</p>
-    <div class="obs-tools"><button id="eval-refresh" class="btn ghost" type="button">刷新</button><label><input id="eval-auto" type="checkbox" checked> 每 5 秒更新</label></div>
-    <div class="obs-scroll">
-      <p class="obs-hint">只核查手动选定的下一轮自然回复与回复前存活记忆的关系。存储内容本身可能有误，实验性建议不是事实真伪或整体诚实度结论。关闭面板不取消任务；取消已发出的请求仍可能计费。</p>
-      <details open class="eval-section"><summary>费用许可与单次选择</summary>
-        <p id="eval-budget" class="obs-hint">日请求额度默认 0；打开面板不会调用模型。</p>
-        <p id="eval-model" class="obs-hint"></p>
-        <form id="eval-budget-form" class="eval-form">
-          <label for="eval-limit">每日最多额外模型请求数（0–100）</label><input id="eval-limit" type="number" min="0" max="100" step="1" value="0" required>
-          <label><input id="eval-paid" type="checkbox"> 我明确允许按所设日额度产生 P1 模型费用</label>
-          <button id="eval-save-budget" class="btn ghost" type="submit" disabled>保存请求额度</button>
-        </form>
-        <p class="obs-hint">这是请求次数上限，不是金额上限。每次核查最多 2 次请求（抽取 + 裁定），没有主张也会消耗 1 次抽取；无自动重试。当前回复及候选记忆会发送给已配置的模型供应商，本机不留副本不代表供应商立即删除。</p>
-        <button id="eval-arm" class="btn primary" type="button" disabled>授权并核查本页下一轮（最多 2 请求）</button>
-        <button id="eval-disarm" class="btn ghost hidden" type="button">取消本页待绑定核查</button>
-        <button id="eval-forget-uncertain" class="btn ghost hidden" type="button">清除本页待确认标记（不重发、不取消远端任务）</button>
-        <p class="obs-hint">一次性选择只随本页下一次发送提交，不会被其他页面的普通对话消费。刷新或关闭整个页面会失去本页绑定；可在任务列表取消遗留的待绑定任务。连接中断不自动重绑或重试。</p>
-      </details>
-      <section class="eval-section"><h3>核查记录</h3><p class="obs-hint">点击授权会建一条记录；本页选定的回复完成后，核查在后台进行。结束后记录保留，直到你删除。删除只清理核查记录，聊天、记忆和已用额度保留。</p>
-        <label for="eval-filter">显示</label><select id="eval-filter"><option value="all">全部记录</option><option value="active">进行中</option><option value="finished">已结束</option></select>
-        <p id="eval-list-time" class="obs-hint"></p><div id="eval-list"></div>
-        <div class="obs-pagination"><button id="eval-first" class="btn ghost" type="button">首页</button><button id="eval-next" class="btn ghost" type="button" disabled>下一页</button></div>
-      </section>
-      <section id="eval-detail" class="eval-section hidden"><div class="obs-head"><h3>核查结果与依据</h3><button id="eval-detail-close" class="card-x" type="button" title="清空详情">×</button></div>
-        <p id="eval-detail-meta" class="obs-hint"></p><details><summary>技术详情</summary><div id="eval-run"></div></details>
-        <button id="eval-reveal" class="btn ghost" type="button">查看模型结果（记录为已查看）</button>
-        <p class="obs-hint">“查看结果”会直接展示模型建议；“先自行判断”先隐藏建议，便于独立标注。已经查看过的记录无法恢复盲标。证据失效后不恢复旧正文。</p>
-        <div id="eval-claims"></div>
-      </section>
-      <details class="eval-section"><summary>高级：人工校准记录</summary>
-        <p class="obs-hint">在任务列表选择校准样本，至少 20 个独立回复，支持 / 未支持 / 相悖三类均须覆盖；先完成未揭示模型建议的人工标签。每个回复只取序号最小的已裁定主张。本项仅核验候选集内裁定的一致性，不覆盖漏抽、漏检索，也不代表整个 P1 已校准。记录随版本或证据失效，不能沿用为当前许可。</p>
-        <p id="eval-selection" class="obs-hint">尚未选择任务。</p>
-        <form id="eval-calibrate" class="eval-form">
-          <label for="eval-agreement">本次人工确认的最低一致率（大于 0，不超过 1）</label><input id="eval-agreement" type="number" min="0.01" max="1" step="0.01" placeholder="请人工确定" required>
-          <label><input id="eval-attest" type="checkbox" required> 我已人工核验这些样本独立、覆盖所述类别，且不是用于制定提示词的锚例</label>
-          <button id="eval-save-calibration" class="btn ghost" type="submit" disabled>记录人工校准</button>
-        </form>
-        <button id="eval-clear-selection" class="btn ghost" type="button">清空选择</button><div id="eval-calibrations"></div>
-      </details>
-    </div>
-  </aside>
   <section id="discovery" class="discovery-panel hidden" aria-labelledby="discovery-title"></section>
   <div class="terminal-foot"><span><b aria-hidden="true">&gt;_</b> 每一句话，都留下一点回声。</span><span class="terminal-foot-right">ALICE / 你的窗口，她的世界</span></div>
 </div>
@@ -387,23 +254,22 @@
       <button type="button" data-settings="general" aria-controls="general-settings model-settings" aria-pressed="true">对话与模型</button>
       <button type="button" data-settings="appearance" aria-controls="appearance-settings" aria-pressed="false">外观</button>
       <button type="button" data-settings="discovery" aria-controls="discovery-settings" aria-pressed="false">联网搜索</button>
-      <button type="button" data-settings="observer" aria-controls="observer-settings" aria-pressed="false">上下文观测</button>
+      <button type="button" data-settings="observer" aria-controls="observer-settings" aria-pressed="false">外部观察</button>
       <button type="button" data-settings="qq" aria-controls="qq-settings" aria-pressed="false">QQ 连接</button>
       <button type="button" data-settings="workers" aria-controls="workers-config" aria-pressed="false">DSH</button>
     </nav>
     <div class="modal-body settings-body">
       <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
-      <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="observer-settings-title">
-        <h2 id="observer-settings-title" class="panel-title">上下文观测</h2>
-        <p id="observer-settings-result" class="settings-result" role="status" aria-live="polite">尚未读取设置。</p>
-        <form id="observer-settings-form">
-          <p><label><input id="observer-settings-enabled" type="checkbox" disabled> 启用上下文观测器</label></p>
-          <p class="settings-hint">显示查看入口，与下方的正文留存独立。</p>
-          <p><label><input id="observer-settings-body" type="checkbox" disabled> 留存完整上下文</label></p>
-          <p class="settings-hint">从新请求开始留存对话、人格及工具等输入正文，仅保存在本机。关闭后不删除已有记录。</p>
-          <div class="row"><button id="observer-settings-save" class="btn primary" type="submit" disabled>保存设置</button><button id="observer-settings-refresh" class="btn ghost" type="button">同步状态</button><button id="observer-settings-open" class="btn ghost" type="button" disabled>打开观测器</button></div>
+      <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="lab-pairing-title">
+        <h2 id="lab-pairing-title" class="panel-title">外部观察</h2>
+        <div class="row"><button id="lab-open" class="btn ghost" type="button">打开 Alice Lab</button><span id="lab-open-status" role="status"></span></div>
+        <p class="settings-hint">授权 Alice Lab 只读查看当前实例，15 分钟后自动失效。</p>
+        <form id="lab-pairing-form">
+          <p><label><input name="body" type="checkbox"> 同时允许读取正文，并从新请求开始留存上下文</label></p>
+          <div class="row"><button class="btn primary" type="submit">生成观察授权码</button><button id="lab-revoke" class="btn ghost" type="button">撤销授权</button></div>
+          <label id="lab-code-label" hidden>授权码（只粘贴给本机 Alice Lab）<input id="lab-code" readonly autocomplete="off"></label>
+          <p id="lab-pairing-status" role="status"></p>
         </form>
-        <details><summary>留存与生效说明</summary><p class="settings-hint">保存后入口立即更新，采集从下一次新请求生效；在途请求沿用开始时的策略，无需重启。完整正文滚动保留最近10个采集请求，同时受7天和50MiB限制。较早未采集的请求不补录，超限或来源失效时如实标记缺口。</p><p id="observer-settings-metadata" class="settings-hint"></p></details>
       </section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
         <div class="discovery-settings-head settings-page-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
@@ -637,14 +503,7 @@
 </div>
 
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-<dialog id="context-inspector-dialog" class="acv-dialog" aria-labelledby="context-inspector-title">
-  <header class="acv-head"><h2 id="context-inspector-title">上下文观测器</h2><button id="context-inspector-close" class="btn ghost" type="button" autofocus>关闭</button></header>
-  <iframe id="context-inspector-frame" class="ci-settings-frame" title="上下文观测器" src="about:blank"></iframe>
-</dialog>
-
-<script src="/context-viewer.js"></script>
-<script src="/observer.js"></script>
-<script src="/evaluations.js"></script>
+<script src="/lab-pairing.js"></script>
 <script src="/worker-tasks.js"></script>
 <p id="claude-gate-load-error" class="claude-gate-panel" role="alert" hidden>权限面板加载失败，请更新服务后重新载入页面。</p>
 <script src="/claude-gate.js" onerror="document.getElementById('claude-gate-load-error').hidden=false"></script>

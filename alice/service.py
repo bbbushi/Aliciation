@@ -24,7 +24,6 @@ from .channels import ChannelCoordinator, ChannelError
 from .config_edit import (ConfigConflict, revision, replace_llm_values, replace_channels,
                           replace_persona_mode, replace_observation_settings)
 from .llm import make_client, safe_provider_error
-from .evaluation_service import EvaluationCoordinator
 from .discovery import DiscoveryCoordinator
 from .collaborators import WorkerCoordinator
 from .store import Store
@@ -88,7 +87,7 @@ class ChatService:
     """拥有 Store 与 client 的生命周期；所有写操作经 _lock 串行（单一永久会话语义）。"""
 
     def __init__(self, cfg: Config | None = None, db_path=None, client=None, *, config_path=None,
-                 allow_unconfigured: bool = False, _maintenance_activation: bool = False):
+                 allow_unconfigured: bool = False, _maintenance_activation: bool = False, lab_experiments=False):
         from .instance_lock import InstanceLock
 
         self._instance_lock = InstanceLock((Path(db_path) if db_path is not None else appconfig.DB_PATH).parent,
@@ -96,20 +95,22 @@ class ChatService:
         self._instance_lock.acquire()
         try:
             self._initialize(cfg, db_path, client, config_path=config_path,
-                             allow_unconfigured=allow_unconfigured)
+                             allow_unconfigured=allow_unconfigured, lab_experiments=lab_experiments)
         except BaseException:
             # Failed shutdown must not admit a replacement writer over live jobs.
             if not hasattr(self, "store") or getattr(self, "_startup_cleanup_complete", False):
                 self._instance_lock.release()
             raise
 
-    def _initialize(self, cfg, db_path, client, *, config_path, allow_unconfigured):
+    def _initialize(self, cfg, db_path, client, *, config_path, allow_unconfigured, lab_experiments):
         self._config_path = Path(config_path).resolve() if config_path is not None else appconfig.USER_DIR / "config.toml"
         # 三参数注入模式不碰本机配置；只有 GUI/自主加载模式绑定写回路径（user/config.toml）。
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
         reset_record = persona_reset.before_open() if db_path is None else None
         self.store = Store(Path(db_path) if db_path is not None else appconfig.DB_PATH)
+        from .reply_sections import ReplyCache
+        self._reply_cache = ReplyCache()
         self._client_owned = client is None
         try:
             if client is None and allow_unconfigured:
@@ -138,7 +139,10 @@ class ChatService:
                 self.cfg.llm.disable_thinking = False
             elif self.cfg.llm.disable_thinking:
                 self.cfg.llm.thinking = "off"  # 旧配置开关在 GUI 中显示真实生效状态
-            self._evaluations = EvaluationCoordinator(self)
+            self._evaluations = None
+            if lab_experiments:
+                from .evaluation_service import EvaluationCoordinator
+                self._evaluations = EvaluationCoordinator(self)
             self._channels = ChannelCoordinator(self)
             self._channels.set_ready(persona.persona_md() is not None)
             self._workers = WorkerCoordinator(self)
@@ -547,6 +551,17 @@ class ChatService:
         return self._observer_read(observation.context_call, scope=scope,
                                    request_id=request_id, call_id=call_id)
 
+    def observer_reply_cache(self, *, scope=None, request_id=None, plugin=False) -> dict:
+        if scope is None or not isinstance(request_id, str) or not 1 <= len(request_id) <= 160:
+            return {"status": "error", "error": "请选择当前观测器中的一个请求"}
+
+        def read(store):
+            if plugin and not self.cfg.plugins.context_inspector_enabled:
+                return {"status": "disabled"}
+            return self._reply_cache.inspect_request(store, request_id)
+
+        return self._observer_read(read, scope=scope)
+
     # ---- 上下文观测插件（20261107 插件设计 §6）：薄命名空间，委托同一核心投影 ----
 
     def _observation_settings_view_locked(self) -> dict:
@@ -555,6 +570,7 @@ class ChatService:
         return {"enabled": self.cfg.plugins.context_inspector_enabled,
                 "body_capture": self.cfg.context.observer_body_capture,
                 "metadata_enabled": self.cfg.context.observer_enabled,
+                "reply_annotation_review": self.cfg.context.reply_annotation_review,
                 "revision": self._config_revision, "writable": self._config_revision is not None,
                 "session_epoch": self._channels.epoch, "restart_required": False}
 
@@ -563,10 +579,12 @@ class ChatService:
         if payload is None:
             with self._lock:
                 return self._observation_settings_view_locked()
+        required = {"enabled", "body_capture", "revision", "session_epoch"}
         if (not isinstance(payload, dict)
-                or set(payload) != {"enabled", "body_capture", "revision", "session_epoch"}
+                or set(payload) - {"reply_annotation_review"} != required
                 or type(payload["enabled"]) is not bool or type(payload["body_capture"]) is not bool
-                or not isinstance(payload["revision"], str) or not isinstance(payload["session_epoch"], str)):
+                or not isinstance(payload["revision"], str) or not isinstance(payload["session_epoch"], str)
+                or ("reply_annotation_review" in payload and type(payload["reply_annotation_review"]) is not bool)):
             raise ValueError("观测设置参数无效，请重新同步设置")
         # Reject a concurrent foreground request instead of queuing an opaque
         # settings write. No model calls and no autonomous-work cancellation.
@@ -576,14 +594,18 @@ class ChatService:
                 self._channels.check_epoch(payload["session_epoch"])
                 self._check_config_revision_locked(payload["revision"], required=True)
                 metadata = self.cfg.context.observer_enabled or payload["body_capture"]
+                annotation_review = payload.get("reply_annotation_review")
                 new_revision = replace_observation_settings(self._config_path,
                     enabled=payload["enabled"], metadata=metadata,
-                    body_capture=payload["body_capture"], expected_revision=self._config_revision)
+                    body_capture=payload["body_capture"], expected_revision=self._config_revision,
+                    reply_annotation_review=annotation_review)
                 # Existing traces retain their own immutable CapturePolicy;
                 # these flags govern only newly created traces and the viewer.
                 self.cfg.plugins.context_inspector_enabled = payload["enabled"]
                 self.cfg.context.observer_enabled = metadata
                 self.cfg.context.observer_body_capture = payload["body_capture"]
+                if annotation_review is not None:
+                    self.cfg.context.reply_annotation_review = annotation_review
                 self._config_revision = new_revision
                 return self._observation_settings_view_locked()
         finally:
@@ -624,9 +646,17 @@ class ChatService:
         return self._observer_read(observation.context_call, scope=scope,
                                    request_id=request_id, call_id=call_id)
 
+    def plugin_inspector_reply_cache(self, *, scope=None, request_id=None) -> dict:
+        return self.observer_reply_cache(scope=scope, request_id=request_id, plugin=True)
+
     def evaluations(self, action: str, *, dataset_id=None, **kwargs) -> dict:
         """P1 public boundary. Opening observer never calls this write-capable surface."""
+        if self._evaluations is None:
+            return {"status": "error", "error": "此后端未装入 P1，需从 Lab 启动源码版测试实例"}
         return self._evaluations.access(action, dataset_id=dataset_id, **kwargs)
+
+    def lab_experiments_available(self):
+        return self._evaluations is not None
 
     def discovery(self, action: str = "status", payload=None) -> dict:
         """Local GUI discovery controls; channel credentials do not grant this API."""
@@ -635,6 +665,54 @@ class ChatService:
     def thoughts(self, action: str = "status", payload=None) -> dict:
         """Public questions/exploration controls; status reads have no side effects."""
         return self._autonomy.access(action, payload)
+
+    def schedule_diagnostics(self) -> dict:
+        """Read current scheduling weights and stored selections; no model calls."""
+        return self._autonomy.schedule_diagnostics()
+
+    def observation_scope(self):
+        return self._observer_scope
+
+    def lab_context_status(self, *, scope=None, bodies=False):
+        from . import context_observation
+        from .context_observer import SCHEMA_VERSION
+
+        def read(store):
+            capturing = context_observation.policy_for(self.cfg).text_capture == "full"
+            return {"protocol_version": SCHEMA_VERSION, "can_read_body": bodies,
+                    "capture": {"metadata": bool(capturing or self.cfg.context.observer_enabled),
+                                "body": capturing} if bodies else {
+                                    "metadata": bool(self.cfg.context.observer_enabled), "body": None},
+                    "quota": context_observation.body_quota(store) if bodies and capturing else None}
+        return self._observer_read(read, scope=scope)
+
+    def lab_configure_observation(self, action, enabled):
+        with self._lock:
+            if action == "capture":
+                self.cfg.context.observer_body_capture = enabled
+            elif action == "review":
+                self.cfg.context.reply_annotation_review = enabled
+
+    def lab_data_metadata(self, topic, *, scope=None, include_titles=False):
+        def project(store):
+            if topic == "memory":
+                return observation.lab_memory_metadata(store, include_titles=include_titles)
+            items = []
+            for row in store.conn.execute(
+                    "SELECT q.id,q.version,q.status,q.origin,q.updated_at,w.kind FROM thought_questions q "
+                    "LEFT JOIN v2_question_waits w ON w.question_id=q.id "
+                    "WHERE q.epoch=? AND q.question<>'' ORDER BY q.updated_at DESC LIMIT 40",
+                    (store.meta_get("session_epoch"),)):
+                items.append(dict(row))
+            if include_titles:
+                from . import thought_workspace as thoughts
+                visible = {row["id"]: row for row in thoughts.question_rows(store, include_closed=True)
+                           if row["question"] and thoughts.valid_basis(store, json.loads(row["basis"]))}
+                for item in items:
+                    if row := visible.get(item["id"]):
+                        item.update(question=row["question"], next_step=row["next_step"])
+            return {"items": items}
+        return self._observer_read(project, scope=scope)
 
     def _admit_background_model(self, store):
         from .background_runtime import in_background, reserve_model
@@ -784,7 +862,8 @@ class ChatService:
         if runner is not None:
             runner.stop()
         self._channels.begin_shutdown()
-        self._evaluations.begin_shutdown()
+        if self._evaluations is not None:
+            self._evaluations.begin_shutdown()
         self._discovery.begin_shutdown()
         self._workers.begin_shutdown()
 
@@ -1112,7 +1191,8 @@ class ChatService:
             raise ValueError("人格或会话在准备后已变化；未归档旧版")
         self._observer_scope = uuid.uuid4().hex  # Invalidate even if archival fails halfway.
         self._channels.set_ready(False)
-        self._evaluations.before_reset()
+        if self._evaluations is not None:
+            self._evaluations.before_reset()
         self._discovery.before_reset()
         self._workers.before_reset()
         self._autonomy.before_reset()
@@ -1146,9 +1226,11 @@ class ChatService:
         reset_record["phase"] = "archived"
         persona_reset.write(reset_record)
         self.store = Store(appconfig.DB_PATH)  # 新库：meta/记忆/对话全空，人格待重新安装
+        self._reply_cache.clear()
         self.store._background_admit = self._admit_background_model
         self.store.meta_set("session_epoch", reset_record["new_epoch"])
-        self._evaluations.bind_store()
+        if self._evaluations is not None:
+            self._evaluations.bind_store()
         self._channels.bind_store()
         self._discovery.bind_store()
         self._workers.bind_store()
@@ -1222,7 +1304,7 @@ class ChatService:
         text, request_id = request["text"], request["request_id"]
         job = None
         evaluation_warning = None
-        if evaluation_id is not None:
+        if evaluation_id is not None and self._evaluations is not None:
             try:
                 job = self._evaluations.capture(evaluation_id)
             except Exception:
@@ -1238,6 +1320,9 @@ class ChatService:
         source_usage = {}
         search_session = self._discovery.prepare_chat_locked(request, owner_token, on_search_progress)
         _, settings = self._discovery._config_locked()
+        if search_session is not None:
+            from .autonomy_policy import search_settings
+            settings = search_settings(settings)
         try:
             reply = yield from loop.chat_turn_steps(
                 self.store, self.client, self.cfg, text,
@@ -1251,6 +1336,7 @@ class ChatService:
                 search_session=search_session, tool_round_limit=settings.get("tool_round_limit", 4),
                 worker_session=self._workers.prepare_chat_locked(request),
                 working_set=getattr(self, "_context_workspace", None),
+                reply_cache=self._reply_cache,
             )
             try:
                 self._discovery.record_chat_locked(request, source_usage,
@@ -1629,7 +1715,8 @@ class ChatService:
         self.begin_shutdown()
         self._channels.drain()  # HTTP 202 workers outlive their submitting connections.
         self._workers.join_worker_reports()  # Report finalizers finish before Store/client disposal.
-        self._evaluations.shutdown()  # Join outside the Store lock; worker commits need it.
+        if self._evaluations is not None:
+            self._evaluations.shutdown()  # Join outside Store lock; worker commits need it.
         self._discovery.shutdown()
         self._workers.shutdown()
         self._autonomy.shutdown()

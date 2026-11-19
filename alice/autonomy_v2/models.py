@@ -206,7 +206,6 @@ class ProgressReport:
     action_refs: tuple[str, ...] = ()
     next_step: str = ""
     wait_condition: WaitCondition | None = None
-    requested_idle_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
