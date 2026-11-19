@@ -17,7 +17,7 @@
       <div class="discovery-overview"><div class="discovery-overview-copy"><p id="discovery-context">正在读取寻找范围…</p><p id="discovery-tieba-scope" class="discovery-hint hidden"></p><p id="discovery-mode" class="discovery-hint"></p><button id="discovery-toggle-enabled" class="link" type="button" data-write>开启发现</button></div><div class="discovery-actions">
         <button id="discovery-run" class="btn primary" type="button" data-write>现在找一轮</button>
         <button id="discovery-cancel" class="btn ghost hidden" type="button" data-write>停止这次寻找</button>
-        <button id="discovery-preferences-toggle" class="btn ghost" type="button" aria-expanded="false" aria-controls="discovery-preferences">偏好设置</button>
+        <button id="discovery-preferences-toggle" class="btn ghost" type="button" aria-expanded="false" aria-controls="settings-modal" aria-haspopup="dialog">平台与兴趣</button>
         <button id="discovery-settings-open" class="link" type="button">联网搜索设置</button>
       </div></div>
       <div id="discovery-next" class="discovery-next hidden"><p id="discovery-next-text"></p><button id="discovery-next-action" class="btn ghost" type="button"></button></div>
@@ -27,19 +27,18 @@
       </div>
       <div class="discovery-grid">
         <div id="discovery-preferences" class="discovery-controls hidden">
-          <div class="discovery-preferences-head"><h2>寻找偏好</h2><button id="discovery-preferences-close" class="link" type="button">返回资料</button></div>
-          <p class="discovery-hint discovery-preferences-note">平台点击即保存；兴趣编辑后保存。自动寻找、额度和访问方式已移到「设置 → 联网搜索」。收起偏好会保留兴趣草稿。</p>
-          <details id="discovery-platforms-box" class="discovery-box"><summary>去哪里找</summary>
-            <p class="discovery-hint">只在你开放的平台寻找公开内容。贴吧回帖分页与楼中楼节选可在设置中开启；私信、观看历史与账号操作不随开关开放。</p>
+          <div class="discovery-preferences-head"><h2 id="discovery-settings-scope-title">平台与兴趣</h2><button id="discovery-preferences-close" class="link" type="button">返回使用与安排</button></div>
+          <p class="discovery-hint discovery-preferences-note">平台操作即时保存。兴趣用自己的保存按钮，切换分类会保留草稿。</p>
+          <details id="discovery-platforms-box" class="discovery-box" open><summary>平台访问</summary>
+            <p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p>
+            <p class="discovery-hint">仅在开放的平台查找可读的公开内容。</p>
             <div id="discovery-platforms"><p class="discovery-hint">正在等待读取…</p></div>
           </details>
-          <details id="discovery-interests-box" class="discovery-box" open><summary>找什么</summary>
-            <p class="discovery-hint">写一个主题就够了；想找得更具体，再补充方向。</p>
-            <div id="discovery-interests"></div>
+          <details id="discovery-interests-box" class="discovery-box" open><summary>兴趣主题</summary>
             <form id="discovery-interest-form" class="discovery-form">
               <label class="discovery-field">想了解什么<input id="discovery-interest-topic" type="text" maxlength="80" placeholder="例如：游戏、手柄、独立游戏叙事" required></label>
               <label class="discovery-check"><input id="discovery-interest-external" type="checkbox"><span>允许用这个主题及补充方向，在已开放的平台和搜索服务中搜索</span></label>
-              <details id="discovery-interest-forums-box"><summary>优先在哪些吧找（可选）</summary>
+              <details id="discovery-interest-forums-box" class="discovery-setting-fold"><summary>优先在哪些吧找（可选）</summary>
                 <div class="discovery-scope-fields">
                   <label class="discovery-field">优先吧名<textarea id="discovery-interest-forums" rows="3" placeholder="每行一个准确吧名；留空不设优先吧" aria-describedby="discovery-interest-forums-hint" disabled></textarea></label>
                   <p id="discovery-interest-forums-hint" class="discovery-hint">先尝试这些吧的候选，没有合适内容时可以找其他吧；当前不是完整吧内检索。每行填写一个与平台显示一致的吧名，保留末尾的“吧”和名字中的逗号。</p>
@@ -48,49 +47,60 @@
                   <div id="discovery-forum-check-results" class="discovery-forum-check-results" role="status" aria-live="polite"></div>
                 </div>
               </details>
-              <details id="discovery-interest-options"><summary>补充方向与启用状态（可选）</summary>
+              <details id="discovery-interest-options" class="discovery-setting-fold"><summary>补充方向与启用状态（可选）</summary>
                 <label class="discovery-field">补充方向<textarea id="discovery-interest-summary" rows="2" maxlength="240" placeholder="留空就按上面的主题寻找"></textarea></label>
                 <label class="discovery-check"><input id="discovery-interest-enabled" type="checkbox" checked><span>启用这个兴趣</span></label>
               </details>
-              <div class="discovery-actions"><button id="discovery-interest-save" class="btn ghost" type="submit" data-write>添加兴趣</button>
+              <div class="discovery-actions"><button id="discovery-interest-save" class="btn primary" type="submit" data-write>添加兴趣</button>
                 <button id="discovery-interest-reset" class="link hidden" type="button">取消编辑</button></div>
               <p id="discovery-interest-draft" class="discovery-draft hidden"></p>
             </form>
+            <div id="discovery-interests"></div>
           </details>
           <div id="discovery-settings-box">
             <form id="discovery-settings-form" class="discovery-form">
-              <label class="discovery-check"><input id="discovery-enabled" type="checkbox"><span>允许内容访问（总开关）</span></label>
-              <label class="discovery-check"><input id="discovery-background" type="checkbox"><span>按兴趣自动寻找</span></label>
-              <label class="discovery-check"><input id="discovery-chat-search" type="checkbox"><span>允许 Alice 在聊天时按需要自行查找相关资料</span></label>
-              <p id="discovery-autonomous-hint" class="discovery-hint">Alice 运行且聊天空闲时，在所选时段内寻找内容。关闭页面不会停止已开启的活动。</p>
-              <div class="discovery-pair"><label class="discovery-field">开始时间（北京时间）<input id="discovery-start" type="time" required></label>
-                <label class="discovery-field">结束时间（北京时间）<input id="discovery-end" type="time" required></label></div>
-              <p class="discovery-hint">开始与结束时间相同表示全天。</p>
-              <label class="discovery-check"><input id="discovery-paid" type="checkbox"><span>允许使用已配置的模型选题和整理资料（可能产生费用，仍受我的额度约束）</span></label>
+              <label class="discovery-switch"><input id="discovery-enabled" type="checkbox" role="switch"><span>允许内容访问</span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+              <div id="discovery-chat-options" class="discovery-setting-group">
+                <label class="discovery-switch"><input id="discovery-chat-search" type="checkbox" role="switch"><span>聊天时按需查找<small>允许 Alice 为回答查找相关资料。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                <details class="discovery-setting-fold"><summary>聊天查找的工作量与等待时间</summary><div id="discovery-chat-limits" class="discovery-policy-grid"></div></details>
+              </div>
+              <p id="discovery-autonomous-hint" class="discovery-hint hidden"></p>
+              <div id="discovery-activity-options" class="discovery-setting-group">
+                <label class="discovery-switch"><input id="discovery-background" type="checkbox" role="switch"><span>空闲时按兴趣自动寻找<small>Alice 保持运行时，关闭网页后也会继续。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                <fieldset class="discovery-time-fields">
+                  <legend>运行时段 <span>北京时间</span></legend>
+                  <div class="discovery-pair"><label class="discovery-field">开始时间<input id="discovery-start" type="time" required></label>
+                    <label class="discovery-field">结束时间<input id="discovery-end" type="time" required></label></div>
+                  <p class="discovery-hint">起止时间相同表示全天。</p>
+                </fieldset>
+                <details class="discovery-setting-fold"><summary>活动节奏与库存目标</summary><div id="discovery-rhythm-settings" class="discovery-policy-grid"></div></details>
+              </div>
+              <label class="discovery-switch discovery-setting-group"><input id="discovery-paid" type="checkbox" role="switch"><span>允许后台模型选题与整理<small>使用已配置的模型，可能产生费用，受每日请求额度约束。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
               <details id="discovery-tieba-scope-box" class="discovery-policy-section"><summary>贴吧回帖阅读</summary>
                 <div class="discovery-scope-fields">
-                  <label class="discovery-check"><input id="discovery-tieba-read-replies" type="checkbox" disabled><span>允许按楼层翻页阅读公开回帖</span></label>
-                  <label class="discovery-check"><input id="discovery-tieba-read-nested" type="checkbox" disabled><span>同时阅读楼中楼节选</span></label>
-                  <label class="discovery-field discovery-reply-limit-field">每帖回复总量（含楼中楼）<input id="discovery-tieba-reply-limit" type="number" min="1" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
-                  <label class="discovery-field discovery-reply-limit-field">每帖文字额度（字符）<input id="discovery-tieba-text-limit" type="number" min="80" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
-                  <p id="discovery-tieba-replies-hint" class="discovery-hint">回复建议先读 200 条，主帖不占条数；文字额度默认 30000 字符，可自行调整。开启后按楼层依次读取，楼中楼紧随所属楼层；只读接口附带的楼中楼节选，不保证完整。达到条数、文字或网络额度即停止；不含图片或视频。资料会标注实际读取量，增加额度也会增加耗时和上下文用量。</p>
+                  <label class="discovery-switch"><input id="discovery-tieba-read-replies" type="checkbox" role="switch" disabled><span>按楼层翻页读取公开回帖</span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                  <label class="discovery-switch"><input id="discovery-tieba-read-nested" type="checkbox" role="switch" disabled><span>读取附带的楼中楼节选</span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                  <div class="discovery-pair">
+                    <label class="discovery-field">每帖回复总量（含楼中楼）<input id="discovery-tieba-reply-limit" type="number" min="1" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
+                    <label class="discovery-field">每帖文字额度（字符）<input id="discovery-tieba-text-limit" type="number" min="80" step="1" aria-describedby="discovery-tieba-replies-hint" disabled></label>
+                  </div>
+                  <details class="discovery-setting-fold"><summary>阅读范围与额度说明</summary><p id="discovery-tieba-replies-hint" class="discovery-hint">建议从 200 条回帖和 30,000 字符开始。主帖不占回帖条数，楼中楼只读取所附节选。按楼层读取文字，达到条数、文字或网络额度即停止。额度越高，耗时和上下文用量可能越多。</p></details>
                   <p id="discovery-tieba-scope-support" class="discovery-hint">等待当前服务提供回帖设置。</p>
                   <p class="discovery-hint discovery-scope-notice">保存范围后，不再符合范围的旧资料及相关引用可能停用；已经失效的资料不会因重新放宽范围而恢复。</p>
                 </div>
               </details>
-              <details class="discovery-policy-section"><summary>每日额度</summary>
-                <p class="discovery-hint">0 表示关闭对应行为；勾选“不限”表示不设置该项额度。所有开放平台共用这些设置。</p>
-                <div id="discovery-daily-limits" class="discovery-policy-grid"></div>
-                <p class="discovery-hint">请求数不是金额上限；已发出但取消的请求也可能计费。不使用后台模型时，将模型额度设为 0。</p>
+              <details class="discovery-policy-section discovery-daily-section"><summary>每日额度</summary>
+                <p class="discovery-hint">所有开放平台共用这些额度。</p>
+                <div id="discovery-daily-limits" class="discovery-daily-layout"></div>
+                <p class="discovery-hint">模型额度按请求次数计算。已发出但取消的请求也可能计费。</p>
               </details>
-              <details class="discovery-policy-section"><summary>聊天取材与记忆</summary>
-              <label class="discovery-check"><input id="discovery-chat-interests" type="checkbox"><span>允许 Alice 从自然聊天中察觉并整理我的兴趣</span></label>
-              <p class="discovery-hint">依据仅限你的表达；可以查看、纠正或停用，无需逐条确认。</p>
-              <label class="discovery-check"><input id="discovery-share-qq" type="checkbox"><span>允许本人 QQ 私聊搜索和使用资料；搜索还需开启上方的聊天查找许可，不主动发送</span></label>
-              <p class="discovery-hint">QQ 与网页共用已开放的平台和搜索额度。开关与额度仍在本机设置，QQ 消息不能自行修改。</p>
-              <label class="discovery-check"><input id="discovery-remember-observations" type="checkbox"><span>允许择要保存带出处的见闻，按价值与实际使用复核</span></label>
-              </details>
-              <details class="discovery-policy-section"><summary>活动节奏与库存目标</summary><div id="discovery-rhythm-settings" class="discovery-policy-grid"></div></details>
+              <div id="discovery-interest-learning" class="discovery-setting-group discovery-settings-interest-learning">
+                <label class="discovery-switch"><input id="discovery-chat-interests" type="checkbox" role="switch"><span>从聊天中整理兴趣<small>依据你的表达整理，可查看、纠正或停用。此项随底部设置保存。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+              </div>
+              <div id="discovery-memory-options" class="discovery-setting-group">
+                <label class="discovery-switch"><input id="discovery-remember-observations" type="checkbox" role="switch"><span>保存带出处的见闻<small>择要保留，按价值与实际使用复核。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                <label class="discovery-switch"><input id="discovery-share-qq" type="checkbox" role="switch"><span>本人 QQ 私聊可查找和使用资料<small>仅用于对话回复。查找还需开启聊天查找，与网页共用平台和额度。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+              </div>
               <details class="discovery-policy-section"><summary>资料、兴趣与对话容量</summary>
                 <p class="discovery-hint">容量设为 0 表示不允许对应内容，勾选“不限”则不设该项容量。</p>
                 <p id="discovery-storage-usage" class="discovery-hint">尚未读取来源内容池用量。</p>
@@ -104,23 +114,43 @@
                 <p class="discovery-hint">这里决定一次任务取多少材料、等多久，以及单次响应可读取的大小；不会增加每日额度。结果数量还受平台单页能力限制。</p>
                 <div id="discovery-execution-settings" class="discovery-policy-grid"></div>
               </details>
-              <details class="discovery-policy-section"><summary>平台访问与网络</summary>
-              <label class="discovery-field">内容发现网络路由<select id="discovery-network-mode" aria-describedby="discovery-network-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="system">跟随本机系统 HTTP 代理</option><option value="direct">直接连接</option></select></label>
-              <p id="discovery-network-hint" class="discovery-hint">当前服务尚未提供网络路由设置。</p>
-              <label class="discovery-field">B站访问方式<select id="discovery-bilibili-access" disabled><option value="native">B站原生入口</option><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select></label>
-              <p id="discovery-bilibili-hint" class="discovery-hint"></p>
-              <label class="discovery-field">知乎访问方式<select id="discovery-zhihu-access" disabled><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select></label>
-              <p id="discovery-zhihu-hint" class="discovery-hint"></p>
-              <label class="discovery-field">贴吧访问方式<select id="discovery-tieba-access" aria-describedby="discovery-tieba-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="native">贴吧原生入口</option><option value="third_party">第三方搜索服务</option></select></label>
-              <p id="discovery-tieba-hint" class="discovery-hint"></p>
-              <label class="discovery-field">第三方搜索服务<select id="discovery-provider"><option value="native">不使用第三方搜索服务</option><option value="bing_rss">Bing RSS（免费，无需密钥）</option><option value="brave">Brave 搜索服务</option><option value="searxng">SearXNG 搜索服务</option></select></label>
-              <p id="discovery-provider-hint" class="discovery-hint"></p>
-              <label id="discovery-endpoint-field" class="discovery-field hidden">搜索服务地址<input id="discovery-endpoint" type="url" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="https://搜索服务地址"></label>
-              <label id="discovery-engines-field" class="discovery-field hidden">使用的搜索引擎（英文逗号分隔）<input id="discovery-engines" type="text" maxlength="8192" autocomplete="off" spellcheck="false" placeholder="duckduckgo"></label>
-              <label id="discovery-key-field" class="discovery-field hidden">搜索服务密钥<input id="discovery-key" type="password" maxlength="512" autocomplete="new-password" placeholder="留空保留现有密钥"></label>
-              <p id="discovery-key-state" class="discovery-hint hidden"></p>
-              <label id="discovery-clear-key-field" class="discovery-check hidden"><input id="discovery-clear-key" type="checkbox"><span>移除已保存的搜索服务密钥</span></label>
-              </details>
+              <div id="discovery-network-fields" class="discovery-setting-stack">
+                <div class="discovery-setting-group">
+                  <div class="discovery-setting-row">
+                    <div><label for="discovery-network-mode">网络路由</label><p id="discovery-network-hint" class="discovery-hint">当前服务尚未提供网络路由设置。</p></div>
+                    <select id="discovery-network-mode" aria-describedby="discovery-network-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="system">跟随系统 HTTP 代理</option><option value="direct">直接连接</option></select>
+                  </div>
+                  <details class="discovery-setting-fold"><summary>路由适用范围</summary><p class="discovery-hint">跟随系统时使用本机配置的 HTTP 代理。模型和自定义 SearXNG 沿用各自的路由。</p></details>
+                </div>
+                <div class="discovery-setting-group discovery-route-group">
+                  <h4>平台访问方式</h4>
+                  <div class="discovery-setting-row">
+                    <div><label for="discovery-bilibili-access">B站</label><p id="discovery-bilibili-hint" class="discovery-hint"></p></div>
+                    <select id="discovery-bilibili-access" aria-describedby="discovery-bilibili-hint" disabled><option value="native">B站原生入口</option><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select>
+                  </div>
+                  <div class="discovery-setting-row">
+                    <div><label for="discovery-zhihu-access">知乎</label><p id="discovery-zhihu-hint" class="discovery-hint"></p></div>
+                    <select id="discovery-zhihu-access" aria-describedby="discovery-zhihu-hint" disabled><option value="browser">独立本机浏览器</option><option value="third_party">第三方搜索服务</option></select>
+                  </div>
+                  <div class="discovery-setting-row">
+                    <div><label for="discovery-tieba-access">贴吧</label><p id="discovery-tieba-hint" class="discovery-hint"></p></div>
+                    <select id="discovery-tieba-access" aria-describedby="discovery-tieba-hint" required disabled><option value="" disabled>等待服务提供设置</option><option value="native">贴吧原生入口</option><option value="third_party">第三方搜索服务</option></select>
+                  </div>
+                </div>
+                <div class="discovery-setting-group">
+                  <div class="discovery-setting-row">
+                    <div><label for="discovery-provider">第三方搜索服务</label><p id="discovery-provider-hint" class="discovery-hint"></p></div>
+                    <select id="discovery-provider" aria-describedby="discovery-provider-hint"><option value="native">不使用第三方搜索服务</option><option value="bing_rss">Bing RSS（免费，无需密钥）</option><option value="brave">Brave 搜索服务</option><option value="searxng">SearXNG 搜索服务</option></select>
+                  </div>
+                  <div class="discovery-provider-config">
+                    <label id="discovery-endpoint-field" class="discovery-field hidden">服务地址<input id="discovery-endpoint" type="url" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="https://搜索服务地址"></label>
+                    <label id="discovery-engines-field" class="discovery-field hidden">搜索引擎（英文逗号分隔）<input id="discovery-engines" type="text" maxlength="8192" autocomplete="off" spellcheck="false" placeholder="duckduckgo"></label>
+                    <label id="discovery-key-field" class="discovery-field hidden">搜索服务密钥<input id="discovery-key" type="password" maxlength="512" autocomplete="new-password" placeholder="留空保留现有密钥" aria-describedby="discovery-key-state"></label>
+                    <p id="discovery-key-state" class="discovery-hint hidden"></p>
+                    <label id="discovery-clear-key-field" class="discovery-check hidden"><input id="discovery-clear-key" type="checkbox"><span>移除已保存的搜索服务密钥</span></label>
+                  </div>
+                </div>
+              </div>
               <p id="discovery-settings-draft" class="discovery-draft hidden"></p>
               <div class="discovery-actions"><button id="discovery-settings-save" class="btn primary" type="submit" data-write>保存设置</button>
                 <button id="discovery-settings-reset" class="link" type="button">重新载入设置</button></div>
@@ -135,8 +165,54 @@
         </section>
       </div>
     </div>`;
-  // Keep one form, one draft and the existing revision-checked save path.
+  // Keep original controls and form owners; the interest editor saves separately.
   settingsPanel.append($("discovery-settings-box"));
+  buildSettingsLayout();
+
+  function buildSettingsLayout() {
+    const box = $("discovery-settings-box"), form = $("discovery-settings-form");
+    // Native form ownership lets settings span panes without nesting the interest form.
+    form.querySelectorAll("input, select, textarea, button").forEach((control) => control.setAttribute("form", form.id));
+    const label = (id) => $(id).closest("label");
+    const policy = (id) => $(id).closest("details");
+    const master = label("discovery-enabled");
+    const draft = $("discovery-settings-draft"), actions = $("discovery-settings-save").closest(".discovery-actions");
+    const workspace = node("div", null, "discovery-settings-workspace");
+    workspace.innerHTML = `
+      <nav class="discovery-settings-nav" aria-label="联网搜索分类">
+        <button type="button" data-discovery-settings-target="use" aria-controls="discovery-settings-use" aria-current="page">使用与安排<small>聊天、自动寻找与时段</small></button>
+        <button type="button" data-discovery-settings-target="scope" aria-controls="discovery-settings-scope">平台与兴趣<small>平台范围与兴趣来源</small></button>
+        <button type="button" data-discovery-settings-target="budget" aria-controls="discovery-settings-budget">费用与额度<small>模型许可与每日上限</small></button>
+        <button type="button" data-discovery-settings-target="memory" aria-controls="discovery-settings-memory">资料与使用<small>保存、QQ 与保留时间</small></button>
+        <button type="button" data-discovery-settings-target="network" aria-controls="discovery-settings-network">网络与访问<small>搜索服务与平台通道</small></button>
+      </nav>
+      <div class="discovery-settings-panes">
+        <section id="discovery-settings-use" class="discovery-settings-pane" data-discovery-settings-pane="use" aria-labelledby="discovery-settings-use-title"><h3 id="discovery-settings-use-title">使用与安排</h3></section>
+        <section id="discovery-settings-scope" class="discovery-settings-pane hidden" data-discovery-settings-pane="scope" aria-labelledby="discovery-settings-scope-title"></section>
+        <section id="discovery-settings-budget" class="discovery-settings-pane hidden" data-discovery-settings-pane="budget" aria-labelledby="discovery-settings-budget-title"><h3 id="discovery-settings-budget-title">费用与额度</h3></section>
+        <section id="discovery-settings-memory" class="discovery-settings-pane hidden" data-discovery-settings-pane="memory" aria-labelledby="discovery-settings-memory-title"><h3 id="discovery-settings-memory-title">资料与使用</h3></section>
+        <section id="discovery-settings-network" class="discovery-settings-pane hidden" data-discovery-settings-pane="network" aria-labelledby="discovery-settings-network-title"><h3 id="discovery-settings-network-title">网络与访问</h3></section>
+      </div>`;
+    const pane = (name) => workspace.querySelector(`[data-discovery-settings-pane="${name}"]`);
+    const cost = node("div", null, "discovery-settings-cost");
+    const costText = node("span", "尚未读取后台模型使用许可。"); costText.id = "discovery-settings-cost";
+    const costLink = node("button", "调整费用与额度", "link"); costLink.type = "button"; costLink.dataset.discoverySettingsTarget = "budget";
+    cost.append(costText, costLink);
+    pane("use").append($("discovery-chat-options"), $("discovery-autonomous-hint"), $("discovery-activity-options"));
+    const preferences = $("discovery-preferences");
+    preferences.classList.remove("hidden");
+    preferences.append($("discovery-interest-learning"));
+    pane("scope").append(preferences);
+    const daily = policy("discovery-daily-limits"); daily.open = true;
+    pane("budget").append(label("discovery-paid"), daily);
+    pane("memory").append($("discovery-memory-options"), policy("discovery-capacity-settings"), policy("discovery-retention-settings"));
+    pane("network").append($("discovery-network-fields"), $("discovery-tieba-scope-box"), policy("discovery-execution-settings"));
+    const savebar = node("div", null, "discovery-settings-savebar");
+    const saveNote = node("p", "关闭不保存 · 普通草稿本页保留", "discovery-hint");
+    savebar.append($("discovery-settings-status"), draft, saveNote, actions);
+    master.after(cost);
+    box.append(workspace, savebar);
+  }
 
   // This is a notice beside the existing composer, not a second chat or send path.
   const composerNotice = document.createElement("div");
@@ -151,7 +227,7 @@
   let opened = false, settingsOpened = false, working = false, generation = 0, timer = null, controller = null;
   let snapshot = null, dataset = null, fresh = false, settingsDirty = false, settingsRevision = null;
   let interestDirty = false, interestRevision = null, editingInterest = null, stopped = false;
-  let settingsEdit = 0, interestEdit = 0;
+  let settingsEdit = 0, interestEdit = 0, settingsSection = "use";
   let editingPreferredForums = [], forumCheckSignature = "";
   let platformSignature = "", interestSignature = "", cardSignature = "";
   let pendingDiscussion = null, discussionTimer = null;
@@ -166,12 +242,12 @@
   taskLabels.browser_resource = "正在加载获准的浏览器资源";
   const reasons = { disabled: "自主发现尚未开启", outside_window: "当前不在活动时段", foreground_busy: "先等当前聊天结束", stock_sufficient: "已有足够的新资料", no_new_material: "本轮没有新增资料", search_no_candidates: "搜索已返回，但没有可读取的页面或帖子候选，尚未进入正文阅读", no_selected_material: "已读取材料，本轮未选入资料卡", quota_exhausted: "今日额度已经用完", source_revoked: "来源许可已关闭", cancelled: "本次任务已停止", no_platforms: "还没有开放平台", no_interests: "还没有可用于寻找内容的兴趣", no_credentials: "所选服务还没有配置可用凭据", timeout: "本次寻找达到时间限制" };
   const policyFields = [
-    { key: "daily_queries", label: "每日查询次数", group: "daily", integer: true, nullable: true },
-    { key: "daily_models", label: "后台每日模型请求", group: "daily", integer: true, nullable: true },
-    { key: "daily_network", label: "每日网络尝试", group: "daily", integer: true, nullable: true },
-    { key: "daily_response_mib", label: "每日响应正文（MiB）", group: "daily", nullable: true },
-    { key: "daily_shares", label: "每日自动带出资料次数", group: "daily", integer: true, nullable: true },
-    { key: "daily_memory_writes", label: "每日正式见闻条数", group: "daily", integer: true, nullable: true },
+    { key: "daily_queries", label: "每日查询次数", group: "daily", integer: true, nullable: true, shortLabel: "查询次数", unit: "次" },
+    { key: "daily_models", label: "后台每日模型请求", group: "daily", integer: true, nullable: true, shortLabel: "后台模型请求", unit: "次" },
+    { key: "daily_network", label: "每日网络尝试", group: "daily", integer: true, nullable: true, shortLabel: "网络尝试", unit: "次" },
+    { key: "daily_response_mib", label: "每日响应正文（MiB）", group: "daily", nullable: true, shortLabel: "响应正文", unit: "MiB" },
+    { key: "daily_shares", label: "每日自动带出资料次数", group: "daily", integer: true, nullable: true, shortLabel: "自动带出资料", unit: "次" },
+    { key: "daily_memory_writes", label: "每日正式见闻条数", group: "daily", integer: true, nullable: true, shortLabel: "正式见闻", unit: "条" },
     { key: "chat_search_calls", label: "每轮对话搜索调用次数", group: "execution", integer: true, nullable: true, note: "相同请求复用已取得的结果，不重复访问。" },
     { key: "chat_search_results", label: "每次对话搜索返回材料", group: "execution", integer: true, nullable: true, note: "同时受本轮资料和来源依赖数量约束。" },
     { key: "tool_round_limit", label: "每轮聊天工具交互轮数", group: "execution", integer: true, nullable: true, note: "用完后不再执行工具，再用一次无工具答复交代实际结果。0 表示只答复、不执行工具。" },
@@ -207,6 +283,7 @@
     { key: "model_response_bytes", label: "单次模型响应（MiB）", group: "execution", positive: true, scale: 1048576 },
   ];
   const policyControls = new Map();
+  let selectedDailyQuota = "daily_models";
   const has = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
   const text = (id, value) => { $(id).textContent = value == null ? "" : String(value); };
   function node(tag, value, cls) { const n = document.createElement(tag); if (value != null) n.textContent = String(value); if (cls) n.className = cls; return n; }
@@ -270,17 +347,120 @@
       const wrapper = node("div", null, "discovery-policy-field"), label = node("label", field.label, "discovery-policy-label");
       const input = node("input"), row = node("div", null, "discovery-limit-input");
       input.id = `discovery-policy-${field.key}`; input.type = "number"; input.min = "0";
+      input.setAttribute("form", "discovery-settings-form");
       input.step = field.integer ? "1" : "any"; input.disabled = true; input.required = true;
       label.htmlFor = input.id; row.append(input);
       const unlimited = field.nullable ? check(field.unlimitedLabel || "不限", false) : null;
       if (unlimited) {
+        unlimited.input.setAttribute("form", "discovery-settings-form");
         unlimited.input.disabled = true; unlimited.input.setAttribute("aria-label", `${field.label}：${field.unlimitedLabel || "不限"}`);
         row.append(unlimited.row);
       }
       const note = node("p", field.note || "", "discovery-hint discovery-policy-note");
       note.id = `${input.id}-hint`; input.setAttribute("aria-describedby", note.id); note.classList.toggle("hidden", !field.note);
-      wrapper.append(label, row, note); $(groups[field.group]).append(wrapper);
+      const chatField = ["chat_search_calls", "chat_search_results", "tool_round_limit", "chat_search_timeout_seconds"].includes(field.key);
+      wrapper.append(label, row, note); $(chatField ? "discovery-chat-limits" : groups[field.group]).append(wrapper);
       policyControls.set(field.key, { field, input, unlimited: unlimited?.input || null, note, supported: false });
+    }
+  }
+  function mountDailyQuotaEditor() {
+    const layout = $("discovery-daily-limits");
+    const list = node("div", null, "discovery-daily-list");
+    list.setAttribute("role", "group");
+    list.setAttribute("aria-label", "选择要编辑的额度");
+    const editor = node("section", null, "discovery-daily-editor");
+    editor.id = "discovery-daily-editor";
+    editor.setAttribute("aria-labelledby", "discovery-daily-title");
+    editor.innerHTML = `
+      <h4 id="discovery-daily-title"></h4>
+      <fieldset id="discovery-daily-modes">
+        <legend>限额方式</legend>
+        <div class="discovery-daily-choices">
+          <label class="discovery-daily-choice"><input class="sr-only" type="radio" name="discovery-daily-mode" value="limit"><span>设上限</span></label>
+          <label class="discovery-daily-choice"><input class="sr-only" type="radio" name="discovery-daily-mode" value="unlimited"><span>不限</span></label>
+          <label class="discovery-daily-choice"><input class="sr-only" type="radio" name="discovery-daily-mode" value="off"><span>关闭</span></label>
+        </div>
+      </fieldset>
+      <p id="discovery-daily-mode-note" class="discovery-hint"></p>`;
+    layout.prepend(list, editor);
+    const modeNote = $("discovery-daily-mode-note");
+
+    for (const control of policyControls.values()) {
+      const { field, input, unlimited } = control;
+      if (field.group !== "daily") continue;
+      const button = node("button", null, "discovery-daily-item");
+      button.type = "button";
+      button.setAttribute("aria-controls", editor.id);
+      const amount = node("span", null, "discovery-daily-amount");
+      button.append(node("span", field.shortLabel), amount);
+      button.addEventListener("click", () => selectDailyQuota(control));
+      list.append(button);
+
+      // The existing number and unlimited checkbox remain the form's source of truth.
+      const valueField = input.closest(".discovery-policy-field");
+      valueField.classList.add("discovery-daily-value");
+      valueField.querySelector("label").textContent = "每日上限";
+      input.dataset.discoveryDailyQuota = field.key;
+      input.inputMode = field.integer ? "numeric" : "decimal";
+      input.setAttribute("aria-label", `${field.shortLabel}每日上限（${field.unit}）`);
+      unlimited.closest("label").classList.add("hidden");
+      input.after(node("span", field.unit, "discovery-daily-unit"));
+      modeNote.before(valueField);
+      control.daily = { button, amount, valueField, lastLimit: "" };
+      input.addEventListener("blur", () => {
+        if (field.key === selectedDailyQuota && dailyQuotaMode(control) === "off") renderDailyQuotaEditor();
+      });
+    }
+
+    $("discovery-daily-modes").addEventListener("change", (event) => {
+      const control = policyControls.get(selectedDailyQuota);
+      if (!control.supported || !event.target.checked) return;
+      const mode = event.target.value;
+      control.unlimited.checked = mode === "unlimited";
+      if (mode === "off") control.input.value = "0";
+      if (mode === "limit" && control.input.valueAsNumber === 0) control.input.value = control.daily.lastLimit;
+      recordSettingsEdit();
+      renderDailyQuotaEditor();
+    });
+    renderDailyQuotaEditor();
+  }
+  function dailyQuotaMode(control) {
+    if (control.unlimited.checked) return "unlimited";
+    return control.input.valueAsNumber === 0 ? "off" : "limit";
+  }
+  function selectDailyQuota(control) {
+    selectedDailyQuota = control.field.key;
+    renderDailyQuotaEditor();
+  }
+  function renderDailyQuotaSummary(control) {
+    const { daily, field, input, supported } = control;
+    const mode = dailyQuotaMode(control);
+    const value = input.valueAsNumber;
+    if (!supported) daily.amount.textContent = snapshot ? "未提供" : "待读取";
+    else if (mode === "unlimited") daily.amount.textContent = "不限";
+    else if (mode === "off") daily.amount.textContent = "关闭";
+    else if (!input.value) daily.amount.textContent = "待填写";
+    else if (!input.validity.valid || field.integer && !Number.isSafeInteger(value)) daily.amount.textContent = "待校验";
+    else daily.amount.textContent = `${Number.isInteger(value) ? quota(value) : input.value} ${field.unit}`;
+  }
+  function renderDailyQuotaEditor() {
+    const selected = policyControls.get(selectedDailyQuota);
+    const mode = dailyQuotaMode(selected);
+    text("discovery-daily-title", selected.field.shortLabel);
+    const modes = $("discovery-daily-modes");
+    modes.classList.toggle("hidden", !selected.supported);
+    for (const radio of modes.querySelectorAll("input")) radio.checked = radio.value === mode;
+    const note = $("discovery-daily-mode-note");
+    note.textContent = !selected.supported ? (snapshot ? "当前服务尚未提供此设置。" : "等待读取额度。")
+      : mode === "unlimited" ? "该项不设每日上限。"
+      : mode === "off" ? "此项额度为 0，暂停对应行为。" : "";
+    note.classList.toggle("hidden", !note.textContent);
+    for (const control of policyControls.values()) {
+      if (!control.daily) continue;
+      const active = control === selected;
+      control.daily.button.setAttribute("aria-pressed", String(active));
+      control.daily.valueField.classList.toggle("hidden", !active || !control.supported || mode !== "limit");
+      renderDailyQuotaSummary(control);
     }
   }
   function updatePolicyControls() {
@@ -295,11 +475,13 @@
       control.supported = has(settings, field.key);
       const value = settings[field.key];
       input.value = control.supported && Number.isFinite(value) ? String(value / (field.scale || 1)) : "";
+      if (control.daily) control.daily.lastLimit = input.valueAsNumber > 0 ? input.value : "";
       if (unlimited) unlimited.checked = control.supported && value === null;
       note.textContent = control.supported ? field.note || "" : "当前服务尚未提供此设置。";
       note.classList.toggle("hidden", !note.textContent);
     }
     updatePolicyControls();
+    renderDailyQuotaEditor();
   }
   function readPolicySettings() {
     const values = {};
@@ -324,7 +506,7 @@
     return values;
   }
   function revealSetting(input) {
-    if (settingsPanel.contains(input)) showSettings();
+    if (settingsPanel.contains(input)) showSettings(input.id || "discovery-settings-title");
     else showPreferences(true);
     for (let parent = input.parentElement; parent && parent !== panel && parent !== settingsPanel; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
@@ -332,29 +514,51 @@
   }
   function quota(value) { return value === null ? "不限" : Number.isFinite(value) ? value.toLocaleString("zh-CN", { maximumFractionDigits: 3 }) : "未提供"; }
   mountPolicyFields();
+  mountDailyQuotaEditor();
   function currentRevision() { return snapshot?.settings?.revision; }
   function settingsConflict() { return settingsDirty && settingsRevision !== currentRevision(); }
+  function selectSettingsSection(section, resetScroll = false) {
+    if (!["use", "scope", "budget", "memory", "network"].includes(section)) section = "use";
+    settingsSection = section;
+    settingsPanel.querySelectorAll("[data-discovery-settings-pane]").forEach((pane) => pane.classList.toggle("hidden", pane.dataset.discoverySettingsPane !== section));
+    settingsPanel.querySelectorAll(".discovery-settings-nav [data-discovery-settings-target]").forEach((button) => {
+      if (button.dataset.discoverySettingsTarget === section) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(settingsOpened && section === "scope"));
+    if (resetScroll) {
+      settingsPanel.closest(".modal-body").scrollTop = 0;
+      settingsPanel.querySelector(".discovery-settings-panes").scrollTop = 0;
+    }
+  }
   function focusSetting(field) {
+    const pane = field.closest("[data-discovery-settings-pane]");
+    if (pane) selectSettingsSection(pane.dataset.discoverySettingsPane);
     for (let parent = field; parent && parent !== panel && parent !== settingsPanel; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
     }
-    const target = field.id === "discovery-settings-box" ? $("discovery-settings-title")
+    let target = field.id === "discovery-settings-box" ? $("discovery-settings-title")
       : field.tagName === "DETAILS" ? field.querySelector("summary") : field;
-    requestAnimationFrame(() => { target.focus({ preventScroll: true }); target.scrollIntoView({ block: "nearest" }); });
+    const daily = policyControls.get(field.dataset.discoveryDailyQuota);
+    if (daily) {
+      selectDailyQuota(daily);
+      if (!daily.supported) target = daily.daily.button;
+      else if (dailyQuotaMode(daily) !== "limit") target = $("discovery-daily-modes").querySelector(":checked");
+    }
+    requestAnimationFrame(() => {
+      target.focus({ preventScroll: true });
+      (target.closest(".discovery-daily-choice") || target).scrollIntoView({ block: "nearest" });
+    });
   }
   function showSettings(target = "discovery-settings-title") {
     if (!settingsOpened) window.AliceUI?.openSettings("discovery");
     const field = $(target); if (field) focusSetting(field);
   }
   function showPreferences(show, target = null) {
-    if (show && target && settingsPanel.contains($(target))) { showSettings(target); return; }
-    $("discovery-preferences").classList.toggle("hidden", !show);
-    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(show));
-    if (show && target) {
-      const field = $(target); if (!field) return;
-      focusSetting(field);
-    }
-    if (!show) $("discovery-preferences-toggle").focus();
+    if (show) { showSettings(target || "discovery-platforms-box"); return; }
+    const restoreFocus = $("discovery-preferences").contains(document.activeElement) && settingsOpened;
+    if (settingsSection === "scope") selectSettingsSection("use");
+    if (restoreFocus) settingsPanel.querySelector('.discovery-settings-nav [data-discovery-settings-target="use"]').focus();
   }
   function resolveDrafts() {
     if (!settingsDirty && !interestDirty) return true;
@@ -383,7 +587,7 @@
     const s = snapshot.settings;
     if (!s.enabled && s.daily_models !== 0 && !s.allow_paid) {
       showPreferences(true, "discovery-paid");
-      status("请确认模型使用许可，或在每日额度中将模型请求设为 0，再开启发现。", "waiting");
+      status("请确认模型使用许可，或在每日额度中关闭后台模型请求，再开启发现。", "waiting");
       return;
     }
     mutate("settings", { settings: { enabled: !s.enabled } }, "正在更新寻找状态…", s.enabled ? "已暂停发现。已找到的资料仍可查看。" : "已开启发现，将按已保存的平台、兴趣、时段与额度寻找。");
@@ -412,10 +616,8 @@
     text("discovery-tieba-scope", tiebaEnabled ? tiebaScopeLabel(s) : "");
     $("discovery-tieba-scope").classList.toggle("hidden", !tiebaEnabled);
     const unified = snapshot.autonomous_scheduler === "lifecycle-v1";
-    $("discovery-background").closest("label").classList.toggle("hidden", unified);
-    $("discovery-start").closest(".discovery-pair").classList.toggle("hidden", unified);
-    $("discovery-start").closest(".discovery-pair").nextElementSibling.classList.toggle("hidden", unified);
-    for (const key of ["activity_interval_minutes", "stock_target"]) $("discovery-policy-" + key).closest(".discovery-policy-field").classList.toggle("hidden", unified);
+    $("discovery-activity-options").classList.toggle("hidden", unified);
+    $("discovery-autonomous-hint").classList.toggle("hidden", !unified);
     if (unified) text("discovery-autonomous-hint", "自主寻找由「思想与探索」中的清醒状态、活动时长与权限统一安排；这里管理平台和资料许可，仍可手动找一轮。");
     text("discovery-mode", s.enabled ? `${unified ? "自主活动由思想与探索统一安排" : s.background_enabled ? "自动寻找已开启" : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"} · 手动找一轮不限时段` : "内容访问已暂停");
     text("discovery-toggle-enabled", s.enabled ? "暂停发现" : "开启发现");
@@ -425,7 +627,6 @@
     for (const root of [panel, settingsPanel]) root.querySelectorAll("[data-write]").forEach((n) => { n.disabled = !ready || n.dataset.ineligible === "true"; });
     $("discovery-refresh").disabled = working || stopped;
     $("discovery-settings-refresh").disabled = working || stopped;
-    $("discovery-settings-preferences").disabled = working || stopped;
     $("discovery-settings-reset").disabled = working || !snapshot;
     $("discovery-interest-reset").disabled = working;
     const forumCheck = snapshot?.tieba_forum_check;
@@ -445,7 +646,8 @@
     text("discovery-next-text", reconnect ? "尚未取得最新状态，重新读取后可以继续操作。" : issue?.message || "");
     text("discovery-next-action", reconnect ? "重新读取" : issue?.label || "");
     $("discovery-next-action").disabled = reconnect ? false : !ready;
-    text("discovery-preferences-toggle", interestDirty ? "偏好设置 · 未保存" : "偏好设置");
+    text("discovery-preferences-toggle", interestDirty ? "平台与兴趣 · 未保存" : "平台与兴趣");
+    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(settingsOpened && settingsSection === "scope"));
     text("discovery-settings-open", settingsDirty ? "联网搜索设置 · 未保存" : "联网搜索设置");
     $("discovery-cancel").classList.toggle("hidden", !active);
     $("discovery-cancel").disabled = !ready || !task.id || ["draining", "cancelling"].includes(task.state);
@@ -455,6 +657,13 @@
     dirtyNote.textContent = settingsConflict() ? "设置已在别处更新。你的草稿仍在；请先重新载入，再保存。" : "有尚未保存的设置。";
     $("discovery-interest-draft").classList.toggle("hidden", !interestDirty);
     text("discovery-interest-draft", interestDirty && interestRevision !== currentRevision() ? "设置已更新。请取消编辑并重新选择兴趣，避免覆盖新内容。" : "兴趣修改尚未保存。保存不会直接发送聊天消息。");
+    const saved = snapshot?.settings, cost = $("discovery-settings-cost"), current = fresh ? "当前生效" : "上次读取";
+    cost.dataset.paid = String(!!saved?.allow_paid);
+    cost.textContent = !saved ? "尚未读取后台模型使用许可。"
+      : !saved.allow_paid ? `${current}：后台模型未授权。`
+      : !has(saved, "daily_models") ? `${current}：后台模型已授权，每日额度尚未提供。`
+      : saved.daily_models === 0 ? `${current}：后台模型已授权，每日额度为 0（暂停模型）。`
+      : `${current}：后台模型已授权 · 每日请求${saved.daily_models === null ? "不限" : `最多 ${quota(saved.daily_models)} 次`}（不是金额上限）。`;
   }
   function tiebaScopeSupport() {
     const s = snapshot?.settings || {};
@@ -493,8 +702,8 @@
     $("discovery-network-mode").disabled = !networkSupported;
     if (!networkSupported) $("discovery-network-mode").value = "";
     text("discovery-network-hint", networkSupported
-      ? "仅影响公开平台、Bing RSS 与 Brave 请求。本机 HTTP 代理由系统配置；不支持远程代理、SOCKS 或 PAC 自动脚本。模型与自定义 SearXNG 保持原路由。这是连接方式，不是第三方搜索通道。"
-      : "当前服务尚未提供可用的网络路由设置；此项不会提交。模型与自定义 SearXNG 保持原路由。");
+      ? "适用于公开平台、Bing RSS 和 Brave 的请求。"
+      : "当前服务尚未提供网络路由设置，此项不会提交。");
     $("discovery-endpoint-field").classList.toggle("hidden", provider !== "searxng");
     $("discovery-engines-field").classList.toggle("hidden", provider !== "searxng");
     $("discovery-key-field").classList.toggle("hidden", !keySupported);
@@ -506,23 +715,23 @@
     $("discovery-engines").disabled = provider !== "searxng";
     $("discovery-key").disabled = !keySupported;
     $("discovery-clear-key").disabled = !keySupported;
-    text("discovery-provider-hint", provider === "native" ? "使用已接入的平台原生入口，不把搜索词交给第三方搜索服务。各平台仍须单独开放。"
-      : provider === "bing_rss" ? "使用此通道的平台会把搜索词交给 Bing。公开 RSS 免费且无需密钥、服务地址或引擎配置；不保证返回数量或始终可达。请在各平台单独允许第三方搜索。"
-      : provider === "brave" ? "使用此通道的平台会把搜索词交给 Brave。请在各平台单独允许此通道，并提供自己的服务密钥；具体费用以服务账单为准。"
-      : "使用此通道的平台会把搜索词交给你填写的 SearXNG 服务。请确认服务地址及使用许可，并在各平台单独允许此通道。");
-    text("discovery-bilibili-hint", !has(snapshot?.settings, "bilibili_access") ? "读取支持此设置的服务后可选择 B站访问方式。"
-      : $("discovery-bilibili-access").value === "browser" ? "用独立 Edge 会话搜索、读取视频简介；需要时在平台卡中打开浏览器亲自登录，关闭窗口后再寻找。不会读取字幕或观看视频。"
-      : $("discovery-bilibili-access").value === "native" ? "原生入口可搜索公开视频、读取视频信息和简介，无需第三方搜索服务。字幕尚未开放，也不表示已观看视频。"
-      : "搜索词会交给下面选择的第三方服务；保存后需在 B站平台卡中单独允许该通道。读取范围仍以实际取得的视频信息与简介为准。");
+    text("discovery-provider-hint", provider === "native" ? "各平台按所选方式访问，仍需单独开放。"
+      : provider === "bing_rss" ? "获准的平台将搜索词交给 Bing 的公开 RSS。平台许可在「平台与兴趣」单独设置。"
+      : provider === "brave" ? "获准的平台将搜索词交给 Brave。需要服务密钥，费用以账单为准。"
+      : "获准的平台将搜索词交给指定的 SearXNG 服务。请核对服务地址与使用许可。");
+    text("discovery-bilibili-hint", !has(snapshot?.settings, "bilibili_access") ? "当前服务尚未提供 B站访问方式。"
+      : $("discovery-bilibili-access").value === "browser" ? "搜索与读取视频简介。如需登录，请在平台卡打开独立浏览器。"
+      : $("discovery-bilibili-access").value === "native" ? "搜索公开视频，读取视频信息和简介。"
+      : "由选定服务查找视频链接，读取信息和简介。请在 B站平台卡单独授权。");
     text("discovery-zhihu-hint", $("discovery-zhihu-access").value === "browser"
-      ? "用独立 Edge 会话搜索并读取指定回答；需要时亲自登录，关闭窗口后再寻找。文章、问题描述和付费内容暂未开放。"
-      : "使用所选第三方服务发现链接，再尝试普通 HTTP 读取正文；此前本机读取受阻。");
+      ? "在独立浏览器搜索并读取指定回答。需要时请亲自登录。"
+      : "通过第三方服务发现链接，再尝试读取指定正文。");
     const tiebaSupported = has(snapshot?.settings, "tieba_access") && ["native", "third_party"].includes(snapshot.settings.tieba_access);
     $("discovery-tieba-access").disabled = !tiebaSupported;
     if (!tiebaSupported) $("discovery-tieba-access").value = "";
-    text("discovery-tieba-hint", !tiebaSupported ? "当前服务尚未提供贴吧访问方式；此项不会提交。"
-      : $("discovery-tieba-access").value === "native" ? "贴吧原生入口无需第三方搜索服务。优先吧按兴趣设置；回帖翻页和楼中楼节选在“贴吧回帖阅读”中配置，不含图片或视频。"
-      : "搜索词会交给下面选择的第三方服务；保存后需在贴吧平台卡中单独允许该通道。回帖仍需另行允许；优先吧匹配以实际取得的归属为准。");
+    text("discovery-tieba-hint", !tiebaSupported ? "当前服务尚未提供贴吧访问方式，此项不会提交。"
+      : $("discovery-tieba-access").value === "native" ? "通过贴吧查找公开帖子。回帖范围在下方设置。"
+      : "搜索词交给选定服务，需在贴吧平台卡单独授权。回帖范围在下方设置。");
     text("discovery-key-state", snapshot?.settings?.provider_key_present ? "已保存密钥；内容不会回显。" : "尚未保存搜索服务密钥。SearXNG 是否需要密钥取决于该服务。");
   }
   function fillSettings(force = false) {
@@ -565,8 +774,9 @@
       const browserAccess = !!p.browser && snapshot.settings[`${p.id}_access`] === "browser";
       const card = node("article", null, "discovery-platform"), head = node("div", null, "discovery-item-head");
       const name = p.name || p.label || "内容平台";
-      const detail = node("details"); detail.append(node("summary", "访问方式与资料管理"));
-      const toggle = button(p.enabled ? `停用${name}` : `开启${name}`, () => {
+      const detail = node("details");
+      detail.append(node("summary", p.browser ? "访问、登录与资料" : "访问方式与资料"), node("p", p.description || "仅使用获准的公开内容。", "discovery-hint"));
+      const toggle = button(p.enabled ? "停用" : "开启", () => {
         if (!resolveDrafts()) return;
         if (!p.enabled && needsThirdParty && !p.allow_third_party) {
           detail.open = true; third.input.focus();
@@ -574,11 +784,17 @@
         }
         mutate("platform", { id: p.id, enabled: !p.enabled, allow_third_party: !!p.allow_third_party }, "正在更新平台…", p.enabled ? `已停用${name}。` : `已开启${name}，将用于之后的寻找。`);
       }, "btn ghost discovery-platform-toggle");
+      toggle.setAttribute("aria-label", `${toggle.textContent}${name}`);
       if (!p.available && !p.enabled) toggle.dataset.ineligible = "true";
-      head.append(node("h3", name), toggle);
-      card.append(head, node("p", p.description || "仅使用获准的公开内容。", "discovery-hint"));
+      const title = node("div", null, "discovery-platform-title");
+      const state = node("div", p.enabled ? (p.available ? "已开启" : "已开启 · 暂不可用") : p.available ? "未开启" : "暂不可用", "discovery-platform-state");
+      state.dataset.active = String(p.enabled && p.available);
+      title.append(node("h3", name), state);
+      head.append(title, toggle);
+      card.append(head);
       if (p.browser) {
-        card.append(node("p", browserAccess ? `${p.browser.message}。${p.browser.last_message}` : "也可使用独立本机浏览器，需要登录时由你亲自完成。", "discovery-hint"));
+        const browserNote = node("p", browserAccess ? `${p.browser.message}。${p.browser.last_message}` : "也可使用独立本机浏览器，需要登录时由你亲自完成。", "discovery-hint");
+        (browserAccess ? card : detail).append(browserNote);
         const browserActions = node("div", null, "discovery-actions");
         if (!browserAccess) {
           const useBrowser = button("使用独立浏览器", () => {
@@ -591,17 +807,17 @@
         browserActions.append(button("打开独立浏览器 / 登录", () => {
           mutate("browser_open", { platform: p.id }, "正在打开独立浏览器…", "已打开独立窗口。需要时请亲自登录，完成后关闭这个窗口，再点“现在找一轮”。");
         }, "btn ghost"));
-        card.append(browserActions, node("p", "会话仅保存在本机独立目录，不读取日常浏览器账号。此窗口供你操作；后台只搜索和阅读，遇验证即停止。", "discovery-hint"));
+        detail.append(browserActions, node("p", "登录保存在本机独立浏览器。完成后关闭该窗口再寻找。后台搜索和阅读遇到验证时会停止。", "discovery-hint"));
       }
       if (p.id === "tieba") {
-        card.append(node("p", tiebaScopeLabel(snapshot.settings), "discovery-hint"));
+        detail.append(node("p", tiebaScopeLabel(snapshot.settings), "discovery-hint"));
         const scope = node("button", "设置回帖阅读", "link"); scope.type = "button";
         scope.addEventListener("click", () => showPreferences(true, "discovery-tieba-scope-box"));
-        card.append(scope);
+        detail.append(scope);
       }
       if (words(p.readable_types)) detail.append(node("p", `可读范围：${words(p.readable_types)}`, "discovery-hint"));
       if (p.discovery_method) detail.append(node("p", `发现方式：${({ native: "平台公开入口", bing_rss: "Bing RSS（免费，无需密钥）", brave: "Brave 搜索服务", searxng: "SearXNG 搜索服务" })[p.discovery_method] || words(p.discovery_method)}`, "discovery-hint"));
-      if (p.reason && !browserAccess) card.append(node("p", p.reason, "discovery-hint"));
+      if (p.reason && !browserAccess) (p.available ? detail : card).append(node("p", p.reason, "discovery-hint"));
       const third = check("允许所选第三方搜索服务寻找此平台的内容", p.allow_third_party);
       if (needsThirdParty || p.allow_third_party) {
         if (p.third_party_notice) detail.append(node("p", p.third_party_notice, "discovery-hint"));
@@ -712,7 +928,7 @@
     const rows = list(snapshot.interests), signature = JSON.stringify(rows);
     if (signature === interestSignature) return; interestSignature = signature;
     const target = $("discovery-interests"); target.replaceChildren();
-    if (!rows.length) target.append(node("p", "还没有兴趣。先添加一个想一起了解的主题。", "discovery-hint"));
+    if (!rows.length) target.append(node("p", "暂无已添加的兴趣。", "discovery-hint"));
     for (const item of rows) {
       const card = node("article", null, "discovery-interest"), head = node("div", null, "discovery-item-head");
       head.append(node("h3", item.topic || "未命名兴趣"), node("span", !item.external_allowed ? "等待允许外发" : item.enabled ? "正在使用" : "已停用", `discovery-pill${item.enabled && item.external_allowed ? "" : " muted"}`));
@@ -721,9 +937,11 @@
       if (list(item.preferred_forums).length) card.append(node("p", `优先吧：${words(item.preferred_forums)}；无合适内容时可找其他吧。`, "discovery-hint"));
       if (item.origin === 'conversation_inferred') {
         const attitude = {interested:'感兴趣',likes:'喜欢',dislikes:'不喜欢',concerned:'关注',curious:'好奇',neutral:'中立'}[item.attitude] || '待明确';
-        card.append(node('p', `从聊天察觉 · ${attitude} · 置信度 ${Math.round((item.confidence || 0)*100)}% · ${list(item.basis_user_turn_ids).length} 条用户表达依据`, 'discovery-hint'));
-        if (item.evidence_reason) card.append(node('p', item.evidence_reason, 'discovery-hint'));
-        for (const quote of list(item.evidence_quotes)) card.append(node('p', `表达依据：“${quote}”`, 'discovery-hint'));
+        const evidence = node("details", null, "discovery-setting-fold");
+        evidence.append(node("summary", `聊天依据 · ${attitude}`), node("p", `置信度 ${Math.round((item.confidence || 0) * 100)}% · ${list(item.basis_user_turn_ids).length} 条用户表达`, "discovery-hint"));
+        if (item.evidence_reason) evidence.append(node("p", item.evidence_reason, "discovery-hint"));
+        for (const quote of list(item.evidence_quotes)) evidence.append(node("p", `表达依据：“${quote}”`, "discovery-hint"));
+        card.append(evidence);
       }
       if (item.origin === "conversation_candidate") card.append(node("p", item.external_allowed ? "来自聊天，已允许搜索。" : "来自聊天，确认后才会用于搜索。", "discovery-hint"));
       const actions = node("div", null, "discovery-actions");
@@ -1026,6 +1244,7 @@
     const next = !!value && !stopped;
     if (settingsOpened === next) return;
     settingsOpened = next;
+    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(next && settingsSection === "scope"));
     if (next) {
       if (!snapshot) status("正在读取联网搜索设置…", "waiting");
       refresh();
@@ -1041,12 +1260,8 @@
   $("discovery-refresh").addEventListener("click", refresh);
   $("discovery-settings-refresh").addEventListener("click", refresh);
   $("discovery-settings-open").addEventListener("click", () => showSettings());
-  $("discovery-settings-preferences").addEventListener("click", () => {
-    window.AliceUI?.closeSettings();
-    if (!opened) open();
-    showPreferences(true, "discovery-platforms-box");
-  });
-  $("discovery-preferences-toggle").addEventListener("click", () => showPreferences($("discovery-preferences").classList.contains("hidden")));
+  settingsPanel.querySelectorAll("[data-discovery-settings-target]").forEach((button) => button.addEventListener("click", () => selectSettingsSection(button.dataset.discoverySettingsTarget, true)));
+  $("discovery-preferences-toggle").addEventListener("click", () => showPreferences(true));
   $("discovery-preferences-close").addEventListener("click", () => showPreferences(false));
   $("discovery-toggle-enabled").addEventListener("click", toggleEnabled);
   $("discovery-next-action").addEventListener("click", () => { if (!fresh) { refresh(); return; } const issue = setupIssue(); if (issue?.enable) toggleEnabled(); else if (issue?.target) showPreferences(true, issue.target); });
@@ -1064,8 +1279,34 @@
   });
   $("discovery-go-chat").addEventListener("click", goChat);
   $("discovery-undiscuss").addEventListener("click", removeDiscussion); composerCancel.addEventListener("click", removeDiscussion);
-  $("discovery-settings-form").addEventListener("input", () => { settingsEdit++; settingsDirty = true; updatePolicyControls(); providerFields(); updateControls(); });
-  $("discovery-settings-form").addEventListener("invalid", (event) => revealSetting(event.target), true);
+  function recordSettingsEdit() {
+    settingsEdit++;
+    settingsDirty = true;
+    updatePolicyControls();
+    providerFields();
+    updateControls();
+  }
+  settingsPanel.addEventListener("input", (event) => {
+    if (event.target.form !== $("discovery-settings-form")) return;
+    const control = policyControls.get(event.target.dataset.discoveryDailyQuota);
+    if (control) {
+      const { input, field, daily } = control;
+      if (input.valueAsNumber > 0 && input.validity.valid && (!field.integer || Number.isSafeInteger(input.valueAsNumber))) {
+        daily.lastLimit = input.value;
+      }
+      renderDailyQuotaSummary(control);
+    }
+    recordSettingsEdit();
+  });
+  settingsPanel.addEventListener("invalid", (event) => {
+    const form = $("discovery-settings-form");
+    if (event.target.form !== form) return;
+    // Native validation visits every invalid control. Keep the first one's pane
+    // visible instead of switching repeatedly and leaving the first field hidden.
+    const first = [...form.elements].find((control) => control.willValidate && !control.validity.valid);
+    if (first && event.target !== first) { event.preventDefault(); return; }
+    revealSetting(event.target);
+  }, true);
   $("discovery-provider").addEventListener("change", providerFields);
   $("discovery-bilibili-access").addEventListener("change", providerFields);
   $("discovery-zhihu-access").addEventListener("change", providerFields);
@@ -1115,7 +1356,7 @@
       settings.provider_endpoint = $("discovery-endpoint").value.trim();
       settings.provider_engines = engines.join(",");
     }
-    if (snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请明确允许后台模型使用，或把每日模型请求设为 0。", "waiting"); return; }
+    if (snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请允许后台模型使用，或在每日额度中关闭后台模型请求。", "waiting"); return; }
     if (["brave", "searxng"].includes(settings.provider_kind)) {
       if ($("discovery-key").value.trim()) settings.provider_key = $("discovery-key").value.trim();
       if ($("discovery-clear-key").checked) settings.clear_provider_key = true;

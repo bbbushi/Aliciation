@@ -7,19 +7,21 @@
   const navButton = document.createElement("button");
   navButton.type = "button"; navButton.dataset.settings = "thoughts";
   navButton.textContent = "思想与探索"; navButton.setAttribute("aria-pressed", "false");
+  navButton.setAttribute("aria-controls", "thought-settings");
   navButton.addEventListener("click", () => window.AliceUI?.selectSettings("thoughts"));
   nav.appendChild(navButton);
   panel.innerHTML = `
-    <div class="thought-head"><h2 id="thought-title" class="panel-title">思想与探索</h2><button id="thought-refresh" class="link" type="button">刷新</button></div>
+    <div class="thought-head settings-page-head"><h2 id="thought-title" class="panel-title">思想与探索</h2><button id="thought-refresh" class="link" type="button">刷新</button></div>
     <p id="thought-status" class="settings-result" role="status" aria-live="polite">尚未读取</p>
     <div class="thought-actions"><span id="thought-lifecycle" role="status">正在读取状态</span><button id="thought-wake" class="btn ghost" type="button">切换状态</button></div>
     <p class="settings-hint">清醒时选择兴趣探索、问题思考或自我迭代；睡眠时待机，仍回应你的消息和任务。服务关闭后不运行。</p>
-    <details><summary>探索与联系设置</summary><form id="thought-config">
+    <details class="settings-group settings-inline-details" open><summary>探索与联系设置</summary><form id="thought-config">
+      <fieldset class="settings-fieldset"><legend>自主探索</legend>
       <label>运行状态<select name="wake_state"><option value="sleeping">睡眠 · 待机</option><option value="awake">清醒 · 空闲时自主活动</option></select></label>
       <label><input name="allow_paid" type="checkbox">允许探索使用已配置模型（产生费用）</label>
       <label><input name="allow_external" type="checkbox">允许探索使用已开放平台的搜索与读取</label>
       <p class="settings-hint">外部读取还需在联网搜索中开放相应平台；本机思考不依赖内容发现总开关。现有后台维护与探索共用运行许可，允许探索使用模型后，共用下面的后台模型额度。</p>
-      <div class="thought-fields">
+      <details class="settings-help settings-inline-details"><summary>运行额度与时段</summary><div class="thought-fields">
         <label>每日后台模型调用上限<input name="daily_models" type="number" min="0" max="1000" required></label>
         <label>每次探索窗口模型调用<input name="run_models" type="number" min="0" max="20" required></label>
         <label>每次探索窗口工具步骤<input name="run_steps" type="number" min="0" max="100" required></label>
@@ -28,27 +30,32 @@
         <label>探索间隔（秒）<input name="interval_seconds" type="number" min="0" max="86400" required></label>
         <label>清醒开始时间（北京时间）<input name="window_start" type="time" required></label>
         <label>清醒结束时间（北京时间）<input name="window_end" type="time" required></label>
-      </div>
-      <details><summary>三种活动的时长与工具权限</summary><p class="settings-hint">时长为单段上限，0暂停该模式；实际还受单轮时间与共享额度限制。模式倾向由内容和执行历史形成。</p><div id="thought-activities"></div></details>
+      </div></details>
+      <details class="settings-help settings-inline-details"><summary>三种活动的时长与工具权限</summary><p class="settings-hint">时长为单段上限，0暂停该模式；实际还受单轮时间与共享额度限制。模式倾向由内容和执行历史形成。</p><div id="thought-activities"></div></details>
+      </fieldset>
+      <fieldset class="settings-fieldset"><legend>主动联系</legend>
       <label><input name="proactive_enabled" type="checkbox">允许主动联系</label>
       <label>联系方式<select name="delivery"><option value="next_chat">下次聊天时按需要提起</option><option value="gui">主动写入站内聊天</option></select></label>
       <p class="settings-hint">站内主动消息由服务运行时写入聊天历史；页面打开时自动同步。当前不向 QQ 或关闭页面后的系统通知推送。下次聊天模式由 Alice 结合你当时的话决定是否采用。</p>
       <div class="thought-actions"><label><input name="progress" type="checkbox">进展反馈</label><label><input name="request" type="checkbox">必要询问</label><label><input name="share" type="checkbox">兴趣分享</label></div>
-      <div class="thought-fields">
+      <details class="settings-help settings-inline-details"><summary>联系次数与时段</summary><div class="thought-fields">
         <label>每日主动联系上限<input name="daily_contacts" type="number" min="0" max="1000" required></label>
         <label>联系冷却（秒）<input name="contact_cooldown" type="number" min="0" max="86400" required></label>
         <label>邀请等待（秒）<input name="invitation_wait_seconds" type="number" min="60" max="86400" required></label>
         <label>同主题再邀间隔（秒）<input name="same_topic_retry_seconds" type="number" min="0" max="86400" required></label>
         <label>可联系开始时间（北京时间）<input name="contact_start" type="time" required></label>
         <label>可联系结束时间（北京时间）<input name="contact_end" type="time" required></label>
-      </div>
+      </div></details>
+      <p class="settings-hint">主动联系先发邀请，用户接受后才展开正文；未回复时静默结束。</p>
+      </fieldset>
+      <fieldset class="settings-fieldset"><legend>休息与推演</legend>
       <div class="thought-fields">
         <label>发呆单段时长（秒，0停用主动发呆）<input name="idle_rest_seconds" type="number" min="0" max="86400" required></label>
         <label>同依据推演窗口数<input name="same_material_windows" type="number" min="1" max="20" required></label>
-      </div><p class="settings-hint">主动联系改为邀请式：先发一句简短邀请，用户接受后才展开正文；未回复静默结束，同主题至少间隔设定时间再自主邀请。发呆期间不调用模型也不投递邀请。起止相同表示全天。时间预算在步骤之间检查，在途模型调用可能需要等待返回。</p>
-      <div class="thought-actions"><button class="btn primary" type="submit">保存设置</button><button id="thought-discard" class="link" type="button">放弃设置草稿并重新读取</button></div>
+      </div><p class="settings-hint">发呆期间不调用模型也不投递邀请。时段起止相同表示全天。时间预算在步骤之间检查，在途模型调用可能需要等待返回。</p></fieldset>
+      <div class="thought-actions settings-actions"><button id="thought-discard" class="link" type="button">放弃设置草稿并重新读取</button><button class="btn primary" type="submit">保存设置</button></div>
     </form></details>
-    <h3>未解决的疑问</h3><form id="thought-record"><label for="thought-question">留下一个想继续研究的问题</label><textarea id="thought-question" maxlength="300" required></textarea><button class="btn ghost" type="submit">收纳疑问</button></form>
+    <h3>未解决的疑问</h3><form id="thought-record" class="settings-group"><label for="thought-question">留下一个想继续研究的问题</label><textarea id="thought-question" maxlength="300" required></textarea><div class="settings-actions"><button class="btn ghost" type="submit">收纳疑问</button></div></form>
     <div class="thought-actions"><button id="thought-run" class="btn ghost" type="button">现在探索一轮（调用模型）</button><button id="thought-rest" class="link" type="button">让她休息一会儿</button><button id="thought-stop" class="link" type="button">暂停当前探索</button></div>
     <div id="thought-questions"></div><details><summary>已解决与关闭的问题</summary><div id="thought-closed"></div></details>
     <h3>已采纳的思辨</h3><p class="settings-hint">这是当前看法，不表示所有主张已经独立验证。点击查看依据与未知。</p><div id="thought-stances"></div>

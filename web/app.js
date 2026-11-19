@@ -1318,6 +1318,7 @@ function wireImport(els, install) {
         const canResume = status?.can_resume === true && typeof status.resume_op_id === "string"
           && /^imp_(?:[0-9a-f]{32}|[0-9]{8}_[0-9]{6}_[0-9a-f]{6})$/.test(status.resume_op_id);
         const note = canResume ? "已保留通过验收的阶段。点击「继续安装」只继续未完成阶段，已用额度不会重置。"
+          : status?.installation_started === false ? "安装前检查失败；本次请求未提交人格安装。请修复原因并刷新页面后再导入。"
           : status ? "本次不能继续；请先核对导入记录和失败原因，不会自动重新生成。"
           : "安装结果暂不能确认。请先核对当前人格与导入记录，不要连续重新提交。";
         personaImportAttempt = {binding: submittedBinding, resumeOpId: canResume ? status.resume_op_id : null,
@@ -3189,12 +3190,23 @@ boot().catch(showStartupError);
   const visible = (el) => !!el && !el.closest(".hidden, [inert]") && el.getClientRects().length > 0;
   const focusable = (root) => [...root.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')].filter(visible);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
+  const settingsModal = byId("settings-modal");
+  const settingsNav = settingsModal.querySelector(".settings-nav");
+  function revealSettingsButton(button) {
+    if (!button || !visible(button)) return;
+    const bounds = button.getBoundingClientRect(), viewport = settingsNav.getBoundingClientRect();
+    if (bounds.left < viewport.left) settingsNav.scrollLeft -= viewport.left - bounds.left;
+    else if (bounds.right > viewport.right) settingsNav.scrollLeft += bounds.right - viewport.right;
+    if (bounds.top < viewport.top) settingsNav.scrollTop -= viewport.top - bounds.top;
+    else if (bounds.bottom > viewport.bottom) settingsNav.scrollTop += bounds.bottom - viewport.bottom;
+  }
 
   function selectSettings(section = "general") {
     if (!["general", "appearance", "discovery", "thoughts", "observer", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
     byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
+    revealSettingsButton(settingsNav.querySelector(`[data-settings="${section}"]`));
     window.AliceDiscovery?.setSettingsVisible(section === "discovery" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
     window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
@@ -3203,6 +3215,24 @@ boot().catch(showStartupError);
   }
   window.AliceUI = { selectSettings, openSettings, closeSettings };
   document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
+  settingsNav.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const buttons = [...settingsNav.querySelectorAll("[data-settings]")], index = buttons.indexOf(event.target);
+    if (index < 0) return;
+    let next;
+    if (["ArrowDown", "ArrowRight"].includes(event.key)) next = (index + 1) % buttons.length;
+    else if (["ArrowUp", "ArrowLeft"].includes(event.key)) next = (index + buttons.length - 1) % buttons.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buttons.length - 1;
+    else return;
+    event.preventDefault(); buttons[next].focus({ preventScroll: true }); buttons[next].click();
+  });
+  settingsModal.addEventListener("invalid", (event) => {
+    for (let parent = event.target.parentElement; parent && parent !== settingsModal; parent = parent.parentElement) {
+      if (parent.tagName === "DETAILS") parent.open = true;
+    }
+  }, true);
+  new ResizeObserver(() => revealSettingsButton(settingsNav.querySelector('[aria-pressed="true"]'))).observe(settingsNav);
   // Keep one-turn paid permission visible even when developer navigation is closed.
   function syncEvaluationNotice() {
     const armed = !byId("eval-disarm").classList.contains("hidden");
@@ -3219,18 +3249,22 @@ boot().catch(showStartupError);
   });
   syncEvaluationNotice();
 
+  function navigationToggle() {
+    return byId(app.classList.contains("observer-workspace") ? "obs-nav-toggle" : "nav-toggle");
+  }
   function setNav(open, returnFocus = true) {
     open = open && narrow.matches;
     app.classList.toggle("nav-open", open);
     byId("nav-backdrop").classList.toggle("hidden", !open);
-    byId("nav-toggle").setAttribute("aria-expanded", String(open));
+    for (const id of ["nav-toggle", "obs-nav-toggle"]) byId(id).setAttribute("aria-expanded", String(open));
     // On a small screen the navigation overlays the page, so its background is inert.
     for (const id of ["chat", "observer", "evaluations"]) byId(id).inert = open;
     document.querySelectorAll(".worker-panel").forEach((panel) => { panel.inert = open; });
     if (open) focus(byId("nav-close"));
-    else if (returnFocus) focus(byId("nav-toggle"));
+    else if (returnFocus) focus(navigationToggle());
   }
   byId("nav-toggle").addEventListener("click", () => setNav(!app.classList.contains("nav-open")));
+  byId("obs-nav-toggle").addEventListener("click", () => setNav(!app.classList.contains("nav-open")));
   byId("nav-close").addEventListener("click", () => setNav(false));
   byId("nav-backdrop").addEventListener("click", () => setNav(false));
   narrow.addEventListener("change", () => {
@@ -3276,7 +3310,7 @@ boot().catch(showStartupError);
       byId("welcome").inert = false;
       modals.forEach((el) => { el.inert = false; });
       if (visible(modalReturn)) focus(modalReturn);
-      else if (!app.classList.contains("hidden")) focus(narrow.matches ? byId("nav-toggle") : byId("input"));
+      else if (!app.classList.contains("hidden")) focus(narrow.matches ? navigationToggle() : byId(app.classList.contains("observer-workspace") ? "obs-close" : "input"));
       modalReturn = null;
     }
   }
@@ -3356,11 +3390,12 @@ boot().catch(showStartupError);
     root.dataset.motion = enabled ? "on" : "off";
     if (!enabled) document.querySelectorAll(".message-arriving").forEach((node) => node.classList.remove("message-arriving"));
     control.value = preference;
-    state.textContent = preference === "off" ? "已关闭界面动效。"
+    state.textContent = preference === "off" ? ""
       : reduced.matches ? "已跟随系统减少动态效果，当前为静态界面。"
       : forcedColors.matches ? "已跟随系统高对比度设置，当前为静态界面。"
-      : "已启用轻量动效。";
+      : "";
     if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+    state.classList.toggle("hidden", !state.textContent.trim());
   }
   control.addEventListener("change", () => {
     preference = control.value === "off" ? "off" : "system";
@@ -3398,10 +3433,9 @@ boot().catch(showStartupError);
   function apply() {
     root.dataset.texture = forcedColors.matches ? "off" : preference;
     control.value = preference;
-    state.textContent = forcedColors.matches ? "高对比度模式下已隐藏屏幕纹理。"
-      : preference === "off" ? "已关闭屏幕纹理，保持清晰显示。"
-      : preference === "soft" ? "已启用柔和扫描线。" : "已启用标准扫描线。";
+    state.textContent = forcedColors.matches && preference !== "off" ? "高对比度模式下已隐藏屏幕纹理。" : "";
     if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+    state.classList.toggle("hidden", !state.textContent.trim());
   }
   control.addEventListener("change", () => {
     preference = normalize(control.value);
@@ -3431,11 +3465,8 @@ boot().catch(showStartupError);
   function apply() {
     root.dataset.theme = preference;
     control.value = preference;
-    state.textContent = preference === "legacy" ? "已切换到经典视图（轻雾背景，无边框正文）。"
-      : preference === "minimal" ? "已切换到简洁视图（专注对话，详细信息与高级设置按需打开）。"
-      : preference === "orbit" ? "已切换到轨道视图（多页环绕，信息收纳为图标与徽标）。"
-      : "已使用房间视图（网格房间、神经球与消息气泡）。";
-    if (!canSave) state.textContent += " 此浏览器无法保存偏好，当前选择仅在本页生效。";
+    state.textContent = canSave ? "" : "此浏览器无法保存偏好，当前选择仅在本页生效。";
+    state.classList.toggle("hidden", !state.textContent.trim());
   }
   control.addEventListener("change", () => {
     preference = normalize(control.value);
@@ -3737,7 +3768,7 @@ boot().catch(showStartupError);
   function install() {
     const thought = document.getElementById("thought-settings");
     if (thought) {
-      for (const details of thought.querySelectorAll(":scope > details")) {
+      for (const details of thought.querySelectorAll(":scope > details:not(.settings-inline-details)")) {
         const title = details.querySelector(":scope > summary")?.textContent || "详情";
         mount(details, title, {statusId:"thought-status"});
       }
@@ -3746,10 +3777,6 @@ boot().catch(showStartupError);
     mount(document.querySelector(".memory-summary"), "记忆概览");
     mount(document.getElementById("discovery-learning-preview"), "见闻维护", {statusId:"discovery-status"});
     mount(document.querySelector("details.discovery-task"), "活动与用量", {statusId:"discovery-status"});
-    mount(document.getElementById("discovery-preferences"), "平台与兴趣", {
-      statusId:"discovery-status", follow:true,
-      closeAction:() => document.getElementById("discovery-preferences-close").click()
-    });
     const refresh = document.getElementById("chat-refresh");
     const refreshMarker = document.createComment("sync-button-position");
     const refreshText = refresh.textContent;

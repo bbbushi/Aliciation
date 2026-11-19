@@ -233,89 +233,88 @@
     <div class="worker-toolbar"><p id="workers-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p><button id="workers-refresh" class="link" type="button">同步记录</button></div>
   </aside>
   <div id="workers-dock-preview" class="worker-dock-preview hidden" aria-hidden="true"><span>松开固定到右侧</span></div>
-  <aside id="observer" class="observer hidden" aria-label="开发者观察器">
-    <div class="obs-head"><strong>开发者观察器</strong><button id="obs-close" class="card-x" type="button" title="关闭并清空观察记录">×</button></div>
-    <div class="obs-tools">
-      <label><input id="obs-auto" type="checkbox" checked> 自动刷新</label>
-      <button id="obs-refresh" class="btn ghost" type="button">刷新到最新</button>
-      <button id="obs-clear" class="btn ghost" type="button">清空观察记录</button>
+  <aside id="observer" class="observer hidden" aria-label="记忆观察器">
+    <div class="obs-head obs-workspace-head">
+      <button id="obs-nav-toggle" class="card-x mobile-only" type="button" aria-label="打开主导航" aria-expanded="false" aria-controls="app-nav">☰</button>
+      <h2>记忆观察器</h2><span class="obs-readonly">只读</span>
+      <button id="obs-close" class="btn ghost" type="button" title="关闭并清空本页观察，不删除 Alice 的记忆">‹ 回到对话</button>
+    </div>
+    <div class="obs-sampling">
+      <p id="obs-time" class="obs-hint"></p>
+      <div class="obs-tools"><label><input id="obs-auto" type="checkbox" checked> 自动刷新</label><button id="obs-refresh" class="btn ghost" type="button">刷新到最新</button></div>
     </div>
     <p id="obs-status" class="obs-status" role="status">等待首次快照</p>
-    <p id="obs-time" class="obs-hint"></p>
-    <div class="obs-scroll">
-      <details class="obs-help"><summary>观察范围与保留规则</summary><p>只读，不调用模型或 recall。自动刷新每 5 秒尝试，本页回复结束也刷新；单写者锁忙时只保留最后快照。空闲且连接正常时，通常在下一次轮询加请求耗时后可见；长轮次、断线和后台标签页无固定最大延迟。</p><p>变化是两次快照之间的净差异，不是完整事件流；无法还原期间多次改写、精确原因或关联轮次。仅跟踪最近至多 2000 个存活 ID，正文指纹只比较各字段前 16000 字及长度，超长尾部同长度改写不可见。</p><p>临时保留相邻基线、最近一次人格前后原文与最多 100 条变化摘要；不保存记忆旧正文，不写本地存储或文件。关闭、清空、会话/服务身份变化、刷新页面都会清除。网络中断保留最后有效快照并标注未知间隔。</p></details>
-      <label class="obs-view-label" for="obs-view">查看</label>
-      <select id="obs-view">
-        <option value="overview">变化与触发进度</option>
-        <option value="memories">记忆 / 观点</option>
-        <option value="persona">人格 / 思想状态</option>
-        <option value="history">人格历史快照</option>
-        <option value="tombstones">遗忘墓碑（实际记录）</option>
-        <option value="skills">技能（次级观察）</option>
-        <option value="traces">调用轨迹（SDK 观测）</option>
+    <div class="obs-workspace">
+      <nav id="obs-nav" class="obs-nav" aria-label="观察内容">
+        <span class="obs-nav-label">观察</span>
+        <button type="button" data-obs-view="overview" aria-controls="obs-overview" aria-pressed="false">变化与进度</button>
+        <button type="button" data-obs-view="memories" aria-controls="obs-browser" aria-pressed="true">记忆与观点</button>
+        <button type="button" data-obs-view="persona" aria-controls="obs-persona" aria-pressed="false">人格与思想</button>
+        <span class="obs-nav-label">核对记录</span>
+        <button type="button" data-obs-view="history" aria-controls="obs-browser" aria-pressed="false">人格历史</button>
+        <button type="button" data-obs-view="tombstones" aria-controls="obs-browser" aria-pressed="false">遗忘记录</button>
+        <button type="button" data-obs-view="skills" aria-controls="obs-browser" aria-pressed="false">技能记录</button>
+        <button type="button" data-obs-view="traces" aria-controls="obs-traces" aria-pressed="false">调用轨迹</button>
+      </nav>
+      <select id="obs-view" class="hidden" aria-label="观察视图">
+        <option value="overview">变化与触发进度</option><option value="memories" selected>记忆 / 观点</option><option value="persona">人格 / 思想状态</option><option value="history">人格历史快照</option><option value="tombstones">遗忘墓碑（实际记录）</option><option value="skills">技能（次级观察）</option><option value="traces">调用轨迹（SDK 观测）</option>
       </select>
-      <section id="obs-overview">
-        <h3>数据与判断状态</h3>
-        <dl class="obs-evidence-types">
-          <div><dt>原始状态</dt><dd><strong>已接入</strong>：存储原文、字段与计数；快照差异由程序比较。</dd></div>
-          <div><dt>模型裁定</dt><dd><strong>独立 P1 工作区</strong>提供手动实验性建议；本只读页不自动产生裁定，日志中的模型说明不是独立裁定。</dd></div>
-          <div><dt>人工标签</dt><dd><strong>独立 P1 工作区</strong>记录人工标签，与模型建议分开保存。</dd></div>
-          <div><dt>校准指标</dt><dd><strong>未校准不出指标</strong>；P1 可记录人工校准，未计算不代表零分，也不等于整体诚实度。</dd></div>
-        </dl>
-        <p class="obs-hint">存储存在不证明现实真伪。记忆内容、人格及重要性 / 压力标记可能由模型生成；条目数和字段变化不构成诚实度、人机感或人格质量评分。</p>
-        <p id="obs-counts"></p><p id="obs-coverage" class="obs-hint"></p>
-        <h3>为什么可能还没变化</h3><div id="obs-progress"></div>
-        <h3>快照比较 · 本次观察期间的变化</h3><p class="obs-hint">以下时间是观测区间，不是发生时刻。遗忘的实际时间与原因请查墓碑。字段变化不等于人格成长、污染或退化。</p>
-        <ol id="obs-changes" class="obs-changes"></ol>
-      </section>
-      <section id="obs-browser" class="hidden">
-        <p id="obs-list-hint" class="obs-hint"></p>
-        <form id="obs-search" class="obs-filters">
-          <select id="obs-layer" aria-label="记忆层级"><option value="all">全部层级</option><option value="active">活跃</option><option value="warehouse">仓库</option><option value="longterm">长期</option></select>
-          <select id="obs-kind" aria-label="记忆类型"><option value="all">事件和观点</option><option value="event">事件</option><option value="stance">观点</option></select>
-          <input id="obs-query" type="search" maxlength="200" placeholder="搜索标题 / 正文" aria-label="检索文本"><button class="btn ghost" type="submit">检索</button>
-        </form>
-        <p id="obs-list-time" class="obs-hint"></p><div id="obs-list"></div>
-        <div class="obs-pagination"><button id="obs-first" class="btn ghost" type="button">首页</button><button id="obs-next" class="btn ghost" type="button" disabled>下一页</button></div>
-      </section>
-      <section id="obs-persona" class="hidden">
-        <h3>人格 / 思想 · 各部分状态</h3>
-        <p id="obs-persona-meta" class="obs-hint"></p>
-        <p class="obs-hint">状态只描述当前原文是否存在，不评价成熟度或事实真伪。摘录直接取自原文；变化时间是本页看到差异的区间，不是各部分的实际更新时间。</p>
-        <div class="obs-persona-tools">
-          <button id="obs-persona-full" class="btn ghost" type="button">查看各部分状态</button>
-          <button id="obs-persona-expand" class="btn ghost" type="button">展开各节内容</button><button id="obs-persona-collapse" class="btn ghost" type="button">收起各节内容</button>
-        </div>
-        <div id="obs-persona-reading">
-          <nav id="obs-persona-toc" class="obs-persona-toc" aria-label="跳转人格状态卡"></nav>
-          <p id="obs-persona-reading-note" class="obs-hint"></p>
-          <div id="obs-persona-sections"></div>
-        </div>
-        <details id="obs-persona-advanced"><summary>高级：核对文件源码</summary>
-          <p class="obs-hint">这里用于逐字核对，不是状态面板。当前快照最多 64000 字符；分段读取每次最多 8000 字符，各段可能来自不同采样时刻，不自动拼成同一版本全文。</p>
-          <details id="obs-persona-source"><summary>显示本次快照的 Markdown 源码</summary><pre id="obs-persona-text" class="obs-text" aria-label="本次人格快照 Markdown 源码"></pre></details>
-          <button id="obs-persona-file" class="btn ghost" type="button">分段核对当前文件</button>
-        </details>
-        <h3>文本比较 · 最近一次人格变化</h3><p id="obs-persona-diff-meta" class="obs-hint"></p>
-        <details><summary>删除 / 增加的原文片段</summary><div id="obs-persona-diff"></div></details>
-        <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
-        <details><summary>已有变更记录（原文；模型说明不是独立裁定）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
-        <p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p>
-      </section>
-      <section id="obs-traces" class="hidden">
-        <h3>调用轨迹 · 上下文观测 SDK</h3>
-        <p class="obs-hint">只读投影：请求 → 模型调用 → 尝试。快照是应用交给模型客户端的参数，不是供应商内部上下文；无正文处如实显示未留存。打开与刷新不触发模型调用或维护。</p>
-        <div id="obs-traces-list"></div>
-      </section>
-      <section id="obs-detail" class="hidden">
-        <div class="obs-head"><strong id="obs-detail-title">条目详情</strong><button id="obs-detail-close" class="card-x" type="button" title="关闭详情">×</button></div>
-        <p id="obs-detail-time" class="obs-hint"></p><dl id="obs-detail-meta"></dl>
-        <div id="obs-detail-reading-tools" class="obs-persona-tools hidden"><label for="obs-detail-mode">当前片段</label><select id="obs-detail-mode"><option value="reading">分块查看</option><option value="source">核对片段源码</option></select></div>
-        <div id="obs-detail-reading" class="hidden"></div><pre id="obs-detail-text" class="obs-text"></pre>
-        <div class="obs-pagination"><button id="obs-detail-first" class="btn ghost" type="button">正文开头</button><button id="obs-detail-next" class="btn ghost" type="button" disabled>下一段正文</button></div>
-        <p class="obs-hint">每段最多 8000 字符；翻段重新读取当前存储，可能与前段不是同一版本。记忆无精确入库时间、修改时间或来源轮次；created_at 可能是提取批末消息时间。</p>
-      </section>
+      <div id="obs-workbench" class="obs-workbench obs-list-view">
+        <section id="obs-overview" class="obs-pane hidden">
+          <h3>变化与进度</h3><p id="obs-counts"></p><p id="obs-coverage" class="obs-hint"></p>
+          <h3>本次观察的变化</h3><p class="obs-hint">相邻快照净差异，时间为观测区间；实际删除请查遗忘记录。</p><ol id="obs-changes" class="obs-changes"></ol>
+          <details class="obs-section-help"><summary>为什么可能还没变化</summary><div id="obs-progress"></div></details>
+          <details class="obs-section-help"><summary>数据与判断状态</summary>
+            <dl class="obs-evidence-types">
+              <div><dt>原始状态</dt><dd><strong>已接入</strong>：存储原文、字段与计数；快照差异由程序比较。</dd></div>
+              <div><dt>模型裁定</dt><dd><strong>独立 P1 工作区</strong>提供手动实验性建议；本只读页不自动产生裁定，日志中的模型说明不是独立裁定。</dd></div>
+              <div><dt>人工标签</dt><dd><strong>独立 P1 工作区</strong>记录人工标签，与模型建议分开保存。</dd></div>
+              <div><dt>校准指标</dt><dd><strong>未校准不出指标</strong>；P1 可记录人工校准，未计算不代表零分，也不等于整体诚实度。</dd></div>
+            </dl>
+            <p class="obs-hint">存储存在不证明现实真伪。记忆内容、人格及重要性 / 压力标记可能由模型生成；条目数和字段变化不构成诚实度、人机感或人格质量评分，也不等于人格成长、污染或退化。</p>
+          </details>
+        </section>
+        <section id="obs-browser" class="obs-list-pane">
+          <div class="obs-list-heading"><h3 id="obs-list-title">记忆与观点</h3><span class="obs-hint">只读查阅</span></div>
+          <form id="obs-search" class="obs-filters">
+            <input id="obs-query" type="search" maxlength="200" placeholder="搜索标题 / 正文" aria-label="检索文本"><button class="btn ghost" type="submit">检索</button>
+            <div id="obs-filter-selects" class="obs-filter-selects"><select id="obs-layer" aria-label="记忆层级"><option value="all">全部层级</option><option value="active">活跃</option><option value="warehouse">仓库</option><option value="longterm">长期</option></select><select id="obs-kind" aria-label="记忆类型"><option value="all">事件和观点</option><option value="event">事件</option><option value="stance">观点</option></select></div>
+          </form>
+          <p id="obs-list-time" class="obs-hint"></p><div id="obs-list"></div>
+          <div class="obs-pagination"><button id="obs-first" class="btn ghost" type="button">首页</button><button id="obs-next" class="btn ghost" type="button" disabled>下一页</button></div>
+          <details class="obs-section-help"><summary>查阅说明</summary><p id="obs-list-hint" class="obs-hint"></p></details>
+        </section>
+        <section id="obs-persona" class="obs-pane hidden">
+          <h3>人格与思想</h3><p id="obs-persona-meta" class="obs-hint"></p>
+          <div class="obs-persona-tools"><button id="obs-persona-full" class="btn ghost" type="button">查看各部分状态</button><button id="obs-persona-expand" class="btn ghost" type="button">展开各节内容</button><button id="obs-persona-collapse" class="btn ghost" type="button">收起各节内容</button></div>
+          <div id="obs-persona-reading"><nav id="obs-persona-toc" class="obs-persona-toc" aria-label="跳转人格状态卡"></nav><p id="obs-persona-reading-note" class="obs-hint"></p><div id="obs-persona-sections"></div></div>
+          <details class="obs-section-help"><summary>最近一次人格变化</summary>
+            <p id="obs-persona-diff-meta" class="obs-hint"></p>
+            <details><summary>删除 / 增加的原文片段</summary><div id="obs-persona-diff"></div></details>
+            <details><summary>变更前 / 后原文对照</summary><div id="obs-persona-compare" class="obs-compare"></div></details>
+            <details><summary>已有变更记录（原文；模型说明不是独立裁定）</summary><pre id="obs-changelog" class="obs-text"></pre></details>
+          </details>
+          <details id="obs-persona-advanced"><summary>高级：核对文件源码</summary><p class="obs-hint">这里用于逐字核对，不是状态面板。当前快照最多 64000 字符；分段读取每次最多 8000 字符，各段可能来自不同采样时刻，不自动拼成同一版本全文。</p><details id="obs-persona-source"><summary>显示本次快照的 Markdown 源码</summary><pre id="obs-persona-text" class="obs-text" aria-label="本次人格快照 Markdown 源码"></pre></details><button id="obs-persona-file" class="btn ghost" type="button">分段核对当前文件</button></details>
+          <details class="obs-section-help"><summary>人格状态与历史的说明</summary><p class="obs-hint">状态只描述当前原文是否存在，不评价成熟度或事实真伪。摘录直接取自原文；变化时间是本页看到差异的区间，不是各部分的实际更新时间。</p><p class="obs-hint">思想小节可在人格版本号不变时更新；观点记忆的出处是正文中的标题，不是已验证的唯一来源链。历史快照不覆盖所有思辨变更。</p></details>
+        </section>
+        <section id="obs-traces" class="obs-pane hidden"><h3>调用轨迹</h3><p class="obs-hint">请求 → 模型调用 → 尝试</p><div id="obs-traces-list"></div><details class="obs-section-help"><summary>调用轨迹的观察范围</summary><p class="obs-hint">只读投影：快照是应用交给模型客户端的参数，不是供应商内部上下文；无正文处如实显示未留存。打开与刷新不触发模型调用或维护。</p></details></section>
+        <div id="obs-detail-empty" class="obs-detail-empty"><h3>选择一条记忆</h3><p class="obs-hint">在此查看当前正文与字段信息。</p></div>
+        <section id="obs-detail" class="obs-detail-pane hidden" aria-label="条目详情">
+          <button id="obs-detail-back" class="link obs-detail-back" type="button">‹ 返回列表</button>
+          <div class="obs-head"><span id="obs-detail-kind" class="obs-hint">当前正文</span><button id="obs-detail-close" class="card-x" type="button" aria-label="收起详情" title="收起详情">×</button></div>
+          <h3 id="obs-detail-title" tabindex="-1">条目详情</h3><p id="obs-detail-tags" class="obs-detail-tags"></p><p id="obs-detail-time" class="obs-hint"></p>
+          <div id="obs-detail-reading-tools" class="obs-persona-tools hidden"><label for="obs-detail-mode">当前片段</label><select id="obs-detail-mode"><option value="reading">分块查看</option><option value="source">核对片段源码</option></select></div>
+          <div id="obs-detail-reading" class="hidden"></div><pre id="obs-detail-text" class="obs-text"></pre>
+          <div class="obs-pagination"><button id="obs-detail-first" class="btn ghost" type="button">正文开头</button><button id="obs-detail-next" class="btn ghost" type="button" disabled>下一段正文</button></div>
+          <details id="obs-detail-fields" class="obs-section-help"><summary>字段与来源信息</summary><dl id="obs-detail-meta"></dl></details>
+          <p id="obs-detail-scope" class="obs-hint"></p>
+          <details class="obs-section-help"><summary>分段读取与时间说明</summary><p class="obs-hint">每段最多 8000 字符；翻段重新读取当前存储，可能与前段不是同一版本。记忆无精确入库时间、修改时间或来源轮次；created_at 可能是提取批末消息时间。</p></details>
+        </section>
+      </div>
     </div>
+    <footer class="obs-workspace-footer">
+      <div class="obs-footer-tools"><details class="obs-help"><summary>观察范围与保留规则</summary><p>只读，不调用模型或 recall，也不触发提取或维护。自动刷新每 5 秒尝试，本页回复结束也刷新；单写者锁忙时只保留最后快照。空闲且连接正常时，通常在下一次轮询加请求耗时后可见；长轮次、断线和后台标签页无固定最大延迟。</p><p>变化是两次快照之间的净差异，不是完整事件流；无法还原期间多次改写、精确原因或关联轮次。仅跟踪最近至多 2000 个存活 ID，正文指纹只比较各字段前 16000 字及长度，超长尾部同长度改写不可见。</p><p>临时保留相邻基线、最近一次人格前后原文与最多 100 条变化摘要；不保存记忆旧正文，不写本地存储或文件。关闭、清空、会话/服务身份变化、刷新页面都会清除本页观察，不删除 Alice 的记忆。网络中断保留最后有效快照并标注未知间隔。</p></details><button id="obs-clear" class="link" type="button" title="只清空观察器临时记录，不删除 Alice 的记忆">清空本页观察</button></div>
+    </footer>
   </aside>
   <aside id="evaluations" class="observer hidden" aria-label="P1 记忆主张核查实验">
     <div class="obs-head"><strong>P1 · 记忆主张核查实验</strong><button id="eval-close" class="card-x" type="button" title="折叠核查面板">×</button></div>
@@ -382,9 +381,16 @@
   <div class="modal-card settings-card">
     <div class="modal-head">
       <div class="modal-title" id="settings-title">设置</div>
-      <button id="settings-x" class="card-x" type="button" title="关闭">×</button>
+      <button id="settings-x" class="card-x" type="button" title="关闭设置" aria-label="关闭设置">×</button>
     </div>
-    <nav class="settings-nav" aria-label="设置分区"><button type="button" data-settings="general" aria-pressed="true">对话与模型</button><button type="button" data-settings="appearance" aria-pressed="false">外观</button><button type="button" data-settings="discovery" aria-pressed="false">联网搜索</button><button type="button" data-settings="observer" aria-pressed="false" aria-label="上下文观测">上下文观测</button><button type="button" data-settings="qq" aria-pressed="false">QQ 连接</button><button type="button" data-settings="workers" aria-pressed="false">DSH</button></nav>
+    <nav class="settings-nav" aria-label="设置分区">
+      <button type="button" data-settings="general" aria-controls="general-settings model-settings" aria-pressed="true">对话与模型</button>
+      <button type="button" data-settings="appearance" aria-controls="appearance-settings" aria-pressed="false">外观</button>
+      <button type="button" data-settings="discovery" aria-controls="discovery-settings" aria-pressed="false">联网搜索</button>
+      <button type="button" data-settings="observer" aria-controls="observer-settings" aria-pressed="false">上下文观测</button>
+      <button type="button" data-settings="qq" aria-controls="qq-settings" aria-pressed="false">QQ 连接</button>
+      <button type="button" data-settings="workers" aria-controls="workers-config" aria-pressed="false">DSH</button>
+    </nav>
     <div class="modal-body settings-body">
       <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
       <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="observer-settings-title">
@@ -400,86 +406,130 @@
         <details><summary>留存与生效说明</summary><p class="settings-hint">保存后入口立即更新，采集从下一次新请求生效；在途请求沿用开始时的策略，无需重启。完整正文滚动保留最近10个采集请求，同时受7天和50MiB限制。较早未采集的请求不补录，超限或来源失效时如实标记缺口。</p><p id="observer-settings-metadata" class="settings-hint"></p></details>
       </section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
-        <div class="discovery-settings-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
-        <p class="settings-hint">管理自动寻找、聊天查找、额度与资料保存。普通草稿在切换分区或关闭设置后保留，未保存的密钥会清空。</p>
+        <div class="discovery-settings-head settings-page-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
+        <p class="settings-hint settings-page-note">普通设置保存后生效；离开此页会清空未保存的密钥。</p>
         <p id="discovery-settings-status" class="discovery-status" role="status" aria-live="polite">等待联网搜索设置加载…</p>
-        <div class="discovery-settings-sources"><p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p><button id="discovery-settings-preferences" class="link" type="button" disabled>选择平台与兴趣</button></div>
       </section>
-      <section class="settings-section hidden" data-settings-section="appearance">
-        <div id="desktop-bubble-settings" hidden><p class="panel-title">桌面气泡</p><p class="settings-hint">Alice 在后台时，点击小球可展开聊天、设置、装扮、退出入口；新回复一句一句出现。消息预览穿透鼠标。</p><button id="desktop-bubble-open" class="btn ghost" type="button">设置桌面气泡…</button><p id="desktop-bubble-result" class="settings-result" role="status"></p></div>
-        <label class="panel-title" for="ui-theme">界面主题</label>
-        <select id="ui-theme" aria-describedby="ui-theme-hint ui-theme-state">
-          <option value="room">房间 · 网格房间与神经球</option>
-          <option value="legacy">经典 · 此前的轻雾背景</option>
-          <option value="minimal">简洁 · 专注对话</option>
-          <option value="orbit">轨道 · 环行她的世界</option>
-        </select>
-        <div id="ui-theme-hint" class="settings-hint">切换对话背景与消息外观：房间视图显示伪3D网格房间与中央神经球，底色更暗，Alice 的回复带气泡；经典视图恢复此前较亮的雾面背景与无边框正文；简洁视图减少装饰，详细信息与高级设置通过按钮打开独立窗口。选择立即生效，仅保存在此浏览器。</div>
-        <div id="ui-theme-state" class="settings-result" role="status"></div>
-        <label class="panel-title" for="ui-texture">屏幕纹理</label>
-        <select id="ui-texture" aria-describedby="ui-texture-hint ui-texture-state">
-          <option value="scanlines">标准扫描线</option>
-          <option value="soft">柔和扫描线</option>
-          <option value="off">关闭（清晰显示）</option>
-        </select>
-        <div id="ui-texture-hint" class="settings-hint">细密的水平横纹，让文字与背景带上旧式屏幕的质感。纹理保持静止，独立于界面动效；选择仅保存在此浏览器。</div>
-        <div id="ui-texture-state" class="settings-result" role="status"></div>
-        <label class="panel-title" for="ui-motion">界面动效</label>
-        <select id="ui-motion" aria-describedby="ui-motion-hint ui-motion-state">
-          <option value="system">自动（跟随系统）</option>
-          <option value="off">关闭</option>
-        </select>
-        <div id="ui-motion-hint" class="settings-hint">网格房间与中央神经球常驻缓慢自旋、轻微呼吸波动，球面不时有太阳风暴式的喷流、磁环与闪光掠过；回复生成时喷发更多更强、信号脉冲变密。细噪点随机浮动、淡入淡出，分层背景随鼠标轻微位移与倾斜；细光在节点间传递。选择立即生效，仅保存在此浏览器；系统的“减少动态效果”设置优先。</div>
-        <div id="ui-motion-state" class="settings-result" role="status"></div>
+      <section id="appearance-settings" class="settings-section hidden" data-settings-section="appearance" aria-labelledby="appearance-title">
+        <div class="settings-page-head"><h2 id="appearance-title" class="panel-title">外观</h2><span class="settings-mode">即时生效</span></div>
+        <p id="ui-appearance-hint" class="settings-hint settings-page-note">偏好仅保存在此浏览器。</p>
+        <div class="settings-group settings-rows">
+          <div class="settings-row">
+            <label for="ui-theme">界面主题</label>
+            <div class="settings-field">
+              <select id="ui-theme" aria-describedby="ui-appearance-hint ui-theme-state">
+                <option value="room">房间 · 网格与神经球</option>
+                <option value="legacy">经典 · 轻雾背景</option>
+                <option value="minimal">简洁 · 专注对话</option>
+                <option value="orbit">轨道 · 环行她的世界</option>
+              </select>
+              <div id="ui-theme-state" class="settings-result hidden" role="status"></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-field"><label for="ui-texture">屏幕纹理</label><p id="ui-texture-hint" class="settings-hint">静态纹理，独立于动效。</p></div>
+            <div class="settings-field">
+              <select id="ui-texture" aria-describedby="ui-appearance-hint ui-texture-hint ui-texture-state">
+                <option value="scanlines">标准扫描线</option>
+                <option value="soft">柔和扫描线</option>
+                <option value="off">关闭（清晰显示）</option>
+              </select>
+              <div id="ui-texture-state" class="settings-result hidden" role="status"></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-field"><label for="ui-motion">界面动效</label><p id="ui-motion-hint" class="settings-hint">优先遵循系统减少动态效果设置。</p></div>
+            <div class="settings-field">
+              <select id="ui-motion" aria-describedby="ui-appearance-hint ui-motion-hint ui-motion-state">
+                <option value="system">自动（跟随系统）</option>
+                <option value="off">关闭</option>
+              </select>
+              <div id="ui-motion-state" class="settings-result hidden" role="status"></div>
+            </div>
+          </div>
+        </div>
+        <div id="desktop-bubble-settings" class="settings-group" hidden><h3>桌面气泡</h3><p class="settings-hint">设置小球入口、消息预览与气泡外观。</p><div class="settings-actions"><button id="desktop-bubble-open" class="btn ghost" type="button">设置桌面气泡…</button></div><p id="desktop-bubble-result" class="settings-result" role="status"></p></div>
       </section>
       <section id="workers-config" class="settings-section worker-config hidden" data-settings-section="workers" aria-labelledby="workers-settings-title">
-        <div class="worker-settings-head"><h2 id="workers-settings-title" class="panel-title">DSH 连接与授权</h2><button id="workers-settings-refresh" class="link" type="button">同步状态</button></div>
+        <div class="worker-settings-head settings-page-head"><h2 id="workers-settings-title" class="panel-title">DSH 连接与授权</h2><button id="workers-settings-refresh" class="link" type="button">同步状态</button></div>
         <p id="workers-settings-status" class="worker-status" role="status" aria-live="polite">尚未读取连接状态</p>
-        <p class="settings-hint">在这里管理连接和任务范围，再到主聊天描述任务。关闭设置不会断开连接、撤销授权或中断任务。</p>
-        <p id="workers-connection"></p><p id="workers-capabilities" class="worker-hint"></p>
-        <section class="worker-pairing" aria-labelledby="workers-pairing-title">
-          <h3 id="workers-pairing-title">1 · 连接本机 DSH</h3>
-          <p id="workers-pairing-hint" class="worker-hint">首次使用请重载 Alice 与 DSH NEXT 的 0.4 版协作插件，并在 DSH 中启用插件及执行许可。之后可在这里连接，无需命令行、环境变量或复制令牌。打开设置或同步状态只查看已有状态。</p>
-          <p id="workers-credential-state" class="worker-hint">尚未读取本机令牌状态</p>
-          <p class="worker-hint">同一 Windows 用户下的 Alice 与 DSH NEXT 共用这份本机加密令牌。令牌不在网页显示，不写入聊天或交给模型。断开或重启保留原授权、剩余额度和仍有效的任务正文；下次使用已保存令牌连接即可。</p>
-          <div class="worker-actions"><button id="workers-managed-connect" class="btn primary" type="button" disabled>生成令牌并连接</button><button id="workers-disconnect" class="btn ghost" type="button" disabled>仅断开连接</button></div>
+        <section class="worker-pairing settings-group" aria-labelledby="workers-pairing-title">
+          <div class="worker-config-heading">
+            <div class="worker-connection-title"><h3 id="workers-pairing-title">本机连接</h3><p id="workers-connection" class="worker-connection-summary"></p></div>
+            <div class="worker-config-actions"><button id="workers-managed-connect" class="btn primary" type="button" disabled>生成令牌并连接</button><button id="workers-disconnect" class="btn ghost" type="button" disabled>仅断开连接</button></div>
+          </div>
+          <div class="worker-connection-notes">
+            <p id="workers-capabilities" class="worker-hint"></p>
+            <p id="workers-credential-state" class="worker-hint">尚未读取本机令牌状态</p>
+          </div>
           <p id="workers-pairing-result" class="worker-hint" role="status"></p>
-          <details id="workers-advanced" class="worker-advanced">
-            <summary>高级设置 · 手动令牌与更换</summary>
-            <form id="workers-pairing" autocomplete="off">
-              <label for="workers-token">手动配对令牌</label><input id="workers-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="4096" aria-describedby="workers-token-hint" disabled>
-              <p id="workers-token-hint" class="worker-hint">仅用于已单独设置令牌的 DSH 插件；不是模型密钥。托管文件存在时，新版插件优先使用托管令牌，此输入不会覆盖该文件或切换托管令牌。输入提交后立即清空，服务重启后需重新输入。</p>
-              <button id="workers-connect" class="btn ghost" type="submit" disabled>使用手动令牌连接</button>
-            </form>
-            <div class="worker-token-rotation"><button id="workers-rotate-token" class="btn ghost" type="button" disabled>更换已保存令牌</button><p class="worker-hint">仅在断开且派工授权关闭时可更换。旧令牌会失效，同一 Windows 用户下使用旧令牌的其他 Alice 实例也需要重新连接。</p></div>
+          <section id="workers-manual-setup" class="worker-connection-help hidden" aria-labelledby="workers-manual-title"><h4 id="workers-manual-title"></h4><ol id="workers-manual-steps" class="worker-hint"></ol><p id="workers-manual-note" class="worker-hint"></p></section>
+          <details class="settings-help"><summary>首次连接与断开说明</summary>
+            <p id="workers-pairing-hint" class="worker-hint">首次使用请重载 Alice 与 DSH NEXT 的 0.4 版协作插件，并在 DSH 中启用插件和执行许可，再用上方按钮连接。</p>
+            <p class="worker-hint">同一 Windows 用户下的 Alice 与 DSH NEXT 共用本机加密令牌。断开或重启会保留授权、剩余额度和仍有效的任务正文。连接并授权后，可在主聊天描述任务。</p>
+          </details>
+          <details id="workers-advanced" class="settings-help">
+            <summary>手动连接与更换令牌</summary>
+            <div class="worker-config-grid">
+              <form id="workers-pairing" class="worker-field-group" autocomplete="off">
+                <div class="settings-field"><label for="workers-token">手动配对令牌</label><input id="workers-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="4096" aria-describedby="workers-token-hint" disabled></div>
+                <p id="workers-token-hint" class="worker-hint">用于单独配置令牌的 DSH 插件。新版插件优先读取托管令牌，手动连接只使用本次输入。提交后输入会清空。</p>
+                <div class="worker-config-actions"><button id="workers-connect" class="btn ghost" type="submit" disabled>使用手动令牌连接</button></div>
+              </form>
+              <div class="worker-field-group">
+                <h4>已保存令牌</h4>
+                <p class="worker-hint">断开连接且关闭派工授权后可更换。旧令牌会失效，共用旧令牌的其他 Alice 实例需要重新连接。</p>
+                <div class="worker-config-actions"><button id="workers-rotate-token" class="btn ghost" type="button" disabled>更换已保存令牌</button></div>
+              </div>
+            </div>
           </details>
         </section>
-        <section id="workers-manual-setup" class="hidden" aria-labelledby="workers-manual-title"><strong id="workers-manual-title"></strong><ol id="workers-manual-steps" class="worker-hint"></ol><p id="workers-manual-note" class="worker-hint"></p></section>
-        <form id="workers-policy">
-          <h3>2 · 授权 Alice 派工</h3><label><input id="workers-enabled" type="checkbox" disabled> 允许 Alice 在以下范围调用 DSH</label>
-          <p class="worker-hint">连接恢复后无需重新保存同一授权。明确关闭授权或更改已有授权参数将清除旧任务正文及派生内容，无法仅靠重新开启恢复，保存前会提示确认。只想断开时，请使用上方“仅断开连接”。</p>
-          <label for="workers-workspace">本次任务工作目录（绝对路径）</label><input id="workers-workspace" type="text" maxlength="1024" placeholder="例如 D:\AliceTasks" autocomplete="off" spellcheck="false" disabled><p class="worker-hint">填写你明确允许 DSH 处理的目录。Alice 会新建专属协作会话，不接管你的日常会话。</p>
-          <label for="workers-mode">任务权限</label><select id="workers-mode" disabled><option value="read-only">仅可查看 · 阅读与分析</option><option value="workspace-write">工作区内修改 · 生成或修改文件</option></select>
-          <div class="worker-policy-limits"><label for="workers-max-runs">本次授权总执行次数<input id="workers-max-runs" type="number" min="0" max="100" step="1" value="0" disabled></label><label for="workers-max-seconds">每次执行最长秒数<input id="workers-max-seconds" type="number" min="30" max="1800" step="1" value="600" disabled></label></div><p id="workers-budget-state" class="worker-hint"></p>
-          <p class="worker-permission-boundary">DSH 原生权限不能保证任务目录外的读取和网络隔离。任务与相关文件内容可能由 DSH 发给其模型服务；这里不开放完全权限。执行次数和超时都不是费用硬限额，未知消费不记为零。</p>
-          <label class="worker-ack"><input id="workers-native-ack" type="checkbox" disabled> 我理解上述边界，并授权 DSH 按所选模式处理该目录及调用其模型服务。</label>
-          <button id="workers-policy-save" class="btn primary" type="submit" disabled>保存授权</button><p id="workers-policy-result" class="worker-hint" role="status"></p>
+        <form id="workers-policy" class="settings-group" aria-labelledby="workers-policy-title">
+          <div class="worker-config-heading">
+            <h3 id="workers-policy-title">派工授权</h3>
+            <label class="worker-grant-toggle"><input id="workers-enabled" type="checkbox" role="switch" disabled><span>允许 Alice 调用 DSH</span><span class="worker-grant-track" aria-hidden="true"></span></label>
+          </div>
+          <div class="worker-config-grid">
+            <section class="worker-field-group" aria-labelledby="workers-scope-title">
+              <h4 id="workers-scope-title">派工范围</h4>
+              <div class="settings-field"><label for="workers-workspace">工作目录（绝对路径）</label><input id="workers-workspace" type="text" maxlength="1024" placeholder="例如 D:\AliceTasks" autocomplete="off" spellcheck="false" disabled></div>
+              <div class="settings-field"><label for="workers-mode">任务权限</label><select id="workers-mode" disabled><option value="read-only">仅可查看 · 阅读与分析</option><option value="workspace-write">工作区内修改 · 生成或修改文件</option></select></div>
+            </section>
+            <section class="worker-field-group" aria-labelledby="workers-limits-title">
+              <h4 id="workers-limits-title">执行额度</h4>
+              <div class="worker-policy-limits"><label for="workers-max-runs">授权总次数<input id="workers-max-runs" type="number" min="0" max="100" step="1" value="0" disabled></label><label for="workers-max-seconds">单次时限（秒）<input id="workers-max-seconds" type="number" min="30" max="1800" step="1" value="600" disabled></label></div>
+              <p id="workers-budget-state" class="worker-hint"></p>
+              <p class="worker-hint">次数和时长限制执行，费用以实际账单为准。未知费用需人工核对。</p>
+            </section>
+          </div>
+          <div class="worker-permission-boundary">
+            <p id="workers-permission-note">任务和相关文件可能由 DSH 发给其模型服务。原生权限仍可能允许读取所选目录外的内容和访问网络。</p>
+            <label class="worker-ack"><input id="workers-native-ack" type="checkbox" aria-describedby="workers-permission-note" disabled><span>我了解权限边界，并授权 DSH 按所选模式处理该目录及调用模型服务。</span></label>
+          </div>
+          <p class="worker-hint">更改或关闭已有授权会清除旧任务正文及派生内容，重新开启也无法恢复。保存前会请你确认。</p>
+          <div class="worker-config-footer"><p id="workers-policy-result" class="worker-hint" role="status"></p><div class="settings-actions"><button id="workers-policy-save" class="btn primary" type="submit" disabled>保存授权</button></div></div>
         </form>
-        <form id="workers-task-settings" class="worker-task-settings">
-          <h3>3 · 任务管理同步</h3><p class="worker-hint">默认只整理 Alice 的任务记录。以下选择独立于派工授权，不改变执行次数或时限。</p>
-          <label class="worker-ack"><input id="workers-sync-archive" type="checkbox" disabled> 归档或恢复 Alice 任务时，同步处理 DSH 专属会话</label>
-          <p id="workers-sync-archive-hint" class="worker-hint"></p>
-          <label class="worker-ack"><input id="workers-sync-delete" type="checkbox" disabled> 删除 Alice 任务时，也永久删除 DSH 专属会话</label>
-          <p id="workers-sync-delete-hint" class="worker-hint">当前 DSH 版本不支持同步删除；Alice 记录仍可删除。</p>
-          <button id="workers-task-settings-save" class="btn ghost" type="submit" disabled>保存同步设置</button><p id="workers-task-settings-result" class="worker-hint" role="status"></p>
+        <form id="workers-task-settings" class="worker-task-settings settings-group" aria-labelledby="workers-sync-title">
+          <h3 id="workers-sync-title">任务管理同步</h3>
+          <div class="worker-config-grid">
+            <div class="worker-field-group">
+              <label class="worker-ack"><input id="workers-sync-archive" type="checkbox" aria-describedby="workers-sync-archive-hint" disabled><span>归档或恢复 Alice 任务时，同步处理 DSH 专属会话</span></label>
+              <p id="workers-sync-archive-hint" class="worker-hint"></p>
+            </div>
+            <div class="worker-field-group">
+              <label class="worker-ack"><input id="workers-sync-delete" type="checkbox" aria-describedby="workers-sync-delete-hint" disabled><span>删除 Alice 任务时，永久删除对应 DSH 会话</span></label>
+              <p id="workers-sync-delete-hint" class="worker-hint">当前 DSH 版本不支持同步删除，Alice 记录仍可删除。</p>
+            </div>
+          </div>
+          <div class="worker-config-footer"><p id="workers-task-settings-result" class="worker-hint" role="status"></p><div class="settings-actions"><button id="workers-task-settings-save" class="btn ghost" type="submit" disabled>保存同步设置</button></div></div>
         </form>
       </section>
       <section id="qq-settings" class="settings-section qq-settings hidden" data-settings-section="qq" tabindex="-1" aria-labelledby="qq-title">
-        <div class="qq-heading"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
+        <div class="qq-heading settings-page-head"><h2 id="qq-title" class="panel-title">QQ 连接</h2><span id="qq-badge" class="qq-badge">尚未读取</span></div>
         <ol class="qq-flow" aria-label="连接步骤"><li>首次准备</li><li>扫码 / 配对</li><li>确认并保存</li><li>启用聊天</li></ol>
-        <p class="settings-hint">用手机 QQ 扫码，把 Alice 接到你的私聊。与这里共用对话和记忆，仅接收已确认的本人文字消息。</p>
+        <p class="settings-hint settings-page-note">连接本人的 QQ 私聊，与这里共用对话和记忆，仅支持文字。</p>
         <p id="qq-status" class="qq-status" role="status" aria-live="polite">打开后读取当前连接状态。</p>
-        <div class="qq-channel-control">
+        <div class="qq-channel-control settings-group">
           <label><input id="qq-channel-enabled" type="checkbox" role="switch" disabled> 启用 QQ 渠道</label>
           <p id="qq-channel-note" class="settings-hint" role="status">正在读取渠道开关。</p>
           <p class="settings-hint">关闭会保存设置并停止接收新 QQ 消息，保留已绑定身份，同时停止本页启动的连接。开启后仍需点击“开始 QQ 聊天”。</p>
@@ -523,42 +573,50 @@
         <p class="settings-hint">关闭这个窗口不会停止 QQ 聊天；电脑和 Alice 服务需要保持运行。</p>
         <details class="qq-details"><summary>连接详情</summary><dl><dt>机器人编号</dt><dd id="qq-app-id">—</dd><dt>连接方式</dt><dd>腾讯官方机器人 · 本人私聊</dd></dl><p>扫码资料只保存在这台电脑，网页不会显示连接密钥。图片、语音、群聊暂不支持。</p></details>
       </section>
-      <section class="settings-section" data-settings-section="general">
-        <label class="panel-title" for="thinking">思考深度</label>
-        <select id="thinking" disabled>
-          <option value="on">开（默认）</option>
-          <option value="off">关（更省 token）</option>
-        </select>
-        <div class="settings-hint">关：跳过对话的思考过程，回复更快；随时可切回。</div>
+      <section id="general-settings" class="settings-section" data-settings-section="general" aria-labelledby="general-settings-title">
+        <div class="settings-page-head"><h2 id="general-settings-title" class="panel-title">对话与模型</h2></div>
+        <div class="settings-group settings-row">
+          <div class="settings-field"><label for="thinking">思考深度</label><p id="thinking-hint" class="settings-hint">即时生效。关闭后回复更快、用量更少。</p></div>
+          <select id="thinking" aria-describedby="thinking-hint" disabled>
+            <option value="on">开（默认）</option>
+            <option value="off">关（更省 token）</option>
+          </select>
+        </div>
       </section>
-      <div id="model-settings-anchor"></div>
+      <div id="model-settings-anchor" hidden></div>
       <section id="model-settings" class="settings-section" data-settings-section="general">
-        <div class="panel-title">模型接口</div>
-        <div class="settings-hint">获取列表只查询模型目录，不发送聊天。验证并保存会发送简短验证请求，可能产生少量 API 费用。ChatGPT 订阅不等于 API 额度。</div>
-        <label for="model-provider">供应商</label>
-        <select id="model-provider" disabled>
-          <option value="deepseek">DeepSeek</option>
-          <option value="zhipu">智谱 GLM</option>
-          <option value="openai">OpenAI GPT</option>
-          <option value="" hidden>请选择供应商</option>
-        </select>
-        <label for="model-base-url">Base URL</label>
-        <input id="model-base-url" type="url" spellcheck="false" autocomplete="off" readonly aria-readonly="true">
-        <label for="model-chat">对话模型</label>
-        <select id="model-chat" disabled><option value="">先获取模型列表</option></select>
-        <label for="model-cheap">记忆与整理模型</label>
-        <select id="model-cheap" disabled><option value="">先获取模型列表</option></select>
-        <p class="settings-hint">可与对话使用同一模型，也可选择更适合日常整理成本的模型。列表不保证工具、流式和所有任务均兼容。</p>
-        <div id="model-key-status" class="settings-hint"></div>
-        <label for="model-key-mode">API Key</label>
-        <select id="model-key-mode" disabled>
-          <option value="keep">不修改现有密钥</option>
-          <option value="replace">替换密钥</option>
-        </select>
-        <input id="model-key" type="password" placeholder="选择“替换密钥”后输入新 Key" autocomplete="new-password" disabled>
-        <div class="settings-hint">密钥不回显；保留时空白框不会写入掩码或空值。候选连接探测仅验证当前网络、凭据和两个模型的普通非流式调用，不保证工具、流式或未来可用。</div>
+        <div class="settings-group">
+          <h3>模型连接</h3>
+          <div class="settings-grid">
+            <div class="settings-field"><label for="model-provider">供应商</label><select id="model-provider" disabled>
+              <option value="deepseek">DeepSeek</option>
+              <option value="zhipu">智谱 GLM</option>
+              <option value="openai">OpenAI GPT</option>
+              <option value="" hidden>请选择供应商</option>
+            </select></div>
+            <div class="settings-field"><label for="model-key-mode">API Key</label><select id="model-key-mode" disabled>
+              <option value="keep">不修改现有密钥</option>
+              <option value="replace">替换密钥</option>
+            </select></div>
+          </div>
+          <div class="settings-field"><label class="sr-only" for="model-key">新的 API Key</label><input id="model-key" type="password" placeholder="选择“替换密钥”后输入新 Key" autocomplete="new-password" disabled><div id="model-key-status" class="settings-hint"></div></div>
+          <details class="settings-help"><summary>接口地址与密钥说明</summary>
+            <div class="settings-field"><label for="model-base-url">Base URL</label><input id="model-base-url" type="url" spellcheck="false" autocomplete="off" readonly aria-readonly="true"></div>
+            <p class="settings-hint">密钥不回显；选择“不修改”时，空白输入不会覆盖现有密钥。获取列表只查询模型目录，不发送聊天。</p>
+            <p class="settings-hint">连接测试仅验证当前网络、凭据和两个模型的普通非流式调用；模型列表与测试均不保证工具、流式或后续任务兼容。</p>
+          </details>
+          <div class="settings-actions"><button id="model-fetch" class="btn ghost" type="button" disabled>获取模型列表</button></div>
+        </div>
+        <div class="settings-group">
+          <h3>模型用途</h3>
+          <div class="settings-grid">
+            <div class="settings-field"><label for="model-chat">对话模型</label><select id="model-chat" disabled><option value="">先获取模型列表</option></select></div>
+            <div class="settings-field"><label for="model-cheap">记忆与整理模型</label><select id="model-cheap" disabled><option value="">先获取模型列表</option></select></div>
+          </div>
+          <p class="settings-hint">可使用同一模型，也可为日常整理选择成本更低的模型。</p>
+        </div>
+        <p class="settings-hint">测试和验证会调用模型，可能产生 API 费用；ChatGPT 订阅不包含 API 额度。</p>
         <div class="settings-actions">
-          <button id="model-fetch" class="btn ghost" type="button" disabled>获取模型列表</button>
           <button id="model-test" class="btn ghost" type="button" disabled>测试候选连接</button>
           <button id="model-save" class="btn primary" type="button" disabled>验证并保存</button>
         </div>
