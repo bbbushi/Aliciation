@@ -3203,18 +3203,21 @@ boot().catch(showStartupError);
 
   function selectSettings(section = "general") {
     if (!["general", "appearance", "discovery", "thoughts", "observer", "qq", "workers", "claude", "service"].includes(section)) section = "general";
-    document.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
-    document.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
-    byId("settings-modal").querySelector(".modal-body").scrollTop = 0;
+    settingsNav.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
+    settingsModal.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
+    settingsModal.querySelector(".modal-body").scrollTop = 0;
     revealSettingsButton(settingsNav.querySelector(`[data-settings="${section}"]`));
-    window.AliceDiscovery?.setSettingsVisible(section === "discovery" && !byId("settings-modal").classList.contains("hidden"));
-    window.AliceWorkers?.setSettingsVisible(section === "workers" && !byId("settings-modal").classList.contains("hidden"));
-    window.AliceClaudeSettings?.setVisible(section === "claude" && !byId("settings-modal").classList.contains("hidden"));
-    window.AliceThoughts?.setVisible(section === "thoughts" && !byId("settings-modal").classList.contains("hidden"));
-    window.AliceObserverSettings?.setVisible(section === "observer" && !byId("settings-modal").classList.contains("hidden"));
+    const showing = !settingsModal.classList.contains("hidden");
+    window.AliceDiscovery?.setSettingsVisible(section === "discovery" && showing);
+    window.AliceWorkers?.setSettingsVisible(section === "workers" && showing);
+    window.AliceClaudeSettings?.setVisible(section === "claude" && showing);
+    window.AliceObserverSettings?.setVisible(section === "observer" && showing);
   }
   window.AliceUI = { selectSettings, openSettings, closeSettings };
-  document.querySelectorAll("[data-settings]").forEach((el) => el.addEventListener("click", () => selectSettings(el.dataset.settings)));
+  settingsNav.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-settings]");
+    if (button) window.AliceUI.selectSettings(button.dataset.settings);
+  });
   settingsNav.addEventListener("keydown", (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const buttons = [...settingsNav.querySelectorAll("[data-settings]")], index = buttons.indexOf(event.target);
@@ -3227,8 +3230,13 @@ boot().catch(showStartupError);
     else return;
     event.preventDefault(); buttons[next].focus({ preventScroll: true }); buttons[next].click();
   });
-  settingsModal.addEventListener("invalid", (event) => {
-    for (let parent = event.target.parentElement; parent && parent !== settingsModal; parent = parent.parentElement) {
+  document.addEventListener("invalid", (event) => {
+    const scope = event.target.closest("#settings-modal, #thought-settings");
+    if (!scope) return;
+    const form = event.target.form;
+    const first = form && [...form.elements].find((field) => field.willValidate && !field.validity.valid);
+    if (first && event.target !== first) return;
+    for (let parent = event.target.parentElement; parent && parent !== scope; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
     }
   }, true);
@@ -3291,11 +3299,16 @@ boot().catch(showStartupError);
     const next = !shutdownScreen.classList.contains("hidden") ? shutdownScreen
       : modals.find((el) => !el.classList.contains("hidden")) || null;
     if (next === activeModal) {
-      if (next && !next.contains(document.activeElement)) focus(focusable(next)[0] || next);
+      if (next && !next.contains(document.activeElement) && !document.querySelector("dialog[open]")) {
+        focus(focusable(next)[0] || next);
+      }
       return;
     }
     if (next) {
-      if (!activeModal) modalReturn = lastTrigger || document.activeElement;
+      if (!activeModal) {
+        modalReturn = visible(lastTrigger) ? lastTrigger : document.activeElement;
+        lastTrigger = null;
+      }
       setNav(false, false);
       activeModal = next;
       app.inert = true;
@@ -3335,7 +3348,7 @@ boot().catch(showStartupError);
     }).observe(panel, { attributes: true, attributeFilter: ["class"] });
   }
   document.addEventListener("keydown", (e) => {
-    if (document.querySelector("dialog.ui-window[open]")) return;
+    if (document.querySelector("dialog[open]")) return;
     const navOpen = app.classList.contains("nav-open");
     const root = activeModal || (navOpen ? nav : null);
     if (e.key === "Escape") {
@@ -3357,7 +3370,7 @@ boot().catch(showStartupError);
     else if (!e.shiftKey && (document.activeElement === last || !items.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
   }, true);
   document.addEventListener("focusin", (e) => {
-    if (document.querySelector("dialog.ui-window[open]")) return;
+    if (document.querySelector("dialog[open]")) return;
     const root = activeModal || (app.classList.contains("nav-open") ? nav : null);
     if (root && !root.contains(e.target)) focus(focusable(root)[0] || root);
   });
@@ -3797,6 +3810,8 @@ boot().catch(showStartupError);
   }
   function applyTheme() {
     const next = document.documentElement.dataset.theme === "minimal";
+    // Orbit restores the original forms before Minimal mounts its readers.
+    if (next && document.body.hasAttribute("data-orbit-page")) return;
     if (next === active) return;
     active = next;
     if (next) install();
@@ -3804,7 +3819,9 @@ boot().catch(showStartupError);
   }
   function ready() {
     applyTheme();
-    new MutationObserver(applyTheme).observe(document.documentElement, {attributes:true,attributeFilter:["data-theme"]});
+    const themeObserver = new MutationObserver(applyTheme);
+    themeObserver.observe(document.documentElement, {attributes:true,attributeFilter:["data-theme"]});
+    themeObserver.observe(document.body, {attributes:true,attributeFilter:["data-orbit-page"]});
     document.addEventListener("invalid", (event) => {
       const dialog = event.target.closest("dialog.ui-window");
       if (dialog && !dialog.open) { const entry = [...windows].find(([,item]) => item.dialog === dialog); if (entry) open(entry[0]); }

@@ -64,7 +64,10 @@
                 <label class="discovery-switch"><input id="discovery-chat-search" type="checkbox" role="switch"><span>聊天时按需查找<small>允许 Alice 为回答查找相关资料。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
                 <details class="discovery-setting-fold"><summary>聊天查找的工作量与等待时间</summary><div id="discovery-chat-limits" class="discovery-policy-grid"></div></details>
               </div>
-              <p id="discovery-autonomous-hint" class="discovery-hint hidden"></p>
+              <div id="discovery-autonomous-hint" class="discovery-setting-group hidden">
+                <p class="discovery-hint">思想与探索统一安排自主寻找。此处管理平台与资料许可，仍可手动找一轮。</p>
+                <button id="discovery-open-thoughts" class="link" type="button">前往思想与探索</button>
+              </div>
               <div id="discovery-activity-options" class="discovery-setting-group">
                 <label class="discovery-switch"><input id="discovery-background" type="checkbox" role="switch"><span>空闲时按兴趣自动寻找<small>Alice 保持运行时，关闭网页后也会继续。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
                 <fieldset class="discovery-time-fields">
@@ -618,7 +621,6 @@
     const unified = snapshot.autonomous_scheduler === "lifecycle-v1";
     $("discovery-activity-options").classList.toggle("hidden", unified);
     $("discovery-autonomous-hint").classList.toggle("hidden", !unified);
-    if (unified) text("discovery-autonomous-hint", "自主寻找由「思想与探索」中的清醒状态、活动时长与权限统一安排；这里管理平台和资料许可，仍可手动找一轮。");
     text("discovery-mode", s.enabled ? `${unified ? "自主活动由思想与探索统一安排" : s.background_enabled ? "自动寻找已开启" : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"} · 手动找一轮不限时段` : "内容访问已暂停");
     text("discovery-toggle-enabled", s.enabled ? "暂停发现" : "开启发现");
   }
@@ -1217,14 +1219,16 @@
       if (pendingDiscussion) composerText.textContent = "所选资料的使用状态暂未确认；可打开内容发现刷新查看。不会自动重发消息。";
     } finally { if (epoch === generation) { working = false; updateControls(); } }
   }
-  function open() {
-    if (stopped) return;
+  function open(focusClose = true) {
+    if (opened || stopped) return;
     window.AliceObserver?.close(); window.AliceEvaluations?.close();
     opened = true; generation++; working = false; controller?.abort();
     panel.classList.remove("hidden"); app.classList.add("discovering"); trigger.setAttribute("aria-expanded", "true"); trigger.setAttribute("aria-current", "page");
     $("chat-nav").classList.remove("selected"); $("chat-nav").removeAttribute("aria-current");
     if (app.classList.contains("nav-open")) $("nav-close").click();
-    panel.inert = false; $("discovery-close").focus(); status("正在核对当前设置与资料…", "waiting"); refresh();
+    panel.inert = false;
+    if (focusClose) $("discovery-close").focus();
+    status("正在核对当前设置与资料…", "waiting"); refresh();
   }
   function close(returnFocus = true) {
     if (!opened) return;
@@ -1256,10 +1260,16 @@
 
   trigger.addEventListener("click", () => opened ? close() : open());
   $("discovery-close").addEventListener("click", goChat);
-  for (const id of ["chat-nav", "observer-btn", "evaluations-btn"]) $(id).addEventListener("click", () => close(false), true);
+  $("chat-nav").addEventListener("click", () => close(false), true);
+  for (const id of ["observer-btn", "evaluations-btn"]) {
+    $(id).addEventListener("click", () => {
+      if (!panel.closest("#orbit-page-discovery")) close(false);
+    }, true);
+  }
   $("discovery-refresh").addEventListener("click", refresh);
   $("discovery-settings-refresh").addEventListener("click", refresh);
   $("discovery-settings-open").addEventListener("click", () => showSettings());
+  $("discovery-open-thoughts").addEventListener("click", () => window.AliceUI?.selectSettings("thoughts"));
   settingsPanel.querySelectorAll("[data-discovery-settings-target]").forEach((button) => button.addEventListener("click", () => selectSettingsSection(button.dataset.discoverySettingsTarget, true)));
   $("discovery-preferences-toggle").addEventListener("click", () => showPreferences(true));
   $("discovery-preferences-close").addEventListener("click", () => showPreferences(false));
@@ -1411,6 +1421,6 @@
     else stopped = false;
   }).observe($("shutdown-screen"), { attributes: true, attributeFilter: ["class"] });
   window.addEventListener("pagehide", () => { close(false); setSettingsVisible(false); stopped = true; controller?.abort(); clearTimeout(discussionTimer); $("discovery-key").value = ""; });
-  window.AliceDiscovery = { close, setSettingsVisible, refreshAfterTurn: () => { if (opened || settingsOpened) refresh(); }, shutdown: () => { close(false); setSettingsVisible(false); stopped = true; } };
+  window.AliceDiscovery = { open, close, setSettingsVisible, refreshAfterTurn: () => { if (opened || settingsOpened) refresh(); }, shutdown: () => { close(false); setSettingsVisible(false); stopped = true; } };
   updateControls(); providerFields();
 })();

@@ -1,17 +1,19 @@
 #thought-settings .thought-head, #thought-settings .thought-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 #thought-settings .thought-head { justify-content:space-between; }
 #thought-settings form { display:grid; gap:12px; margin:16px 0; }
-#thought-settings .thought-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
-#thought-settings label { display:flex; gap:8px; align-items:center; }
-#thought-settings label:has(input[type=number]), #thought-settings label:has(input[type=time]) { flex-direction:column; align-items:flex-start; }
-#thought-settings input[type=number], #thought-settings input[type=time], #thought-settings select { max-width:100%; padding:8px; }
+#thought-settings .thought-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%, 152px),1fr)); gap:12px; }
+#thought-settings label { display:flex; gap:8px; min-width:0; align-items:flex-start; line-height:1.7; }
+#thought-settings label:has(> :is(input[type=number], input[type=time], select)) { flex-direction:column; align-items:stretch; }
+#thought-settings :is(input[type=number], input[type=time], select) { min-width:0; max-width:100%; min-height:42px; padding:8px; }
+#thought-settings input[type=checkbox] { flex:0 0 16px; width:16px; margin-top:3px; }
 #thought-settings textarea { width:100%; min-height:72px; box-sizing:border-box; }
 #thought-settings article { padding:12px 0; border-bottom:1px solid var(--line, #526071); }
 #thought-settings article p { white-space:pre-wrap; overflow-wrap:anywhere; margin:6px 0; }
 #thought-settings pre { max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 #thought-settings details { margin:14px 0; }
 #thought-settings .thought-error { color:var(--danger, #ee9c9c); }
-#thought-activities fieldset { margin:12px 0; padding:12px; border:1px solid var(--line, #526071); border-radius:8px; }
+#thought-settings :is(#thought-activities, #thought-test-tools) { display:grid; gap:12px; }
+#thought-settings :is(#thought-activities, #thought-test-tools) fieldset { min-width:0; margin:0; padding:12px; border:1px solid var(--line, #526071); border-radius:8px; }
 #thought-lifecycle { padding:6px 0; }
 #thought-lifecycle[data-state="awake"] { color:var(--accent, #b9d8bf); }
 #thought-invitations article strong, #thought-invitations article p { overflow-wrap:anywhere; }

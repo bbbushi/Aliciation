@@ -10,10 +10,8 @@
  *   3) 召唤窗：自建 <dialog class="orbit-window">（S2/M8/M9/M10；M2–M7 复用
  *      #settings-modal——02c 权威口径），origin 夹取 20–80%、键盘回退 50%、
  *      退场 B 案 data-closing ≤120ms、防重入、焦点先回后 close。
- *   4) 运行时文案替换 + 还原表（轮次 3 裁定 1：不改 index.html）。
- *   5) MutationObserver 重应用（轮次 3 裁定 2）：evaluations armed 显隐、
- *      workers-empty 替身、rows=0 隐藏、thoughts 冻结对抗（三时机 setVisible）、
- *      thought-detail 联动抽屉。
+ *   4) 页面和召唤窗的展示调整与还原。共用设置窗管理分区与表单。
+ *   5) MutationObserver 同步召唤窗、核查许可与任务状态。
  *   6) 状态镜像：OrbitBG.setState + dock 徽标/状态点（M-03 一次性双波）。
  *   7) 跨组接点：claude-settings 依赖 #settings-btn.click()（原按钮保留隐藏，
  *      dock 代理点击）；P4「去思想与探索」跨页跳 P3；待确认徽标切 P1。
@@ -38,11 +36,9 @@
   let seq = 0;
   /** undos：结构/监听/观察器类，uninstall 时逆序执行（对齐 minimal cleanup 纪律） */
   const undos = [];
-  /** restores：值类还原（textContent/innerHTML/style/open/class），逆序执行 */
+  /** restores：值类还原（文本、属性、样式与状态），逆序执行 */
   const restores = [];
   const timers = new Set();
-  const controller = new AbortController(); // document 级监听统一信号
-  const signal = controller.signal;
 
   function later(fn, ms) {
     const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
@@ -54,8 +50,6 @@
     timers.add(t);
     return t;
   }
-  undos.push(() => { for (const t of timers) { clearTimeout(t); clearInterval(t); } timers.clear(); });
-  undos.push(() => controller.abort());
 
   /** 观察器登记：uninstall 全部断开（02b 还原表 #13） */
   function spy(node, options, fn) {
@@ -74,20 +68,24 @@
 
   /* ---------- 二、还原表 helper（轮次 3 裁定 1：改写一律记录可还原） ---------- */
 
-  /** 文本替换：restores[i] 还原 textContent */
+  /** 只替换纯文本，保留标签内的控件及其关联。 */
   function subText(node, text) {
-    if (!node) return;
+    if (!node || node.childElementCount) return;
     const old = node.textContent;
     if (old === text) return;
     node.textContent = text;
-    restores.push(() => { node.textContent = old; });
+    restores.push(() => {
+      if (!node.childElementCount && node.textContent === text) node.textContent = old;
+    });
   }
-  /** innerHTML 替换（图标化按钮用；按钮自身监听不受影响） */
-  function subHtml(node, html) {
-    if (!node) return;
-    const old = node.innerHTML;
-    node.innerHTML = html;
-    restores.push(() => { node.innerHTML = old; });
+  function useIcon(node, name, cls) {
+    if (node.childElementCount) return;
+    const children = [...node.childNodes];
+    const icon = svg(name, cls);
+    node.replaceChildren(icon);
+    restores.push(() => {
+      if (node.childNodes.length === 1 && node.firstChild === icon) node.replaceChildren(...children);
+    });
   }
   /** 属性写入（placeholder/title/aria-label/tabindex…），null 表示原本无 */
   function subAttr(node, name, value) {
@@ -96,7 +94,8 @@
     if (old === value) return;
     node.setAttribute(name, value);
     restores.push(() => {
-      if (old === null) node.removeAttribute(name); else node.setAttribute(name, name === "tabindex" ? old : old);
+      if (node.getAttribute(name) !== value) return;
+      if (old === null) node.removeAttribute(name); else node.setAttribute(name, old);
     });
   }
   /** style 整体改写（clip 隐藏等），记录旧 style 串 */
@@ -108,19 +107,11 @@
       if (old === null) node.removeAttribute("style"); else node.setAttribute("style", old);
     });
   }
-  /** class 追加（记旧 className 全量还原） */
+  /** 还原时只移除 Orbit 添加的类。 */
   function subClass(node, cls) {
     if (!node || node.classList.contains(cls)) return;
-    const old = node.className;
     node.classList.add(cls);
-    restores.push(() => { node.className = old; });
-  }
-  /** 摘除 .hidden 类通道（app.js 对面板用类+属性双通道隐藏；还原回原类串） */
-  function unhideClass(node) {
-    if (!node || !node.classList.contains("hidden")) return;
-    const old = node.className;
-    node.classList.remove("hidden");
-    restores.push(() => { node.className = old; });
+    restores.push(() => node.classList.remove(cls));
   }
   /** open/hidden 类布尔态改写（记旧值） */
   function subFlag(node, prop, value) {
@@ -128,19 +119,6 @@
     const old = node[prop];
     node[prop] = value;
     restores.push(() => { node[prop] = old; });
-  }
-  /** 文本节点摘除（label 内含 input 时只隐文字不动控件），成对还原 */
-  function stripTexts(node) {
-    if (!node) return;
-    const removed = [];
-    const walk = (n) => {
-      for (const child of n.childNodes) {
-        if (child.nodeType === 3 && child.nodeValue.trim()) { removed.push([child, child.nodeValue]); child.nodeValue = ""; }
-        else if (child.nodeType === 1 && child.tagName !== "INPUT" && child.tagName !== "SELECT") walk(child);
-      }
-    };
-    walk(node);
-    if (removed.length) restores.push(() => { for (const [t, v] of removed) t.nodeValue = v; });
   }
   /** 搬移原节点：留注释标记占位，uninstall 时 marker.replaceWith 还位（minimal 先例） */
   function moveNode(node, newParent, before) {
@@ -249,27 +227,27 @@
     tipEl.setAttribute("role", "tooltip");
     tipEl.style.pointerEvents = "none";
     document.body.appendChild(tipEl);
-    undos.push(() => { tipEl.remove(); tipEl = null; tipTarget = null; });
-    document.addEventListener("pointerover", (e) => {
+    undos.push(() => { tipHide(); tipEl.remove(); tipEl = null; });
+    wire(document, "pointerover", (e) => {
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (!t || t === tipTarget || e.pointerType === "touch") return;
       clearTimeout(holdT);
       tipHide();
       tipTarget = t; // 占位防重入；真正展示在延迟后
       holdT = later(() => { if (tipTarget === t) tipShow(t); }, HOLD_MOUSE);
-    }, { capture: true, signal });
-    document.addEventListener("pointerout", (e) => {
+    }, true);
+    wire(document, "pointerout", (e) => {
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (t && t === tipTarget && !(e.relatedTarget && t.contains(e.relatedTarget))) tipHide();
-    }, { capture: true, signal });
-    document.addEventListener("focusin", (e) => {
+    }, true);
+    wire(document, "focusin", (e) => {
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (t) tipShow(t); // 键盘 0ms
-    }, { capture: true, signal });
-    document.addEventListener("focusout", (e) => {
+    }, true);
+    wire(document, "focusout", (e) => {
       if (tipTarget && e.target.closest && e.target.closest("[data-tip]") === tipTarget) tipHide();
-    }, { capture: true, signal });
-    document.addEventListener("pointerdown", (e) => {
+    }, true);
+    wire(document, "pointerdown", (e) => {
       if (e.pointerType !== "touch") return;
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (!t) return;
@@ -281,15 +259,15 @@
         clearTimeout(dismissT);
         dismissT = later(tipHide, AUTO_DISMISS);
       }, HOLD_TOUCH);
-    }, { capture: true, signal });
-    document.addEventListener("pointermove", (e) => {
+    }, true);
+    wire(document, "pointermove", (e) => {
       if (e.pointerType !== "touch" || !holdT) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) < MOVE_CANCEL) return;
       clearTimeout(holdT); holdT = 0; tipTarget = null; // 位移 >8px 才清除（R4 P1-3）
-    }, { capture: true, signal });
+    }, true);
     ["pointerup", "pointercancel"].forEach((t) =>
-      document.addEventListener(t, () => { clearTimeout(holdT); holdT = 0; }, { capture: true, signal }));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") tipHide(); }, { capture: true, signal });
+      wire(document, t, () => { clearTimeout(holdT); holdT = 0; }, true));
+    wire(document, "keydown", (e) => { if (e.key === "Escape") tipHide(); }, true);
   }
 
   /* ---------- 五、页面路由与切页五连（04a §1） ---------- */
@@ -299,6 +277,7 @@
   let currentPage = "chat";
 
   function writePage(name) {
+    if (document.body.dataset.orbitPage === name) return;
     document.body.dataset.orbitPage = name;
     for (const key of PAGE_KEYS) {
       const el = pages[key];
@@ -319,7 +298,8 @@
       if (btn) { if (key === name) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current"); }
     }
     if (window.OrbitBG && typeof window.OrbitBG.setPage === "function") window.OrbitBG.setPage(name);
-    syncThoughtsVisible(); // 切页时机：P3 可见性重申（02b 三时机之二）
+    if (name === "discovery") window.AliceDiscovery?.open?.(false);
+    else window.AliceDiscovery?.close(false);
   }
 
   function effectivePage() {
@@ -328,20 +308,9 @@
     if (app && !app.classList.contains("hidden")) return currentPage;
     return "onboarding"; // app 未开且无引导卡：视为 onboarding 档（球位下缘让位）
   }
-  function route(name, opts) {
+  function route(name) {
     currentPage = name;
-    writePage(effectivePage() === "onboarding" ? "onboarding" : name);
-    if (!opts || !opts.silent) { /* 供键盘/鼠标同路径调用，无差异处理 */ }
-  }
-
-  /** thoughts 可见性三时机之一：统一出口（thoughts.js settings-modal observer 会冻结） */
-  function syncThoughtsVisible() {
-    const modal = $("settings-modal");
-    const modalHidden = !modal || modal.classList.contains("hidden");
-    try {
-      window.AliceThoughts && window.AliceThoughts.setVisible &&
-        window.AliceThoughts.setVisible(currentPage === "thoughts" && modalHidden);
-    } catch (_) { /* 思想模块未就绪时静默 */ }
+    writePage(effectivePage());
   }
 
   /* ---------- 六、dock（03a §3.1 契约：四簇 / SVG / 纹理 / 徽标挂点） ---------- */
@@ -527,7 +496,7 @@
     later(finish, 150); // animationend 因隐藏丢失时兜底
   }
   /** 自建窗骨架：dialog.orbit-window + 可选窗头（唯一可见标题） */
-  function makeWindow({ id, title, size, label, ariaLabel }) {
+  function makeWindow({ id, title, size, ariaLabel }) {
     const d = document.createElement("dialog");
     d.id = id;
     d.className = "orbit-window" + (size ? " orbit-window--" + size : "");
@@ -554,10 +523,8 @@
       wire(x, "click", () => closeOrbitWindow(d));
       tools.appendChild(x);
       head.appendChild(tools);
-      d._orbitTools = tools;   // hint 收纳引擎挂点（05 轮次 11）
       d.setAttribute("aria-labelledby", t.id);
       d.appendChild(head);
-      d._orbitCloseBtn = x;
     }
     const body = document.createElement("div");
     body.className = "orbit-window-body";
@@ -577,39 +544,6 @@
     return d;
   }
 
-  /* ---------- 八·补、L2 窗级 hint 收纳引擎（05 轮次 11：02b/02c 说明卡设计的通用化） ----------
-     >12 字的静态 hint 隐藏并聚合进窗头「说明」钮（口径 2：按需展开；role=status/结果行动态值排除）。
-     动态分区（claude-settings 等）重绘由各窗 spy 重跑 tuckHints 维持（幂等）。 */
-  const HINT_SEL = ".settings-hint, .worker-hint, .obs-hint, .discovery-hint";
-  function tuckHints(scope) {
-    const parts = [];
-    if (!scope) return parts;
-    for (const h of scope.querySelectorAll(HINT_SEL)) {
-      if (h.closest('[role="status"], .settings-result')) continue;
-      if (h.style.display === "none") continue;
-      const txt = (h.textContent || "").replace(/\s+/g, " ").trim();
-      if (!txt || [...txt].length <= 12) continue;
-      subStyle(h, "display:none");
-      parts.push(txt);
-    }
-    return parts;
-  }
-  function ensureInfoBtn(tools, tipText) {
-    let info = tools.querySelector(".orbit-info-btn");
-    if (!info) {
-      info = document.createElement("button");
-      info.type = "button";
-      info.className = "orbit-icon orbit-info-btn";
-      info.setAttribute("aria-label", "本窗说明");
-      info.setAttribute("data-tip-long", "");
-      info.appendChild(svg("info"));
-      const closeBtn = tools.querySelector(".orbit-win-btn");
-      tools.insertBefore(info, closeBtn || null);   // 说明在关闭左侧（R5c B1 同簇）
-      undos.push(() => info.remove());
-    }
-    if (tipText) info.setAttribute("data-tip", tipText);
-    return info;
-  }
 
   /* ---------- 九、四自建窗安装（S2 / M8 / M9 / M10） ---------- */
 
@@ -623,9 +557,12 @@
       if (memory) moveNode(memory, win._orbitBody);
       subClass(memSummary.querySelector(":scope > summary"), "orbit-icon-entry"); // 入口图标化语言
       const sum = memSummary.querySelector(":scope > summary");
-      if (sum) { subAttr(sum, "data-tip", "记忆概览"); subHtml(sum, ""); sum.appendChild(svg("book", "orbit-symbol")); }
+      if (sum) {
+        subAttr(sum, "data-tip", "记忆概览");
+        subAttr(sum, "aria-label", "记忆概览");
+        useIcon(sum, "book", "orbit-symbol");
+      }
       wire(memSummary, "click", (e) => { e.preventDefault(); e.stopPropagation(); openOrbitWindow(win, sum); }, { capture: true });
-      win._orbitCloseBtn && (win._orbitCloseBtn.dataset.tip = "关闭");
     }
 
     // —— M8 记忆观察器 / M9 P1 核查 / M10 DSH 协作：搬移整节点 + hidden↔dialog 开合同步 ——
@@ -643,51 +580,26 @@
         }
       };
       spy(aside, { attributes: true, attributeFilter: ["class"] }, sync);
-      // hint 收纳引擎（05 轮次 11）：搬移后收集，业务重绘由 spy 维持（幂等）；
-      // 聚合文本进窗头说明钮（tools 由 makeWindow 提供）
-      const applyHints = () => {
-        const parts = tuckHints(aside);
-        if (dialog._orbitTools) {
-          const cur = parts.length ? parts.join(" ｜ ") : "本窗无附加说明";
-          ensureInfoBtn(dialog._orbitTools, cur);
-        }
-      };
-      applyHints();
-      spy(aside, { childList: true, subtree: true }, applyHints);
       wire(dialog, "close", () => {
-        if (!aside.classList.contains("hidden")) aside.classList.add("hidden"); // close 回写信号
-        if (opts.onClose) opts.onClose();
+        if (!aside.classList.contains("hidden")) {
+          if (opts.onClose) opts.onClose();
+          else aside.classList.add("hidden");
+        }
         const opener = dialog._orbitOpener;
         if (!(opener && opener.isConnected && opener.getClientRects().length) &&
             dialog._orbitDockFallback && dialog._orbitDockFallback.isConnected) {
           dialog._orbitDockFallback.focus({ preventScroll: true }); // 焦点接管回 dock 图标（02c 0.5）
         }
       });
+      sync();
     };
 
-    const obsWin = makeWindow({ id: "orbit-window-observer", title: "观察器", ariaLabel: "记忆观察器" });
-    obsWin._orbitDockFallback = dockIcons.tools.observer;
-    const obsHead = document.querySelector("#observer .obs-head");
-    if (obsHead) {
-      subClass(obsHead, "orbit-win-head"); // 次级头改主窗头（03c §三）
-      const strong = obsHead.querySelector("strong");
-      subText(strong, "开发者观察器"); // 文本保留（还原表无改写），clip 隐藏交由唯一标题规则视觉
-      subStyle(strong, "position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;");
-      subAttr(strong, "tabindex", "-1");
-      const close = $("obs-close");
-      if (close && obsWin._orbitCloseBtn) {
-        // obs-close 收进窗头 tools（关窗单一路径；原 title 还原）
-        subAttr(close, "data-tip", "关闭并清空观察记录");
-        moveNode(close, obsWin._orbitCloseBtn.parentElement, obsWin._orbitCloseBtn);
-        subClass(close, "orbit-win-btn");
-        subHtml(close, ""); close.appendChild(svg("x", ""));
-        close.querySelector("svg").style.width = "18px";
-        close.querySelector("svg").style.height = "18px";
-        wire(close, "click", (e) => { e.stopPropagation(); closeOrbitWindow(obsWin); }, { capture: true });
-        obsWin._orbitCloseBtn.hidden = true; // 双 × 收敛为一个（工具头唯一）
-      }
-    }
-    follow("observer", obsWin, { dockFallback: dockIcons.tools.observer });
+    const obsWin = makeWindow({ id: "orbit-window-observer", ariaLabel: "记忆观察器" });
+    subText($("obs-close"), "关闭观察器");
+    follow("observer", obsWin, {
+      dockFallback: dockIcons.tools.observer,
+      onClose: () => window.AliceObserver?.close(),
+    });
 
     const evalWin = makeWindow({ id: "orbit-win-evaluations", size: "md", ariaLabel: "P1 核查" });
     evalWin._orbitDockFallback = dockIcons.tools.p1;
@@ -700,160 +612,39 @@
     follow("worker-tasks", workerWin, { dockFallback: dockIcons.system.dsh });
   }
 
-  /* ---------- 十、设置窗增强（M2–M7 复用 #settings-modal；02c 权威口径） ---------- */
+  /* ---------- 十、设置窗与独立页面的入口 ---------- */
 
-  const SECTION_NAMES = {
-    general: "对话与模型", appearance: "外观", discovery: "联网搜索", observer: "上下文观测",
-    qq: "QQ 连接", workers: "DSH 授权", claude: "Claude 授权", thoughts: "思想与探索",
-  };
-  let switching = false; // M-10 switchStep 纪元重入守卫
-
-  function installSettingsWindow() {
+  function installSettingsRoutes() {
+    const ui = window.AliceUI;
+    if (!ui) return;
     const modal = $("settings-modal");
-    const card = modal && modal.querySelector(".modal-card.settings-card");
-    if (!card) return;
-    subClass(card, "orbit-window");   // 03c §1.1 权威口径：运行时追加类
-    subClass(card, "orbit-window--md");
-    subAttr(card, "data-density", "mid");
-    const head = card.querySelector(".modal-head");
-    if (head) {
-      subClass(head, "orbit-win-head");
-      const title = $("settings-title");
-      subClass(title, "orbit-win-title");
-      // R5c B1：head 带遗留 .modal-head space-between——工具簇 wrapper（说明/关闭同簇右聚）
-      const tools = document.createElement("div");
-      tools.className = "orbit-win-tools";
-      head.appendChild(tools);
-      undos.push(() => { for (const k of [...tools.childNodes]) head.appendChild(k); tools.remove(); });
-      const x = $("settings-x");
-      if (x) moveNode(x, tools);
-      // hint 收纳引擎：逐分区收集（ⓘ 随分区切换更新 tip，见 syncSettingsTitle）
-      const sectionTips = {};
-      for (const sec of card.querySelectorAll("[data-settings-section]")) {
-        const parts = tuckHints(sec);
-        if (parts.length) sectionTips[sec.dataset.settingsSection] = parts;
-      }
-      card._orbitInfoTip = ensureInfoBtn(tools, "");
-      card._orbitSyncInfo = () => {
-        const cur = card.querySelector("[data-settings-section]:not(.hidden)");
-        const key = cur ? cur.dataset.settingsSection : "";
-        const parts = sectionTips[key] || [];
-        card._orbitInfoTip.setAttribute("data-tip", parts.length ? parts.join(" ｜ ") : "本分区无附加说明");
-      };
-      // R5c B2：返回钮（03c 1.2 必备）——复用关闭链路（与 Esc 同源语义）
-      const back = document.createElement("button");
-      back.type = "button";
-      back.className = "orbit-win-btn orbit-win-back";
-      back.setAttribute("aria-label", "返回");
-      back.setAttribute("data-tip", "返回");
-      back.appendChild(svg("x", ""));
-      back.querySelector("svg").style.width = "18px";
-      back.querySelector("svg").style.height = "18px";
-      wire(back, "click", () => { if (x) x.click(); });
-      head.insertBefore(back, title);
-      undos.push(() => back.remove());
+    const select = ui.selectSettings;
+    const open = ui.openSettings;
+
+    function showThoughts() {
+      if (!modal.classList.contains("hidden")) ui.closeSettings();
+      route("thoughts");
+      later(() => {
+        if (document.body.dataset.orbitPage === "thoughts" && modal.classList.contains("hidden")) {
+          $("thought-title")?.focus({ preventScroll: true });
+        }
+      }, 0);
     }
 
-    // 步点条：原 nav.settings-nav 已在窗头下方，只挂类 + 图标化（监听全保留，02c 0.3）
-    const nav = card.querySelector("nav.settings-nav");
-    // R5c C1：元素化指示条（05 轮次 7 裁定）——span 引擎随 [aria-pressed=true] 滑移。
-    // moveIndicator 须在函数级作用域（openSettings 包装跨块引用，块内 const 会 ReferenceError）。
-    let moveIndicator = () => {};
-    if (nav) {
-      subClass(nav, "orbit-step-dots");
-      const STEP_ICON = { general: "chat", appearance: "palette", discovery: "search", observer: "layers", qq: "qq", workers: "dsh" };
-      for (const b of nav.querySelectorAll("button[data-settings]")) {
-        subClass(b, "orbit-step");
-        const key = b.getAttribute("data-settings");
-        subAttr(b, "data-tip", SECTION_NAMES[key] || key);
-        subHtml(b, "");
-        b.appendChild(svg(STEP_ICON[key] || "gear", ""));
-        b.querySelector("svg").style.width = "18px";
-        b.querySelector("svg").style.height = "18px";
-      }
-      const indicator = document.createElement("span");
-      indicator.className = "orbit-step-indicator";
-      nav.appendChild(indicator);
-      undos.push(() => indicator.remove());
-      moveIndicator = () => {
-        const cur = nav.querySelector('button[aria-pressed="true"]');
-        if (!cur) return;
-        indicator.style.transform = `translateX(${cur.offsetLeft}px)`;
-        indicator.style.width = `${cur.offsetWidth}px`;
-        indicator.dataset.ready = "1";
-      };
-      // thoughts.js 注入的「思想与探索」按钮：无条件隐藏（05 轮次 10 C3：跨页跳转项不进步点条）
-      const thBtn = nav.querySelector('button[data-settings="thoughts"]');
-      if (thBtn) subStyle(thBtn, "display:none");
-      for (const b of nav.querySelectorAll("button")) {
-        if (!b.getAttribute("data-settings") || b.getAttribute("data-settings") === "thoughts")
-          subStyle(b, "display:none"); // 动态注册按钮（thoughts）
-      }
-      later(moveIndicator, 0);
-      // switchStep 重入守卫 + 窗头标题随动（M-09/M-10）
-      wire(nav, "click", (e) => {
-        const b = e.target.closest && e.target.closest("button[data-settings]");
-        if (!b) return;
-        if (switching) { e.stopImmediatePropagation(); e.preventDefault(); return; }
-        switching = true;
-        later(() => { switching = false; }, 240);
-        later(syncSettingsTitle, 0);
-        later(moveIndicator, 0);
-      }, { capture: true });
+    ui.selectSettings = (section) => section === "thoughts" ? showThoughts() : select(section);
+    ui.openSettings = (section) => section === "thoughts" ? showThoughts() : open(section);
+    undos.push(() => { ui.selectSettings = select; ui.openSettings = open; });
+    if (modal.querySelector('[data-settings="thoughts"][aria-pressed="true"]')) {
+      select("general");
+      if (!modal.classList.contains("hidden")) showThoughts();
     }
-    // 五个分区自带标题 clip 隐藏保节点（唯一可见标题规则；还原表 02c #4）
-    for (const tid of ["discovery-settings-title", "qq-title", "workers-settings-title", "claude-settings-title"]) {
-      const t = $(tid);
-      if (!t) continue;
-      subStyle(t, "position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;");
-    }
-    // 窗头标题随 selectSettings 更新（还原表 02c #1）。原值恒为「设置」，
-    // subText 对同值不登记——这里强制登记，保证运行期换名后能还原。
-    const settingsTitle = $("settings-title");
-    if (settingsTitle) {
-      const oldTitle = settingsTitle.textContent;
-      restores.push(() => { settingsTitle.textContent = oldTitle; });
-    }
-    syncSettingsTitle();
-    spy(modal, { attributes: true, attributeFilter: ["class"], subtree: true, childList: true }, () => {
-      syncSettingsTitle();
-      syncThoughtsVisible(); // 三时机之三：设置模态开/关后重申 P3 可见性（02b 机制条款）
-      // 关窗焦点接管：模态转 hidden 且焦点落空 → 回 dock 设置图标
-      if (modal.classList.contains("hidden")) {
-        const ae = document.activeElement;
-        const lost = !ae || ae === document.body || (modal.contains(ae));
-        if (lost && dockIcons.primary.settings) dockIcons.primary.settings.focus({ preventScroll: true });
+    spy(modal, { attributes: true, attributeFilter: ["class"] }, () => {
+      if (modal.classList.contains("hidden") && document.activeElement === document.body) {
+        dockIcons.primary.settings.focus({ preventScroll: true });
       }
     });
+  }
 
-    // AliceUI 拦截：thoughts 分区 → P3 跨页（02c 六.1：拦截责任在 orbit.js）
-    const ui = window.AliceUI;
-    if (ui && typeof ui.selectSettings === "function") {
-      const origSelect = ui.selectSettings, origOpen = ui.openSettings;
-      ui.selectSettings = function (key) {
-        if (key === "thoughts") { route("thoughts"); syncThoughtsVisible(); return; }
-        return origSelect.apply(this, arguments);
-      };
-      ui.openSettings = function (key) {
-        if (key === "thoughts") { route("thoughts"); syncThoughtsVisible(); return; }
-        later(moveIndicator, 60);   // 开窗/换分区后指示条重定位（首开时布局才稳定）
-        return origOpen.apply(this, arguments);
-      };
-      undos.push(() => { ui.selectSettings = origSelect; ui.openSettings = origOpen; });
-    }
-  }
-  function syncSettingsTitle() {
-    const body = document.querySelector("#settings-modal .settings-body");
-    const title = $("settings-title");
-    if (!body || !title) return;
-    const cur = body.querySelector('[data-settings-section]:not(.hidden)');
-    if (!cur) return;
-    const key = cur.getAttribute("data-settings-section");
-    const name = SECTION_NAMES[key];
-    if (name && title.textContent !== name) title.textContent = name; // 首次写入已被 subText 登记还原
-    const card = document.querySelector("#settings-modal .modal-card");
-    if (card && card._orbitSyncInfo) card._orbitSyncInfo();   // ⓘ 说明随分区切换（05 轮次 11）
-  }
 
   /* ---------- 十一、页面骨架与搬移（结构壳：02a/02b/02c） ---------- */
 
@@ -865,8 +656,8 @@
     const main = document.createElement("div");
     main.id = "orbit-main";
     main.setAttribute("data-density", "wide");
+    undos.push(() => main.remove());
     if (chat) { app.insertBefore(main, chat); moveNode(chat, main); }
-    undos.push(() => main.remove());   // LIFO：还原时先由 marker 把 chat 归位，再摘空壳
     pages.chat = main;
 
     // P2：#orbit-page-discovery；#discovery 整容器搬入 + 容器级包装（02b）
@@ -879,106 +670,19 @@
     undos.push(() => p2.remove());
     if (discovery) {
       moveNode(discovery, p2);
-      subFlag(discovery, "hidden", false); // 面板可见性归页容器（还原表 02b #1：回原 hidden）
-      // app.js 用 .hidden 类 + 属性双通道隐藏面板：类通道在入页时一并摘除（还原回原类串）
-      unhideClass(discovery);
-      // 双列包装：grid 只挂 .orbit-body（R3 P1-2 防棋盘化）
       const body = document.createElement("div");
       body.className = "orbit-body";
       const side = document.createElement("div");
       side.className = "orbit-body-side";
       const mainCol = document.createElement("div");
       mainCol.className = "orbit-body-main";
-      // 左列：策略抽屉（#discovery-settings-box 搬入，须晚于 discovery.js:139 搬移——脚本序已保证）
-      const drawer = document.createElement("details");
-      drawer.id = "orbit-strategy-drawer";
-      drawer.className = "orbit-drawer";
-      const sum = document.createElement("summary");
-      sum.textContent = "寻找策略";
-      drawer.appendChild(sum);
-      const box = $("discovery-settings-box");
-      if (box) moveNode(box, drawer);
-      // 左列 = 行动区（03b §2.1/R5b J1：开关+主按钮+入口排 overview 为首位），
-      // 右主列仅结果流；偏好浮层包装节点物理在左列（窗口召唤，R5d P1-1 分组重排）
-      const overview = discovery.querySelector(".discovery-overview");
-      const results = discovery.querySelector(".discovery-results");
-      const prefs = $("discovery-preferences");
-      moveNode(overview, side);
-      moveNode(results, mainCol);
-      moveNode(prefs, side);
-      // 导语精简 1 字（P2 91→90 贴线，05 轮次 11）：原句入悬停
-      const intro = discovery.querySelector(".discovery-intro");
-      if (intro) { subText(intro, "找点感兴趣的，留着一起聊"); subAttr(intro, "title", "找点你感兴趣的，留着一起聊。"); }
-      // 结果区说明句：标题悬停承接（02b：短版入「找到的资料」悬停）；39 字说明句收纳
-      const resHead = results && results.querySelector("h2");
-      if (resHead) subAttr(resHead, "title", "原文与判断分开保留；资料会到期，没有新发现时也可以什么都不带回");
-      const resHint = results && results.querySelector(".discovery-results > .discovery-hint, .discovery-hint");
-      if (resHint && results.contains(resHint)) subStyle(resHint, "display:none");
-      // 偏好 note ≈49 字收纳：隐藏 + 头部悬停短句（02b P1-2）
-      const note = document.querySelector(".discovery-preferences-note");
-      if (note) {
-        subStyle(note, "display:none");
-        const prefHead = document.querySelector(".discovery-preferences-head");
-        if (prefHead) subAttr(prefHead, "title", "平台即点即存；草稿会保留");
-      }
-      // 左列余项：见闻维护 / 活动用量 / 策略抽屉（依次其后，R5b J1）
-      const learn = $("discovery-learning-preview");
-      const task = document.querySelector("details.discovery-task");
-      moveNode(learn, side);
-      moveNode(task, side);
-      moveNode(drawer, side);
-      // interests-box 初始 open 移除（02b 裁定请求 3，还原恢复）
-      const interests = $("discovery-interests-box");
-      if (interests) subFlag(interests, "open", false);
-      // 字数帽（05 轮次 11）：抽屉/用量块默认折叠——展开内容不计常驻的口径前提是
-      // 「默认不可见」。discovery.js 重绘会恢复 open，observer 强制维持（还原=subFlag 登记链）。
-      const foldDetail = (el) => { if (el && el.open) subFlag(el, "open", false); };
-      foldDetail(drawer);
-      foldDetail(task);
-      if (interests) foldDetail(interests);
-      spy(discovery, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] }, () => {
-        foldDetail(drawer); foldDetail(task);
-        const ib = $("discovery-interests-box"); if (ib) foldDetail(ib);
-      });
-      // 偏好浮层包装：CSS 呈浮层抽屉（节点留在面板内）；S10 族动态列表浮层挂滚动例外钩子（R5d P3 组）
-      if (prefs) {
-        const f = document.createElement("div");
-        f.className = "orbit-float";
-        f.setAttribute("data-orbit-scroll", "");
-        wrapNode(prefs, f);
-      }
-      body.appendChild(side);
-      body.appendChild(mainCol);
-      discovery.appendChild(body);
-      // app.js 运行时可能给面板加 hidden（导航语义残留）：orbit 期间剥离；
-      // discovery.js 重绘后维持折叠/空态替身/说明收纳/引导态去重（字数帽口径前提，05 轮次 11）
-      spy(discovery, { attributes: true, attributeFilter: ["class", "open"], childList: true, subtree: true }, () => {
-        if (discovery.classList.contains("hidden")) discovery.classList.remove("hidden");
-        foldDetail(drawer); foldDetail(task);
-        const ib2 = $("discovery-interests-box"); if (ib2) foldDetail(ib2);
-        // 结果说明 39 字：标题悬停承接（重绘后维持）
-        for (const h of discovery.querySelectorAll(".discovery-results .discovery-hint"))
-          if (!h.style.display) h.style.display = "none";
-        // 空态替身（重绘后维持）
-        const emp = discovery.querySelector(".discovery-empty");
-        if (emp && !emp.dataset.orbitTuck) {
-          emp.dataset.orbitTuck = "1";
-          const raw = emp.textContent.trim();
-          if (raw.length > 12) { emp.textContent = "开放平台并添加兴趣后，资料会出现在这里。"; emp.title = raw; }
-        }
-        // 引导态去重（11-15 原则）：下一步引导在场时，status（无错误时）与 context 范围摘要
-        // 与引导信息重叠——orbit 域隐藏（还原=subStyle 登记链；discovery.js 语义类不动）
-        const next = discovery.querySelector("#discovery-next");
-        const nextOn = next && !next.classList.contains("hidden");
-        const status = $("discovery-status");
-        const ctx = $("discovery-context");
-        const applyGuide = (el) => {
-          if (!el) return;
-          const want = nextOn && !(el === status && el.dataset.kind === "error") ? "none" : "";
-          if (el.style.display !== want) el.style.display = want;
-        };
-        applyGuide(status); applyGuide(ctx);
-      });
+      body.append(side, mainCol);
+      discovery.querySelector(".discovery-grid").appendChild(body);
+      undos.push(() => body.remove());
+      moveNode(discovery.querySelector(".discovery-overview"), side);
+      moveNode($("discovery-learning-preview"), side);
+      moveNode(discovery.querySelector("details.discovery-task"), side);
+      moveNode(discovery.querySelector(".discovery-results"), mainCol);
     }
     pages.discovery = p2;
 
@@ -990,117 +694,37 @@
     p3.setAttribute("data-density", "wide");
     app.insertBefore(p3, app.querySelector(".terminal-foot") || null);
     undos.push(() => p3.remove());
-    // P3 页头（R5b J2/R5d P2-1：三页页头同构 .orbit-page-head——标题 + 清醒睡眠 chip）
-    const thoughtHead = document.createElement("header");
-    thoughtHead.className = "orbit-page-head";
-    const thoughtTitle = document.createElement("h1");
-    thoughtTitle.className = "page-title";
-    thoughtTitle.textContent = "思想与探索";
-    const chip = document.createElement("span");
-    chip.className = "orbit-state-chip";
-    chip.setAttribute("data-state", "awake");
-    thoughtHead.append(thoughtTitle, chip);
-    p3.appendChild(thoughtHead);
-    undos.push(() => thoughtHead.remove());
-    // chip 只读镜像 #thought-lifecycle 的 data-state（05 轮次 7 星线裁定同路径；原节点收纳）
-    const lifecycle = $("thought-lifecycle");
-    if (lifecycle) {
-      subStyle(lifecycle, "display:none");
-      const syncChip = () => { chip.dataset.state = lifecycle.dataset.state === "sleeping" ? "sleeping" : "awake"; };
-      syncChip();
-      spy(lifecycle, { attributes: true, attributeFilter: ["data-state"] }, syncChip);
-    }
     if (thought) {
       moveNode(thought, p3);
-      subFlag(thought, "hidden", false);
-      unhideClass(thought);
+      thought.classList.remove("hidden");
+      undos.push(() => thought.classList.add("hidden"));
+      subClass(thought.querySelector(".thought-head"), "orbit-page-head");
+      subClass($("thought-lifecycle"), "orbit-state-chip");
+
+      const policy = $("thought-config").closest("details");
+      const records = [];
+      for (let node = policy.nextElementSibling; node; node = node.nextElementSibling) {
+        records.push(node);
+      }
       const body = document.createElement("div");
       body.className = "orbit-body";
       const mainCol = document.createElement("div");
+      mainCol.className = "orbit-thought-column";
       const side = document.createElement("div");
-      side.className = "orbit-drawer-stack";
-      // 分类：探索与联系设置 details 与其余运维 details 入右列；已解决入右列；thought-detail 留主列
-      const opsDrawer = document.createElement("details");
-      opsDrawer.id = "orbit-thought-ops";
-      opsDrawer.className = "orbit-drawer";
-      const opsSum = document.createElement("summary");
-      opsSum.textContent = "运行记录";
-      opsSum.setAttribute("data-tip", "探索用量、调度、队列与事件");
-      opsDrawer.appendChild(opsSum);
-      for (const d of [...thought.querySelectorAll(":scope > details")]) {
-        const s = d.querySelector(":scope > summary");
-        const name = s ? s.textContent.trim() : "";
-        if (d.id === "thought-detail") continue; // 详情浮层留主列
-        if (name.includes("探索与联系设置") || name.includes("已解决")) moveNode(d, side);
-        else moveNode(d, opsDrawer);
-      }
-      moveNode(opsDrawer, side);
-      // 字数帽（05 轮次 11）：右列抽屉默认折叠——thoughts.js 渲染的 details 自带 open；
-      // thoughts.js 重绘恢复 open 由 spy 强制维持。thought-detail 保留程序化 open 通道。
-      const foldThought = () => {
-        for (const d of side.querySelectorAll("details")) if (d.open) subFlag(d, "open", false);
-      };
-      foldThought();
-      // 主列 = 其余全部子节点；双标题去重（R5c 同款）：面板自带 #thought-title 由页头接管
-      const thoughtTitle = $("thought-title");
-      if (thoughtTitle) subStyle(thoughtTitle, "display:none");
-      for (const child of [...thought.childNodes]) {
-        if (child === body || child.nodeType !== 1) continue;
-        moveNode(child, mainCol);
-      }
-      // 44 字睡眠提示：隐藏换 15 字替身（轮次 3 已批运行时替换）
-      const hint = [...thought.querySelectorAll(".settings-hint, p")]
-        .find((p) => p.textContent.includes("清醒时选择兴趣探索"));
-      if (hint) {
-        subStyle(hint, "display:none");
-        const rep = document.createElement("p");
-        rep.className = "orbit-thought-hint";
-        rep.textContent = "睡眠待机，清醒自主；消息照常回应。";
-        rep.title = hint.textContent.trim();
-        mainCol.insertBefore(rep, mainCol.firstChild.nextSibling || null);
-        undos.push(() => rep.remove());
-      }
-      // #thought-run 文案替换（「调用模型」入悬停）。11-17 清醒睡眠改造后主行动按钮
-      // 为 #thought-wake「开启后台测试（调用模型）」（11 字）——替身跟随新节点（05 轮次 11）
-      const run = $("thought-run") || $("thought-wake");
-      if (run) { subText(run, "开启后台活动"); subAttr(run, "title", run.textContent.trim() + "；调用模型，计入后台额度"); }
-      // 疑问占位精简（02b 预算 8 字）：原句入悬停
-      const qLabel = [...thought.querySelectorAll("label, .settings-hint")]
-        .find((el) => el.textContent.includes("留下一个想继续研究的问题"));
-      if (qLabel) { subText(qLabel, "记下想研究的问题"); subAttr(qLabel, "title", "留下一个想继续研究的问题"); }
-      // 疑问空态收纳：只读 observer + h3 悬停（轮次 4 钉死模板写死文案计入）
-      const questions = $("thought-questions");
-      if (questions) {
-        const tuck = () => {
-          const empty = questions.textContent.trim() === "暂时没有未解决的疑问。";
-          questions.style.display = empty ? "none" : "";
-        };
-        tuck();
-        spy(questions, { childList: true, characterData: true, subtree: true }, tuck);
-        undos.push(() => { questions.style.display = ""; });
-        const qh3 = [...thought.querySelectorAll("h3")].find((h) => h.textContent.includes("未解决的疑问"));
-        if (qh3) subAttr(qh3, "title", "暂时没有未解决的疑问");
-      }
-      // 思辨提示句隐藏 + h3 悬停
-      const stanceHint = [...thought.querySelectorAll("p, .obs-hint, .settings-hint")]
-        .find((p) => p.textContent.length > 20 && p.textContent.includes("思辨"));
-      if (stanceHint) subStyle(stanceHint, "display:none");
-      // thought-detail 程序化 open 时自动展开运行记录抽屉（02b 交互点）
-      const detail = $("thought-detail");
-      if (detail) {
-        spy(detail, { attributes: true, attributeFilter: ["open"] }, () => {
-          if (detail.open) opsDrawer.open = true;
-        });
-      }
-      body.appendChild(mainCol);
-      body.appendChild(side);
+      side.className = "orbit-thought-column";
+      const history = document.createElement("details");
+      history.className = "settings-group";
+      const summary = document.createElement("summary");
+      summary.textContent = "运行记录";
+      history.appendChild(summary);
+      side.appendChild(history);
+      body.append(mainCol, side);
       thought.appendChild(body);
-      // app.js selectSettings 会给本 section 切 hidden：orbit 期间剥离（P3 永远可见）；
-      // thoughts.js 重绘恢复抽屉 open：强制维持折叠（字数帽口径前提）
-      spy(thought, { attributes: true, attributeFilter: ["class", "open"], childList: true, subtree: true }, () => {
-        if (thought.classList.contains("hidden")) thought.classList.remove("hidden");
-        foldThought();
-      });
+      undos.push(() => body.remove());
+      moveNode(policy, side, history);
+      for (const node of records) {
+        moveNode(node, node.matches("details:not(#thought-detail)") ? history : mainCol);
+      }
     }
     pages.thoughts = p3;
 
@@ -1126,6 +750,7 @@
       ["general", "对话与模型", "chat"],
       ["appearance", "外观", "palette"],
       ["discovery", "联网搜索", "search"],
+      ["observer", "上下文观测", "layers"],
       ["qq", "QQ 连接", "qq"],
       ["workers", "DSH 授权", "dsh"],
       ["claude", "Claude 授权", "claude"],
@@ -1139,12 +764,7 @@
       const strong = document.createElement("strong");
       strong.textContent = name;
       b.append(s, strong);
-      wire(b, "click", () => {
-        if (switching) return; // 纪元重入守卫同源
-        switching = true;
-        later(() => { switching = false; }, 240);
-        if (window.AliceUI) window.AliceUI.openSettings(key);
-      });
+      wire(b, "click", () => window.AliceUI?.openSettings(key));
       grid.appendChild(b);
     }
     // 跨页跳转行（裁定②）：不带 data-settings，走 orbit 路由
@@ -1176,7 +796,7 @@
       const sync = () => {
         const off = screen.classList.contains("hidden");
         wrap.style.display = off ? "none" : "";
-        if (!off) route("onboarding"); else route(currentPage);
+        route(currentPage);
       };
       sync();
       spy(screen, { attributes: true, attributeFilter: ["class"] }, sync);
@@ -1190,6 +810,7 @@
     // OB 期间 #app hidden ↔ 路由回 onboarding
     const appEl = $("app");
     spy(appEl, { attributes: true, attributeFilter: ["class"] }, () => route(currentPage));
+    wire($("chat-nav"), "click", () => route("chat"), true);
   }
 
   /* ---------- 十二、运行时文案改写（还原表逐项登记） ---------- */
@@ -1205,7 +826,7 @@
       subClass(refresh, "orbit-icon-entry");
       subAttr(refresh, "data-tip", "同步记录");
       subAttr(refresh, "aria-label", "同步记录");
-      subHtml(refresh, ""); refresh.appendChild(svg("sync"));
+      useIcon(refresh, "sync");
       const headerActions = document.querySelector(".chat-header-actions");
       if (headerActions) moveNode(refresh, headerActions);
       const syncBar = document.querySelector(".chat-sync-bar");
@@ -1265,8 +886,7 @@
       parent.insertBefore(marker, recordSection);
       fold.appendChild(sum);
       for (const c of [...recordSection.childNodes]) fold.appendChild(c);
-      parent.insertBefore(fold, marker);
-      marker.remove();
+      recordSection.replaceWith(fold);
       subAttr(sum, "data-tip", "点击授权会建一条记录；结束后记录保留");
       undos.push(() => {
         // 拆除包装：正文回 section、h3 出 summary 回首位，标记位还原
@@ -1332,45 +952,6 @@
     if (soothe) { subText(soothe, "记忆已保存，下次继续。"); subAttr(soothe, "title", "对话、人格与记忆都在本机"); }
     const restart = $("restart-instructions");
     if (restart) subText(restart.querySelector(":scope > summary"), "重启命令");
-    // M2（02c #7）
-    const cheapLabel = document.querySelector('label[for="model-cheap"]');
-    if (cheapLabel) { subText(cheapLabel, "整理模型"); subAttr(cheapLabel, "title", "记忆与整理模型"); }
-    const mFetch = $("model-fetch"), mTest = $("model-test"), mSave = $("model-save");
-    if (mFetch) { subText(mFetch, "获取列表"); subAttr(mFetch, "title", "获取模型列表"); }
-    if (mTest) { subText(mTest, "测试"); subAttr(mTest, "title", "测试候选连接"); }
-    if (mSave) { subText(mSave, "保存"); subAttr(mSave, "title", "验证产生少量费用"); }
-    // M4：顶部 40 字 settings-hint → 折叠「保存说明」（02c #12）
-    const m4hint = document.querySelector("#discovery-settings > p.settings-hint");
-    if (m4hint) {
-      const fold = document.createElement("details");
-      fold.className = "orbit-fold";
-      const sum = document.createElement("summary");
-      sum.textContent = "保存说明";
-      const parent = m4hint.parentElement;
-      const marker = document.createComment("orbit-fold:m4-save");
-      parent.insertBefore(marker, m4hint);
-      fold.appendChild(sum);
-      fold.appendChild(m4hint);
-      parent.insertBefore(fold, marker);
-      marker.remove();
-      undos.push(() => { marker.replaceWith(m4hint); fold.remove(); });
-    }
-    // M6（02c #17 部分：预算相关常驻文案）
-    const wsLabel = document.querySelector('label[for="workers-workspace"]');
-    if (wsLabel) { subText(wsLabel, "工作目录"); subAttr(wsLabel, "title", "本次任务工作目录（绝对路径）"); }
-    const adv = $("workers-advanced");
-    if (adv) { subText(adv.querySelector(":scope > summary"), "高级"); subAttr(adv.querySelector(":scope > summary"), "title", "高级设置 · 手动令牌与更换"); }
-    const syncSave = $("workers-task-settings-save");
-    if (syncSave) { subText(syncSave, "保存同步"); subAttr(syncSave, "title", "保存同步设置"); }
-    const workersEnabled = $("workers-enabled");
-    if (workersEnabled) {
-      const lb = workersEnabled.closest("label");
-      if (lb) { stripTexts(lb); subAttr(lb, "title", "允许 Alice 在以下范围调用 DSH"); const t = document.createElement("span"); t.textContent = "允许调用 DSH"; lb.appendChild(t); undos.push(() => t.remove()); }
-    }
-    const runsLabel = document.querySelector('label[for="workers-max-runs"]');
-    if (runsLabel) { const inp = $("workers-max-runs"); stripTexts(runsLabel); const t = document.createElement("span"); t.textContent = "执行次数"; runsLabel.insertBefore(t, inp); subAttr(runsLabel, "title", "本次授权总执行次数"); undos.push(() => t.remove()); }
-    const secsLabel = document.querySelector('label[for="workers-max-seconds"]');
-    if (secsLabel) { const inp = $("workers-max-seconds"); stripTexts(secsLabel); const t = document.createElement("span"); t.textContent = "最长秒数"; secsLabel.insertBefore(t, inp); subAttr(secsLabel, "title", "每次执行最长秒数"); undos.push(() => t.remove()); }
     // OB1（02b 还原表 #12）：45 字 hint 替身；原句全文入悬停（title 先于正文改写登记）
     const ob1hint = document.querySelector("#onboarding .onboarding-card .hint");
     if (ob1hint) {
@@ -1437,132 +1018,9 @@
     const n = count ? parseInt(count.textContent.replace(/[^0-9]/g, ""), 10) || 0 : 0;
     setBadge("dsh", n);
   }
-  /* ---------- 十三·补、字数帽预算文案（02c M2 / 02b P3；轮次 3 批准的运行时替换） ----------
-     帽内常驻文案精简，被收起的全文走「说明」悬停卡与控件 title（口径 2/4：按需展开、完整性保留）。 */
-  function applyBudgetRewrites() {
-    // S7 协作者卡定位交由 CSS !important 裁决（theme-orbit.css §5）——worker-tasks.js
-    // 状态轮询持续写回内联 inset，JS 首装重置不持久；orbit 下卡固定右下、拖拽禁用（已登记）。
-    // —— composer 包裹层（#chat > footer，room 遗留 158px 侧距）挂类：CSS 侧对齐
-    //    消息列 880 宽（03a 负面清单只护 composer 本体，父级 padding 属容器排版） ——
+  function installPanelLayout() {
     const composerWrap = document.querySelector(".composer")?.parentElement;
-    if (composerWrap && composerWrap.tagName === "FOOTER") subClass(composerWrap, "orbit-composer-wrap");
-    // —— M2「对话与模型」：Base URL 降为次级；hint 说明卡已由窗级引擎统一接管（05 轮次 11） ——
-    const m2 = $("model-settings");
-    if (m2) {
-      // Base URL：只读展示降次级（完整值挂「供应商」悬停；值随供应商变化，转 07 抽验）
-      subStyle($("model-base-url"), "display:none");
-      const baseUrlLabel = document.querySelector('label[for="model-base-url"]');
-      if (baseUrlLabel) subStyle(baseUrlLabel, "display:none");
-      const providerLabel = document.querySelector('label[for="model-provider"]');
-      const baseUrl = $("model-base-url");
-      if (providerLabel && baseUrl)
-        subAttr(providerLabel, "title", "Base URL：" + (baseUrl.value || "随供应商自动填入"));
-      // 标签/按钮短名（全名入悬停；02c 预算清单原样）。app.js 会在状态变化时重写按钮
-      // 文案（fetch 每次成功后重建动作行），短名用维持式 observer 保持。
-      const maintain = (node, target) => {
-        if (!node) return;
-        subText(node, target);
-        spy(node, { childList: true, characterData: true, subtree: true }, () => {
-          if (node.textContent !== target) node.textContent = target;
-        });
-      };
-      const cheapLabel = document.querySelector('label[for="model-cheap"]');
-      if (cheapLabel) { subText(cheapLabel, "整理模型"); subAttr(cheapLabel, "title", "记忆与整理模型"); }
-      const fetchBtn = $("model-fetch");
-      if (fetchBtn) { maintain(fetchBtn, "获取列表"); subAttr(fetchBtn, "title", "获取模型列表"); }
-      const testBtn = $("model-test");
-      if (testBtn) { maintain(testBtn, "测试"); subAttr(testBtn, "title", "测试候选连接"); }
-      const saveBtn = $("model-save");
-      if (saveBtn) { maintain(saveBtn, "保存"); subAttr(saveBtn, "title", "验证并保存可能产生少量 API 费用"); }
-      // 窗头「说明」图标已由窗级 hint 引擎统一创建（05 轮次 11；installSettingsWindow）
-    }
-    // —— M5 QQ：连接详情折叠 + 步引导句悬停化（02c「连接说明/使用限制」折叠的落地，05 轮次 11；
-    //    qq-status/channel-note 为 role=status 动态值不计；确认句=口径 4 豁免保留） ——
-    const qqSection = document.querySelector('[data-settings-section="qq"]');
-    if (qqSection) {
-      const foldQq = () => { for (const d of qqSection.querySelectorAll("details.qq-details")) if (d.open) subFlag(d, "open", false); };
-      foldQq();
-      spy(qqSection, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] }, foldQq);
-      const GUIDE = ["打开手机QQ，扫一扫", "用你本人的QQ私聊机器人", "扫码或配对已完成", "扫码资料只保存在这台电脑"];
-      for (const p of qqSection.querySelectorAll("p")) {
-        const t = (p.textContent || "").replace(/\s+/g, "");
-        if (!GUIDE.some((g) => t.includes(g.replace(/\s+/g, "")))) continue;
-        subStyle(p, "display:none");
-        const stepTitle = p.closest(".qq-step")?.querySelector("h3") || p.previousElementSibling;
-        if (stepTitle) subAttr(stepTitle, "title", p.textContent.trim());
-      }
-    }
-    // —— M7 Claude：表单标签精简（02c 预算案短版），全文入悬停；确认句=口径 4 豁免 ——
-    const claudeSection = document.querySelector('[data-settings-section="claude"]');
-    if (claudeSection) {
-      const CLAUDE_SHORT = [
-        ["任务工作目录（绝对路径）", "工作目录"],
-        ["每个任务最多轮数", "任务轮数"],
-        ["每个任务费用阈值（美元）", "单任务费用上限"],
-        ["每日费用阈值（美元）", "每日费用上限"],
-      ];
-      for (const [full, short] of CLAUDE_SHORT) {
-        const label = [...claudeSection.querySelectorAll("label")]
-          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
-        if (label) { subText(label, short); subAttr(label, "title", full); }
-      }
-    }
-    // —— M6 DSH：同步 checkbox 标签改写（02c 预算案）+ 同步说明/凭据状态收纳；边界句=口径 4 豁免 ——
-    const dshSection = document.querySelector('[data-settings-section="workers"]');
-    if (dshSection) {
-      const DSH_SHORT = [
-        ["归档或恢复Alice任务时，同步处理DSH专属会话", "归档时同步DSH会话"],
-        ["删除Alice任务时，也永久删除DSH专属会话", "删除时同步删除"],
-      ];
-      for (const [full, short] of DSH_SHORT) {
-        const label = [...dshSection.querySelectorAll("label")]
-          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
-        if (label) { subText(label, short); subAttr(label, "title", full); }
-      }
-      for (const hid of ["#workers-sync-archive-hint", "#workers-credential-state"]) {
-        const el = dshSection.querySelector(hid);
-        if (el) subStyle(el, "display:none");
-      }
-      // 三步分步（02c 分步器）：三步容器本就独立（worker-pairing/workers-policy/workers-task-settings）
-      // ——只显当前步，H3 作切换点；标题/状态块常驻。还原=subStyle style 登记。
-      const stepContainers = [
-        dshSection.querySelector("section.worker-pairing"),
-        dshSection.querySelector("#workers-policy"),
-        dshSection.querySelector("#workers-task-settings"),
-      ].filter(Boolean);
-      if (stepContainers.length > 1) {
-        const activateStep = (idx) => stepContainers.forEach((p, i) => {
-          const want = i === idx ? "" : "none";
-          if (p.style.display !== want) subStyle(p, "display:" + want);
-        });
-        activateStep(0);
-        for (const p of stepContainers) {
-          const h3 = p.querySelector("h3");
-          if (h3) { subAttr(h3, "role", "button"); subAttr(h3, "tabindex", "0"); wire(h3, "click", () => activateStep(stepContainers.indexOf(p))); }
-        }
-      }
-    }
-    // —— M8 记忆观察器：obs-help 免责/口径说明整块收纳 + evidence-types dd 说明折叠
-    //    （02c「dt 保留/dd 折叠」预算案落地，05 轮次 11；全文挂对应 dt 悬停） ——
-    const obsAsideM8 = $("observer");
-    if (obsAsideM8) {
-      const obsHelp = obsAsideM8.querySelector(".obs-help");
-      if (obsHelp) {
-        const txt = (obsHelp.textContent || "").replace(/\s+/g, " ").trim();
-        if ([...txt].length > 30) {
-          subStyle(obsHelp, "display:none");
-          const anchor = $("obs-status") || obsAsideM8.querySelector(".obs-head strong");
-          if (anchor) subAttr(anchor, "title", txt);
-        }
-      }
-      for (const dd of obsAsideM8.querySelectorAll(".obs-evidence-types dd")) {
-        const txt = (dd.textContent || "").replace(/\s+/g, " ").trim();
-        if ([...txt].length <= 10) continue;
-        subStyle(dd, "display:none");
-        const dt = dd.previousElementSibling;
-        if (dt && dt.tagName === "DT") subAttr(dt, "title", txt);
-      }
-    }
+    if (composerWrap?.tagName === "FOOTER") subClass(composerWrap, "orbit-composer-wrap");
     // —— M9 P1 核查：额度/人工校准两个表单区折叠（02c 三抽屉落地——费用许可本就是 details，
     //    这两个是 section.eval-section 常驻展开）；确认句=口径 4 豁免保留在折叠内 ——
     const evAsideM9 = $("evaluations");
@@ -1581,49 +1039,8 @@
         wrapNode(sec, d);
       }
     }
-    // —— M9 表单标签精简（02c 预算案短版），全文入悬停 ——
-    const evalSec = $("evaluations");
-    if (evalSec) {
-      const EVAL_SHORT = [
-        ["每日最多额外模型请求数（0–100）", "日额度上限"],
-        ["本次人工确认的最低一致率（大于0，不超过100）", "最低一致率"],
-      ];
-      for (const [full, short] of EVAL_SHORT) {
-        const label = [...evalSec.querySelectorAll("label")]
-          .find((el) => (el.textContent || "").replace(/\s+/g, "").includes(full.replace(/\s+/g, "")));
-        if (label) { subText(label, short); subAttr(label, "title", full); }
-      }
-    }
-    // —— P3 思想与探索：睡眠提示 15 字替身、探索按钮短名、思辨提示收纳（02b 裁定 1） ——
-    const run = $("thought-run");
-    if (run) { subText(run, "现在探索一轮"); subAttr(run, "title", "调用模型，计入后台额度"); }
-    const lifeHint = [...document.querySelectorAll("#thought-settings .settings-hint")]
-      .find((el) => (el.textContent || "").includes("清醒时选择兴趣探索"));
-    if (lifeHint) {
-      subStyle(lifeHint, "display:none");
-      const lifecycle = $("thought-lifecycle");
-      if (lifecycle) subAttr(lifecycle, "title", (lifeHint.textContent || "").replace(/\s+/g, " ").trim());
-    }
-    const stanceHint = [...document.querySelectorAll("#thought-settings .settings-hint")]
-      .find((el) => (el.textContent || "").includes("这是当前看法"));
-    if (stanceHint) {
-      subStyle(stanceHint, "display:none");
-      const h3 = stanceHint.previousElementSibling;
-      if (h3 && h3.tagName === "H3") subAttr(h3, "title", "当前看法，未必已独立验证");
-    }
-    // 疑问空态句（thoughts.js 运行时写入）：空态文案时收纳为悬停，observer 维持
-    const questions = $("thought-questions");
-    if (questions) {
-      const apply = () => {
-        const empty = (questions.textContent || "").includes("暂时没有未解决的疑问");
-        questions.style.display = empty ? "none" : "";
-        if (empty) questions.setAttribute("title", "暂时没有未解决的疑问");
-        else questions.removeAttribute("title");
-      };
-      apply();
-      spy(questions, { childList: true, characterData: true, subtree: true }, apply);
-    }
   }
+
 
   function installMirrors() {
     const watch = [
@@ -1649,18 +1066,19 @@
   function install() {
     if (installed) return;
     installed = true;
+    currentPage = $("app").classList.contains("discovering") ? "discovery" : "chat";
     // 防叠加：异常中断的历史残留（半拆状态）先清掉再建。
     for (const stale of document.querySelectorAll("#orbit-dock, #orbit-main, .orbit-page, .orbit-tip"))
       stale.remove();
     buildDock();
     installTip();
     installPages();
-    installSettingsWindow();
+    installSettingsRoutes();
     installWindows();
     applyTextRewrites();
-    applyBudgetRewrites();
+    installPanelLayout();
     installMirrors();
-    route("chat", { silent: true });
+    route(currentPage);
     // R5a P2-3 启动自检：composer 列宽对齐依赖 footer.orbit-composer-wrap（base 仍 760），
     // 漏挂会静默失轴——只警示不阻断。
     const cWrap = document.querySelector(".composer")?.parentElement;
@@ -1670,6 +1088,11 @@
   function uninstall() {
     if (!installed) return;
     installed = false;
+    for (const timer of timers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+    timers.clear();
     // 1) 值类还原（逆序：后改的先还原）
     for (const fn of restores.reverse()) { try { fn(); } catch (_) {} }
     restores.length = 0;
@@ -1707,8 +1130,6 @@
   function ready() {
     applyTheme();
     new MutationObserver(applyTheme).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    // 三时机之一：窗口可见性恢复时重申 P3（02b 冻结对抗）
-    document.addEventListener("visibilitychange", syncThoughtsVisible, { signal });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, { once: true });
   else ready();
@@ -1716,13 +1137,10 @@
 
 /* =========================================================================
  * 裁剪与降级登记（待真机验证后补）：
- * 1) P2 策略抽屉四簇折叠（开关与时段/范围与方式/额度与容量/取材与工作量）
- *    未拆——#discovery-settings-box 整体入抽屉，簇级分组待真机核对字段结构后补。
+ * 1) P2 使用现有入口打开联网搜索设置；设置与兴趣表单由共用设置窗承载。
  * 2) M1 人格窗 foot「更多」收纳（.orbit-foot-more）未实施——#modal 按钮区为
  *    app.js 动态重建，防交叉写入需独立 observer 编排，登记后补。
- * 3) M5 QQ 六句静态文案的「连接说明/使用限制」折叠、M6/M7 分步包装（步点条
- *    交互式）、M8 视图级「说明」折叠与快照比较图标化、M10「更多」popover 保留
- *    现状未动——均属 02x 分步/折叠细颗粒适配，先保功能可达，字数帽待真机抽验。
+ * 3) M8 保留双栏观察界面，M10「更多」popover 沿用现状。
  * 4) worker-message-nav 三按钮、eval-auto、obs 刷新/清空等图标化（R1 档）未
  *    一一挂 data-tip；「更多」popover、来源行图标化沿用现状。
  * 5) P4 hub 行健康徽标（QQ/DSH/Claude/发现态镜像到行内）未挂——状态点已在

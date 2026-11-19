@@ -394,16 +394,33 @@
     <div class="modal-body settings-body">
       <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
       <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="observer-settings-title">
-        <h2 id="observer-settings-title" class="panel-title">上下文观测</h2>
+        <div class="settings-page-head">
+          <h2 id="observer-settings-title" class="panel-title">上下文观测</h2>
+          <button id="observer-settings-refresh" class="link" type="button">同步状态</button>
+        </div>
         <p id="observer-settings-result" class="settings-result" role="status" aria-live="polite">尚未读取设置。</p>
         <form id="observer-settings-form">
-          <p><label><input id="observer-settings-enabled" type="checkbox" disabled> 启用上下文观测器</label></p>
-          <p class="settings-hint">显示查看入口，与下方的正文留存独立。</p>
-          <p><label><input id="observer-settings-body" type="checkbox" disabled> 留存完整上下文</label></p>
-          <p class="settings-hint">从新请求开始留存对话、人格及工具等输入正文，仅保存在本机。关闭后不删除已有记录。</p>
-          <div class="row"><button id="observer-settings-save" class="btn primary" type="submit" disabled>保存设置</button><button id="observer-settings-refresh" class="btn ghost" type="button">同步状态</button><button id="observer-settings-open" class="btn ghost" type="button" disabled>打开观测器</button></div>
+          <div class="settings-group settings-rows">
+            <label class="settings-row observer-settings-option">
+              <span class="settings-field"><strong id="observer-entry-label">上下文查看入口</strong><span id="observer-entry-hint" class="settings-hint">在 Alice 的回复旁显示查看入口。</span></span>
+              <input id="observer-settings-enabled" type="checkbox" role="switch" aria-labelledby="observer-entry-label" aria-describedby="observer-entry-hint" disabled>
+            </label>
+            <label class="settings-row observer-settings-option">
+              <span class="settings-field"><strong id="observer-body-label">留存完整上下文</strong><span id="observer-body-hint" class="settings-hint">对话、人格及工具等输入正文保存在本机，独立于查看入口。</span></span>
+              <input id="observer-settings-body" type="checkbox" role="switch" aria-labelledby="observer-body-label" aria-describedby="observer-body-hint" disabled>
+            </label>
+          </div>
+          <div class="settings-actions">
+            <button id="observer-settings-open" class="btn ghost" type="button" disabled>打开观测器</button>
+            <button id="observer-settings-save" class="btn primary" type="submit" disabled>保存设置</button>
+          </div>
         </form>
-        <details><summary>留存与生效说明</summary><p class="settings-hint">保存后入口立即更新，采集从下一次新请求生效；在途请求沿用开始时的策略，无需重启。完整正文滚动保留最近10个采集请求，同时受7天和50MiB限制。较早未采集的请求不补录，超限或来源失效时如实标记缺口。</p><p id="observer-settings-metadata" class="settings-hint"></p></details>
+        <details class="settings-help">
+          <summary>生效时间与留存范围</summary>
+          <p class="settings-hint">保存后，查看入口立即更新，正文采集从下一次新请求生效。在途请求沿用开始时的策略。</p>
+          <p class="settings-hint">完整正文在本机滚动留存最近 10 个采集请求，最长 7 天、最多 50 MiB。停用后，已有记录按原规则保留。较早未采集的请求不补录，超限或来源失效时会标明缺口。</p>
+          <p id="observer-settings-metadata" class="settings-hint"></p>
+        </details>
       </section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">
         <div class="discovery-settings-head settings-page-head"><h2 id="discovery-settings-title" class="panel-title" tabindex="-1">联网搜索</h2><button id="discovery-settings-refresh" class="link" type="button" disabled>同步状态</button></div>
