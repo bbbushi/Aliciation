@@ -270,6 +270,10 @@ html[data-theme=room] .msg.assistant .txt { max-width: 88%; background: #101b2ec
 #settings-modal #thought-settings label:has(select) { flex-direction: column; align-items: stretch; }
 #settings-modal #thought-settings .thought-actions.settings-actions { justify-content: flex-end; }
 #settings-modal #thought-settings > details:not(.settings-group) { padding: 14px 0; border-top: 1px solid var(--line); font-size: 13px; }
+#observer-settings .settings-page-head h3 { margin: 0; font-size: 14px; }
+#observer-settings #lab-open { min-height: 40px; }
+#lab-pairing-form .lab-body-choice { display: flex; align-items: flex-start; gap: 9px; }
+#lab-pairing-form .lab-body-choice input { flex: 0 0 auto; width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--accent); }
 #settings-modal .settings-body:has(> .discovery-settings:not(.hidden)) { overflow: hidden; }
 #settings-modal .discovery-settings { flex: 1 1 0; min-height: 0; gap: 12px; }
 @media (max-width: 800px) {

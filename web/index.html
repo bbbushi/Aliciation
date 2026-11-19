@@ -261,14 +261,28 @@
     <div class="modal-body settings-body">
       <section id="thought-settings" class="settings-section hidden" data-settings-section="thoughts" aria-labelledby="thought-title"></section>
       <section id="observer-settings" class="settings-section hidden" data-settings-section="observer" aria-labelledby="lab-pairing-title">
-        <h2 id="lab-pairing-title" class="panel-title">外部观察</h2>
-        <div class="row"><button id="lab-open" class="btn ghost" type="button">打开 Alice Lab</button><span id="lab-open-status" role="status"></span></div>
-        <p class="settings-hint">授权 Alice Lab 只读查看当前实例，15 分钟后自动失效。</p>
-        <form id="lab-pairing-form">
-          <p><label><input name="body" type="checkbox"> 同时允许读取正文，并从新请求开始留存上下文</label></p>
-          <div class="row"><button class="btn primary" type="submit">生成观察授权码</button><button id="lab-revoke" class="btn ghost" type="button">撤销授权</button></div>
-          <label id="lab-code-label" hidden>授权码（只粘贴给本机 Alice Lab）<input id="lab-code" readonly autocomplete="off"></label>
-          <p id="lab-pairing-status" role="status"></p>
+        <div class="settings-page-head"><h2 id="lab-pairing-title" class="panel-title">外部观察</h2></div>
+        <section class="settings-group" aria-labelledby="lab-launch-title">
+          <div class="settings-page-head">
+            <h3 id="lab-launch-title">Alice Lab</h3>
+            <button id="lab-open" class="btn ghost" type="button">打开 Alice Lab</button>
+          </div>
+          <p class="settings-hint">在独立窗口查看调度、上下文与记忆等记录。</p>
+          <p id="lab-open-status" class="settings-result" role="status"></p>
+        </section>
+        <form id="lab-pairing-form" class="settings-group" aria-labelledby="lab-grant-title" aria-describedby="lab-grant-hint">
+          <h3 id="lab-grant-title">只读授权</h3>
+          <p id="lab-grant-hint" class="settings-hint">默认只读当前实例的元数据。授权将在 15 分钟后失效，也可提前撤销。</p>
+          <label class="lab-body-choice">
+            <input name="body" type="checkbox">
+            <span>同时允许读取正文，并从新请求开始留存上下文</span>
+          </label>
+          <label id="lab-code-label" class="settings-field" hidden>授权码（只粘贴给本机 Alice Lab）<input id="lab-code" readonly autocomplete="off"></label>
+          <p id="lab-pairing-status" class="settings-result" role="status"></p>
+          <div class="settings-actions">
+            <button id="lab-revoke" class="btn ghost" type="button">撤销授权</button>
+            <button class="btn primary" type="submit">生成观察授权码</button>
+          </div>
         </form>
       </section>
       <section id="discovery-settings" class="settings-section discovery-settings hidden" data-settings-section="discovery" aria-labelledby="discovery-settings-title">

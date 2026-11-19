@@ -8,10 +8,9 @@
   navButton.type = "button"; navButton.dataset.settings = "thoughts";
   navButton.textContent = "思想与探索"; navButton.setAttribute("aria-pressed", "false");
   navButton.setAttribute("aria-controls", "thought-settings");
-  navButton.addEventListener("click", () => window.AliceUI?.selectSettings("thoughts"));
   nav.appendChild(navButton);
   panel.innerHTML = `
-    <div class="thought-head settings-page-head"><h2 id="thought-title" class="panel-title">思想与探索</h2><button id="thought-refresh" class="link" type="button">刷新</button></div>
+    <div class="thought-head settings-page-head"><h2 id="thought-title" class="panel-title" tabindex="-1">思想与探索</h2><button id="thought-refresh" class="link" type="button">刷新</button></div>
     <p id="thought-status" class="settings-result" role="status" aria-live="polite">尚未读取</p>
     <div class="thought-actions">
       <span id="thought-lifecycle" role="status">正在读取状态</span>
@@ -255,12 +254,22 @@
   };
   el("thought-refresh").onclick = refresh;
   el("thought-discard").onclick = () => { dirty = false; refresh(); };
-  window.AliceThoughts = {setVisible(value) { visible = value; if (value) refresh(); }};
   const timer = setInterval(refresh, 10000);
-  new MutationObserver(() => {
-    visible = !panel.classList.contains("hidden") && !document.getElementById("settings-modal").classList.contains("hidden");
+  const modal = el("settings-modal");
+  function syncVisibility() {
+    const modalHidden = modal.classList.contains("hidden");
+    const next = panel.closest("#orbit-page-thoughts")
+      ? document.body.dataset.orbitPage === "thoughts" && modalHidden
+      : !modalHidden && !panel.classList.contains("hidden");
+    if (next === visible) return;
+    visible = next;
     if (visible) refresh();
-  }).observe(document.getElementById("settings-modal"), {attributes:true,attributeFilter:["class"]});
+  }
+  const visibilityObserver = new MutationObserver(syncVisibility);
+  visibilityObserver.observe(modal, {attributes:true,attributeFilter:["class"]});
+  visibilityObserver.observe(panel, {attributes:true,attributeFilter:["class"]});
+  visibilityObserver.observe(document.body, {attributes:true,attributeFilter:["data-orbit-page"]});
+  syncVisibility();
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
   window.addEventListener("pagehide", () => clearInterval(timer));
 })();
