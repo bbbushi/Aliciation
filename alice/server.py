@@ -19,6 +19,7 @@ from .config import Config, PROJECT_ROOT, USER_DIR, load
 from .config_edit import ConfigConflict
 from .channels import ChannelError
 from .local_connector import ConnectorSpec, LocalConnectorManager
+from .runtime_paths import runtime_distribution
 from .service import ChatService
 from .lab_observation import ObservationGrant
 
@@ -1007,7 +1008,8 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
             command=() if frozen else connector_command, cwd=PROJECT_ROOT,
             setup_root=None if frozen else connector_root,
             unavailable_reason="此桌面包尚未适配 QQ 组件" if frozen else ""), svc)
-        httpd.RequestHandlerClass = make_handler(svc, gate, runtime_info, connectors)
+        httpd.RequestHandlerClass = make_handler(
+            svc, gate, {**runtime_info, "distribution": runtime_distribution()}, connectors)
         url = f"http://{host}:{httpd.server_port}"
         print(f"=== {svc.cfg.persona.name} 图形界面 ===")
         for line in boot_events:

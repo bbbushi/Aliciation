@@ -14,7 +14,8 @@ from .context_memory import MemoryContext, TOOLS as MEMORY_TOOLS
 from .context_workspace import TOOLS as WORKSPACE_TOOLS
 from .config import Config
 from . import interaction_policy
-from .llm import chat, thinking_disabled, apply_provider_parameters
+from .llm import (apply_provider_parameters, chat, finish_observed_attempt, prepare_observed_call,
+                  provider_token_usage, thinking_disabled)
 from .store import Store
 from .steps import drive
 from .worker_context import merge_worker_refs
@@ -28,22 +29,13 @@ SEARCH_TOOL = sdk_group("search")[0]
 SOURCE_RECALL_TOOL = sdk_group("source_recall")[0]
 
 
-def dispatch_tool(store: Store, name: str, arguments: str, *, source_context=None) -> str:
-    if source_context is not None and "capability_tools" in source_context:
-        error = capability_registry.validate_call(name, arguments, source_context["capability_tools"])
-        if error is not None:
-            return json.dumps(error, ensure_ascii=False)
-    try:
-        args = json.loads(arguments or "{}")
-    except json.JSONDecodeError:
-        args = {}
+def dispatch_tool(store: Store, name: str, args: dict, *, source_context) -> str:
+    """Execute decoded local tool arguments. Executors still check live permissions."""
     if name == "persona_load":
         registry = source_context.get("persona_registry") if source_context else None
         if registry is None:
             return json.dumps({"error": "persona_registry_unavailable"})
         return registry.execute(name, args)
-    if not isinstance(args, dict):
-        args = {}
     if capability_registry.executor(name) == "thought":
         session = source_context.get("thought_session") if source_context else None
         return session.execute(name, args) if session is not None else json.dumps({"error": "thought_unavailable"})
@@ -139,17 +131,10 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     calls: dict[int, dict] = {}
     started = time.monotonic()
     failure, receipt_usage, actual_model = None, None, None
-    call_id = uuid.uuid4().hex
     stream = None
     last_chunk_had_usage = False
     finish_reason = None
-    # 调用接入：最终 SDK 参数在发送前冻结；SDK 不发送请求，只随业务调用记录
-    trace_call = (observation or {}).get("trace_call")
-    if trace_call is not None:
-        try:
-            trace_call.freeze_final(kwargs)
-        except Exception:
-            trace_call = None
+    trace_call, call_id = prepare_observed_call(observation, kwargs)
     attempt = trace_call.begin_attempt() if trace_call is not None else None
     send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
     try:
@@ -195,6 +180,7 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
     finally:
         receipt = SimpleNamespace(usage=receipt_usage, model=actual_model)
         incomplete = failure is not None or not last_chunk_had_usage
+        usage_state = "partial_receipt" if receipt_usage and incomplete else "reported" if receipt_usage else "unknown"
         _record_usage(usage_out, receipt, incomplete=incomplete)
         if observation:
             from .llm import safe_provider_error
@@ -203,23 +189,11 @@ def _stream_round(client, cfg: Config, messages: list[dict], on_delta, on_reason
                 model=cfg.llm.chat_model, request_id=observation.get("request_id"), call_id=call_id,
                 context=observation.get("context"),
                 status="cancelled" if failure and not isinstance(failure, Exception) else "error" if failure else "ok",
-                usage_state=("partial_receipt" if receipt_usage and incomplete
-                             else "reported" if receipt_usage else "unknown"))
-        if attempt is not None:
-            usage_receipt = {}
-            for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
-                v = getattr(receipt_usage, src, None)
-                if type(v) is int and v >= 0:
-                    usage_receipt[dst] = v
-            attempt.finish(
-                status=("cancelled" if failure and not isinstance(failure, Exception)
-                        else "error" if failure else "ok" if last_chunk_had_usage else "stream_interrupted"),
-                usage=usage_receipt,
-                usage_state=("partial_receipt" if receipt_usage and incomplete
-                             else "reported" if receipt_usage else "unknown"),
-                error_type=type(failure).__name__ if failure is not None else None,
-                model=actual_model, model_source="receipt" if actual_model else "requested",
-                duration_ms=max(0, int((time.monotonic() - started) * 1000)))
+                usage_state=usage_state)
+        finish_observed_attempt(
+            attempt, started, receipt, failure, usage_state=usage_state,
+            status=("cancelled" if failure and not isinstance(failure, Exception)
+                    else "error" if failure else "ok" if last_chunk_had_usage else "stream_interrupted"))
         if stream is not None and callable(getattr(stream, "close", None)):
             try:
                 stream.close()
@@ -243,15 +217,10 @@ def _record_usage(usage_out: dict | None, resp, *, incomplete: bool = False) -> 
     """Accumulate one actual attempt once; uncertainty survives later receipts."""
     if usage_out is None:
         return
-    u = getattr(resp, "usage", None)
-    known = True
-    for source, target in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
-        value = getattr(u, source, None)
-        if type(value) is int and value >= 0:
-            usage_out[target] = usage_out.get(target, 0) + value
-        else:
-            known = False
-    if incomplete or not known:
+    counts = provider_token_usage(resp)
+    for key, value in counts.items():
+        usage_out[key] = usage_out.get(key, 0) + value
+    if incomplete or len(counts) < 2:
         usage_out["incomplete"] = True
 
 
@@ -423,6 +392,15 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 and persona_growth.refs_valid(store, growth_refs)
                 and (recap_session is None or recap_session.valid())
                 and (reply_session is None or reply_session.valid()))
+
+    def worker_sources_valid():
+        refs = source_context["worker_refs"]
+        return not refs or store.worker_refs_valid(refs, scope=source_scope)
+
+    def source_packets_valid():
+        ids = source_context["packet_ids"]
+        return not ids or bool(store.source_packets_for(ids, scope=source_scope))
+
     from .learning import learning_tools
     memory_session = (MemoryContext(store, cfg, source_scope, user_text)
                       if cfg.context.assembly_mode == "indexed" else None)
@@ -479,7 +457,6 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         tools += worker_session.tools
         worker_names = {tool["function"]["name"] for tool in worker_session.tools}
         extra_messages.append({"role": "system", "content": worker_session.description()})
-    source_context["capability_tools"] = tools
     extra_messages.append({"role": "system", "content": capability_registry.catalogue(tools)})
     explicit_capability = capability_registry.explicit_request(user_text, tools)
     if explicit_capability is not None:
@@ -612,9 +589,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     # C3(a)：有来源前情——取数窗下界推进且新增跨度达标时，由原文生成一次（缓存永续）
     recap_block = None
     recap_reply_audit = {'selected': False, 'calls': 0, 'status': 'not_selected', 'usage': {}}
-    initial_over_budget = bool(cfg.context.total_budget_tokens and
-        _ctx.messages_tokens(messages + extra_messages + ([anchor_msg] if anchor_msg else []), tools)
-        + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens)
+    initial_over_budget = _ctx.over_input_budget(
+        cfg.context, messages + extra_messages + ([anchor_msg] if anchor_msg else []), tools)
     if cfg.context.recap_enabled and not initial_over_budget:
         from .context_recap import RecapContext
         recap_session = RecapContext(store, cfg, source_scope, boundary=boundary)
@@ -622,8 +598,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         if span_rows is not None:
             prompt = recap_session.prompt(span_rows)
             recap_messages = [{"role": "user", "content": prompt}]
-            if (cfg.context.total_budget_tokens and _ctx.messages_tokens(recap_messages)
-                    + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+            if _ctx.over_input_budget(cfg.context, recap_messages):
                 recap_session.generation = 'model_budget_exceeded'
             elif recap_session.claim(span_rows):
                 recap_raw = ''
@@ -642,8 +617,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     if recap_md:
                         review_messages = grounding.messages('recap', [dict(r) for r in span_rows],
                                                             [{'id': 0, 'recap_md': recap_md}])
-                        if (cfg.context.total_budget_tokens and _ctx.messages_tokens(review_messages)
-                                + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+                        if _ctx.over_input_budget(cfg.context, review_messages):
                             recap_session.generation = 'review_budget_exceeded'
                         else:
                             recap_calls += 1
@@ -739,8 +713,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         if persona_registry is not None and not persona_registry.valid():
             reply = "本轮人格分层已变更或失效，需要重新核对后再谈。"
             break
-        if (cfg.context.total_budget_tokens and _ctx.messages_tokens(messages, active_tools)
-                + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+        if _ctx.over_input_budget(cfg.context, messages, active_tools):
             reply = "本轮材料已超出上下文预算，请缩小问题或材料范围；未读取的内容不作猜测补全。"
             break
         if memory_session is not None and not memory_session.valid():
@@ -750,12 +723,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
             break
         round_number += 1
-        if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+        if not worker_sources_valid():
             reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
             break
-        if source_context["packet_ids"] and not store.source_packets_for(
-            source_context["packet_ids"], scope=source_scope,
-        ):
+        if not source_packets_valid():
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
         # Request assembly is not a sent receipt. Each actual call records the
@@ -785,7 +756,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             except Exception:
                 # 流式通道异常（含不支持 stream+tools 的客户端）→ 回退非流式；
                 # 已推出的增量由调用方用最终回复覆盖
-                if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+                if not worker_sources_valid():
                     reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
                     break
                 if buffered is not None:
@@ -797,9 +768,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                 if memory_session is not None and not memory_session.valid():
                     reply = "本轮本机记忆资料已变更或失效，需要重新取得当前资料后再谈。"
                     break
-                if source_context["packet_ids"] and not store.source_packets_for(
-                    source_context["packet_ids"], scope=source_scope,
-                ):
+                if not source_packets_valid():
                     reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                     break
                 resp = yield lambda: chat(client, cfg, messages, tools=active_tools,
@@ -827,10 +796,10 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
         if not growth_valid():
             reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
             break
-        if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+        if not worker_sources_valid():
             reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
             break
-        if source_context["packet_ids"] and not store.source_packets_for(source_context["packet_ids"], scope=source_scope):
+        if not source_packets_valid():
             reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
             break
         if memory_session is not None and not memory_session.valid():
@@ -873,8 +842,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     {'request': user_text, 'current_recap': recap_block},
                                                       [{'id': 0, 'reply': reply}])
                 try:
-                    if (cfg.context.total_budget_tokens and _ctx.messages_tokens(review_messages)
-                            + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+                    if _ctx.over_input_budget(cfg.context, review_messages):
                         raise ValueError('review_budget_exceeded')
                     review_audit['calls'] += 1
                     reviewed = yield lambda: chat(client, cfg, review_messages,
@@ -939,41 +907,31 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             if not growth_valid():
                 reply = "本轮人格或前情所依赖的资料已变更或失效，需要按当前依据重新回应。"
                 break
-            if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+            if not worker_sources_valid():
                 reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
                 break
-            if source_context["packet_ids"] and not store.source_packets_for(source_context["packet_ids"], scope=source_scope):
+            if not source_packets_valid():
                 reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
                 break
             if on_tool and tc.function.name != reply_sections.TOOL_NAME:
                 on_tool(tc.function.name)
-            if memory_session is not None:
-                memory_session.remaining_tokens = (max(0, cfg.context.total_budget_tokens
-                    - cfg.context.reply_reserve_tokens - _ctx.messages_tokens(messages, tools) - 256)
-                    if cfg.context.total_budget_tokens else None)
-            if persona_registry is not None:
-                persona_registry.remaining_tokens = (max(0, cfg.context.total_budget_tokens
-                    - cfg.context.reply_reserve_tokens - _ctx.messages_tokens(messages, tools) - 256)
-                    if cfg.context.total_budget_tokens else None)
+            if memory_session is not None or persona_registry is not None:
+                headroom = _ctx.input_headroom(cfg.context, messages, tools)
+                available = None if headroom is None else max(0, headroom - 256)
+                if memory_session is not None:
+                    memory_session.remaining_tokens = available
+                if persona_registry is not None:
+                    persona_registry.remaining_tokens = available
             try:
-                validation = capability_registry.validate_call(tc.function.name, tc.function.arguments, active_tools)
+                args, validation = capability_registry.parse_call(tc.function.name, tc.function.arguments, active_tools)
                 if validation is not None:
                     result = json.dumps(validation, ensure_ascii=False)
                 elif reply_session is not None and tc.function.name == reply_sections.TOOL_NAME:
-                    result = json.dumps(reply_session.read(json.loads(tc.function.arguments or "{}"), source_context),
-                                        ensure_ascii=False)
+                    result = json.dumps(reply_session.read(args, source_context), ensure_ascii=False)
                 elif capability_registry.executor(tc.function.name) == "search" and search_session is not None:
-                    try:
-                        args = json.loads(tc.function.arguments or "{}")
-                    except (ValueError, TypeError):
-                        args = None
                     result = yield lambda: search_session.execute(args, tool_call_id=tc.id)
                     result = search_session.attach_locked(result, source_context)
                 elif capability_registry.executor(tc.function.name) == "worker" and tc.function.name in worker_names:
-                    try:
-                        args = json.loads(tc.function.arguments or "{}")
-                    except (ValueError, TypeError):
-                        args = None
                     worker_session.bind_context_locked(source_context)
                     result = yield lambda: worker_session.execute(tc.function.name, args, tool_call_id=tc.id)
                     result = worker_session.attach_locked(result, source_context)
@@ -982,8 +940,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
                     if source_context["worker_refs"]:
                         store.protect_worker_turn(user_id, source_context["worker_refs"], scope=source_scope)
                 else:
-                    result = dispatch_tool(store, tc.function.name, tc.function.arguments,
-                                           source_context=source_context)
+                    result = dispatch_tool(store, tc.function.name, args, source_context=source_context)
             finally:
                 # A failed recall can have already persisted its source boundary.
                 # Report it even if a later counter/tool operation raises.
@@ -991,13 +948,11 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
             for manifest in manifests:
                 manifest.add("tool_result", tc.function.name, result)
-    if source_context["packet_ids"] and not store.source_packets_for(
-        source_context["packet_ids"], scope=source_scope,
-    ):
+    if not source_packets_valid():
         # A model response may arrive after the source licence expired. Do not
         # publish that derived body as a newly saved reply.
         reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
-    if source_context["worker_refs"] and not store.worker_refs_valid(source_context["worker_refs"], scope=source_scope):
+    if not worker_sources_valid():
         reply = "这轮协作任务资料已失效或被撤回，不能继续使用正文。"
     if memory_session is not None and not memory_session.valid():
         reply = "本轮本机记忆资料已变更或失效，需要重新取得当前资料后再谈。"
@@ -1137,7 +1092,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
 def _review_annotation_steps(store, client, cfg, raw, user_text, manifest, request_id, trace,
                              observe, on_attempt_usage):
     """Run one body-free observed classifier and fail back to the first pass."""
-    from .context import messages_tokens
+    from .context import over_input_budget
 
     audit = {"status": "skipped_draft"}
     try:
@@ -1148,8 +1103,7 @@ def _review_annotation_steps(store, client, cfg, raw, user_text, manifest, reque
         if prepared is None:
             return audit
         units, review_messages = prepared
-        if (cfg.context.total_budget_tokens and messages_tokens(review_messages)
-                + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens):
+        if over_input_budget(cfg.context, review_messages):
             return {"status": "skipped_budget"}
     except Exception:
         return {"status": "fallback", "reason": "preparation"}

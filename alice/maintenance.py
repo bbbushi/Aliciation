@@ -26,7 +26,7 @@ from datetime import datetime
 from .config import Config
 from .llm import chat, parse_json
 from .steps import drive
-from .context import messages_tokens
+from .context import input_token_limit, messages_tokens, over_input_budget
 from . import grounding
 
 # 注意：本模块不顶层导入 .store（store.py 反向导入本模块的 SCHEMA/Mixin，
@@ -301,6 +301,14 @@ def compact_preview(store: Store, cfg: Config, *, scope: str = "gui") -> dict:
     }
 
 
+def _record_input_budget(receipt: dict, cfg: Config, phase: str, messages: list[dict]) -> bool:
+    estimated = messages_tokens(messages)
+    limit = input_token_limit(cfg.context)
+    receipt.update(phase=phase, input_limit_tokens=limit)
+    receipt[f"{phase}_estimated_input_tokens"] = estimated
+    return limit is not None and estimated > limit
+
+
 def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_id=None,
                        should_stop=None, chat_active=None):
     """执行一个 compact 任务（生成器；模型调用经 yield 让出写锁）。
@@ -319,19 +327,23 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
     epoch = store.meta_get("session_epoch") or ""
     task_epoch = task["session_epoch"]
     span, cursor = compact_span(store, cfg, scope=scope)
+    receipt = {"attempt": task["attempts"] + 1, "phase": "selection", "selected_rounds": len(span)}
     if not span:
         store.set_maintenance_task_status(task_id, "committed",
-                                          result={"nothing_to_compact": True, "cursor": cursor})
+                                          result={**receipt, "nothing_to_compact": True, "cursor": cursor})
         return {"nothing_to_compact": True}
     snapshot_rows = [dict(r) for r in span]
     snapshot_sha = hashlib.sha256(json.dumps(snapshot_rows, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     prior_state = store.active_compact_state(scope)
     prior_text = prior_state["state_md"] if prior_state else None
+    receipt.update(phase="evidence", prior_covered_turns=prior_state["covered_turns"] if prior_state else 0)
+    store.set_maintenance_task_status(task_id, "running", result=receipt)
     prior_evidence = _rebuild_prior_evidence(store, prior_state, scope=scope)
     if prior_state is not None and prior_evidence is None:
         # 不让模型在证据缺失时通过“丢掉旧事项”继续推进覆盖边界。
         store.set_maintenance_task_status(task_id, "failed", error="prior_evidence_unavailable")
         return None
+    receipt["prior_pairs_verified"] = len(prior_evidence or [])
     extract_cursor = _int_meta(store, "extract_cursor")
     already_extracted = [r["user_id"] for r in span if r["user_id"] <= extract_cursor]
     source = {"epoch": epoch, "cursor": cursor,
@@ -344,9 +356,10 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
         prior_evidence=json.dumps(prior_evidence, ensure_ascii=False),
         doc=json.dumps(snapshot_rows, ensure_ascii=False))
     request = [{"role": "user", "content": prompt}]
-    if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
-        store.set_maintenance_task_status(task_id, "failed", error="generation_budget_exceeded")
+    if _record_input_budget(receipt, cfg, "generation", request):
+        store.set_maintenance_task_status(task_id, "failed", result=receipt, error="generation_budget_exceeded")
         return None
+    store.set_maintenance_task_status(task_id, "running", result=receipt)
     observation_id = request_id or uuid.uuid4().hex
     _gate(should_stop, chat_active)
     resp = yield lambda: chat(client, cfg, request, model=cfg.llm.cheap_model,
@@ -356,7 +369,7 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
     _gate(should_stop, chat_active)
     raw = resp.choices[0].message.content or ""
     def fail(reason: str, *, status: str = "failed", extra: dict | None = None):
-        payload = {"error": reason, "sha256": hashlib.sha256(raw.encode()).hexdigest(), "chars": len(raw)}
+        payload = {**receipt, "error": reason, "sha256": hashlib.sha256(raw.encode()).hexdigest(), "chars": len(raw)}
         if extra:
             payload.update(extra)
         store.set_maintenance_task_status(task_id, status, result=payload, error=reason)
@@ -389,9 +402,9 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
                       "prior_evidence": prior_evidence,
                       "already_extracted_user_ids": already_extracted}
     review_messages = grounding.messages("compact", review_sources, candidates)
-    if cfg.context.total_budget_tokens and messages_tokens(review_messages) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
+    if _record_input_budget(receipt, cfg, "review", review_messages):
         return fail("review_budget_exceeded")
-    store.set_maintenance_task_status(task_id, "validating")
+    store.set_maintenance_task_status(task_id, "validating", result=receipt)
     _gate(should_stop, chat_active)
     try:
         reviewed = yield lambda: chat(client, cfg, review_messages, model=cfg.llm.cheap_model,
@@ -405,6 +418,7 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
         return fail("review_failed:" + type(exc).__name__)
     _gate(should_stop, chat_active)
     # 提交前重核（草案 §3.3）：会话、游标、原文版本、任务归属全部仍在。
+    receipt["phase"] = "recheck"
     current, current_cursor = compact_span(store, cfg, scope=scope)
     if (store.meta_get("session_epoch") != epoch or task_epoch != epoch
             or current_cursor != cursor
@@ -470,11 +484,11 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
                 reflection_inputs.clear()
         store.meta_set("last_compact_success_at", time.time())
         store.set_maintenance_task_status(task_id, "committed", result={
+            **receipt, "phase": "commit",
             "batch_id": batch_id, "rounds": len(span), "state_chars": len(state_text),
             "memories_written": written, "memories_reviewed_out": len(memories) - len(kept_memories),
             "opinion_processing": "queued" if reflection_inputs and scope == "gui" else "not_needed",
             "already_extracted_user_ids": already_extracted,
-            "prior_pairs_verified": len(prior_evidence or []),
             "covered_turns_total": len(covered_new), "cursor": end_turn_id})
     return {"committed": True, "batch_id": batch_id, "rounds": len(span),
             "memories": len(written), "state_chars": len(state_text),
@@ -512,7 +526,7 @@ def compact_reflection_steps(store, client, cfg, task_id, *, should_stop=None, c
                            (time.time(), task_id))
     def model_runner(prompt):
         request = [{"role": "user", "content": prompt}]
-        if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
+        if over_input_budget(cfg.context, request):
             raise ValueError("reflection_budget_exceeded")
         resp = chat(client, cfg, request, model=cfg.llm.cheap_model, json_mode=True, retry=False,
                     observation={"store": store, "purpose": "compact_reflect", "request_id": "compact_view_" + str(task_id)})
@@ -750,6 +764,9 @@ def tidy_preview(store: Store, cfg: Config) -> dict:
     }
 
 
+TIDY_ROLLBACK_SCOPE = "condensed_text_only"
+
+
 def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_id=None,
                     should_stop=None, chat_active=None):
     """执行一个 tidy 任务：既有维护先行 → 冻结快照 → 判读 → 审查 → 幂等提交（生成器）。
@@ -765,14 +782,22 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
     if task is None:
         return None
     from . import consolidation
+    receipt = {"attempt": task["attempts"] + 1, "phase": "preliminary_maintenance",
+               "rollback_scope": TIDY_ROLLBACK_SCOPE}
+    store.set_maintenance_task_status(task_id, "running", result=receipt)
     # 既有失效/硬期限/分层维护先行，不等待周期整理（草案 §4.1）；
     # 兴趣衰减仅当兴趣表已建（serve 侧建表；裸库路径无兴趣可衰减）。
     has_interests = bool(store.conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='discovery_interests'").fetchone())
-    consolidation.run(store, cfg, decay=has_interests)
+    preliminary = consolidation.run(store, cfg, decay=has_interests)
+    receipt.update(phase="selection", preliminary_maintenance={
+        "to_warehouse": preliminary["to_warehouse"], "promoted": len(preliminary["promoted"]),
+        "expired": len(preliminary["expired"]), "evicted": len(preliminary["evicted"]),
+    })
+    store.set_maintenance_task_status(task_id, "running", result=receipt)
     plan = tidy_plan(store, cfg)
     if not plan["groups"] and not plan["condensations"]:
-        store.set_maintenance_task_status(task_id, "committed", result={"nothing_to_tidy": True})
+        store.set_maintenance_task_status(task_id, "committed", result={**receipt, "nothing_to_tidy": True})
         return {"nothing_to_tidy": True}
     # R05：发送模型前冻结全部成员（一次性读取；此后不再为判读/提交重新取内容）。
     frozen_groups: dict[int, list[dict]] = {}
@@ -790,7 +815,7 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
         if row is not None:
             frozen_condense[c["id"]] = _freeze_member(row)
     if not frozen_groups and not frozen_condense:
-        store.set_maintenance_task_status(task_id, "committed", result={"nothing_to_tidy": True})
+        store.set_maintenance_task_status(task_id, "committed", result={**receipt, "nothing_to_tidy": True})
         return {"nothing_to_tidy": True}
     doc = {"groups": [{"id": gi, "members": [{"id": m["id"], "title": m["title"], "content": m["content"]}
                                              for m in members]}
@@ -799,9 +824,10 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
                              for m in frozen_condense.values()]}
     prompt = TIDY_PROMPT.format(ratio="80%", doc=json.dumps(doc, ensure_ascii=False))
     request = [{"role": "user", "content": prompt}]
-    if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
-        store.set_maintenance_task_status(task_id, "failed", error="generation_budget_exceeded")
+    if _record_input_budget(receipt, cfg, "generation", request):
+        store.set_maintenance_task_status(task_id, "failed", result=receipt, error="generation_budget_exceeded")
         return None
+    store.set_maintenance_task_status(task_id, "running", result=receipt)
     observation_id = request_id or uuid.uuid4().hex
     _gate(should_stop, chat_active)
     resp = yield lambda: chat(client, cfg, request, model=cfg.llm.cheap_model,
@@ -811,7 +837,7 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
     _gate(should_stop, chat_active)
     raw = resp.choices[0].message.content or ""
     def fail(reason: str, extra: dict | None = None):
-        payload = {"error": reason, "sha256": hashlib.sha256(raw.encode()).hexdigest(), "chars": len(raw)}
+        payload = {**receipt, "error": reason, "sha256": hashlib.sha256(raw.encode()).hexdigest(), "chars": len(raw)}
         if extra:
             payload.update(extra)
         store.set_maintenance_task_status(task_id, "failed", result=payload, error=reason)
@@ -887,9 +913,9 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
         sources.extend(members_display([w["original"]]))
     if candidates:
         review_messages = grounding.messages("memory", sources, candidates)
-        if cfg.context.total_budget_tokens and messages_tokens(review_messages) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
+        if _record_input_budget(receipt, cfg, "review", review_messages):
             return fail("review_budget_exceeded")
-        store.set_maintenance_task_status(task_id, "validating")
+        store.set_maintenance_task_status(task_id, "validating", result=receipt)
         _gate(should_stop, chat_active)
         try:
             reviewed = yield lambda: chat(client, cfg, review_messages, model=cfg.llm.cheap_model,
@@ -907,7 +933,8 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
         merges = [m for m, v in zip(merges, verdicts[:n_merges]) if v.get("valid")]
         condense_writes = [w for w, v in zip(condense_writes, verdicts[n_merges:]) if v.get("valid")]
     else:
-        store.set_maintenance_task_status(task_id, "validating")
+        receipt["phase"] = "recheck"
+        store.set_maintenance_task_status(task_id, "validating", result=receipt)
     # 提交：会话未换；事务内对每个成员做完整资格重核（R06 权威检查点）。
     batch_id = uuid.uuid4().hex
     merged, condensed = 0, 0
@@ -946,6 +973,7 @@ def tidy_task_steps(store: Store, client, cfg: Config, task_id: int, *, request_
                               rollback, cfg.maintenance.tidy_rollback_days)
         store.meta_set("last_tidy_success_at", time.time())
         store.set_maintenance_task_status(task_id, "committed", result={
+            **receipt, "phase": "commit",
             "batch_id": batch_id, "merged": merged, "condensed": condensed, "skipped": skipped,
             "kept_distinct": kept_distinct, "rollback_until_days": cfg.maintenance.tidy_rollback_days})
     return {"committed": True, "batch_id": batch_id, "merged": merged,
@@ -969,17 +997,18 @@ def tidy_rollback(store: Store, cfg: Config) -> dict:
     恢复 before；整理后被用户或后续流程改写过的条目计为冲突并跳过，不用更早
     的正文覆盖新编辑。
     """
+    empty = {"rolled_back": 0, "conflicts": 0, "rollback_scope": TIDY_ROLLBACK_SCOPE}
     batch = store.last_tidy_batch()
     if batch is None:
-        return {"rolled_back": 0, "conflicts": 0, "reason": "no_batch"}
+        return {**empty, "reason": "no_batch"}
     if batch["rollback_expires_at"] <= time.time() or batch["rollback_json"] == "{}":
-        return {"rolled_back": 0, "conflicts": 0, "reason": "rollback_window_closed"}
+        return {**empty, "reason": "rollback_window_closed"}
     try:
         bodies = json.loads(batch["rollback_json"])
     except ValueError:
-        return {"rolled_back": 0, "conflicts": 0, "reason": "corrupt_batch"}
+        return {**empty, "reason": "corrupt_batch"}
     if not isinstance(bodies, dict):
-        return {"rolled_back": 0, "conflicts": 0, "reason": "corrupt_batch"}
+        return {**empty, "reason": "corrupt_batch"}
     restored = conflicts = 0
     with store.source_transaction():
         for memory_id, body in bodies.items():
@@ -1000,7 +1029,8 @@ def tidy_rollback(store: Store, cfg: Config) -> dict:
             else:
                 conflicts += 1  # 当前正文已非本批浓缩产物（或行已删除）：保留现状
         store.conn.execute("UPDATE tidy_batches SET rollback_json='{}' WHERE id=?", (batch["id"],))
-    return {"rolled_back": restored, "conflicts": conflicts, "batch_id": batch["batch_id"]}
+    return {"rolled_back": restored, "conflicts": conflicts, "batch_id": batch["batch_id"],
+            "rollback_scope": TIDY_ROLLBACK_SCOPE}
 
 
 # ---------- 触发、状态与执行器 ----------
@@ -1058,7 +1088,8 @@ def status_view(store: Store, cfg: Config) -> dict:
                     "active_state": {"state_id": state["state_id"], "chars": state["chars"],
                                      "end_turn_id": state["end_turn_id"],
                                      "created_at": _iso(state["created_at"])} if state else None},
-        "tidy": {"last_batch": {"batch_id": tidy["batch_id"], "created_at": _iso(tidy["created_at"]),
+        "tidy": {"rollback_scope": TIDY_ROLLBACK_SCOPE,
+                 "last_batch": {"batch_id": tidy["batch_id"], "created_at": _iso(tidy["created_at"]),
                                 "plan": json.loads(tidy["plan_json"] or "{}"),
                                 "rollback_until": _iso(tidy["rollback_expires_at"])} if tidy else None},
         "config": {"auto_compact_enabled": cfg.maintenance.auto_compact_enabled,

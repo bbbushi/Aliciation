@@ -10,6 +10,10 @@ tokenizer；真实 usage 仅用于事后校准（设计 §7.1）。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import ContextConfig
 
 # CJK 区间按 1 字符≈1 token 保守估算；其余按 4 字符≈1 token。
 def estimate_tokens(text: str) -> int:
@@ -25,6 +29,24 @@ def messages_tokens(messages: list[dict], tools: list[dict] | None = None) -> in
     if tools:
         total += sum(estimate_tokens(json.dumps(t, ensure_ascii=False)) for t in tools)
     return total
+
+
+def input_token_limit(config: ContextConfig) -> int | None:
+    """Configured input allowance after reserving the reply budget."""
+    if not config.total_budget_tokens:
+        return None
+    return config.total_budget_tokens - config.reply_reserve_tokens
+
+
+def input_headroom(config: ContextConfig, messages: list[dict], tools: list[dict] | None = None) -> int | None:
+    """Estimated space before adding new material."""
+    limit = input_token_limit(config)
+    return None if limit is None else limit - messages_tokens(messages, tools)
+
+
+def over_input_budget(config: ContextConfig, messages: list[dict], tools: list[dict] | None = None) -> bool:
+    headroom = input_headroom(config, messages, tools)
+    return headroom is not None and headroom < 0
 
 
 @dataclass

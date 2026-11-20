@@ -24,8 +24,8 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-19 基于main c43a764（PR40/23d6568）重新适配UI；旧PR39已关闭未合入，重放a40d902时6个文件冲突已逐项解决，并经主会话复核。按用户授权更新trial/windows-v0.2-20261028并以PR交main，保留HTTPS/trial约定。备份.git/main-sync/20261119-214709-ui-adapt与codex/before-ui-adapt-20261119-214709保存旧提交、补丁和86项私有资料引用；恢复按manifest.stored_path，不单删引用快照。
-- PR40 入库桌面 0.1.37、独立 Alice Lab 六模块、全网搜索许可、联系等待与计划摘要、分段回复和 Orbit 收纳 Dock／球面设置页。设置的「外部观察」启动已注册的 Lab，签发或撤销当前实例 15 分钟只读授权，正文须单独勾选。完整上下文和诊断在 Lab 查看，主界面沿用新版对话与思想投影。TEST_CONTROLS_ONLY 源码默认 False，上游运行策略原样保留。
-- 本轮恢复共用设置窗与 DSH／Claude／QQ 分组，联网五类、六额度与保存清钥接线。新版 Lab 授权页适用四主题，Orbit 保留球面入口、退场过渡、设置页返回与原配色，单独思想页保留休息、联系等待及最近活动，折叠校验和焦点归还补齐。主题往返恢复原节点并清理监听和计时器。修复待确认徽标重进与 Dock 收纳贴底。
-- 适配限web/{app.js,discovery.js,index.html,orbit.js,style.css,theme-orbit.css,thoughts.css,thoughts.js}和交接。Python编译、5 addon JS/4修改前端JS语法、7 JSON/TOML/Cargo.lock解析及差异空白通过；25原HTML输入/选择控件契约一致无重复ID，29相关控件/39联网字段及33离线静态布局见D:/alice_tmp/PR40设置适配-20261119/20261119-215827。两路源码复核与文件hash核对完成；86私有资料/旧stash/worktree保留，不纳入提交。真实Lab注册启动/授权到期撤销、保存清钥、首次引导、往返切主题及分段回复待人工；未读写user/、起停服务、调用业务/模型、迁移或机器行为/冒烟测试。
-- legacy recall 动态余额／重复 source_block／先暴露后准入及 PR33 延迟队列边界待修验，诊断 D:/alice_tmp/会话上下文溢出排查-20261114/诊断报告.md。人格导入 material/token、Astra、人格 QQ 与 QQ 主动投递等前序待办仍在。私有 UI 预览、旧 stash 和 worktree 保留。
+- 2026-11-20 基于 main b003f46 完成 D01–D10 技术债治理：统一预算、工具解析和模型回执，收口观测归属，补维护回执，退出旧人格生成、旧自主选题及主网页旧诊断资产，整理 Orbit、Lab 人工入口和桌面组件清单；交付见 `docs/代码审查/Alice技术债治理与源码复审-20261120.md`。
+- 全仓审查 F01–F17 仍待指定修复范围，复审另确认已有 F18 Orbit 思想忙闲误判和 F19 流式结束观测误报。本轮不宣称这些缺陷已修复；累计 compact 证据、legacy 装配、人格/QQ、旧留存等边界见两份 `docs/代码审查/*20261120.md` 报告。
+- 按本次授权提交 `trial/windows-v0.2-20261028` 并以 PR 交 main，沿用 HTTPS、不直推 main。提交前备份 `.git/pr-prep/20261120-104342-debt-governance` 保存 38 项改动和 86 项私有资料引用，私有文件及载荷 hash 已核对；按 manifest.stored_path 恢复。旧 `.git/main-sync/20261120-100353`、备份分支、stash、worktree 与私有 UI 预览保留。
+- 运行时差异 hash 与治理报告一致；提交前另核 16 个修改 Python 内存编译、3 个 JS 语法、示例 TOML 和差异空白通过。治理会话全仓静态记录为 154 Python/spec、47 JS、9 JSON、7 TOML、29 资产引用。TEST_CONTROLS_ONLY=False；Lab 授权、GUI/QQ/探索、维护回退、人格恢复、四主题及桌面行为待真人。
+- 本轮未读写 user/、起停服务、调用模型/业务接口、构建安装包、迁移或运行机器行为测试。现行人工入口是 Alice Lab 与 tests/lab，旧 pressure 仅供历史参考；既有 UI 证据在 D:/alice_tmp/PR40设置适配-20261119/20261119-215827。

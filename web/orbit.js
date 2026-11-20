@@ -32,16 +32,16 @@
   /** restores：值类还原（文本、属性、样式与状态），逆序执行 */
   const restores = [];
   const timers = new Set();
+  const effects = new Set();
 
   function later(fn, ms) {
     const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
     timers.add(t);
     return t;
   }
-  function every(fn, ms) {
-    const t = setInterval(fn, ms);
-    timers.add(t);
-    return t;
+  function cancelTimer(timer) {
+    clearTimeout(timer);
+    timers.delete(timer);
   }
 
   /** 观察器登记：uninstall 全部断开（02b 还原表 #13） */
@@ -57,6 +57,22 @@
     if (!node) return;
     node.addEventListener(type, fn, opts);
     undos.push(() => node.removeEventListener(type, fn, opts));
+  }
+
+  function finishEffect(node, type, fallbackMs, done, propertyName = null) {
+    const finish = () => { cancel(); done(); };
+    const onEnd = (event) => {
+      if (event.target === node && (!propertyName || event.propertyName === propertyName)) finish();
+    };
+    const timer = later(finish, fallbackMs);
+    function cancel() {
+      node.removeEventListener(type, onEnd);
+      cancelTimer(timer);
+      effects.delete(cancel);
+    }
+    node.addEventListener(type, onEnd);
+    effects.add(cancel);
+    return cancel;
   }
 
   /* ---------- 二、还原表 helper（轮次 3 裁定 1：改写一律记录可还原） ---------- */
@@ -203,7 +219,7 @@
     tipEl.style.visibility = "";
   }
   function tipHide() {
-    clearTimeout(holdT); clearTimeout(dismissT); holdT = dismissT = 0;
+    cancelTimer(holdT); cancelTimer(dismissT); holdT = dismissT = 0;
     if (tipEl) tipEl.removeAttribute("data-show");
     tipTarget = null;
   }
@@ -217,7 +233,7 @@
     wire(document, "pointerover", (e) => {
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (!t || t === tipTarget || e.pointerType === "touch") return;
-      clearTimeout(holdT);
+      cancelTimer(holdT);
       tipHide();
       tipTarget = t; // 占位防重入；真正展示在延迟后
       holdT = later(() => { if (tipTarget === t) tipShow(t); }, HOLD_MOUSE);
@@ -238,21 +254,21 @@
       const t = e.target.closest && e.target.closest("[data-tip]");
       if (!t) return;
       downX = e.clientX; downY = e.clientY; tipTarget = t;
-      clearTimeout(holdT);
+      cancelTimer(holdT);
       holdT = later(() => {
         if (tipTarget !== t) return;
         tipShow(t);
-        clearTimeout(dismissT);
+        cancelTimer(dismissT);
         dismissT = later(tipHide, AUTO_DISMISS);
       }, HOLD_TOUCH);
     }, true);
     wire(document, "pointermove", (e) => {
       if (e.pointerType !== "touch" || !holdT) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) < MOVE_CANCEL) return;
-      clearTimeout(holdT); holdT = 0; tipTarget = null; // 位移 >8px 才清除（R4 P1-3）
+      cancelTimer(holdT); holdT = 0; tipTarget = null; // 位移 >8px 才清除（R4 P1-3）
     }, true);
     ["pointerup", "pointercancel"].forEach((t) =>
-      wire(document, t, () => { clearTimeout(holdT); holdT = 0; }, true));
+      wire(document, t, () => { cancelTimer(holdT); holdT = 0; }, true));
     wire(document, "keydown", (e) => { if (e.key === "Escape") tipHide(); }, true);
   }
 
@@ -263,6 +279,7 @@
   const pageHooks = [];        // 页级副作用（如 P4 球面引擎的启停）：切页时按最终页名回调
   let currentPage = "chat";
   let pageToken = 0;           // 切页令牌：过期退场计时器不得再动 DOM
+  let cancelPageEntry = null;
 
   /* 退场页必须先脱离文档流再淡出：#app 是 flex-row，#orbit-main 与 .orbit-page 都是
      width: min(1080px, 100%)，两页同时在场会被对半分宽（772 → 各 363px），一秒内再把新页
@@ -290,6 +307,8 @@
 
   function writePage(name) {
     if (document.body.dataset.orbitPage === name) return;
+    cancelPageEntry?.();
+    cancelPageEntry = null;
     document.body.dataset.orbitPage = name;
     // 每次切页领一个令牌：退场计时器只对「最后一次切页」生效。
     // 原本按写入时捕获的页名判断（key !== name），启动时 onboarding→chat 的竞态会让
@@ -318,8 +337,10 @@
         unfreezePage(el);                     // 快速往返：退场中重返则撤销冻结与退场
         el.hidden = false; el.style.display = "";
         el.classList.add("is-entering");
-        el.addEventListener("animationend", () => el.classList.remove("is-entering"), { once: true });
-        later(() => el.classList.remove("is-entering"), 400); // 动画被 display:none 打断时兜底（04a §1.6）
+        cancelPageEntry = finishEffect(el, "animationend", 400, () => {
+          el.classList.remove("is-entering");
+          cancelPageEntry = null;
+        });
       } else {
         el.classList.remove("is-entering");
         if (leaving.some(([k]) => k === key)) continue;   // 已冻结在退场层，等计时器收尾
@@ -373,7 +394,8 @@
      几何：展开＝56 高整条轨道；收起＝52×40、只剩 chevron（把手宽由 --orbit-dock-tuck 定）。
      auto 宽度无法过渡，所以收/开都先把当前宽度钉成像素，过渡完再交还 CSS。 */
   const DOCK_TUCK_KEY = "alice.orbit.dock.v1";
-  let dock = null, dockToggle = null, dockTucked = false, dockTuckSeq = 0;
+  let dock = null, dockToggle = null, dockTucked = false;
+  let cancelDockWidth = null, dockFollowRaf = null;
 
   function dockTuckWidth() {
     const n = parseFloat(getComputedStyle(dock).getPropertyValue("--orbit-dock-tuck"));
@@ -381,6 +403,9 @@
   }
   function setDockTucked(next, animate = true) {
     if (!dock || next === dockTucked) return;
+    cancelDockWidth?.();
+    cancelDockWidth = null;
+    stopDockFollow();
     const motion = animate && !reduceMotion();
     // 载入时恢复上次收纳态不该播动画（页面已画过一帧）：开一个短免过渡窗口
     if (!animate) {
@@ -416,16 +441,16 @@
     if (!motion) { dock.style.width = ""; if (pinnedToBottom) msgs.scrollTop = msgs.scrollHeight; return; }
     if (pinnedToBottom) {
       // 过渡期间每帧跟到底（高度在 180ms 内连续变化）
-      const track = dock;
       const stick = () => { msgs.scrollTop = msgs.scrollHeight; };
       stick();
       const until = performance.now() + 320;
       const tick = () => {
-        if (dock !== track || !msgs.clientHeight || performance.now() > until) return;
+        dockFollowRaf = null;
+        if (!msgs.clientHeight || performance.now() > until) return;
         stick();
-        requestAnimationFrame(tick);
+        dockFollowRaf = requestAnimationFrame(tick);
       };
-      requestAnimationFrame(tick);
+      dockFollowRaf = requestAnimationFrame(tick);
     }
     if (next) {
       dock.style.width = dockTuckWidth() + "px";
@@ -437,10 +462,15 @@
       void dock.offsetWidth;
       dock.style.width = to + "px";
     }
-    const seq = ++dockTuckSeq;                       // 快速连点时只让最后一次交还 CSS
-    const release = () => { if (dock && seq === dockTuckSeq) dock.style.width = ""; };
-    dock.addEventListener("transitionend", release, { once: true });
-    later(release, 260);
+    cancelDockWidth = finishEffect(dock, "transitionend", 260, () => {
+      dock.style.width = "";
+      cancelDockWidth = null;
+    }, "width");
+  }
+
+  function stopDockFollow() {
+    if (dockFollowRaf !== null) cancelAnimationFrame(dockFollowRaf);
+    dockFollowRaf = null;
   }
 
   function buildDock() {
@@ -487,7 +517,7 @@
     badge.className = "orbit-badge";
     badge.dataset.tone = "warn";
     badge.hidden = true;
-    badge.addEventListener("animationend", (e) => {
+    wire(badge, "animationend", (e) => {
       if (e.animationName === "orbit-badge-glow") badge.setAttribute("data-attention", "done");
     });
     chat.appendChild(badge);
@@ -502,13 +532,12 @@
     root.dataset.dock = "open";
     if (savedTuck === "tucked" && !narrow.matches) setDockTucked(true, false);
     const onNarrow = () => { if (narrow.matches && dockTucked) setDockTucked(false); };
-    narrow.addEventListener("change", onNarrow);
-    undos.push(() => narrow.removeEventListener("change", onNarrow));
+    wire(narrow, "change", onNarrow);
     undos.push(() => { delete root.dataset.dock; delete root.dataset.dockInstant; });
     // 主题首次进入：dock 整体 180ms 仅淡入（04a §1.5 顺序注）
-    dock.classList.add("is-entering");
-    dock.addEventListener("animationend", () => dock.classList.remove("is-entering"), { once: true });
-    later(() => dock.classList.remove("is-entering"), 400);
+    const enteringDock = dock;
+    enteringDock.classList.add("is-entering");
+    finishEffect(enteringDock, "animationend", 400, () => enteringDock.classList.remove("is-entering"));
   }
 
   /* ---------- 七、M-03 徽标一次性双波协议 ---------- */
@@ -560,8 +589,6 @@
     const ui = window.AliceUI;
     if (!ui) return;
     const modal = $("settings-modal");
-    const select = ui.selectSettings;
-    const open = ui.openSettings;
     let modalVisible = !modal.classList.contains("hidden");
     let returnOnClose = true;
 
@@ -578,9 +605,20 @@
       }, 0);
     }
 
-    ui.selectSettings = (section) => section === "thoughts" ? showThoughts() : select(section);
-    ui.openSettings = (section) => section === "thoughts" ? showThoughts() : open(section);
-    undos.push(() => { ui.selectSettings = select; ui.openSettings = open; });
+    function handleRoute(section) {
+      if (section !== "thoughts") return false;
+      showThoughts();
+      return true;
+    }
+    if (ui.registerSettingsRoute) {
+      undos.push(ui.registerSettingsRoute(handleRoute));
+    } else {
+      // The macOS packager can pin app.js to a revision before route registration.
+      const { selectSettings, openSettings } = ui;
+      ui.selectSettings = (section) => { if (!handleRoute(section)) selectSettings(section); };
+      ui.openSettings = (section) => { if (!handleRoute(section)) openSettings(section); };
+      undos.push(() => Object.assign(ui, { selectSettings, openSettings }));
+    }
     spy(modal, { attributes: true, attributeFilter: ["class"] }, () => {
       const visible = !modal.classList.contains("hidden");
       if (modalVisible && !visible && returnOnClose) returnToSettings();
@@ -588,7 +626,7 @@
       if (!visible) returnOnClose = true;
     });
     if (modal.querySelector('[data-settings="thoughts"][aria-pressed="true"]')) {
-      select("general");
+      ui.selectSettings("general");
       if (modalVisible) showThoughts();
     }
   }
@@ -995,10 +1033,7 @@
 
   function mirrorState() {
     // OrbitBG：discoveryRunning / thoughtState（单向传入，orbit-bg 不自查业务 DOM）
-    const cancel = $("discovery-cancel");
-    const run = $("discovery-run");
-    const running = !!(cancel && !cancel.classList.contains("hidden")) ||
-      !!(run && run.disabled && run.textContent.indexOf("正在寻找") === 0);
+    const running = window.AliceDiscovery?.isSearching() ?? false;
     const lifecycle = $("thought-lifecycle");
     const stop = $("thought-stop");
     let thoughtState = 0;
@@ -1019,16 +1054,15 @@
   }
 
   function installMirrors() {
+    wire(window, "alice:discovery-state", mirrorState);
+    wire(window, "alice:discovery-cleared", mirrorState);
     const watch = [
-      [$("discovery-run"), { attributes: true, attributeFilter: ["disabled"] }],
-      [$("discovery-cancel"), { attributes: true, attributeFilter: ["class"] }],
       [$("thought-lifecycle"), { attributes: true, attributeFilter: ["data-state"], childList: true, characterData: true, subtree: true }],
       [$("thought-stop"), { attributes: true, attributeFilter: ["class", "disabled"] }],
       [$("chat-new-attempt"), { attributes: true, attributeFilter: ["class"] }],
       [$("chat-notice"), { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] }],
     ];
     for (const [node, opts] of watch) if (node) spy(node, opts, mirrorState);
-    every(mirrorState, 5000); // 兜底轮询（动态写入无 attribute 变更的少数路径）
     mirrorState();
   }
 
@@ -1059,11 +1093,10 @@
     if (!installed) return;
     installed = false;
     if (document.body.dataset.orbitPage !== "discovery") window.AliceDiscovery?.close(false);
-    for (const timer of timers) {
-      clearTimeout(timer);
-      clearInterval(timer);
-    }
-    timers.clear();
+    for (const cancel of effects) cancel();
+    cancelPageEntry = cancelDockWidth = null;
+    stopDockFollow();
+    for (const timer of timers) cancelTimer(timer);
     // 1) 值类还原（逆序：后改的先还原）
     for (const fn of restores.reverse()) { try { fn(); } catch (_) {} }
     restores.length = 0;
