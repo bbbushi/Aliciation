@@ -598,100 +598,6 @@ function paintPersona(v, out) {
   mountCards(out, [{box: listCard.box, wide:true}]);
 }
 
-const kindLabelsCtx = {stable:"系统与规则", background:"背景", index:"索引", history:"对话历史",
-  tool_result:"工具结果", selection:"选择决策"};
-function requestSegments(request) {
-  const groups = {};
-  for (const block of request.blocks || []) {
-    const key = block.name === "tool_schemas" ? "tool" : (block.kind || "other");
-    groups[key] = (groups[key] || 0) + (block.estimated_tokens || 0);
-  }
-  const palette = {stable:C[1], background:C[0], index:C[5], history:C[4], tool_result:C[2], tool:C[3], other:C[5]};
-  return Object.entries(groups).map(([key, value]) => ({
-    label: key === "tool" ? "工具定义" : (kindLabelsCtx[key] || key), value, color: palette[key] || C[5]}));
-}
-async function paintContext(out) {
-  const [requests, status] = await Promise.all([
-    api("observe", {}, {topic:"context"}).then((r) => r.result),
-    api("observe", {}, {topic:"context_status"}).then((r) => r.result).catch(() => null),
-  ]);
-  const list = requests.requests || [];
-  const calls = list.reduce((n, r) => n + (r.calls || []).length, 0);
-  const blocks = list.reduce((n, r) => n + (r.blocks || []).length, 0);
-  const bodyOk = status?.can_read_body;
-
-  out.append(kpis([
-    {label:"最近请求", value: fmt.int(list.length), hint:"观测窗口内"},
-    {label:"模型调用", value: fmt.int(calls)},
-    {label:"装配块", value: fmt.int(blocks)},
-    {label:"正文授权", value: bodyOk ? "已授权" : "未授权", hint: bodyOk ? "可按片段读原文" : "仅元数据"},
-  ]));
-
-  const overview = card("请求组成", "每个请求一条堆叠条；长度按装配块估算 token 归一化。");
-  if (!list.length) overview.body.append(emptyNote("还没有上下文观测记录。"));
-  else {
-    const wrap = el("div", "rows");
-    for (const request of list.slice(0, 6)) {
-      const row = el("div");
-      const head = el("div", "line");
-      head.append(node("span", `${fmt.time(request.first_event_at)} · ${(request.calls || []).length} 次调用 · ${(request.blocks || []).length} 块`),
-        node("b", request.finished ? "已结束" : "进行中"));
-      row.append(head, stack(requestSegments(request)));
-      wrap.append(row);
-    }
-    const open = node("button", "打开完整观测器");
-    open.className = "inline-action";
-    open.onclick = () => { try { openContext(); } catch (err) { feedback(err.message, true); } };
-    wrap.append(open);
-    overview.body.append(wrap);
-  }
-
-  const tableCard = card("最近请求", "点开原始记录可核对事件数与决策留痕。");
-  if (list.length) {
-    tableCard.body.append(table(["时间", "调用", "工具轮次", "装配块", "估算 tokens", "事件", "状态"], list.map((r) => {
-      const estimated = (r.blocks || []).reduce((n, b) => n + (b.estimated_tokens || 0), 0);
-      const rounds = (r.calls || []).reduce((n, c) => Math.max(n, c.tool_round || 0), 0);
-      return [fmt.time(r.first_event_at), String((r.calls || []).length), rounds || "—",
-        String((r.blocks || []).length), fmt.tok(estimated), fmt.int(r.event_count),
-        r.finished ? "已结束" : "进行中"];
-    })));
-    tableCard.body.append(rawDetails("查看原始请求投影", list));
-  } else tableCard.body.append(emptyNote("暂无请求。"));
-
-  const stateCard = card("采集状态", "协议版本与采集范围决定这里能看到多少。");
-  if (!status) stateCard.body.append(emptyNote("采集状态不可读。"));
-  else {
-    stateCard.body.append(line("协议版本", status.protocol_version || "—"));
-    stateCard.body.append(line("元数据采集", status.capture?.metadata ? "开启" : "关闭"));
-    stateCard.body.append(line("正文采集", status.capture?.body ? "开启" : "关闭"));
-    if (status.quota) {
-      stateCard.body.append(line("正文额度", `${fmt.int(status.quota.requests?.used)} / ${fmt.int(status.quota.requests?.limit)} 请求`));
-      stateCard.body.append(line("占用", fmt.tok(status.quota.body_dir_bytes) + " / " + fmt.tok(status.quota.limit_bytes)));
-    }
-  }
-  if (requests.notice) stateCard.body.append(el("p", "note", requests.notice));
-
-  const blockLabels = {constitution:"宪法", persona_core:"人格核心", tool_schemas:"工具定义",
-    memory_active:"活跃记忆", knowledge_index:"见闻索引", recent_turns:"近期回合",
-    recall:"召回结果", question_index:"疑问索引"};
-  const blockMap = {};
-  for (const request of list) {
-    for (const block of request.blocks || []) {
-      const key = block.name || block.kind || "未命名";
-      blockMap[key] = (blockMap[key] || 0) + (block.estimated_tokens || 0);
-    }
-  }
-  const blocksCard = card("装配块用量", "按名称合并最近请求里的估算 token。");
-  const topBlocks = Object.entries(blockMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  blocksCard.body.append(topBlocks.length
-    ? barRows(topBlocks.map(([key, value]) => ({
-        label: blockLabels[key] || key, value, color:C[3], note:fmt.tok(value) + " tok"})))
-    : emptyNote("还没有装配块记录。"));
-
-  out.append(overview.box, tableCard.box);
-  mountCards(out, [{box: stateCard.box}, {box: blocksCard.box}]);
-}
-
 /* ---------- 页面装配 ---------- */
 const topics = {
   schedule: {title:"调度权重", sub:"谁在决定 Alice 接下来做什么，以及为什么。"},
@@ -711,6 +617,7 @@ function setPage(next) {
   byId("refresh").hidden = next !== "dashboard";
   byId("bench-body").hidden = targetMode !== "isolated";
   byId("bench-note").hidden = targetMode === "isolated";
+  document.querySelector("main").classList.toggle("embedded", next === "dashboard" && topic === "context");
   document.querySelectorAll("#topics button").forEach((btn) => {
     btn.disabled = !connected;
     btn.setAttribute("aria-pressed", String(next === "dashboard" && btn.dataset.topic === topic));
@@ -737,11 +644,13 @@ function stamp() {
 }
 async function show(next = topic) {
   if (next !== "context") {
+    unmountContext();
     const data = await api("observe", {}, {topic:next});
     const value = data.result;
     if (value && value.status && value.status !== "ok") throw new Error(value.error || "数据暂不可读，请稍后再试");
     topic = next;
     const output = byId("observations");
+    output.hidden = false;
     output.replaceChildren();
     byId("body-controls").hidden = !(next === "memory" && ["body", "isolated"].includes(targetMode));
     setPage("dashboard");
@@ -755,11 +664,10 @@ async function show(next = topic) {
     return;
   }
   topic = "context";
-  const output = byId("observations");
-  output.replaceChildren();
+  byId("observations").replaceChildren();
   byId("body-controls").hidden = true;
   setPage("dashboard");
-  await paintContext(output);
+  mountContext();
   stamp();
 }
 async function load(next = topic) {
@@ -794,7 +702,7 @@ async function perform(operation) {
   }
 }
 function connect(mode, message, url) {
-  closeContext();
+  unmountContext();
   clearTimeout(grantExpiry);
   connectionId = null;
   targetMode = mode; epoch = null; armed = null;
@@ -826,20 +734,25 @@ function showConnection(info) {
 }
 
 /* ---------- 上下文观测桥 ---------- */
-function closeContext() {
-  if (byId("context-window").open) byId("context-window").close();
-  contextFrame?.remove();
-  contextFrame = null;
-}
-function openContext() {
+function mountContext() {
   if (!connectionId) throw new Error("请先连接 Alice");
+  const host = byId("context-host");
+  host.hidden = false;
+  if (contextFrame) return;
   const frame = node("iframe");
   frame.title = "上下文观测";
   frame.allow = "clipboard-write";
   frame.src = "/context-inspector/";
-  byId("context-frame-host").replaceChildren(frame);
+  host.replaceChildren(frame);
   contextFrame = frame;
-  byId("context-window").showModal();
+}
+function unmountContext() {
+  if (!contextFrame) return;
+  contextFrame.remove();
+  contextFrame = null;
+  const host = byId("context-host");
+  host.replaceChildren();
+  host.hidden = true;
 }
 window.AliceLabContext = {
   async read(caller, name, params, signal) {
@@ -866,10 +779,6 @@ window.AliceLabContext = {
     }
   },
 };
-byId("close-context").onclick = closeContext;
-byId("context-window").addEventListener("close", () => {
-  if (!byId("context-window").open) closeContext();
-});
 
 /* ---------- 事件绑定 ---------- */
 async function api(action, params = {}, fields = {}, signal) {

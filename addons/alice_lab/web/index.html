@@ -46,6 +46,7 @@
 
     <section id="observe" aria-labelledby="observe-title" hidden>
       <h3 id="observe-title" class="sr-only">运行数据</h3>
+      <div id="context-host" hidden></div>
       <div id="observations"></div>
       <details id="body-controls" hidden><summary>查看已授权的记忆正文</summary>
         <form id="body-form" class="actions">
@@ -85,8 +86,4 @@
     <p id="feedback" role="status" aria-live="polite"></p>
   </main>
 </div>
-<dialog id="context-window" aria-label="上下文观测">
-  <div class="context-window-bar"><button id="close-context" class="quiet" type="button" autofocus>返回 Lab</button></div>
-  <div id="context-frame-host"></div>
-</dialog>
 </body></html>
