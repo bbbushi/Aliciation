@@ -21,6 +21,20 @@ const callStatusLabels = {ok:"成功", error:"失败", cancelled:"取消", strea
 const originLabels = {interest:"兴趣", exploration:"探索", review:"复读审核", user_request:"用户指定",
   problem:"问题", iteration:"迭代", extraction:"提取"};
 const C = ["#2f7a63", "#3d6f9c", "#b07a2f", "#8a5a9e", "#a8544c", "#6d7c46"];
+const modeColors = {interest:C[1], problem:C[2], iteration:C[3], idle:C[5]};
+const layerColors = {active:C[0], warehouse:C[2], longterm:C[1]};
+const phaseColors = {completed:C[0], db_committed:C[0], file_replaced:C[2], prepared:C[2],
+  rolled_back:C[4], aborted:C[4], superseded:C[4], unknown:C[5], unreadable:C[4]};
+const statusColors = {open:C[2], resolved:C[0], closed:C[5], unknown:C[4]};
+const purposeColors = {main:C[1], main_stream:C[1], main_fallback:C[2], extraction:C[3], evolution:C[4],
+  distill:C[5], deliberate:C[2], judge:C[0], review:C[3], summary:C[5], vision:C[4], search:C[0]};
+function statusColor(key) {
+  if (statusColors[key]) return statusColors[key];
+  return String(key).startsWith("waiting") ? C[3] : C[4];
+}
+function purposeColor(value) {
+  return purposeColors[value] || "#7c8b83";
+}
 
 let targetMode = null, epoch = null, topic = "schedule", armed = null, working = false;
 let contextFrame = null, connectionId = null, grantExpiry = null, page = "gate", loadedAt = null;
@@ -65,6 +79,10 @@ const fmt = {
   },
   short: (id) => (id ? String(id).slice(0, 8) : "—"),
 };
+function opTime(id) {
+  const m = String(id || "").match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+  return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : "—";
+}
 
 function kpis(specs) {
   const row = el("div", "kpis");
@@ -93,42 +111,247 @@ function pill(text, tone) {
 function emptyNote(text) {
   return el("p", "empty", text);
 }
-function barRows(items, opts = {}) {
-  const wrap = el("div", "bars"), max = Math.max(...items.map((i) => i.value || 0), 0.0001);
+/* ---------- 图表语法 ---------- */
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs || {}) n.setAttribute(k, attrs[k]);
+  return n;
+}
+function donut(segments, opts = {}) {
+  const alive = segments.filter((s) => (s.value || 0) > 0);
+  const total = alive.reduce((a, s) => a + s.value, 0);
+  if (!total) return emptyNote("暂无数据。");
+  const size = 128, width = 13, r = (size - width) / 2 - 3, cx = size / 2, len = 2 * Math.PI * r;
+  const chart = sv("svg", {viewBox:`0 0 ${size} ${size}`, class:"donut-ring", role:"img",
+    "aria-label": alive.map((s) => `${s.label} ${fmt.int(s.value)}，占 ${fmt.pct(s.value / total)}`).join("；")});
+  chart.append(sv("circle", {cx, cy:cx, r, fill:"none", stroke:"#e9ede4", "stroke-width":width}));
+  let offset = 0;
+  for (const seg of alive) {
+    const span = (seg.value / total) * len, drawn = Math.max(span - 1.2, 0.4);
+    const arc = sv("circle", {cx, cy:cx, r, fill:"none", stroke:seg.color, "stroke-width":width,
+      "stroke-dasharray":`${drawn} ${len - drawn}`, "stroke-dashoffset":-offset,
+      transform:`rotate(-90 ${cx} ${cx})`});
+    const tip = sv("title");
+    tip.textContent = `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / total)}`;
+    arc.append(tip);
+    chart.append(arc);
+    offset += span;
+  }
+  const big = sv("text", {x:cx, y:cx + 1, "text-anchor":"middle", "font-size":21, "font-weight":600, fill:"#182722"});
+  big.textContent = opts.centerValue ?? fmt.int(total);
+  const small = sv("text", {x:cx, y:cx + 18, "text-anchor":"middle", "font-size":10.5, fill:"#4c6158"});
+  small.textContent = opts.centerLabel || "合计";
+  chart.append(big, small);
+  const legend = el("div", "donut-legend");
+  for (const seg of segments) {
+    if (!(seg.value > 0)) continue;
+    const row = el("div", "dl-row"), dot = el("span", "dot");
+    dot.style.background = seg.color;
+    row.append(dot, el("span", "dl-name", seg.label), el("b", "dl-pct", fmt.pct(seg.value / total)));
+    if (seg.note) row.append(el("span", "dl-note", seg.note));
+    legend.append(row);
+  }
+  const wrap = el("div", "donut");
+  wrap.append(chart, legend);
+  return wrap;
+}
+function waterfall(steps) {
+  let run = 0;
+  const marks = steps.map((step) => {
+    if (step.kind === "total") return {bottom:0, height:run, at:run};
+    if (step.kind === "add") {
+      const mark = {bottom:run, height:step.value || 0};
+      run += step.value || 0;
+      mark.at = run;
+      return mark;
+    }
+    run = step.value || 0;
+    return {bottom:0, height:run, at:run};
+  });
+  const max = Math.max(...marks.map((m) => m.bottom + m.height), 1);
+  const plot = el("div", "wf"), axis = el("div", "wf-axis");
+  steps.forEach((step, i) => {
+    const mark = marks[i], col = el("div", "wf-col"), gap = el("div", "wf-gap");
+    gap.style.height = ((mark.bottom / max) * 100).toFixed(2) + "%";
+    const bar = el("div", "wf-bar" + (step.kind === "total" ? " total" : ""));
+    bar.style.height = ((mark.height / max) * 100).toFixed(2) + "%";
+    bar.style.background = step.color;
+    bar.title = `${step.label} ${fmt.int(step.value)}${step.kind === "add" ? `（累计 ${fmt.int(mark.at)}）` : ""}`;
+    bar.append(el("span", "wf-val", (step.kind === "add" && step.value ? "+" : "") + fmt.int(step.value)));
+    col.append(gap, bar);
+    plot.append(col);
+    axis.append(el("span", "wf-lab", step.label));
+  });
+  const wrap = el("div", "wf-wrap");
+  wrap.append(plot, axis);
+  return wrap;
+}
+function ribbon(items, opts = {}) {
+  const bar = el("div", "ribbon");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", opts.label || "");
   for (const item of items) {
-    const row = el("div", "bar-row");
-    if (opts.labelWidth) row.style.gridTemplateColumns = `${opts.labelWidth}px minmax(0,1fr) 112px`;
-    const name = el("span", "bar-name", item.label);
+    const seg = el("span", "ribbon-seg");
+    seg.style.background = item.color;
+    seg.title = item.title || "";
+    bar.append(seg);
+  }
+  const wrap = el("div", "ribbon-wrap");
+  wrap.append(bar);
+  if (items.length && (opts.start || opts.end)) {
+    const axis = el("div", "ribbon-axis");
+    axis.append(el("span", "", opts.start || ""), el("span", "", opts.end || ""));
+    wrap.append(axis);
+  }
+  return wrap;
+}
+function scatter(points, opts = {}) {
+  const maxX = Math.max(...points.map((p) => p.x || 0), 1);
+  const maxY = Math.max(...points.map((p) => p.y || 0), 1);
+  const wrap = el("div", "scatter"), ycol = el("div", "sc-y");
+  ycol.append(el("span", "", fmt.int(maxY)), el("span", "", "0"));
+  const plot = el("div", "sc-plot");
+  plot.setAttribute("role", "img");
+  plot.setAttribute("aria-label", opts.label || "散点图");
+  for (let i = 1; i < 4; i += 1) {
+    const grid = el("div", "sc-grid");
+    grid.style.bottom = i * 25 + "%";
+    plot.append(grid);
+  }
+  const buckets = new Map();
+  for (const p of points) {
+    const px = (p.x || 0) / maxX, py = (p.y || 0) / maxY;
+    const key = `${Math.round(px * 80)}:${Math.round(py * 80)}`;
+    const slot = buckets.get(key) || {px:0, py:0, n:0, head:p, ring:false};
+    slot.px += px;
+    slot.py += py;
+    slot.n += 1;
+    slot.ring = slot.ring || Boolean(p.ring);
+    buckets.set(key, slot);
+  }
+  for (const slot of buckets.values()) {
+    const px = slot.px / slot.n, py = slot.py / slot.n;
+    const size = Math.min(18, 9 + Math.sqrt(slot.n - 1) * 3.2);
+    const dot = el("span", "sc-dot" + (slot.ring || slot.head.ring ? " imp" : ""));
+    dot.style.left = `calc(5px + (100% - 10px) * ${px.toFixed(4)})`;
+    dot.style.bottom = `calc(5px + (100% - 10px) * ${py.toFixed(4)})`;
+    dot.style.width = size.toFixed(1) + "px";
+    dot.style.height = size.toFixed(1) + "px";
+    dot.style.background = slot.head.color;
+    dot.title = slot.n > 1 ? `${slot.n} 条记忆数值接近` : slot.head.title;
+    plot.append(dot);
+  }
+  const xaxis = el("div", "sc-x");
+  xaxis.append(el("span", "", "0"), el("span", "", `${opts.xName || "横轴"} ${fmt.int(maxX)}`));
+  const right = el("div", "sc-right");
+  right.append(plot, xaxis);
+  wrap.append(ycol, right);
+  return wrap;
+}
+function heatmap(rowLabels, colLabels, values) {
+  const max = Math.max(...values.flat(), 1);
+  const grid = el("div", "heat");
+  grid.style.gridTemplateColumns = `minmax(46px,auto) repeat(${colLabels.length}, minmax(30px,1fr))`;
+  grid.append(el("span", "heat-corner"));
+  for (const label of colLabels) grid.append(el("span", "heat-col", label));
+  rowLabels.forEach((label, r) => {
+    grid.append(el("span", "heat-row", label));
+    colLabels.forEach((col, c) => {
+      const value = values[r][c] || 0, cell = el("span", "heat-cell", value ? fmt.int(value) : "");
+      if (value) {
+        const k = 0.12 + 0.76 * (value / max);
+        cell.style.background = `rgba(47,122,99,${k.toFixed(2)})`;
+        if (k > 0.52) cell.style.color = "#fff";
+      }
+      cell.title = `${label} · ${col}：${value}`;
+      grid.append(cell);
+    });
+  });
+  const wrap = el("div", "heat-wrap");
+  wrap.append(grid);
+  return wrap;
+}
+function histogram(values, edges, labels) {
+  const counts = new Array(edges.length + 1).fill(0);
+  for (const value of values) {
+    let index = edges.findIndex((edge) => value < edge);
+    if (index < 0) index = edges.length;
+    counts[index] += 1;
+  }
+  const max = Math.max(...counts, 1);
+  const plot = el("div", "hist");
+  counts.forEach((count, i) => {
+    const col = el("div", "hist-col");
+    col.append(el("span", "hist-val", fmt.int(count)));
+    const bar = el("div", "hist-bar");
+    bar.style.height = Math.max(count ? 3 : 1, (count / max) * 100) + "%";
+    bar.style.background = i === counts.length - 1 ? C[4] : C[1];
+    bar.style.opacity = count ? "1" : ".3";
+    bar.title = `${labels[i]}：${count} 次`;
+    col.append(bar);
+    plot.append(col);
+  });
+  const axis = el("div", "hist-axis");
+  for (const label of labels) axis.append(el("span", "", label));
+  const wrap = el("div", "hist-wrap");
+  wrap.append(plot, axis);
+  return wrap;
+}
+function lollipop(items) {
+  const max = Math.max(...items.map((i) => i.value || 0), 1);
+  const wrap = el("div", "lol");
+  for (const item of items) {
+    const row = el("div", "lol-row"), name = el("span", "lol-name", item.label);
     name.title = item.label;
-    row.append(name);
-    const track = el("div", "bar-track"), fill = el("div", "bar-fill");
-    fill.style.width = Math.max(0, Math.min(100, ((item.value || 0) / max) * 100)).toFixed(1) + "%";
-    fill.style.background = item.color || C[1];
-    track.append(fill);
-    const note = el("span", "bar-note", item.note ?? fmt.int(item.value));
-    note.title = item.note ?? fmt.int(item.value);
-    row.append(track, note);
+    const pct = Math.max(2, ((item.value || 0) / max) * 100);
+    const track = el("div", "lol-track"), line = el("span", "lol-line"), dot = el("span", "lol-dot");
+    line.style.width = pct + "%";
+    line.style.background = item.color || C[1];
+    dot.style.left = pct + "%";
+    dot.style.background = item.color || C[1];
+    track.append(line, dot);
+    const note = el("span", "lol-note", item.note ?? fmt.int(item.value));
+    note.title = item.note ?? "";
+    row.append(name, track, note);
     wrap.append(row);
   }
   return wrap;
 }
-function stack(segments) {
-  const bar = el("div", "stack"), legend = el("div", "legend"), total = segments.reduce((a, s) => a + (s.value || 0), 0);
+function unitGrid(cells, label) {
+  const wrap = el("div", "units");
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", label || "");
+  for (const cell of cells) {
+    const unit = el("span", "unit");
+    unit.style.background = cell.color;
+    unit.title = cell.title || "";
+    wrap.append(unit);
+  }
+  return wrap;
+}
+function layerColumn(segments) {
+  const total = segments.reduce((a, s) => a + (s.value || 0), 0);
+  if (!total) return emptyNote("暂无记忆。");
+  const wrap = el("div", "vlayers"), col = el("div", "vlayer");
+  col.setAttribute("role", "img");
+  col.setAttribute("aria-label", segments.map((s) => `${s.label} ${fmt.int(s.value)}`).join("；"));
   for (const seg of segments) {
     if (!seg.value) continue;
     const part = el("span");
-    part.style.width = ((seg.value / (total || 1)) * 100).toFixed(2) + "%";
+    part.style.height = ((seg.value / total) * 100).toFixed(2) + "%";
     part.style.background = seg.color;
-    part.title = `${seg.label} ${fmt.int(seg.value)}`;
-    bar.append(part);
-    const item = el("span");
-    const dot = el("span", "dot");
-    dot.style.background = seg.color;
-    item.append(dot, node("span", `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / (total || 1))}`));
-    legend.append(item);
+    part.title = `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / total)}`;
+    col.append(part);
   }
-  const wrap = el("div");
-  wrap.append(bar, legend);
+  const legend = el("div", "donut-legend");
+  for (const seg of segments) {
+    const row = el("div", "dl-row"), dot = el("span", "dot");
+    dot.style.background = seg.color;
+    row.append(dot, el("span", "dl-name", seg.label), el("b", "dl-pct", fmt.pct((seg.value || 0) / total)));
+    legend.append(row);
+  }
+  wrap.append(col, legend);
   return wrap;
 }
 function table(headers, rows, opts = {}) {
@@ -226,36 +449,60 @@ function paintSchedule(v, out) {
     {label:"抽签记录", value: fmt.int(recs.length), hint: "本会话最近 30 次"},
   ]));
 
+  const weights = drawable ? cur.draw_weights
+    : Object.fromEntries(keys.map((key) => [key, info(key).weight || 0]));
+  const weightTotal = Object.keys(weights).reduce((a, key) => a + (weights[key] || 0), 0);
+  const topKey = Object.keys(weights).reduce((best, key) => ((weights[key] || 0) > (weights[best] || 0) ? key : best), keys[0]);
   const weightCard = card("抽签权重", drawable
     ? "按权重归一化得到抽中概率；内容分来自问题重要度/紧急度与轮转债。"
     : "本次存在优先事项，直接指定，不进入抽签。");
-  weightCard.body.append(barRows(keys.map((key) => ({
+  weightCard.body.append(donut(keys.map((key) => ({
     label: modes[key],
-    value: info(key).weight || 0,
-    color: key === "idle" ? C[2] : C[1],
-    note: `${probability(cur.draw_weights, key)} · 分 ${info(key).content_score ?? "—"}`,
-  }))));
-  if (!drawable) weightCard.body.append(el("p", "note", "没有 draw_weights：优先事项或明确指定时不会抽签。"));
+    value: weights[key] || 0,
+    color: key === "idle" ? C[5] : key === "problem" ? C[2] : key === "iteration" ? C[3] : C[1],
+    note: drawable ? `内容分 ${info(key).content_score ?? "—"}`
+      : `权重 ${info(key).weight ?? "—"} · 内容分 ${info(key).content_score ?? "—"}`,
+  })), {
+    centerValue: drawable ? probability(cur.draw_weights, topKey) : fmt.int(weightTotal),
+    centerLabel: drawable ? modes[topKey] : "权重合计",
+  }));
+  if (!drawable && weightTotal) weightCard.body.append(el("p", "note", "没有 draw_weights：优先事项或明确指定时不会抽签。"));
 
   const dry = cur.dry_windows || 0, blocked = cur.blocked_modes || 0;
+  const dryAdd = 2 * Math.min(dry, 3), blockAdd = 2 * Math.min(blocked, 3);
   const restCard = card("发呆分构成", "发呆分 = 1 + 2×无进展轮（最多 3）+ 2×受阻模式（最多 3）。");
-  restCard.body.append(stack([
-    {label:"基数", value:1, color:C[5]},
-    {label:"无进展", value:2 * Math.min(dry, 3), color:C[2]},
-    {label:"受阻", value:2 * Math.min(blocked, 3), color:C[4]},
+  restCard.body.append(waterfall([
+    {label:"基数", value:1, kind:"base", color:C[5]},
+    {label:"无进展", value:dryAdd, kind:"add", color:C[2]},
+    {label:"受阻", value:blockAdd, kind:"add", color:C[4]},
+    {label:"合计", value:1 + dryAdd + blockAdd, kind:"total", color:C[0]},
   ]));
   restCard.body.append(line("发呆权重", String(info("idle").weight ?? "—")));
   restCard.body.append(line("发呆秒数", cur.idle_seconds ? cur.idle_seconds + "s" : "未开启"));
 
-  const recentCard = card("最近实际选择", "最近 12 次调度，含原因与当时概率。");
+  const recentCard = card("最近实际选择", "先看色带：左旧右新，颜色是模式；下面每次的决策留痕。");
   if (!recs.length) recentCard.body.append(emptyNote("还没有运行记录。"));
   else {
+    const seq = recs.slice(0, 12).slice().reverse();
+    recentCard.body.append(ribbon(seq.map((item) => ({
+      color: modeColors[item.activity] || C[5],
+      title: `${fmt.clock(item.at)} ${modes[item.activity] || item.activity} · ${reasons[item.reason] || "原因未记录"}`,
+    })), {label:"最近选择的模式序列", start:fmt.clock(seq[0].at), end:fmt.clock(seq[seq.length - 1].at)}));
+    const usedModes = [...new Set(seq.map((item) => item.activity))];
+    const modeLegend = el("div", "legend");
+    for (const key of usedModes) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = modeColors[key] || C[5];
+      item.append(dot, node("span", modes[key] || key));
+      modeLegend.append(item);
+    }
+    recentCard.body.append(modeLegend);
     const tl = el("div", "tl tl-cols");
     for (const item of recs.slice(0, 12)) {
       const row = el("div", "tl-item");
       row.append(el("div", "tl-at", fmt.clock(item.at)));
       const dotEl = el("div", "tl-node");
-      dotEl.style.background = item.activity === "idle" ? C[2] : C[1];
+      dotEl.style.background = modeColors[item.activity] || C[1];
       row.append(dotEl);
       const body = el("div", "tl-body"), title = el("div", "tl-title");
       title.append(node("span", modes[item.activity] || item.activity));
@@ -303,7 +550,7 @@ function paintMemory(v, out) {
   ]));
 
   const layerCard = card("三层分布", "活跃层进上下文，仓库层待晋升，长期层是稳定结论。");
-  layerCard.body.append(stack([
+  layerCard.body.append(layerColumn([
     {label:"活跃", value:counts.active || 0, color:C[0]},
     {label:"仓库", value:counts.warehouse || 0, color:C[2]},
     {label:"长期", value:counts.longterm || 0, color:C[1]},
@@ -314,17 +561,38 @@ function paintMemory(v, out) {
   layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
   layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
 
-  const ranked = [...items].sort((a, b) => (b.salience || 0) - (a.salience || 0)
-    || (b.use_count || 0) - (a.use_count || 0)).slice(0, 8);
-  const heatCard = card("重要与常用", "与 Alice 自己的排序取向一致：先 salience（重大事项 0/1），再取用次数。");
-  heatCard.body.append(ranked.length
-    ? barRows(ranked.map((i) => ({label:`#${i.id} ${kindLabels[i.kind] || i.kind || ""}`,
-        value:i.use_count || 0, color:i.salience ? C[3] : C[1],
-        note:`${i.salience ? "重要" : "一般"} · ${fmt.int(i.use_count)} 次`})))
+  const heatCard = card("提及 × 取用", "横轴被提及次数，纵轴被取用次数；带圈的是重大事项。右下角 = 说过很多次、却很少用到。");
+  heatCard.body.append(items.length
+    ? scatter(items.map((i) => ({
+        x:i.mention_count || 0, y:i.use_count || 0,
+        color:layerColors[i.layer] || C[5],
+        ring:Boolean(i.salience),
+        title:`#${i.id} ${kindLabels[i.kind] || ""} · 提及 ${fmt.int(i.mention_count)} · 取用 ${fmt.int(i.use_count)}${i.salience ? " · 重要" : ""}`,
+      })), {xName:"提及", label:`${items.length} 条记忆的提及与取用分布`})
     : emptyNote("还没有记忆。"));
-  if (ranked.length) {
+  if (items.length) {
+    const mix = el("div", "legend");
+    for (const key of Object.keys(layerLabels)) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = layerColors[key];
+      item.append(dot, node("span", layerLabels[key]));
+      mix.append(item);
+    }
+    const imp = el("span");
+    imp.append(el("span", "dot ring"), node("span", "重大事项"));
+    mix.append(imp);
+    heatCard.body.append(mix);
+    const sumMention = items.reduce((a, i) => a + (i.mention_count || 0), 0);
+    const sumUse = items.reduce((a, i) => a + (i.use_count || 0), 0);
+    const never = items.filter((i) => !i.use_count).length;
+    const talky = items.filter((i) => (i.mention_count || 0) >= 5 && (i.use_count || 0) <= 1).length;
+    const stats = el("div", "rows stats");
+    stats.append(line("合计提及 / 取用", `${fmt.int(sumMention)} / ${fmt.int(sumUse)}`));
+    stats.append(line("从未被取用", `${never} 条`));
+    stats.append(line("提及多、取用少", `${talky} 条`));
+    heatCard.body.append(stats);
     heatCard.body.append(el("p", "note",
-      "salience 只有 0/1 两档（生日、健康、重大决定、重要约定、强烈情绪），不是连续价值分；层与取用次数才是长期依据。"));
+      "salience 只有 0/1 两档，不是连续价值分；点越大，表示落在附近的记忆越多。"));
   }
 
   const listCard = card("最近记忆", `按 id 倒序，最多 ${items.length} 条；只有元数据。`);
@@ -345,7 +613,7 @@ function paintMemory(v, out) {
       : "当前连接只有元数据授权，按 ID 读取正文会被拒绝。"));
   const column = el("div", "col");
   column.append(layerCard.box, noteCard.box);
-  const pair = el("div", "grid");
+  const pair = el("div", "grid equal");
   pair.append(column, heatCard.box);
   out.append(pair);
   mountCards(out, [{box: listCard.box, wide:true}]);
@@ -367,16 +635,19 @@ function paintQuestions(v, out) {
     {label:"最近更新", value: latest ? fmt.ago(latest) : "—"},
   ]));
 
+  const statusKeys = Object.keys(statuses).sort((a, b) => statuses[b] - statuses[a]);
+  const originKeys = Object.keys(origins).sort((a, b) => origins[b] - origins[a]);
   const statusCard = card("状态分布", "waiting* 表示在等外部条件，不是卡住。");
-  statusCard.body.append(Object.keys(statuses).length
-    ? barRows(Object.entries(statuses).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: statusLabel(key), value:n, color:C[0]})))
+  statusCard.body.append(statusKeys.length
+    ? donut(statusKeys.map((key) => ({label:statusLabel(key), value:statuses[key], color:statusColor(key)})),
+        {centerValue:fmt.int(items.length), centerLabel:"疑问"})
     : emptyNote("暂无疑问。"));
 
-  const originCard = card("来源分布", "谁把它放进 Alice 的工作台。");
-  originCard.body.append(Object.keys(origins).length
-    ? barRows(Object.entries(origins).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: originLabels[key] || key, value:n, color:C[3]})))
+  const originCard = card("来源 × 状态", "行是来源，列是状态；格子越深，数量越多。");
+  originCard.body.append(originKeys.length && statusKeys.length
+    ? heatmap(originKeys.map((key) => originLabels[key] || key), statusKeys.map((key) => statusLabel(key)),
+        originKeys.map((origin) => statusKeys.map((status) =>
+          items.filter((i) => (i.origin || "unknown") === origin && (i.status || "unknown") === status).length)))
     : emptyNote("暂无来源记录。"));
 
   const listCard = card("疑问清单", "按更新时间倒序；隔离测试里可直接推进一步。");
@@ -446,17 +717,29 @@ function paintCalls(v, out) {
     {label:"中位耗时", value: fmt.dur(median)},
   ]));
 
-  const trendCard = card("耗时趋势", "每次模型调用一根柱，左旧右新。");
+  const peak = Math.max(...items.map((i) => i.duration_ms || 0), 1);
+  const useLog = peak > Math.max(median || 1, 1) * 5 && peak > 20000;
+  const heightOf = (value) => useLog
+    ? Math.log10(1 + Math.max(0, value)) / Math.log10(1 + peak)
+    : Math.max(0, value) / peak;
+  const trendCard = card("耗时趋势", useLog
+    ? `每次模型调用一根柱，左旧右新；存在超长调用（峰值 ${fmt.dur(peak)}），高度按对数压缩。`
+    : "每次模型调用一根柱，左旧右新；虚线是本次样本的中位数。");
   if (!items.length) trendCard.body.append(emptyNote("还没有调用回执。"));
   else {
-    const max = Math.max(...items.map((i) => i.duration_ms || 0), 1);
     const cols = el("div", "cols");
     for (const item of items) {
-      const bar = el("div");
-      bar.style.height = Math.max(2, ((item.duration_ms || 0) / max) * 100) + "%";
+      const bar = el("div", "col-bar");
+      bar.style.height = Math.max(2, heightOf(item.duration_ms || 0) * 100) + "%";
       bar.style.background = item.status && item.status !== "ok" ? C[4] : item.attempt > 1 ? C[2] : C[1];
       bar.title = `${fmt.clock(item.ts)} · ${purposeLabels[item.purpose] || item.purpose} · ${fmt.dur(item.duration_ms)}${item.status && item.status !== "ok" ? " · " + item.status : ""}`;
       cols.append(bar);
+    }
+    if (median) {
+      const ref = el("div", "ref");
+      ref.style.bottom = (heightOf(median) * 100).toFixed(1) + "%";
+      ref.append(el("span", "ref-lab", "中位 " + fmt.dur(median)));
+      cols.append(ref);
     }
     trendCard.body.append(cols);
     const axis = el("div", "axis");
@@ -479,12 +762,23 @@ function paintCalls(v, out) {
     const u = i.usage;
     if (u && typeof u === "object") slot.tokens += (u.prompt || 0) + (u.completion || 0);
   }
-  const purposeCard = card("用途分布", "同一请求里可能有多次调用：主对话、记忆提取、评审分别计量。");
-  purposeCard.body.append(Object.keys(purposeMap).length
-    ? barRows(Object.entries(purposeMap).sort((a, b) => b[1].count - a[1].count).map(([key, s]) => ({
-        label: purposeLabel(key), value:s.count, color:C[3],
-        note:`${s.count} 次 · ${fmt.tok(s.tokens)} tok`})))
+  const purposeCard = card("用途分布", "一格代表一次调用；颜色是用途，悬停看时间与耗时。");
+  purposeCard.body.append(items.length
+    ? unitGrid(items.map((i) => ({
+        color:purposeColor(i.purpose),
+        title:`${fmt.clock(i.ts)} · ${purposeLabel(i.purpose)} · ${fmt.dur(i.duration_ms)}`,
+      })), `${items.length} 次调用的用途`)
     : emptyNote("暂无调用。"));
+  if (items.length) {
+    const used = el("div", "legend");
+    for (const [key, slot] of Object.entries(purposeMap).sort((a, b) => b[1].count - a[1].count)) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = purposeColor(key);
+      item.append(dot, node("span", `${purposeLabel(key)} ${slot.count} · ${fmt.tok(slot.tokens)}`));
+      used.append(item);
+    }
+    purposeCard.body.append(used);
+  }
 
   const stateCard = card("回执完整度", "哪些调用拿到了真实用量。");
   stateCard.body.append(line("有 usage 回执", `${tokens.known} / ${items.length}`));
@@ -501,12 +795,17 @@ function paintCalls(v, out) {
     const u = i.usage;
     if (u && typeof u === "object") slot.tokens += (u.prompt || 0) + (u.completion || 0);
   }
-  const modelCard = card("模型分布", "回执里报告的模型；缺失时按未知计。");
+  const modelCard = card("模型分布", "回执里报告的模型；点越靠右，调用越多。");
   modelCard.body.append(Object.keys(modelMap).length
-    ? barRows(Object.entries(modelMap).sort((a, b) => b[1].count - a[1].count).map(([key, s]) => ({
-        label: key, value:s.count, color:C[1],
-        note:`${s.count} 次 · ${fmt.tok(s.tokens)} tok`})), {labelWidth:128})
+    ? lollipop(Object.entries(modelMap).sort((a, b) => b[1].count - a[1].count).map(([key, slot]) => ({
+        label:key, value:slot.count, color:C[1],
+        note:`${slot.count} 次 · ${fmt.tok(slot.tokens)} tok`})))
     : emptyNote("暂无模型回执。"));
+
+  const histCard = card("耗时分布", "按调用次数分桶；最后一桶是 ≥30s。");
+  histCard.body.append(durations.length
+    ? histogram(durations, [1000, 3000, 10000, 30000], ["<1s", "1–3s", "3–10s", "10–30s", "≥30s"])
+    : emptyNote("还没有带耗时的回执。"));
 
   const tableCard = card("调用明细", "最近 40 次，按时间倒序。");
   tableCard.body.append(items.length ? table(
@@ -519,8 +818,11 @@ function paintCalls(v, out) {
     })) : emptyNote("暂无调用。"));
   if (items.length) tableCard.body.append(rawDetails("查看原始回执", items));
 
-  out.append(gridOf([trendCard.box, purposeCard.box, stateCard.box, modelCard.box]));
-  mountCards(out, [{box: tableCard.box, wide:true}]);
+  out.append(trendCard.box);
+  mountCards(out, [
+    {box: purposeCard.box}, {box: modelCard.box}, {box: histCard.box}, {box: stateCard.box},
+    {box: tableCard.box, wide:true},
+  ]);
 }
 
 function paintPersona(v, out) {
@@ -537,12 +839,28 @@ function paintPersona(v, out) {
 
   const phaseMap = {};
   for (const i of items) phaseMap[i.phase || "unknown"] = (phaseMap[i.phase || "unknown"] || 0) + 1;
-  const phaseCard = card("阶段分布", "终态之外还留在日志里的，都是需要人工核对的迁移。");
-  phaseCard.body.append(items.length
-    ? barRows(Object.entries(phaseMap).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: phaseLabels[key] || key, value:n,
-        color:["completed"].includes(key) ? C[0] : ["rolled_back", "aborted", "superseded"].includes(key) ? C[5] : C[2]})))
-    : emptyNote("没有人格导入记录。"));
+  const phaseCard = card("导入序列", "一个色块一次导入，左旧右新；颜色是阶段，计数在下方图例。");
+  if (!items.length) phaseCard.body.append(emptyNote("没有人格导入记录。"));
+  else {
+    const chrono = items.slice().reverse();
+    phaseCard.body.append(ribbon(chrono.map((item) => ({
+      color:phaseColors[item.phase] || C[5],
+      title:`${item.op_id} · ${phaseLabels[item.phase] || item.phase}`,
+    })), {label:"导入操作序列"}));
+    const counts = el("div", "legend");
+    for (const [key, n] of Object.entries(phaseMap).sort((a, b) => b[1] - a[1])) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = phaseColors[key] || C[5];
+      item.append(dot, node("span", `${phaseLabels[key] || key} ${n}`));
+      counts.append(item);
+    }
+    phaseCard.body.append(counts);
+    const inserted = items.reduce((a, i) => a + (i.inserted_count || 0), 0);
+    const unfinished = items.filter((i) => !["completed", "rolled_back", "superseded", "aborted"].includes(i.phase)).length;
+    phaseCard.body.append(line("插入合计", `${fmt.int(inserted)} 条`));
+    phaseCard.body.append(line("未到终态", `${fmt.int(unfinished)} 条`));
+    phaseCard.body.append(line("最近一次", opTime(items[0] && items[0].op_id)));
+  }
 
   const resetCard = card("重置与迁移", "只读操作元数据，不触发恢复。");
   const reset = v.reset;
