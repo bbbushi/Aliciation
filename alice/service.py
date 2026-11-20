@@ -90,11 +90,13 @@ class ChatService:
                  allow_unconfigured: bool = False, _maintenance_activation: bool = False, lab_experiments=False):
         from .instance_lock import InstanceLock
 
-        self._instance_lock = InstanceLock((Path(db_path) if db_path is not None else appconfig.DB_PATH).parent,
-                                           maintenance=_maintenance_activation)
+        database = Path(db_path) if db_path is not None else appconfig.DB_PATH
+        self._profile_database = (database.parent.resolve() / database.name
+                                  == appconfig.DB_PATH.parent.resolve() / appconfig.DB_PATH.name)
+        self._instance_lock = InstanceLock(database.parent, maintenance=_maintenance_activation)
         self._instance_lock.acquire()
         try:
-            self._initialize(cfg, db_path, client, config_path=config_path,
+            self._initialize(cfg, database, client, config_path=config_path,
                              allow_unconfigured=allow_unconfigured, lab_experiments=lab_experiments)
         except BaseException:
             # Failed shutdown must not admit a replacement writer over live jobs.
@@ -102,13 +104,13 @@ class ChatService:
                 self._instance_lock.release()
             raise
 
-    def _initialize(self, cfg, db_path, client, *, config_path, allow_unconfigured, lab_experiments):
+    def _initialize(self, cfg, database: Path, client, *, config_path, allow_unconfigured, lab_experiments):
         self._config_path = Path(config_path).resolve() if config_path is not None else appconfig.USER_DIR / "config.toml"
         # 三参数注入模式不碰本机配置；只有 GUI/自主加载模式绑定写回路径（user/config.toml）。
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
-        reset_record = persona_reset.before_open() if db_path is None else None
-        self.store = Store(Path(db_path) if db_path is not None else appconfig.DB_PATH)
+        reset_record = persona_reset.before_open() if self._profile_database else None
+        self.store = Store(database)
         from .reply_sections import ReplyCache
         self._reply_cache = ReplyCache()
         self._client_owned = client is None
@@ -888,6 +890,8 @@ class ChatService:
 
     def seed(self, tags: list[str], reset: bool = False) -> dict:
         """reset=True 表示「初始化」：先归档旧会话（对话/记忆/人格），再装新人格。"""
+        if reset:
+            self._require_profile_archive()
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
@@ -917,6 +921,8 @@ class ChatService:
             raise ValueError("新原稿请使用原文保留＋六层理解导入；结构化生成已退出，此入口仅恢复 Alice 文件")
         if resume_op_id is not None:
             raise ValueError("旧结构化生成不再续跑；请用原稿新建六层导入，或恢复已生成的 Alice 文件")
+        if reset:
+            self._require_profile_archive()
         def installation_result():
             # Both first completion and read-only replay expose the same
             # installed coverage, captured while the operation lock is held.
@@ -964,6 +970,7 @@ class ChatService:
 
     def reset_session(self) -> dict:
         """丢掉当前会话，回到空白的「第一次见面」。旧数据归档在 data/archive/<时间戳>/。"""
+        self._require_profile_archive()
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
@@ -1155,6 +1162,7 @@ class ChatService:
                 elif payload.get("mode") != self.cfg.persona.expression_mode:
                     raise ValueError("服务未绑定配置文件，不能修改装配模式")
             if ready["reset"]:
+                self._require_profile_archive()
                 self._workers.drain()
                 self._workers.join_worker_reports()
             with self._lock:
@@ -1183,8 +1191,13 @@ class ChatService:
                     pass
                 return {**self.state(), "material_notice": ready["notice"]}
 
+    def _require_profile_archive(self) -> None:
+        if not self._profile_database:
+            raise ValueError("会话归档需要通过 --user-dir 选择完整档案。仅指定数据库无法归档。")
+
     def _archive_locked(self, *, plan=None) -> Path | None:
         """把这场会话（对话轮次/记忆/人格）整体搬进归档目录，然后换上一张空库。"""
+        self._require_profile_archive()
         if plan is not None and (plan["epoch"] != self.store.meta_get("session_epoch")
                                  or plan["current_md"] != persona.persona_md()
                                  or "before_version" in plan and plan["before_version"] != self.store.meta_get("persona_version")):

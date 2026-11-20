@@ -11,7 +11,7 @@ import json
 import time
 
 from .config import Config
-from .llm import chat_text, parse_json
+from .llm import chat_text, parse_json, provider_token_usage
 from .store import Store
 
 MODULES: dict[str, dict] = {
@@ -117,12 +117,7 @@ def record_llm_call(store: Store, purpose: str, started: float, resp=None, *,
             # Never retain the mutable input or let observation failure retry
             # the model. No exception text/body is copied into this marker.
             frozen_context = {"snapshot_status": "context_unavailable"}
-        usage = {}
-        u = getattr(resp, "usage", None)
-        for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
-            v = getattr(u, src, None)
-            if type(v) is int and v >= 0:
-                usage[dst] = v
+        usage = provider_token_usage(resp)
         actual_model = getattr(resp, "model", None)
         event = {"purpose": purpose, "duration_ms": duration_ms,
                  "usage": usage or "unknown", "usage_state": ("partial_receipt" if usage and len(usage) < 2 else

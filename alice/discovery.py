@@ -783,7 +783,7 @@ class DiscoveryCoordinator:
             elif action == "interest_delete":
                 self._remove_interest_locked(_string(payload.get("id"), 32))
             elif action == "run":
-                self._launch_locked(settings, revision, manual=True, interest_id=payload.get("interest_id"))
+                self._launch_manual_locked(settings, revision, interest_id=payload.get("interest_id"))
             elif action == "tieba_forum_check":
                 self._launch_tieba_check_locked(settings, revision, payload.get("forums"))
             elif action == "browser_open":
@@ -909,8 +909,8 @@ class DiscoveryCoordinator:
                 settings[key] = ",".join(dict.fromkeys(engines))
             elif key == "clear_provider_key" and _bool(value):
                 settings["provider_key"] = ""
-        # Autonomous model permission/quotas now belong to thoughts settings.
-        # The old background_enabled flag is retained for file compatibility.
+        # Thoughts settings own autonomous model permission. Discovery allow_paid
+        # and daily_models still govern the explicit discovery worker.
         self._cancel.set()
         if self._chat_session:
             self._chat_session.cancel.set()
@@ -1167,7 +1167,7 @@ class DiscoveryCoordinator:
                             and self.service._channels.activity()['status']=='ready'):
                         from . import consolidation
                         consolidation.run_if_due(self.service.store,self.service.cfg)
-                revision, settings = self._config_locked()
+                _, settings = self._config_locked()
                 next_tick = time.monotonic() + settings["tick_minutes"] * 60
                 # Autonomous selection belongs to the three-mode coordinator.
                 # Keep this timer for source expiry / non-model housekeeping.
@@ -1176,104 +1176,6 @@ class DiscoveryCoordinator:
                 pass
             finally:
                 self.service._lock.release()
-
-    def _launch_thought_locked(self, settings, revision):
-        """One idle, cancellable batch; never occupy the foreground writer slot."""
-        if (self._stop.is_set() or self._unavailable or not settings['enabled']
-                or not settings['background_enabled'] or not settings['allow_paid']
-                or not settings['remember_observations']):
-            return False
-        clock = datetime.now(DAY_ZONE).strftime('%H:%M')
-        start, end = settings['window_start'], settings['window_end']
-        if not (start <= clock < end if start < end else clock >= start or clock < end):
-            return False
-        with self._guard:
-            if self._worker is not None and self._worker.is_alive():
-                return False
-        if self.service._channels.activity()['status'] != 'ready':
-            return False
-        budget = self._budget_locked()
-        if (_exceeds(budget['models'],1,settings['daily_models'])
-                or _exceeds(budget['network'],1,settings['daily_network'])
-                or _exceeds(budget['body_bytes'],settings['model_response_bytes'],_response_budget(settings))):
-            return False
-        store = self.service.store
-        pending = store.pending_thought_rows()
-        stances = store.memory_rows(purpose='thought',scope='gui',kind='stance')
-        if not pending or not any(row['origin'] != 'conversation' for row in pending + stances):
-            return False
-        cfg = self.service.cfg.memory
-        early = cfg.deliberate_early_high and any(r['value_tier']=='high' or r['reflection_hint'] in {'conflict','repeated'} for r in pending)
-        if not early and len(pending) < cfg.deliberate_every_memories:
-            return False
-        from .thought import deliberation_inputs
-        material, stances = deliberation_inputs(store,{r['id'] for r in pending})
-        if not material:
-            return False
-        inputs = material + stances
-        identity = store.learning_model_identity(inputs)
-        if store.conn.execute('SELECT 1 FROM learning_model_attempts WHERE identity=?',(identity,)).fetchone():
-            return False  # An unknown call is not silently retried by the clock.
-        model = {'base_url': self.service.cfg.llm.base_url, 'api_key': self.service.cfg.llm.resolved_key(),
-                 'model': self.service.cfg.llm.cheap_model, 'allow_loopback':True}
-        if not all(model.get(k) for k in ('base_url','api_key','model')):
-            return False
-        now = time.time()
-        job = {'id':uuid.uuid4().hex, 'kind':'thought', 'epoch':self.dataset_id,
-               'revision':revision, 'generation':self._generation, 'day':_day(),
-               'state':'queued','phase':'queued','started_at':now,'cards':0}
-        cancel = threading.Event()
-        worker = threading.Thread(target=self._background_run, args=(self._run_thought, (job,copy.deepcopy(settings),model,cancel)),
-                                  name='alice-thought',daemon=False)
-        with self.service._channels.condition:
-            if self.service._channels.slot is not None or self.service._channels.closing:
-                return False
-            with store.conn:
-                store.conn.execute("INSERT INTO discovery_runs(id,epoch,revision,day,state,phase,started_at) VALUES(?,?,?,?,?,?,?)",
-                                   tuple(job[k] for k in ('id','epoch','revision','day','state','phase','started_at')))
-            self._cancel = cancel
-            with self._guard:
-                self._task, self._worker = dict(job), worker
-            worker.start()
-        return True
-
-    def _run_thought(self, job, settings, model, cancel):
-        from . import thought
-        deadline = time.monotonic()+settings['activity_timeout_seconds']
-        runner = lambda prompt: self._execute(job,cancel,settings,'reflect',{'model':model,'prompt':prompt},deadline)
-        steps = None
-        state, code = 'completed', 'ok'
-        try:
-            # Generator database steps are locked; its yielded I/O stays outside.
-            def create():
-                return thought.deliberate_if_due_steps(self.service.store,self.service.client,self.service.cfg,model_runner=runner)
-            steps = self._store_step(job,cancel,create)
-            value = None
-            while True:
-                try:
-                    operation = self._store_step(job,cancel,lambda: steps.send(value))
-                except StopIteration:
-                    break
-                value = operation()
-        except _Stopped as exc:
-            code = exc.code
-            state = 'cancelled' if code in {'cancelled','foreground_busy','session_changed'} else 'failed'
-        except Exception:
-            code, state = 'processing_failed','failed'
-        finally:
-            if steps is not None:
-                steps.close()
-            if self._unavailable:
-                code, state = 'worker_not_reaped','draining'
-            self._phase(job,'finished',state=state,reason=code)
-            def finish():
-                with self.service.store.conn:
-                    self.service.store.conn.execute("UPDATE discovery_runs SET state=?,phase='finished',reason=?,finished_at=? WHERE id=?",
-                                                    (state,code,time.time(),job['id']))
-            try:
-                self._store_step(job,cancel,finish,settle=True)
-            except Exception:
-                pass
 
     def _background_run(self, target, args):
         with self.service._background.claim("discovery") as acquired:
@@ -1287,45 +1189,27 @@ class DiscoveryCoordinator:
                         self.service.store.conn.execute("UPDATE discovery_runs SET state='cancelled',phase='finished',"
                             "reason='background_busy',finished_at=? WHERE id=?", (time.time(), job["id"]))
 
-    def _launch_locked(self, settings, revision, *, manual, interest_id=None):
-        from .autonomy_policy import search_settings, search_quota_active
+    def _launch_manual_locked(self, settings, revision, *, interest_id=None):
+        from .autonomy_policy import search_settings
         settings = search_settings(settings)
-        def reject(code, message):
-            if manual:
-                raise ChannelError(409, code, message)
-            return False
         if self._stop.is_set() or self._unavailable:
-            return reject("draining", "后台工作者尚未回收或正在关闭")
+            raise ChannelError(409, "draining", "后台工作者尚未回收或正在关闭")
         if not settings["enabled"]:
-            return reject("disabled", "请先启用内容发现")
-        if not manual and not settings["background_enabled"]:
-            return False
+            raise ChannelError(409, "disabled", "请先启用内容发现")
         if settings["pool_capacity"] == 0 or settings["source_pool_bytes"] == 0 or settings["read_candidates"] == 0:
-            return reject("material_disabled", "资料容量或候选读取数为0，请先在设置中调整")
+            raise ChannelError(409, "material_disabled", "资料容量或候选读取数为0，请先在设置中调整")
         with self._guard:
             if self._worker is not None and self._worker.is_alive():
-                return reject("busy", "已有内容发现任务")
+                raise ChannelError(409, "busy", "已有内容发现任务")
         activity = self.service._channels.activity()
         if activity["status"] != "ready":
-            return reject("foreground_busy", "请在Alice已初始化且空闲时开始")
+            raise ChannelError(409, "foreground_busy", "请在Alice已初始化且空闲时开始")
         now = time.time()
-        if not manual and not search_quota_active(settings):
-            clock = datetime.now(DAY_ZONE).strftime("%H:%M")
-            start, end = settings["window_start"], settings["window_end"]
-            inside = start <= clock < end if start < end else clock >= start or clock < end
-            if not inside:
-                return False
-            last = self.service.store.conn.execute("SELECT MAX(started_at) FROM discovery_runs WHERE interest_id IS NOT NULL").fetchone()[0]
-            if last and now - last < settings["activity_interval_minutes"] * 60:
-                return False
-            stock = self.service.store.conn.execute("SELECT COUNT(*) FROM discovery_cards WHERE trigger_kind='interest' AND disabled=0 AND used_at IS NULL AND expires_at>?", (now,)).fetchone()[0]
-            if settings["stock_target"] is not None and stock >= settings["stock_target"]:
-                return False
         platforms = [identity for identity, policy in settings["platforms"].items()
                      if policy["enabled"] and self._available(identity, settings)[0]
                      and (not _third_party(identity, settings) or policy["allow_third_party"])]
         if not platforms:
-            return reject("no_platform", "请先开放至少一个可用平台")
+            raise ChannelError(409, "no_platform", "请先开放至少一个可用平台")
         self.service.store.decay_interests(self.service.cfg.memory.interest_decay_days)
         interests = [dict(r) for r in self.service.store.conn.execute(
             "SELECT * FROM discovery_interests WHERE enabled=1 AND external_allowed=1 "
@@ -1334,17 +1218,17 @@ class DiscoveryCoordinator:
         if interest_id is not None:
             interests = [row for row in interests if row["id"] == interest_id]
         if not interests:
-            return reject("no_interest", "请先添加并允许至少一项搜索兴趣")
+            raise ChannelError(409, "no_interest", "请先添加并允许至少一项搜索兴趣")
         budget = self._budget_locked()
         if _exceeds(budget["queries"], 1, settings["daily_queries"]) or _exceeds(budget["network"], 1, settings["daily_network"]):
-            return reject("quota_exceeded", "今天的发现额度已用完")
+            raise ChannelError(409, "quota_exceeded", "今天的发现额度已用完")
         # User feedback is bounded; age wins after fourteen days, never bypassing permissions.
         interests.sort(key=lambda i: (now - i["last_selected"] >= 14 * 86400,
                                      (now - i["last_selected"]) * i["weight"]), reverse=True)
         model = {"base_url": self.service.cfg.llm.base_url, "api_key": self.service.cfg.llm.resolved_key(),
                  "model": self.service.cfg.llm.cheap_model, "thinking": False, "allow_loopback": True}
         task = {"id": uuid.uuid4().hex, "epoch": self.dataset_id, "revision": revision, "day": _day(),
-                "manual": manual,
+                "manual": True,
                 "state": "queued", "phase": "queued", "reason": "", "started_at": now,
                 "generation": self._generation, "interest_id": interests[0]["id"], "cards": 0}
         with self.service.store.conn:
@@ -1361,7 +1245,7 @@ class DiscoveryCoordinator:
             if self.service._channels.slot is not None or self.service._channels.closing:
                 with self.service.store.conn:
                     self.service.store.conn.execute("UPDATE discovery_runs SET state='cancelled',reason='foreground_busy',finished_at=? WHERE id=?", (time.time(), task["id"]))
-                return reject("foreground_busy", "对话刚刚开始，请稍后再试")
+                raise ChannelError(409, "foreground_busy", "对话刚刚开始，请稍后再试")
             self._cancel = cancel
             with self._guard:
                 self._task, self._worker = dict(task), worker

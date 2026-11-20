@@ -2337,14 +2337,36 @@ function showRestartCommand(command) {
     || "未能读取本次启动命令。请使用启动此服务时的原命令，并保留 --config 和 --port 参数。";
 }
 
+function showRuntimeDistribution(distribution) {
+  const note = $("#runtime-distribution");
+  if (!note) return;
+  note.hidden = !distribution;
+  if (!distribution) { note.textContent = ""; return; }
+  if (distribution.kind === "source") {
+    note.textContent = "源码运行。可选组件的就绪状态见各自设置。";
+    return;
+  }
+  const labels = { qq: "QQ", "browser-reader": "独立浏览器读取", bilibili: "B 站公开接口",
+    "claude-agent": "Claude", "dsh-agent": "DSH" };
+  const components = distribution.components || {};
+  const missing = Object.keys(labels).filter((name) => components[name] === "not-packaged");
+  const lines = [];
+  if (missing.length) lines.push(`此包未内置${missing.map((name) => labels[name]).join("、")}。`);
+  if (components["context-inspector"] === "external-alice-lab") lines.push("完整观察通过独立安装的 Alice Lab 提供。");
+  if (components["p1-evaluation"] === "external-alice-lab-source-runner") lines.push("P1 在 Lab 的源码隔离实例运行。");
+  note.textContent = lines.join(" ") || "桌面包运行。组件状态见各自设置。";
+}
+
 async function loadRuntimeInfo() {
   restartCommand = null;
   try {
     const info = await api("/api/runtime", { headers: { "X-Alice-Intent": "runtime" } });
     showRestartCommand(info.restart_command);
+    showRuntimeDistribution(info.distribution);
     $("#restart-instructions").classList.toggle("hidden", info.desktop === true);
   } catch (e) {
     showRestartCommand(null);
+    showRuntimeDistribution(null);
   }
 }
 
@@ -2361,16 +2383,6 @@ async function loadSettings() {
   }
 }
 
-function openSettings(section = "general") {
-  if (modelWizard && section === "general") { $("#model-provider").focus(); return; }
-  $("#settings-modal").classList.remove("hidden");
-  window.AliceUI?.selectSettings(section);
-  window.AliceQQ?.open();
-  loadSettings();
-  loadModelSettings();
-  loadRuntimeInfo();
-}
-
 function closeSettings() {
   $("#settings-modal").classList.add("hidden");
   window.AliceDiscovery?.setSettingsVisible(false);
@@ -2380,7 +2392,7 @@ function closeSettings() {
 }
 
 function openQQSettings() {
-  openSettings("qq");
+  window.AliceUI.openSettings("qq");
   $("#qq-settings").scrollIntoView({ block: "start" });
   $("#qq-settings").focus({ preventScroll: true });
 }
@@ -2388,8 +2400,8 @@ function openQQSettings() {
 $("#qq-btn").onclick = openQQSettings;
 $("#welcome-qq-btn").onclick = openQQSettings;
 
-$("#settings-btn").onclick = () => openSettings();
-$("#welcome-settings-btn").onclick = () => openSettings();
+$("#settings-btn").onclick = () => window.AliceUI.openSettings();
+$("#welcome-settings-btn").onclick = () => window.AliceUI.openSettings();
 $("#settings-x").onclick = closeSettings;
 $("#settings-modal").addEventListener("click", (e) => {
   if (e.target.id === "settings-modal") closeSettings();
@@ -2865,7 +2877,7 @@ async function send() {
   const text = input.value.trim();
   if (!state || !text || busy || shuttingDown) return;
   if (!sessionEpoch) {
-    setChatNotice("请先同步当前会话，核对记录后再点击发送；草稿与本页 P1 许可已保留。");
+    setChatNotice("请先同步当前会话，核对记录后再点击发送。草稿已保留。");
     await syncHistory();
     return;
   }
@@ -2911,7 +2923,6 @@ async function send() {
       const existing = /^request_(accepted|running|user_committed|interrupted|failed|generated|completed)/.test(error.code || "");
       rejected = !existing && ((error.code !== "status_unavailable" && r.status < 500)
         || ["busy", "draining", "not_ready"].includes(error.code));
-      // 明确拒绝（尤其 busy）不消费 P1 的本页下一轮许可，也不清空草稿。
       // busy 只表示本次没新接单，仍保留原请求 ID，避免重试时漏掉已有记录。
       if (rejected && error.code !== "busy") uncertainSend = null;
       if (existing) {
@@ -2979,7 +2990,6 @@ async function send() {
     if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
   } finally {
     replyMotion(node, false);
-    // 未收到确认仍可能已接受；不能让一次性 P1 许可被另一个新请求复用。
     busy = false;
     if (uncertainSend?.requestId === requestId && uncertainSend.workerReference && !input.value.trim()) {
       input.value = uncertainSend.text; resizeComposer();
@@ -3039,6 +3049,7 @@ boot().catch(showStartupError);
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
   const settingsModal = byId("settings-modal");
   const settingsNav = settingsModal.querySelector(".settings-nav");
+  let settingsRoute = null;
   function revealSettingsButton(button) {
     if (!button || !visible(button)) return;
     const bounds = button.getBoundingClientRect(), viewport = settingsNav.getBoundingClientRect();
@@ -3048,7 +3059,7 @@ boot().catch(showStartupError);
     else if (bounds.bottom > viewport.bottom) settingsNav.scrollTop += bounds.bottom - viewport.bottom;
   }
 
-  function selectSettings(section = "general") {
+  function selectSettingsSection(section) {
     if (!["general", "appearance", "discovery", "thoughts", "observer", "qq", "workers", "claude", "service"].includes(section)) section = "general";
     settingsNav.querySelectorAll("[data-settings]").forEach((el) => el.setAttribute("aria-pressed", String(el.dataset.settings === section)));
     settingsModal.querySelectorAll("[data-settings-section]").forEach((el) => el.classList.toggle("hidden", el.dataset.settingsSection !== section));
@@ -3059,7 +3070,26 @@ boot().catch(showStartupError);
     window.AliceWorkers?.setSettingsVisible(section === "workers" && showing);
     window.AliceClaudeSettings?.setVisible(section === "claude" && showing);
   }
-  window.AliceUI = { selectSettings, openSettings, closeSettings };
+  window.AliceUI = {
+    selectSettings(section = "general") {
+      if (!settingsRoute?.(section)) selectSettingsSection(section);
+    },
+    openSettings(section = "general") {
+      if (settingsRoute?.(section)) return;
+      if (modelWizard && section === "general") { byId("model-provider").focus(); return; }
+      settingsModal.classList.remove("hidden");
+      selectSettingsSection(section);
+      window.AliceQQ?.open();
+      loadSettings();
+      loadModelSettings();
+      loadRuntimeInfo();
+    },
+    closeSettings,
+    registerSettingsRoute(handler) {
+      settingsRoute = handler;
+      return () => { if (settingsRoute === handler) settingsRoute = null; };
+    },
+  };
   settingsNav.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-settings]");
     if (button) window.AliceUI.selectSettings(button.dataset.settings);

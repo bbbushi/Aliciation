@@ -566,7 +566,7 @@ class AutonomyCoordinator:
         from . import capability_registry, context_observation, loop, persona_context
         from .context_memory import MemoryContext, TOOLS as MEMORY_TOOLS
         from .context_history import HistoryContext, TOOLS as HISTORY_TOOLS
-        from .context import messages_tokens
+        from .context import input_headroom, over_input_budget
         from .llm import chat
         service, search = self.service, None
         context = {"scope": "gui", "request_id": run["id"], "run_id": run["id"], "packet_ids": [], "worker_refs": [],
@@ -692,7 +692,6 @@ class AutonomyCoordinator:
                     search.cancel = self.cancel
                     search.background_deadline = deadline
                     tools += capability_registry.sdk_group("search")
-                context["capability_tools"] = tools
                 trace = context_observation.begin_request(store, service.cfg, request_id=run["id"], scope="gui")
                 if trace is not None:
                     for message in intro:
@@ -713,7 +712,7 @@ class AutonomyCoordinator:
                     self._gate(run, config, revision, basis, latest, deadline)
                     if not session.valid() or not memory.valid() or not persona_growth.refs_valid(store, growth_refs) or registry is not None and not registry.valid():
                         raise ValueError("material_changed")
-                    if messages_tokens(messages, tools) + service.cfg.context.reply_reserve_tokens > service.cfg.context.total_budget_tokens > 0:
+                    if over_input_budget(service.cfg.context, messages, tools):
                         raise YieldToForeground("context_budget")
                     reserve_model(store, force=True)
                     calls_started += 1
@@ -752,13 +751,12 @@ class AutonomyCoordinator:
                         self._gate(run, config, revision, basis, latest, deadline)
                         if not autonomy_policy.TEST_CONTROLS_ONLY and performed >= config["run_steps"]:
                             raise YieldToForeground("tool_step_budget")
-                        error = capability_registry.validate_call(tc.function.name, tc.function.arguments, tools)
-                        args = json.loads(tc.function.arguments or "{}") if error is None else {}
+                        args, error = capability_registry.parse_call(tc.function.name, tc.function.arguments, tools)
                         if error is None:
                             error = planning.tool_error(run['id'], tc.function.name, args, context.get("interest_browse"))
                         performed += 1
-                        memory.remaining_tokens = max(0, service.cfg.context.total_budget_tokens - messages_tokens(messages, tools)
-                            - service.cfg.context.reply_reserve_tokens) if service.cfg.context.total_budget_tokens else None
+                        headroom = input_headroom(service.cfg.context, messages, tools)
+                        memory.remaining_tokens = None if headroom is None else max(0, headroom)
                         if tc.function.name == "discovery_search" and error is None:
                             store.conn.execute("UPDATE exploration_runs SET reason='tool_in_flight' WHERE id=?", (run["id"],))
                             store.conn.commit()
@@ -767,14 +765,14 @@ class AutonomyCoordinator:
                             if capability_registry.executor(tc.function.name) == "thought":
                                 with store.source_transaction():
                                     result = thoughts.dump(error) if error else loop.dispatch_tool(store, tc.function.name,
-                                        tc.function.arguments, source_context=context)
+                                        args, source_context=context)
                                     result = tool_receipt(result, tc)
                                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                                     basis = thoughts.current_basis(store, context)
                                     self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
                             else:
                                 result = thoughts.dump(error) if error else loop.dispatch_tool(store, tc.function.name,
-                                    tc.function.arguments, source_context=context)
+                                    args, source_context=context)
                                 result = tool_receipt(result, tc)
                                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                                 basis = thoughts.current_basis(store, context)

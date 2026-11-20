@@ -67,6 +67,39 @@ def safe_provider_error(exc: Exception) -> str:
     return "模型请求失败，请检查接口地址、模型和账户状态"
 
 
+def provider_token_usage(response) -> dict[str, int]:
+    """Read the token counts an actual provider reply supplied."""
+    usage = getattr(response, "usage", None)
+    counts = {}
+    for field, key in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
+        value = getattr(usage, field, None)
+        if type(value) is int and value >= 0:
+            counts[key] = value
+    return counts
+
+
+def prepare_observed_call(observation, kwargs: dict):
+    """Freeze final SDK arguments and share the call ID with metrics."""
+    trace_call = (observation or {}).get("trace_call")
+    if trace_call is not None:
+        try:
+            trace_call.freeze_final(kwargs)
+        except Exception:
+            trace_call = None
+    return trace_call, getattr(trace_call, "call_id", None) or uuid.uuid4().hex
+
+
+def finish_observed_attempt(attempt, started, response, failure, *, status, usage_state=None):
+    if attempt is None:
+        return
+    model = getattr(response, "model", None)
+    attempt.finish(
+        status=status, usage=provider_token_usage(response), usage_state=usage_state,
+        error_type=type(failure).__name__ if failure is not None else None,
+        model=model, model_source="receipt" if model else "requested",
+        duration_ms=max(0, int((time.monotonic() - started) * 1000)))
+
+
 def chat(
     client,
     cfg: Config,
@@ -97,14 +130,7 @@ def chat(
         kwargs["timeout"] = timeout
     apply_provider_parameters(cfg, kwargs)
 
-    call_id = uuid.uuid4().hex
-    # 调用接入（20261107 SDK 设计）：最终 SDK 参数在发送前冻结；SDK 不发送请求
-    trace_call = (observation or {}).get("trace_call")
-    if trace_call is not None:
-        try:
-            trace_call.freeze_final(kwargs)
-        except Exception:
-            trace_call = None
+    trace_call, call_id = prepare_observed_call(observation, kwargs)
     last_err: Exception | None = None
     for attempt_no in range(3 if retry else 1):
         store = (observation or {}).get("store")
@@ -127,21 +153,10 @@ def chat(
             e = exc  # 网络/限流等瞬时错误
             last_err = e
         finally:
-            if sdk_attempt is not None:
-                usage_receipt = {}
-                u = getattr(response, "usage", None)
-                for src, dst in (("prompt_tokens", "prompt"), ("completion_tokens", "completion")):
-                    v = getattr(u, src, None)
-                    if type(v) is int and v >= 0:
-                        usage_receipt[dst] = v
-                sdk_attempt.finish(
-                    status=("cancelled" if failure is not None and not isinstance(failure, Exception)
-                            else "error" if failure is not None else "ok"),
-                    usage=usage_receipt,
-                    error_type=type(failure).__name__ if failure is not None else None,
-                    model=getattr(response, "model", None),
-                    model_source="receipt" if getattr(response, "model", None) else "requested",
-                    duration_ms=max(0, int((time.monotonic() - started) * 1000)))
+            finish_observed_attempt(
+                sdk_attempt, started, response, failure,
+                status=("cancelled" if failure is not None and not isinstance(failure, Exception)
+                        else "error" if failure is not None else "ok"))
             if on_attempt_usage is not None:
                 try:
                     on_attempt_usage(response, incomplete=failure is not None)

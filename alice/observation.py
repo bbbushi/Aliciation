@@ -96,7 +96,7 @@ def context_requests(store, *, limit="20", request_id=None):
         captured = (any(m.get("body") in retained for call in request["calls"] for m in call["messages"]["order"])
                     or any((call.get("input") or {}).get("body") in retained for call in request["calls"])
                     or any(b.get("body_state") in retained for b in request["blocks"]))
-        reason = body_reason(request["request_id"], captured=captured, ts=request.get("first_event_at"))
+        reason = body_reason(store, request["request_id"], captured=captured, ts=request.get("first_event_at"))
         if not captured and request.get("body_capture_reason") not in (None, "rolling_capture"):
             reason = request["body_capture_reason"]
         for block in request["blocks"]:
@@ -212,7 +212,7 @@ def context_body(store, *, content_hash=None, request_id=None, max_chars=64000):
                if call.get("input") and call["input"].get("content_hash") == content_hash]
     if not any(s in ("stored", "head", "on_disk") for s in states):
         return {"stored": False, "reason": states[0] if states else "historical_not_captured"}
-    return read_body(content_hash, request_id=request_id, limit=max_chars)
+    return read_body(store, content_hash, request_id=request_id, limit=max_chars)
 
 
 def context_call(store, *, request_id=None, call_id=None):
@@ -231,7 +231,7 @@ def context_call(store, *, request_id=None, call_id=None):
         # read_body additionally verifies durable request/hash capture evidence.
         if entry.get("body") not in {"stored", "head", "on_disk"}:
             return {"stored": False, "reason": entry.get("body", "historical_not_captured")}
-        return read_body(entry.get("content_hash"), request_id=request_id, limit=limit)
+        return read_body(store, entry.get("content_hash"), request_id=request_id, limit=limit)
     snapshot = call.get("input") or {}
     loaded = retained_body(snapshot) if snapshot else {}
     if loaded.get("stored") and not loaded.get("truncated"):

@@ -61,11 +61,17 @@ addons/desktop/packaging/.venv/bin/python addons/desktop/packaging/build_macos.p
 
 ## 当前交付边界
 
-- 源码原型：同源页面、实际随机端口、核心目录锁、重复点击唤醒、私有管道状态/退出、缺配置先进入设置。
-- 管道 v1 支持 `status`、`maintenance_status` 与 `shutdown(reason=quit/update/recovery)`；明确 `updates=false`，不支持任意路径/程序/模型工具。恢复通过固定离线 CLI 在后端实际退出后执行，不向聊天页面授予原生命令权限。
-- 外链/新窗口与导入导出、SSE、神经球在系统 WebView 中仍需真人验收；不得因编译成功认定可用。
-- QQ、浏览器、B站与协作者在源码模式沿用既有独立组件；冻结模式不把冻结程序当 Python 解释器调用，未打包组件返回不可用，不自动改用户许可。
-- `packaging/resource-manifest.json` v11 是资源与组件清单，包含实现摘要所需源文件；0.1.2 冻结后端、`.app`、`.dmg` 及签名更新归档已生成。0.1.2 联网授权与检查更新已真人通过，0.1.4 正常升级、安装重启与数据保留已获真人确认；异常失败与实际恢复专项仍未验收。
+[资源与组件清单](./packaging/resource-manifest.json)声明当前打包范围。构建把 `components` 写入该版的 `build-info.json`，随资源摘要进入冻结后端和发行报告。「设置 → 对话与模型」通过现有 `/api/runtime` 显示本包缺少的组件。各设置页仍负责连接、依赖就绪与授权状态。
+
+| 功能 | 桌面源码原型 | macOS arm64 开发包 |
+|---|---|---|
+| 核心、回环网页、发现工作者、离线档案维护 | 本机源码与工具链 | 随包提供 |
+| 完整上下文与日常诊断 | 独立 Alice Lab，短时授权 | 独立 Alice Lab，短时授权 |
+| P1 | Lab 的源码隔离实例 | 在包外使用 Lab 的源码隔离实例 |
+| QQ、独立浏览器读取、B 站公开接口、Claude、DSH | 各组件独立准备，按设置和授权启用 | 本包未包含这些组件 |
+| 桌面气泡、签名更新 | 气泡走 macOS 宿主，签名更新面向发行包 | macOS 气泡及签名更新 |
+
+Windows 有源码桌面启动器和 `%LOCALAPPDATA%/Alice/` 档案根。WebView、目录锁、停机及实际恢复仍待 Windows 人工验收。安装包和签名更新流水线当前面向 Apple Silicon。资料格式和维护协议都是 v1，回退用升级前恢复点，并依据目标版本的实际读写能力核对。
 
 ## 核心公共入口
 
@@ -81,7 +87,7 @@ addons/desktop/packaging/.venv/bin/python addons/desktop/packaging/build_macos.p
 
 气泡偏好位于宿主配置目录 `bubble.json`，只保存开关、外观和物理位置，不保存密钥、对话或草稿。草稿与不确定请求只在当前页面内存保留；隐藏窗口不销毁发送流。关闭应用或维护后端重建时不保证草稿恢复。气泡的真实穿透、焦点、中文输入、多屏、睡眠唤醒及退出共存尚待真人；Windows 气泡未启用。
 
-当前资源清单为 v16。构建可加 `--freeze-chat-ui-at-head`，保留工作区 `web/app.js`，以 HEAD 原文冻结主聊天脚本；覆盖摘要及来源提交记入签名范围内的 `resource_overrides`，其余新增气泡资源正常打包。若主页 HTML/CSS 或 room.js 也有另一棒的进行中改动，可加 `--freeze-main-ui-from-build <本机 build_id>`，核验此前 App 签名和资源摘要后沿用其主页 HTML/CSS 与 room.js，来源包与摘要写入构建声明。
+构建可加 `--freeze-chat-ui-at-head`，以 HEAD 原文冻结主聊天脚本。覆盖摘要及来源提交记入 `resource_overrides`。`--freeze-main-ui-from-build <本机 build_id>` 核验来源 App 签名和资源摘要后沿用其主页资源，具体文件与来源包写入构建声明。
 
 ```sh
 # 独立数据目录：必须为绝对路径；--config 本身不改变数据根。
