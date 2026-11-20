@@ -51,6 +51,9 @@ input:not([type=checkbox]),textarea,select{width:100%;display:block;font:inherit
 .kpi b{display:block;font-size:23px;font-weight:600;line-height:1.25;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .kpi i{display:block;font-size:11px;color:var(--muted);font-style:normal;margin-top:2px}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
+.grid.equal{align-items:stretch}
+.grid.equal .card-body{display:flex;flex-direction:column}
+.grid.equal .card-body > :last-child{margin-top:auto}
 .card{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:15px 17px;min-width:0;box-shadow:0 1px 2px rgba(27,42,35,.03)}
 .card.wide{grid-column:1/-1}
 .card-body{min-width:0;flex:1}
@@ -186,6 +189,24 @@ summary{cursor:pointer;font-weight:600;font-size:13.5px}
   border-bottom:1.3px solid var(--muted);transform:rotate(45deg);transition:transform 160ms var(--ease-out)}
 .raw[open] > summary::after{transform:rotate(-135deg)}
 .raw > summary:hover{color:var(--accent)}
+/* 字段表：内部字段名与代码值已翻译，不做原始 JSON 展示 */
+.field-body{display:flex;flex-direction:column;gap:9px;padding:10px 0 2px}
+.field-hint{font-size:11.5px;color:var(--muted);margin:0 0 2px}
+.field-item{border-top:1px solid var(--rule-soft);padding:9px 0 7px}
+.field-hint + .field-item{border-top:0;padding-top:0}
+.field-head{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.field-index{font:11px/1.4 ui-monospace,monospace;color:var(--muted);flex:none}
+.field-title{font-size:12.5px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:4px 22px;font-size:12.5px}
+.field{display:grid;grid-template-columns:80px minmax(0,1fr);gap:8px;align-items:baseline;min-width:0}
+.field-k{color:var(--muted);font-size:11.5px;line-height:1.55}
+.field-v{min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;line-height:1.55}
+.field-sub{grid-column:1/-1;margin:3px 0 1px;padding:8px 10px;border-radius:8px;background:var(--sunken)}
+.field-sub-head{font-size:11px;color:var(--muted);margin-bottom:5px}
+.field-sub .fields + .fields{margin-top:8px;padding-top:8px;border-top:1px solid var(--rule-soft)}
+.io{border:1px solid var(--rule-soft);border-radius:10px;padding:2px 12px 10px;background:var(--card);
+  margin-top:10px;overflow-wrap:anywhere}
+.io .field-body{padding:8px 0 0}
 /* 正文读取入口：与留痕层同一形态 */
 #body-controls{margin-top:12px;background:var(--sunken);border:1px solid var(--rule-soft);border-radius:12px;padding:0 15px}
 #body-controls > summary{display:flex;align-items:center;list-style:none;padding:12px 0;cursor:pointer;
@@ -231,6 +252,11 @@ main.embedded #feedback,main.embedded #observations{display:none}
   .top h2{font-size:22px}
   .grid,.columns{grid-template-columns:minmax(0,1fr)}
   .card.wide{grid-column:auto}
+  .fields{grid-template-columns:minmax(0,1fr);gap:2px}
+  .field{grid-template-columns:64px minmax(0,1fr);gap:6px}
+  .field-k{font-size:11px;line-height:1.5}
+  .field-v{font-size:12px;line-height:1.5}
+  .field-item{padding:8px 0 6px}
   .lol-row{grid-template-columns:96px minmax(0,1fr) 84px}
   .wf{gap:6px}
   main.embedded{height:auto;min-height:100dvh}

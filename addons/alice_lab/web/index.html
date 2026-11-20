@@ -52,7 +52,7 @@
         <form id="body-form" class="actions">
           <label>记忆 ID<input name="id" required maxlength="160"></label>
           <button>读取正文</button>
-        </form><pre id="body-result" hidden></pre>
+        </form><div id="body-result" class="io" hidden></div>
       </details>
     </section>
 
@@ -78,7 +78,7 @@
           <details><summary>记录详情与人工判级</summary><form id="p1-operation" class="actions">
             <label>操作<select name="action"><option value="detail">查看记录</option><option value="label">保存人工标签</option><option value="cancel">取消</option><option value="calibrations">一致性记录</option><option value="calibrate">确认一致性</option></select></label>
             <label>该操作的记录参数（JSON）<input name="params" value="{}" maxlength="1800"></label><button>执行</button>
-          </form></details><pre id="p1-output" hidden></pre>
+          </form></details><div id="p1-output" class="io" hidden></div>
         </details>
       </div>
     </section>

@@ -11,6 +11,7 @@ const reasons = {weighted_rotation:"按权重抽签", priority_content:"优先�
   actionable_question:"有可推进问题", no_content:"无内容"};
 const layerLabels = {active:"活跃", warehouse:"仓库", longterm:"长期"};
 const kindLabels = {event:"事件", stance:"立场"};
+const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
 const phaseLabels = {completed:"已完成", rolled_back:"已回滚", superseded:"已被取代", aborted:"已中止",
   prepared:"已预备", db_committed:"已入库", file_replaced:"已换文件", unknown:"未知", unreadable:"不可读"};
 const purposeLabels = {main:"主对话", main_stream:"主对话·流式", main_fallback:"主对话·回退",
@@ -390,24 +391,211 @@ function table(headers, rows, opts = {}) {
   wrap.append(result);
   return wrap;
 }
-function rawDetails(label, value) {
-  const block = el("details", "raw");
-  block.append(node("summary", label), node("pre", JSON.stringify(value, null, 2)));
+/* ---------- 字段翻译：内部字段名与代码值 → 日常说法 ---------- */
+const FIELD_LABELS = {
+  id:"编号", ref:"引用", version:"版本", detail_state:"详情状态", name:"名称", seq:"顺序",
+  created_at:"创建时间", updated_at:"更新时间", last_used_at:"最近使用", promoted_at:"晋升时间",
+  expires_at:"到期时间", expired_at:"过期时间", due_at:"到期", sampled_at:"采样时间",
+  first_event_at:"首个事件", last_event_at:"末个事件", at:"发生时间", ts:"发生时间",
+  layer:"所在层", kind:"类型", salience:"重大事项", pressure:"压力标记",
+  mention_count:"被提及", use_count:"被使用", origin:"来源", scope:"范围",
+  lifecycle:"生命周期", provenance_status:"溯源状态", title:"标题", content:"正文",
+  activity:"活动模式", reason:"原因", schedule_reason:"调度说明", draw_weights:"抽签权重",
+  dry_windows:"连续无进展", blocked_modes:"受阻模式数", content_score:"内容分",
+  importance:"重要度", urgency:"紧迫度", value_waiting:"等待确认",
+  question:"疑问内容", status:"状态", next_step:"下一步", progress:"进展",
+  parent_id:"上级编号", outcome_id:"结论编号", basis:"依据",
+  op_id:"操作号", phase:"阶段", epoch_matches:"属于本会话", db_marker_present:"库内有标记",
+  inserted_count:"已写入条数", before_sha256:"变更前指纹", after_sha256:"变更后指纹",
+  call_id:"调用号", request_id:"请求号", request_seq:"请求序号", session_epoch:"会话代号",
+  purpose:"用途", model:"模型", model_source:"模型来源", duration_ms:"耗时",
+  usage:"用量", usage_state:"用量状态", attempt:"第几次尝试", tool_round:"工具轮次",
+  error_type:"错误类型", fallback:"回退", storage:"存储状态", response_started:"已开始响应",
+  counts:"分层计数", items:"条目", notice:"说明", pending_dropped:"已丢弃",
+  scan_limit:"扫描上限", truncated:"是否截断", scan_incomplete:"扫描不完整",
+  total_chars:"总字数", count:"条数", chars:"字数", estimated_tokens:"估算 token",
+  finished:"已结束", event_count:"事件数", blocks:"装配块", selections:"取舍决策",
+  gaps:"采集缺口", delivery:"投递", assistant_turn_id:"回复编号", sdk_dropped:"SDK 丢弃",
+  body:"正文留存", body_state:"正文状态", content_hash:"内容指纹", messages_hash:"消息指纹",
+  start:"起点", end:"终点", message_seq:"消息序号", block_seq:"装配块序号",
+  role:"角色", input:"输入", tools:"工具清单", parameters:"参数", bindings:"绑定",
+  order:"消息顺序", prompt:"输入", completion:"输出", model_tokens:"模型 token",
+  source_id:"来源编号", included:"是否采用", modes:"各模式权重", mode:"模式",
+  token:"操作令牌", source_hash:"来源指纹", before_version:"变更前版本", after_version:"变更后版本",
+  projection_chars:"投影字数", rollback_token:"回滚令牌", rollback_of:"回滚自", format:"格式",
+  metadata:"元信息",
+};
+const MEMORY_ORIGINS = {conversation:"对话", chat:"对话", document:"文档", web:"网页",
+  manual:"手动", import:"导入", extraction:"提取", discovery:"发现", system:"系统"};
+const PROVENANCE = {valid:"有效", confirmed:"已确认", unverified:"未核实",
+  legacy_unverified:"旧数据未核", needs_review:"待复核", invalid:"已失效", superseded:"已被取代"};
+const SCOPES = {local:"本机", global:"全局", gui:"界面", shared:"共享", private:"私有"};
+const EXPR_STATUS = {applied:"已生效", preparing:"准备中", prepare_failed:"准备失败",
+  state_unconfirmed:"状态未确认", unreadable:"不可读", rolled_back:"已回滚"};
+const BODY_STATES = {stored:"已留存", head:"仅留开头", on_disk:"已存磁盘", none:"未留存",
+  historical_not_captured:"当时未采集", rolling_capture:"滚动采集", not_captured:"未采集"};
+const FIELD_ENUMS = {
+  layer: layerLabels, kind: {...kindLabels, question:"疑问"},
+  lifecycle: lifecycleLabels, phase: phaseLabels,
+  purpose: purposeLabels, activity: modes, reason: reasons,
+  origin: {...originLabels, ...MEMORY_ORIGINS},
+  body: BODY_STATES, body_state: BODY_STATES,
+  storage: {committed:"已落库", pending:"待写入"},
+  usage_state: {ok:"已回执", unknown:"未知", missing:"缺失", unsupported:"不支持"},
+  status: {...questionStatus, ...callStatusLabels, ...EXPR_STATUS, entered:"已开始"},
+  role: {user:"用户", assistant:"Alice", system:"系统", tool:"工具"},
+  salience: {0:"否", 1:"是"}, pressure: {0:"否", 1:"是"},
+  included: {true:"已采用", false:"未采用"},
+  provenance_status: PROVENANCE, scope: SCOPES,
+};
+const VALUE_LABELS = {
+  ok:"正常", error:"失败", cancelled:"取消", stream_interrupted:"流中断", entered:"已开始",
+  none:"无", unknown:"未知", unsupported:"不支持", missing:"缺失",
+  committed:"已落库", pending:"待写入", stored:"已留存", head:"仅留开头", on_disk:"已存磁盘",
+  historical_not_captured:"当时未采集", rolling_capture:"滚动采集", not_captured:"未采集",
+};
+const TIME_KEY = /(^|_)(at|ts)$/;
+function humanize(key) { return String(key).replace(/_/g, " "); }
+function fieldLabel(key) {
+  return FIELD_LABELS[key] || modes[key] || layerLabels[key] || kindLabels[key] || humanize(key);
+}
+function fieldValue(key, value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  const table = FIELD_ENUMS[key];
+  if (table && table[value] !== undefined) return table[value];
+  if (VALUE_LABELS[value] !== undefined && typeof value === "string") return VALUE_LABELS[value];
+  if (typeof value === "number") {
+    if (TIME_KEY.test(key)) return value ? fmt.time(value) : (/expire|due/.test(key) ? "无期限" : "—");
+    if (/_ms$/.test(key)) return fmt.dur(value);
+    if (/tokens?$/.test(key)) return fmt.tok(value) + " tok";
+    if (key === "content_score" || key === "importance" || key === "urgency") return String(value) + " / 3";
+    return fmt.int(value);
+  }
+  if (Array.isArray(value)) return value.length ? `${value.length} 项` : "—";
+  if (typeof value === "string" && /^\[.*\]$/.test(value.trim())) {
+    try {
+      const list = JSON.parse(value);
+      if (Array.isArray(list) && list.length) {
+        return list.map((v) => (SCOPES[v] || String(v))).join("、");
+      }
+    } catch (err) { /* 不是 JSON 就按普通文本处理 */ }
+  }
+  if (typeof value === "object") return "见下方分组";
+  const text = String(value);
+  if (/sha256$/.test(key)) return text.slice(0, 8) + "…";
+  return text;
+}
+function isFlat(obj) {
+  return !!obj && typeof obj === "object" && !Array.isArray(obj)
+    && Object.values(obj).every((v) => v === null || typeof v !== "object");
+}
+function pairText(obj) {
+  return Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${fieldLabel(k)} ${fieldValue(k, v)}`).join(" · ") || "—";
+}
+function fieldCell(key, text) {
+  const cell = el("div", "field");
+  cell.append(el("span", "field-k", fieldLabel(key)), el("span", "field-v", text));
+  return cell;
+}
+function fieldTable(obj, depth = 0, skip = []) {
+  const box = el("div", "fields");
+  const nested = [];
+  for (const [key, value] of Object.entries(obj || {})) {
+    if (value === undefined || skip.includes(key)) continue;
+    if ((value && typeof value === "object" && !Object.keys(value).length)) continue;
+    if (isFlat(value)) {
+      const text = pairText(value);
+      if (text !== "—") box.append(fieldCell(key, text));
+    } else if (Array.isArray(value)) {
+      const records = value.filter((v) => v && typeof v === "object");
+      const text = !value.length ? ""
+        : records.length ? `${value.length} 条记录`
+        : value.slice(0, 8).map((v) => String(v)).join("、") + (value.length > 8 ? ` 等 ${value.length} 项` : "");
+      if (text) box.append(fieldCell(key, text));
+      if (records.length && depth < 2) nested.push([key, records]);
+    } else if (value && typeof value === "object") {
+      box.append(fieldCell(key, "分组"));
+      if (depth < 2) nested.push([key, [value]]);
+    } else {
+      const text = fieldValue(key, value);
+      if (text !== "—") box.append(fieldCell(key, text));
+    }
+  }
+  for (const [key, records] of nested) {
+    const group = el("div", "field-sub");
+    group.append(el("div", "field-sub-head", fieldLabel(key)));
+    for (const record of records.slice(0, 20)) group.append(fieldTable(record, depth + 1));
+    if (records.length > 20) group.append(el("p", "field-hint", `另有 ${records.length - 20} 条未展开。`));
+    box.append(group);
+  }
+  return box;
+}
+function recordTitle(obj) {
+  const bits = [];
+  const skip = [];
+  const identKey = ["id", "op_id", "call_id", "request_id"].find((k) => obj[k] != null);
+  if (identKey) {
+    const text = String(obj[identKey]);
+    bits.push(text.length > 20 ? text.slice(0, 20) + "…" : text);
+    if (identKey !== "request_id") skip.push(identKey);
+  }
+  if (obj.purpose) { bits.push(purposeLabel(obj.purpose)); skip.push("purpose"); }
+  else if (obj.activity) { bits.push(modes[obj.activity] || obj.activity); skip.push("activity"); }
+  else if (obj.phase) { bits.push(phaseLabels[obj.phase] || obj.phase); skip.push("phase"); }
+  else if (obj.name) bits.push(String(obj.name));
+  else if (obj.question) {
+    const text = String(obj.question);
+    bits.push(text.length > 26 ? text.slice(0, 26) + "…" : text);
+    skip.push("question");
+  }
+  if (obj.status) { bits.push(statusLabel(obj.status)); skip.push("status"); }
+  else if (obj.lifecycle) { bits.push(lifecycleLabels[obj.lifecycle] || obj.lifecycle); skip.push("lifecycle"); }
+  return { title: bits.join(" · ") || "记录", skip };
+}
+function fieldRecords(value) {
+  const box = el("div", "field-body");
+  const records = Array.isArray(value) ? value : (value && typeof value === "object" ? [value] : []);
+  if (!records.length) return box;
+  box.append(el("p", "field-hint", "内部字段名和代码值已翻译成日常说法。"));
+  records.slice(0, 20).forEach((record, index) => {
+    const item = el("div", "field-item");
+    if (!record || typeof record !== "object") {
+      item.append(el("span", "field-v", String(record)));
+    } else {
+      const { title, skip } = recordTitle(record);
+      const head = el("div", "field-head");
+      head.append(el("span", "field-index", String(index + 1).padStart(2, "0")));
+      head.append(el("span", "field-title", title));
+      item.append(head, fieldTable(record, 0, skip));
+    }
+    box.append(item);
+  });
+  if (records.length > 20) box.append(el("p", "field-hint", `另有 ${records.length - 20} 条未展开，可在上方明细表里按序号查看。`));
+  return box;
+}
+function dataDetails(label, value, opts = {}) {
+  const block = el("details", "raw" + (opts.inline ? " inline" : ""));
+  block.append(node("summary", label));
+  let built = false;
+  const build = () => {
+    if (built) return;
+    built = true;
+    block.append(fieldRecords(value));
+  };
+  block.addEventListener("toggle", () => { if (block.open) build(); });
+  if (opts.open) { build(); block.open = true; }
   return block;
+}
+function renderValue(target, value) {
+  target.replaceChildren(fieldRecords(value));
+  target.hidden = false;
 }
 function line(label, value) {
   const row = el("div", "line");
   row.append(node("span", label), node("b", value));
   return row;
-}
-function keyValues(obj, skip = []) {
-  const wrap = el("div", "rows");
-  for (const [key, value] of Object.entries(obj || {})) {
-    if (skip.includes(key)) continue;
-    if (value == null || typeof value === "object") continue;
-    wrap.append(line(key, String(value)));
-  }
-  return wrap;
 }
 function gridOf(cards) {
   const grid = el("div", "grid");
@@ -427,10 +615,11 @@ function mountCards(out, items) {
     }
   }
 }
-const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
 function statusLabel(value) {
   if (!value) return "—";
   if (questionStatus[value]) return questionStatus[value];
+  if (callStatusLabels[value]) return callStatusLabels[value];
+  if (EXPR_STATUS[value]) return EXPR_STATUS[value];
   if (String(value).startsWith("waiting")) return "等待中";
   return value;
 }
@@ -527,7 +716,7 @@ function paintSchedule(v, out) {
     detail.append(table(["时间", "活动", "原因", "当时概率", "无进展"], recs.map((item) => [
       fmt.time(item.at), modes[item.activity] || item.activity, reasons[item.reason] || item.reason || "—",
       probability(item.draw_weights, item.activity), item.dry_windows ?? "—",
-    ])), rawDetails("查看原始记录", recs));
+    ])), dataDetails("查看全部字段", recs));
     out.append(disclosure("决策留痕", `${recs.length} 条 · 最近 ${fmt.clock(recs[0].at)}`,
       detail, "每次选择的当时概率与抽签池；按时间倒序。"));
   }
@@ -559,7 +748,7 @@ function paintMemory(v, out) {
   layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
   layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
   const bodyAllowed = targetMode === "body" || targetMode === "isolated";
-  layerCard.body.append(el("p", "card-sub", bodyAllowed
+  layerCard.body.append(el("p", "card-sub auto-bottom", bodyAllowed
     ? "正文授权：含正文，可按 ID 读取。"
     : "正文授权：仅元数据；标题与正文需在 Alice 单独勾选。"));
 
@@ -597,7 +786,7 @@ function paintMemory(v, out) {
       "salience 只有 0/1 两档，不是连续价值分；点越大，表示落在附近的记忆越多。"));
   }
 
-  const pair = el("div", "grid");
+  const pair = el("div", "grid equal");
   pair.append(layerCard.box, heatCard.box);
   out.append(pair);
   if (items.length) {
@@ -608,7 +797,7 @@ function paintMemory(v, out) {
       i.salience ? pill("重要", "warn") : "—", fmt.int(i.mention_count), fmt.int(i.use_count),
       fmt.ago(i.last_used_at), i.expires_at ? fmt.time(i.expires_at) : "—",
       lifecycleLabels[i.lifecycle] || i.lifecycle || i.provenance_status || "—",
-    ]), {cards:true}), rawDetails("查看原始元数据", items));
+    ]), {cards:true}), dataDetails("查看全部字段", items));
     out.append(disclosure("最近记忆", `${items.length} 条 · 最近取用 ${lastUse ? fmt.ago(lastUse) : "无"}`,
       detail, "按 id 倒序；只有元数据，正文需单独授权。"));
   }
@@ -692,7 +881,7 @@ function paintQuestions(v, out) {
     if (targetMode !== "isolated") {
       listCard.body.append(el("p", "note", "日常连接只读：推进疑问要在隔离实例里操作，这里只显示状态。"));
     }
-    listCard.body.append(rawDetails("查看原始记录", ordered));
+    listCard.body.append(dataDetails("查看全部字段", ordered));
   }
   out.append(gridOf([statusCard.box, originCard.box]));
   mountCards(out, [{box: listCard.box, wide:true}]);
@@ -818,7 +1007,7 @@ function paintCalls(v, out) {
         return [fmt.time(i.ts), purposeLabel(i.purpose), i.model || "—",
           callStatusLabels[i.status] || i.status || "—", fmt.dur(i.duration_ms),
           fmt.tok(u.prompt), fmt.tok(u.completion)];
-      })), rawDetails("查看原始回执", items));
+      })), dataDetails("查看全部字段", items.slice().reverse()));
     if (v.notice) detail.append(el("p", "note", v.notice));
     out.append(disclosure("调用明细",
       `${items.length} 次 · 中位 ${fmt.dur(median)}${failed ? ` · ${failed} 次未成功` : ""}`,
@@ -877,7 +1066,7 @@ function paintPersona(v, out) {
     const exprItems = Array.isArray(expr.items) ? expr.items : [];
     resetCard.body.append(line("表达更新", `${exprItems.length} 条`));
     if (exprItems.length) {
-      resetCard.body.append(rawDetails("查看表达更新", exprItems.slice(0, 8)));
+      resetCard.body.append(dataDetails("查看全部字段", exprItems.slice(0, 8)));
     }
   }
 
@@ -909,7 +1098,7 @@ function paintPersona(v, out) {
       wrap.append(row);
     });
     const detail = el("div");
-    detail.append(wrap, rawDetails("查看原始记录", v));
+    detail.append(wrap, dataDetails("查看全部字段", v));
     if (v.truncated || v.scan_incomplete) detail.append(el("p", "note", "本次扫描不完整，列表可能少于实际记录。"));
     if (v.notice) detail.append(el("p", "note", v.notice));
     const flag = v.truncated || v.scan_incomplete ? " · 扫描不完整" : "";
@@ -979,7 +1168,7 @@ async function show(next = topic) {
     else if (next === "questions") paintQuestions(value, output);
     else if (next === "calls") paintCalls(value, output);
     else if (next === "persona_operations") paintPersona(value, output);
-    else output.append(rawDetails("查看数据", value));
+    else output.append(dataDetails("查看全部字段", value));
     stamp();
     return;
   }
@@ -1167,8 +1356,7 @@ byId("body-form").onsubmit = (event) => {
   perform(async () => {
     const id = event.target.elements.id.value.trim();
     const data = (await api("observe", {id}, {topic:"memory_detail", connection_id:connectionId})).result;
-    byId("body-result").textContent = JSON.stringify(data, null, 2);
-    byId("body-result").hidden = false;
+    renderValue(byId("body-result"), data);
   });
 };
 byId("chat").onsubmit = (event) => {
@@ -1199,9 +1387,7 @@ async function p1(action, params = {}) {
   if (state.status !== "ok") throw new Error(state.error || "核查状态暂不可用");
   const result = (await api("experiment", {...params, action, dataset_id:state.dataset_id})).result;
   if (result.status !== "ok") throw new Error(result.error || "核查操作未完成");
-  const output = byId("p1-output");
-  output.textContent = JSON.stringify(result, null, 2);
-  output.hidden = false;
+  renderValue(byId("p1-output"), result);
   return result;
 }
 byId("p1-list").onclick = () => perform(() => p1("list"));
