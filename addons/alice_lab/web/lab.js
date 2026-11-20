@@ -108,6 +108,17 @@ function card(title, sub, badge) {
 function pill(text, tone) {
   return el("span", "pill" + (tone ? " " + tone : ""), text);
 }
+/* 细节默认收起：摘要行给出「有多少、多近」，需要核对时再展开。 */
+function disclosure(title, meta, content, hint, inline = false) {
+  const box = el("details", "more" + (inline ? " inline" : ""));
+  const summary = node("summary");
+  summary.append(el("span", "more-title", title), el("span", "more-meta", meta || ""));
+  const body = el("div", "more-body");
+  if (hint) body.append(el("p", "more-hint", hint));
+  body.append(content);
+  box.append(summary, body);
+  return box;
+}
 function emptyNote(text) {
   return el("p", "empty", text);
 }
@@ -380,7 +391,7 @@ function table(headers, rows, opts = {}) {
   return wrap;
 }
 function rawDetails(label, value) {
-  const block = node("details");
+  const block = el("details", "raw");
   block.append(node("summary", label), node("pre", JSON.stringify(value, null, 2)));
   return block;
 }
@@ -480,9 +491,18 @@ function paintSchedule(v, out) {
   restCard.body.append(line("发呆权重", String(info("idle").weight ?? "—")));
   restCard.body.append(line("发呆秒数", cur.idle_seconds ? cur.idle_seconds + "s" : "未开启"));
 
-  const recentCard = card("最近实际选择", "先看色带：左旧右新，颜色是模式；下面每次的决策留痕。");
+  const recentCard = card("最近选择", "最近一次在下面；色带是最近 12 次的模式序列，单次留痕收在页尾。");
   if (!recs.length) recentCard.body.append(emptyNote("还没有运行记录。"));
   else {
+    const latest = recs[0];
+    const pick = el("div", "pick");
+    pick.append(el("span", "pick-label", "最近一次"), el("span", "pick-time", fmt.clock(latest.at)),
+      el("b", null, modes[latest.activity] || latest.activity));
+    pick.append(pill(reasons[latest.reason] || latest.reason || "原因未记录",
+      latest.reason === "weighted_rotation" ? "ok" : ""));
+    const lastChance = probability(latest.draw_weights, latest.activity);
+    if (lastChance !== "—") pick.append(pill("概率 " + lastChance));
+    recentCard.body.append(pick);
     const seq = recs.slice(0, 12).slice().reverse();
     recentCard.body.append(ribbon(seq.map((item) => ({
       color: modeColors[item.activity] || C[5],
@@ -497,42 +517,20 @@ function paintSchedule(v, out) {
       modeLegend.append(item);
     }
     recentCard.body.append(modeLegend);
-    const tl = el("div", "tl tl-cols");
-    for (const item of recs.slice(0, 12)) {
-      const row = el("div", "tl-item");
-      row.append(el("div", "tl-at", fmt.clock(item.at)));
-      const dotEl = el("div", "tl-node");
-      dotEl.style.background = modeColors[item.activity] || C[1];
-      row.append(dotEl);
-      const body = el("div", "tl-body"), title = el("div", "tl-title");
-      title.append(node("span", modes[item.activity] || item.activity));
-      title.append(pill(reasons[item.reason] || item.reason || "原因未记录", item.reason === "weighted_rotation" ? "ok" : ""));
-      const chance = probability(item.draw_weights, item.activity);
-      if (chance !== "—") title.append(pill("概率 " + chance));
-      body.append(title);
-      body.append(el("div", "tl-sub", item.draw_weights && Object.keys(item.draw_weights).length
-        ? "抽签池 " + Object.keys(item.draw_weights).map((k) => modes[k]).join(" / ")
-        : item.reason === "weighted_rotation" ? "旧记录未保存抽签权重。" : "这次没有抽签。"));
-      row.append(body);
-      tl.append(row);
-    }
-    recentCard.body.append(tl);
-  }
-
-  const tableCard = card("记录明细", "按时间倒序；展开可看当时的完整权重。");
-  if (!recs.length) tableCard.body.append(emptyNote("暂无记录。"));
-  else {
-    tableCard.body.append(table(["时间", "活动", "原因", "当时概率", "无进展"], recs.map((item) => [
-      fmt.time(item.at), modes[item.activity] || item.activity, reasons[item.reason] || item.reason || "—",
-      probability(item.draw_weights, item.activity), item.dry_windows ?? "—",
-    ])));
-    tableCard.body.append(rawDetails("查看原始记录", recs));
   }
 
   mountCards(out, [
-    {box: weightCard.box}, {box: restCard.box},
-    {box: recentCard.box, wide:true}, {box: tableCard.box, wide:true},
+    {box: weightCard.box}, {box: restCard.box}, {box: recentCard.box, wide:true},
   ]);
+  if (recs.length) {
+    const detail = el("div");
+    detail.append(table(["时间", "活动", "原因", "当时概率", "无进展"], recs.map((item) => [
+      fmt.time(item.at), modes[item.activity] || item.activity, reasons[item.reason] || item.reason || "—",
+      probability(item.draw_weights, item.activity), item.dry_windows ?? "—",
+    ])), rawDetails("查看原始记录", recs));
+    out.append(disclosure("决策留痕", `${recs.length} 条 · 最近 ${fmt.clock(recs[0].at)}`,
+      detail, "每次选择的当时概率与抽签池；按时间倒序。"));
+  }
 }
 
 function paintMemory(v, out) {
@@ -560,6 +558,10 @@ function paintMemory(v, out) {
   const soonest = items.reduce((min, i) => (i.expires_at && (!min || i.expires_at < min) ? i.expires_at : min), null);
   layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
   layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
+  const bodyAllowed = targetMode === "body" || targetMode === "isolated";
+  layerCard.body.append(el("p", "card-sub", bodyAllowed
+    ? "正文授权：含正文，可按 ID 读取。"
+    : "正文授权：仅元数据；标题与正文需在 Alice 单独勾选。"));
 
   const heatCard = card("提及 × 取用", "横轴被提及次数，纵轴被取用次数；带圈的是重大事项。右下角 = 说过很多次、却很少用到。");
   heatCard.body.append(items.length
@@ -595,28 +597,21 @@ function paintMemory(v, out) {
       "salience 只有 0/1 两档，不是连续价值分；点越大，表示落在附近的记忆越多。"));
   }
 
-  const listCard = card("最近记忆", `按 id 倒序，最多 ${items.length} 条；只有元数据。`);
-  if (!items.length) listCard.body.append(emptyNote("还没有记忆。"));
-  else {
-    listCard.body.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
+  const pair = el("div", "grid");
+  pair.append(layerCard.box, heatCard.box);
+  out.append(pair);
+  if (items.length) {
+    const lastUse = items.reduce((max, i) => Math.max(max, i.last_used_at || 0), 0);
+    const detail = el("div");
+    detail.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
       String(i.id), layerLabels[i.layer] || i.layer || "—", kindLabels[i.kind] || i.kind || "—",
       i.salience ? pill("重要", "warn") : "—", fmt.int(i.mention_count), fmt.int(i.use_count),
       fmt.ago(i.last_used_at), i.expires_at ? fmt.time(i.expires_at) : "—",
       lifecycleLabels[i.lifecycle] || i.lifecycle || i.provenance_status || "—",
-    ]), {cards:true}));
-    listCard.body.append(rawDetails("查看原始元数据", items));
+    ]), {cards:true}), rawDetails("查看原始元数据", items));
+    out.append(disclosure("最近记忆", `${items.length} 条 · 最近取用 ${lastUse ? fmt.ago(lastUse) : "无"}`,
+      detail, "按 id 倒序；只有元数据，正文需单独授权。"));
   }
-
-  const noteCard = card("正文与标题", "元数据授权只到 id 与计数；标题、正文要 Alice 单独勾选正文授权后再读。");
-  noteCard.body.append(el("p", "note",
-    targetMode === "body" ? "当前连接已含正文授权，可在下方按 ID 读取已留存的正文。"
-      : "当前连接只有元数据授权，按 ID 读取正文会被拒绝。"));
-  const column = el("div", "col");
-  column.append(layerCard.box, noteCard.box);
-  const pair = el("div", "grid equal");
-  pair.append(column, heatCard.box);
-  out.append(pair);
-  mountCards(out, [{box: listCard.box, wide:true}]);
 }
 
 function paintQuestions(v, out) {
@@ -628,6 +623,9 @@ function paintQuestions(v, out) {
     origins[i.origin || "unknown"] = (origins[i.origin || "unknown"] || 0) + 1;
   }
   const latest = items.reduce((max, i) => Math.max(max, i.updated_at || 0), 0);
+  const rank = (status) => status === "open" ? 2 : String(status || "").startsWith("waiting") ? 1 : 0;
+  const ordered = [...items].sort((a, b) =>
+    rank(b.status) - rank(a.status) || (b.updated_at || 0) - (a.updated_at || 0));
   out.append(kpis([
     {label:"疑问总数", value: fmt.int(items.length), hint:"最多 40 条"},
     {label:"待处理", value: fmt.int(open)},
@@ -650,11 +648,10 @@ function paintQuestions(v, out) {
           items.filter((i) => (i.origin || "unknown") === origin && (i.status || "unknown") === status).length)))
     : emptyNote("暂无来源记录。"));
 
-  const listCard = card("疑问清单", "按更新时间倒序；隔离测试里可直接推进一步。");
+  const listCard = card("疑问清单", "待处理优先，其余按更新时间；默认显示 6 条。");
   if (!items.length) listCard.body.append(emptyNote("当前会话没有疑问。"));
   else {
-    const wrap = el("div", "rows");
-    for (const item of items) {
+    const questionRow = (item) => {
       const box = el("div", "tl-item");
       box.style.borderBottom = "1px solid var(--rule-soft)";
       const left = el("div", "tl-at", "#" + item.id);
@@ -674,7 +671,7 @@ function paintQuestions(v, out) {
       body.append(el("div", "tl-sub", meta.join(" · ")));
       if (topic === "questions" && targetMode === "isolated" && item.status === "open") {
         const button = node("button", "探索此疑问");
-        button.className = "quiet";
+        button.className = "quiet explore";
         button.style.marginTop = "6px";
         button.onclick = () => perform(async () => {
           await api("control", {id:item.id, version:item.version}, {command:"run"});
@@ -682,13 +679,20 @@ function paintQuestions(v, out) {
         body.append(button);
       }
       box.append(left, dotEl, body);
-      wrap.append(box);
-    }
+      return box;
+    };
+    const wrap = el("div", "rows");
+    for (const item of ordered.slice(0, 6)) wrap.append(questionRow(item));
     listCard.body.append(wrap);
+    if (items.length > 8) {
+      const rest = el("div", "rows");
+      for (const item of ordered.slice(6)) rest.append(questionRow(item));
+      listCard.body.append(disclosure(`其余 ${items.length - 6} 条`, "按需要展开", rest, null, true));
+    }
     if (targetMode !== "isolated") {
       listCard.body.append(el("p", "note", "日常连接只读：推进疑问要在隔离实例里操作，这里只显示状态。"));
     }
-    listCard.body.append(rawDetails("查看原始记录", items));
+    listCard.body.append(rawDetails("查看原始记录", ordered));
   }
   out.append(gridOf([statusCard.box, originCard.box]));
   mountCards(out, [{box: listCard.box, wide:true}]);
@@ -751,6 +755,13 @@ function paintCalls(v, out) {
       dot.style.background = color; s.append(dot, node("span", text)); legend.append(s);
     }
     trendCard.body.append(legend);
+    const dist = el("div", "trend-extra");
+    dist.append(el("div", "mini-head", "耗时分布"),
+      el("p", "mini-hint", "按调用次数分桶；最后一桶 ≥30s。"));
+    dist.append(durations.length
+      ? histogram(durations, [1000, 3000, 10000, 30000], ["<1s", "1–3s", "3–10s", "10–30s", "≥30s"])
+      : emptyNote("还没有带耗时的回执。"));
+    trendCard.body.append(dist);
   }
 
   const purposeMap = {};
@@ -780,12 +791,6 @@ function paintCalls(v, out) {
     purposeCard.body.append(used);
   }
 
-  const stateCard = card("回执完整度", "哪些调用拿到了真实用量。");
-  stateCard.body.append(line("有 usage 回执", `${tokens.known} / ${items.length}`));
-  stateCard.body.append(line("缺失丢弃", fmt.int(v.pending_dropped)));
-  stateCard.body.append(line("未知用量条数", fmt.int(items.length - tokens.known)));
-  if (v.notice) stateCard.body.append(el("p", "note", v.notice));
-
   const modelMap = {};
   for (const i of items) {
     const key = i.model || "未知";
@@ -802,27 +807,23 @@ function paintCalls(v, out) {
         note:`${slot.count} 次 · ${fmt.tok(slot.tokens)} tok`})))
     : emptyNote("暂无模型回执。"));
 
-  const histCard = card("耗时分布", "按调用次数分桶；最后一桶是 ≥30s。");
-  histCard.body.append(durations.length
-    ? histogram(durations, [1000, 3000, 10000, 30000], ["<1s", "1–3s", "3–10s", "10–30s", "≥30s"])
-    : emptyNote("还没有带耗时的回执。"));
-
-  const tableCard = card("调用明细", "最近 40 次，按时间倒序。");
-  tableCard.body.append(items.length ? table(
-    ["时间", "用途", "模型", "状态", "耗时", "入", "出"],
-    items.slice().reverse().map((i) => {
-      const u = i.usage && typeof i.usage === "object" ? i.usage : {};
-      return [fmt.time(i.ts), purposeLabel(i.purpose), i.model || "—",
-        callStatusLabels[i.status] || i.status || "—", fmt.dur(i.duration_ms),
-        fmt.tok(u.prompt), fmt.tok(u.completion)];
-    })) : emptyNote("暂无调用。"));
-  if (items.length) tableCard.body.append(rawDetails("查看原始回执", items));
-
   out.append(trendCard.box);
-  mountCards(out, [
-    {box: purposeCard.box}, {box: modelCard.box}, {box: histCard.box}, {box: stateCard.box},
-    {box: tableCard.box, wide:true},
-  ]);
+  mountCards(out, [{box: purposeCard.box}, {box: modelCard.box}]);
+  if (items.length) {
+    const detail = el("div");
+    detail.append(table(
+      ["时间", "用途", "模型", "状态", "耗时", "入", "出"],
+      items.slice().reverse().map((i) => {
+        const u = i.usage && typeof i.usage === "object" ? i.usage : {};
+        return [fmt.time(i.ts), purposeLabel(i.purpose), i.model || "—",
+          callStatusLabels[i.status] || i.status || "—", fmt.dur(i.duration_ms),
+          fmt.tok(u.prompt), fmt.tok(u.completion)];
+      })), rawDetails("查看原始回执", items));
+    if (v.notice) detail.append(el("p", "note", v.notice));
+    out.append(disclosure("调用明细",
+      `${items.length} 次 · 中位 ${fmt.dur(median)}${failed ? ` · ${failed} 次未成功` : ""}`,
+      detail, `按时间倒序；usage 回执 ${tokens.known}/${items.length}${v.pending_dropped ? `，丢弃 ${v.pending_dropped} 条` : ""}，缺失按未知计。`));
+  }
 }
 
 function paintPersona(v, out) {
@@ -880,9 +881,8 @@ function paintPersona(v, out) {
     }
   }
 
-  const listCard = card("导入记录", "op_id 可以对照 Alice 的日志定位。");
-  if (!items.length) listCard.body.append(emptyNote("没有记录。"));
-  else {
+  out.append(gridOf([phaseCard.box, resetCard.box]));
+  if (items.length) {
     const wrap = el("div", "rows");
     items.forEach((item, index) => {
       const row = el("div", "tl-item");
@@ -908,12 +908,14 @@ function paintPersona(v, out) {
       row.append(body);
       wrap.append(row);
     });
-    listCard.body.append(wrap, rawDetails("查看原始记录", v));
-    if (v.truncated || v.scan_incomplete) listCard.body.append(el("p", "note", "本次扫描不完整，列表可能少于实际记录。"));
-    if (v.notice) listCard.body.append(el("p", "note", v.notice));
+    const detail = el("div");
+    detail.append(wrap, rawDetails("查看原始记录", v));
+    if (v.truncated || v.scan_incomplete) detail.append(el("p", "note", "本次扫描不完整，列表可能少于实际记录。"));
+    if (v.notice) detail.append(el("p", "note", v.notice));
+    const flag = v.truncated || v.scan_incomplete ? " · 扫描不完整" : "";
+    out.append(disclosure("导入记录", `${items.length} 条${flag} · 最近 ${opTime(items[0].op_id)}`,
+      detail, "op_id 可以对照 Alice 的日志定位。"));
   }
-  out.append(gridOf([phaseCard.box, resetCard.box]));
-  mountCards(out, [{box: listCard.box, wide:true}]);
 }
 
 /* ---------- 页面装配 ---------- */

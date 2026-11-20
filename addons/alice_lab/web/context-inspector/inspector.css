@@ -12,6 +12,7 @@
   --ci-sub: #64746b;
   --ci-accent: #225942;
   --ci-accent-soft: #eef4ef;
+  --ci-sunken: #f6f7f3;
   --ci-warn: #96602a;
   --ci-ease: cubic-bezier(.23, 1, .32, 1);
 }
@@ -109,6 +110,20 @@ details > summary { list-style: revert; }
 .ci-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .ci-card-body { margin-top: 10px; min-width: 0; }
 .ci-hint { font-size: 12px; color: var(--ci-sub); margin: 3px 0; line-height: 1.6; }
+
+/* 细节折叠：下沉面板，不参与主视觉竞争 */
+.ci-card.ci-fold { background: var(--ci-sunken); border-color: var(--ci-line-soft); box-shadow: none; padding: 0 18px; }
+.ci-fold > summary { display: flex; align-items: center; gap: 10px; padding: 15px 0; cursor: pointer; list-style: none; }
+.ci-fold > summary::-webkit-details-marker { display: none; }
+.ci-fold > summary::after { content: ""; flex: none; width: 6px; height: 6px; margin-left: 2px;
+  border-right: 1.5px solid var(--ci-sub); border-bottom: 1.5px solid var(--ci-sub);
+  transform: rotate(45deg); transition: transform 160ms var(--ci-ease); }
+.ci-fold[open] > summary::after { transform: rotate(-135deg); }
+.ci-fold .ci-fold-title { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ci-sub); }
+.ci-fold > summary:hover .ci-fold-title { color: var(--ci-ink); }
+.ci-fold-meta { margin-left: auto; font-size: 12px; color: var(--ci-sub); font-variant-numeric: tabular-nums; }
+.ci-fold-body { border-top: 1px solid var(--ci-line-soft); padding: 10px 0 16px; }
+.ci-fold-body > .ci-hint:first-child { margin: 2px 0 0; }
 
 /* KPI 行 */
 .ci-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(156px, 1fr)); gap: 10px; }

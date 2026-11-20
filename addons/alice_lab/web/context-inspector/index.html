@@ -34,16 +34,26 @@
       <div id="ci-trend" class="ci-card-body"><p class="ci-hint">先选择请求。</p></div>
     </section>
   </div>
-  <section class="ci-card">
-    <h2>DNA · 模型读取顺序</h2>
-    <p class="ci-hint">按模型读取顺序逐项平铺；位置编号、类别与开销一目了然。正文需开启正文采集后才留存。</p>
-    <div id="ci-dna" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
-  </section>
-  <section class="ci-card">
-    <h2>上下文浏览器</h2>
-    <p class="ci-hint">按类别展开装配块与选择决策；未进入当前调用的材料如实标注。</p>
-    <div id="ci-browser" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
-  </section>
+  <details class="ci-card ci-fold">
+    <summary>
+      <h2 class="ci-fold-title">DNA · 模型读取顺序</h2>
+      <span class="ci-fold-meta" id="ci-dna-meta">选择一次调用</span>
+    </summary>
+    <div class="ci-fold-body">
+      <p class="ci-hint">按模型读取顺序逐项平铺；位置编号、类别与开销一目了然。正文需开启正文采集后才留存。</p>
+      <div id="ci-dna" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+    </div>
+  </details>
+  <details class="ci-card ci-fold">
+    <summary>
+      <h2 class="ci-fold-title">上下文浏览器</h2>
+      <span class="ci-fold-meta" id="ci-browser-meta">选择请求</span>
+    </summary>
+    <div class="ci-fold-body">
+      <p class="ci-hint">按类别展开装配块与选择决策；未进入当前调用的材料如实标注。</p>
+      <div id="ci-browser" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+    </div>
+  </details>
 </main>
 <script src="observer-client.js"></script>
 <script src="context-viewer.js"></script>

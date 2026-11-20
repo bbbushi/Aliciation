@@ -268,11 +268,12 @@
   }
 
   function renderDNA(request, call) {
-    const body = el("ci-dna");
+    const body = el("ci-dna"), meta = el("ci-dna-meta");
     clearBodies(body);
     body.replaceChildren();
-    if (!call) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (!call) { if (meta) meta.textContent = "选择一次调用"; body.append(node("p", "选择一次调用。", "ci-hint")); return; }
     const seg = segmentsOf(request, call);
+    if (meta) meta.textContent = `${seg.segments.length} 段 · ${kfmt(seg.total)} 字`;
     const dna = node("div", null, "ci-dna");
     let position = 0;
     const maxChars = Math.max(1, ...seg.segments.map((s) => s.chars));
@@ -296,10 +297,11 @@
   }
 
   function renderBrowser(request, call) {
-    const body = el("ci-browser");
+    const body = el("ci-browser"), meta = el("ci-browser-meta");
     clearBodies(body);
     body.replaceChildren();
-    if (!request) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (!request) { if (meta) meta.textContent = "选择请求"; body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (meta) meta.textContent = `${(request.blocks || []).length} 块 · ${(request.selections || []).length} 条决策`;
     const tree = node("div", null, "ci-tree");
     const selectedSources = new Set(((call && call.bindings) || []).map((b) => b.block_seq));
     const byKind = new Map();
