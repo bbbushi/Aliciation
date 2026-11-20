@@ -91,19 +91,19 @@ def _valid(value, schema):
     return True
 
 
-def validate_call(command, arguments, tools):
-    """Check actual request-visible schema; execution still checks live grants."""
+def parse_call(command, arguments, tools) -> tuple[dict | None, dict | None]:
+    """Return decoded arguments or a refusal for the request-visible schema."""
     schema = next((t["function"]["parameters"] for t in tools
                    if t["function"]["name"] == command), None)
     if schema is None:
-        return {"error": "capability_not_available", "command": command}
+        return None, {"error": "capability_not_available", "command": command}
     try:
         value = json.loads(arguments or "{}")
     except (ValueError, TypeError):
-        return {"error": "invalid_arguments", "command": command}
+        return None, {"error": "invalid_arguments", "command": command}
     if not _valid(value, schema):
-        return {"error": "invalid_arguments", "command": command}
-    return None
+        return None, {"error": "invalid_arguments", "command": command}
+    return value, None
 
 
 def explicit_request(text, tools):

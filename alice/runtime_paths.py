@@ -6,12 +6,32 @@ application state. Importing this module does not create directories.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
 
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)).resolve()
 _selected: Path | None = None
+_OPTIONAL_COMPONENTS = ("context-inspector", "p1-evaluation", "qq", "browser-reader", "bilibili",
+                        "claude-agent", "dsh-agent")
+_COMPONENT_STATES = ("packaged", "not-packaged", "external-alice-lab", "external-alice-lab-source-runner")
+
+
+def runtime_distribution() -> dict:
+    """Describe shipped components. Their connection and authorization states are separate."""
+    if not getattr(sys, "frozen", False):
+        return {"kind": "source"}
+    distribution = {"kind": "packaged", "components": {}}
+    try:
+        build = json.loads((RESOURCE_ROOT / "build-info.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return distribution
+    components = build.get("components") if isinstance(build, dict) else None
+    if isinstance(components, dict):
+        distribution["components"] = {name: components[name] for name in _OPTIONAL_COMPONENTS
+                                      if components.get(name) in _COMPONENT_STATES}
+    return distribution
 
 
 def user_root() -> Path:

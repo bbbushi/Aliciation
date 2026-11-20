@@ -36,7 +36,7 @@ class CapturePolicy:
 
 
 class ContextObserver:
-    """进程级采集入口；sink 由宿主提供（空实现见 NullObserver）。"""
+    """采集入口，宿主提供 sink。同一入口可按请求选择采集策略。"""
 
     def __init__(self, sink, policy: CapturePolicy | None = None):
         self._sink = sink
@@ -49,12 +49,12 @@ class ContextObserver:
         return self._policy
 
     def begin_request(self, *, request_id, session_epoch=None, scope=None,
-                      parent_request_id=None) -> "RequestTrace":
+                      parent_request_id=None, policy: CapturePolicy | None = None) -> "RequestTrace":
         with self._lock:
             request_seq = next(self._request_seq)
         trace = RequestTrace(self, request_id=request_id, session_epoch=session_epoch,
                              scope=scope, request_seq=request_seq,
-                             parent_request_id=parent_request_id)
+                             parent_request_id=parent_request_id, policy=policy or self.policy)
         trace._emit(EVENT_REQUEST_STARTED, {
             "parent_request_id": parent_request_id})
         return trace
@@ -64,9 +64,9 @@ class RequestTrace:
     """一次用户请求的观测轨迹。所有登记方法只记录事实，不改变业务状态。"""
 
     def __init__(self, observer: ContextObserver, *, request_id, session_epoch, scope,
-                 request_seq: int, parent_request_id=None):
+                 request_seq: int, parent_request_id=None, policy: CapturePolicy | None = None):
         self._observer = observer
-        self._policy = observer.policy
+        self._policy = policy or observer.policy
         self._sink = observer._sink
         self.request_id = request_id
         self.session_epoch = session_epoch
@@ -301,7 +301,7 @@ class NullObserver:
     policy = CapturePolicy()
 
     def begin_request(self, *, request_id, session_epoch=None, scope=None,
-                      parent_request_id=None) -> "NullTrace":
+                      parent_request_id=None, policy: CapturePolicy | None = None) -> "NullTrace":
         return NullTrace()
 
 

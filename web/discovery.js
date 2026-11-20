@@ -235,6 +235,7 @@
   let platformSignature = "", interestSignature = "", cardSignature = "";
   let pendingDiscussion = null, discussionTimer = null;
   const activeStates = new Set(["queued", "starting", "running", "planning", "searching", "reading", "synthesizing", "committing", "cancelling", "draining"]);
+  const isSearching = () => activeStates.has(snapshot?.task?.state);
   const taskLabels = { idle: "等待下一次合格活动", queued: "等待开始", starting: "正在准备", running: "正在寻找", plan: "正在选择角度", search: "正在寻找材料", read: "正在读取内容", interpret: "正在整理材料与看法", bili_search: "正在准备 B站搜索", bili_read: "正在准备读取视频信息", bili_http: "正在访问 B站公开接口", planning: "正在选择角度", searching: "正在寻找材料", reading: "正在读取内容", synthesizing: "正在整理材料与看法", committing: "正在保存资料", completed: "本次寻找已完成", succeeded: "本次寻找已完成", skipped: "本次未继续寻找", cancelled: "本次已停止", cancelling: "正在停止", draining: "正在收回本次任务", failed: "本次寻找未完成", unavailable: "发现服务暂不可用", interrupted: "本次寻找已中断" };
   const biliStages = { device: "匿名设备准备", wbi_keys: "搜索参数准备", search: "视频搜索", video_info: "视频信息读取" };
   taskLabels.tieba_forum_check = "正在检测吧名";
@@ -638,7 +639,7 @@
     $("discovery-forum-check").textContent = checking ? "正在检测…" : "检测吧名";
     renderForumCheck();
     $("discovery-settings-save").disabled = !ready || settingsConflict();
-    const task = snapshot?.task || {}, active = activeStates.has(task.state);
+    const task = snapshot?.task || {}, active = isSearching();
     const issue = setupIssue();
     $("discovery-run").disabled = !ready || active || !!issue;
     $("discovery-run").textContent = active ? "正在寻找…" : "现在找一轮";
@@ -1071,6 +1072,7 @@
   }
   function clearIdentity() {
     snapshot = null; dataset = null; fresh = false; settingsDirty = false; settingsRevision = null;
+    window.dispatchEvent(new Event("alice:discovery-cleared"));
     interestDirty = false; pendingDiscussion = null; clearTimeout(discussionTimer);
     platformSignature = interestSignature = cardSignature = "";
     $("discovery-settings-form").reset(); $("discovery-key").value = ""; fillPolicySettings({}); $("discovery-bilibili-access").disabled = true; resetInterest();
@@ -1415,6 +1417,6 @@
     else stopped = false;
   }).observe($("shutdown-screen"), { attributes: true, attributeFilter: ["class"] });
   window.addEventListener("pagehide", () => { close(false); setSettingsVisible(false); stopped = true; controller?.abort(); clearTimeout(discussionTimer); $("discovery-key").value = ""; });
-  window.AliceDiscovery = { open, close, setSettingsVisible, refreshAfterTurn: () => { if (opened || settingsOpened) refresh(); }, shutdown: () => { close(false); setSettingsVisible(false); stopped = true; } };
+  window.AliceDiscovery = { open, close, setSettingsVisible, isSearching, refreshAfterTurn: () => { if (opened || settingsOpened) refresh(); }, shutdown: () => { close(false); setSettingsVisible(false); stopped = true; } };
   updateControls(); providerFields();
 })();
