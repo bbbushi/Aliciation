@@ -243,7 +243,6 @@
           col.append(segEl);
         }
       }
-      col.style.setProperty("--h", "100%");
       wrap.append(col);
       const label = node("div", null, "lbl");
       label.append(node("div", `${purposeLabels[call.purpose] || call.purpose}`));
@@ -265,9 +264,6 @@
     body.append(chart);
     if (state.mode === "delta") {
       body.append(node("p", "Delta 模式：与同请求上一次调用比较；斜线纹=该类减少。", "ci-hint"));
-    } else if (stats.length) {
-      const lastSeg = stats[stats.length - 1].seg;
-      body.append(legend(lastSeg.totals, lastSeg.total));
     }
   }
 
@@ -286,9 +282,11 @@
       row.append(node("span", String(position), `ci-pos ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`));
       const mid = node("div", null, "ci-dna-mid");
       mid.append(node("p", `${s.label} · ${s.kindLabel} · ${s.chars} 字 · 消息 #${s.message_seq}`));
+      const track = node("div", null, "ci-dna-track");
       const bar = node("div", null, `ci-dna-bar ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`);
       bar.style.width = `${Math.max(2, (s.chars / maxChars) * 100)}%`;
-      mid.append(bar);
+      track.append(bar);
+      mid.append(track);
       mid.append(bodyButton(request.request_id, s.content_hash, s.bodyState));
       row.append(mid);
       dna.append(row);
@@ -373,7 +371,8 @@
       const label = value => value == null ? "未知" : value ? "开" : "关";
       status(`采集：元数据 ${label(state.capture.metadata)} · 正文 ${label(state.capture.body)}`
         + ` · 读取：${state.canReadBody ? "含正文" : "仅元数据"}`
-        + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
+        + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB`
+          + (Number.isFinite(quota.retention_days) ? ` · 保留 ${quota.retention_days} 天` : "") : "")
         + (quota?.requests ? ` · 滚动留存 ${quota.requests.used ?? "?"}/${quota.requests.limit} 个请求` : "")
         + (state.canReadBody && !state.fullCall ? " · 完整上下文需要新版 Alice" : ""));
       const data = await window.ContextInspectorClient.get("requests");

@@ -1,4 +1,4 @@
-:root{color-scheme:light;--bg:#f6f6f0;--card:#fffefa;--ink:#182722;--muted:#4c6158;--rule:#dde3d9;--rule-soft:#e9ede4;--accent:#225942;--rail:#eef0e6;
+:root{color-scheme:light;--bg:#fbfbf8;--card:#ffffff;--ink:#1b2a23;--muted:#5f6f66;--rule:#e7eae3;--rule-soft:#f1f3ee;--accent:#225942;--rail:#f0f2e8;
   --c1:#2f7a63;--c2:#3d6f9c;--c3:#b07a2f;--c4:#8a5a9e;--c5:#a8544c;--c6:#6d7c46;
   --ease-out:cubic-bezier(.23,1,.32,1)}
 *{box-sizing:border-box}
@@ -46,13 +46,13 @@ input:not([type=checkbox]),textarea,select{width:100%;display:block;font:inherit
 .actions label{min-width:115px}.actions input[type=number]{max-width:10em}
 .foot-note{font-size:12px;margin-top:14px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-bottom:12px}
-.kpi{background:var(--card);border:1px solid var(--rule);border-radius:12px;padding:11px 13px}
+.kpi{background:var(--card);border:1px solid var(--rule);border-radius:12px;padding:11px 13px;box-shadow:0 1px 2px rgba(27,42,35,.03)}
 .kpi span{display:block;font-size:11px;color:var(--muted);letter-spacing:.02em}
 .kpi b{display:block;font-size:23px;font-weight:600;line-height:1.25;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .kpi i{display:block;font-size:11px;color:var(--muted);font-style:normal;margin-top:2px}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
 .grid.equal{align-items:stretch}
-.card{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:15px 17px;min-width:0}
+.card{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:15px 17px;min-width:0;box-shadow:0 1px 2px rgba(27,42,35,.03)}
 .card.wide{grid-column:1/-1}
 .card-body{min-width:0;flex:1}
 .col{display:flex;flex-direction:column;gap:12px;min-width:0}
@@ -173,7 +173,7 @@ main.embedded .top{display:none}
 main.embedded #observe{flex:1;min-height:0;display:flex;flex-direction:column}
 main.embedded #feedback,main.embedded #observations{display:none}
 #context-host{flex:1;min-height:0;display:flex}
-#context-host iframe{display:block;width:100%;height:100%;border:0;background:#f2f4f8}
+#context-host iframe{display:block;width:100%;height:100%;border:0;background:#fbfbf8}
 @media(max-width:900px){
   .shell{grid-template-columns:minmax(0,1fr)}
   .rail{position:static;height:auto;flex-direction:column;gap:10px;padding:14px 16px 10px;
