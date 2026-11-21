@@ -1,5 +1,5 @@
 {
-  "version": 12,
+  "version": 13,
   "units": [
     {
       "command": "reply_detail",
@@ -1261,6 +1261,26 @@
       "internal": {
         "executor": "thought",
         "operation": "contact_reply"
+      }
+    },
+    {
+      "command": "contact_plan",
+      "summary": "主动交流窗口中提交话题、目的和时机，决定现在询问用户是否方便、留待以后或暂不联系。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "decision": {"type": "string", "enum": ["invite", "later", "none"]},
+          "topic": {"type": "string", "minLength": 1, "maxLength": 80, "description": "新话题，用一句话说明想聊什么；沿用意图时省略。"},
+          "purpose": {"type": "string", "minLength": 1, "maxLength": 240, "description": "想聊的目的，闲聊本身也可以；决定none时说明不联系的理由。"},
+          "why_now": {"type": "string", "minLength": 1, "maxLength": 240, "description": "invite/later必填，说明此刻适合开口的依据或留待以后的原因。"},
+          "intent_ref": {"type": "string", "minLength": 1, "maxLength": 80, "description": "沿用本窗口给出的待聊意图，与topic二选一。"}
+        },
+        "required": ["decision", "purpose"],
+        "additionalProperties": false
+      },
+      "internal": {
+        "executor": "thought",
+        "operation": "contact_plan"
       }
     },
     {

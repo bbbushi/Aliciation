@@ -16,6 +16,10 @@ import time
 
 
 SOURCE_SHADOW = "（这一轮参考了外部资料；资料正文仅在仍获准的来源附件中提供。）"
+_RECENT_SOURCE_REFERENCE = re.compile(
+    r"(?:刚才|之前|上面|前面|上次|接着|继续).{0,10}(?:那篇|资料|文章|帖子|网页|来源|原文|链接|搜索|查到|读到)"
+    r"|(?:这|那)(?:篇文章|篇帖子|篇|条来源|个网页|个链接|份资料)"
+)
 # User-controlled business limits. None means unlimited, zero disables new work;
 # tieba_text_limit is a positive character quota, validated separately on writes.
 # Per-field UTF-8/ID checks below protect serialized execution, not daily quotas.
@@ -374,10 +378,11 @@ class SourceStoreMixin:
         import json
         for table, fields in (("thought_questions", "question||reason||progress||next_step"),
                               ("thought_contacts", "message"), ("exploration_runs", "checkpoint"),
-                              ("v2_activity_plans", "object||value||why_now||stop_condition||next_action||COALESCE(result,'')")):
+                              ("v2_activity_plans", "object||value||why_now||stop_condition||next_action||COALESCE(result,'')"),
+                              ("v2_contact_intents", "topic||reason")):
             if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                 for row in self.conn.execute(f"SELECT basis,length(CAST({fields} AS BLOB)) FROM {table}"):
-                    if json.loads(row[0]).get("packets"):
+                    if (json.loads(row[0] or "{}") or {}).get("packets"):
                         total += row[1] or 0
         if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thought_agenda'").fetchone():
             for row in self.conn.execute("SELECT q.basis,length(CAST(a.schedule_reason AS BLOB)) "
@@ -554,8 +559,8 @@ class SourceStoreMixin:
         )
 
     def protect_source_turn(self, turn_id: int, packet_ids, *, scope="gui") -> None:
-        """Recall may introduce external data after the user turn was saved."""
-        row = self.conn.execute("SELECT content FROM turns WHERE id=?", (turn_id,)).fetchone()
+        """Record later dependencies without moving original user text."""
+        row = self.conn.execute("SELECT role,content FROM turns WHERE id=?", (turn_id,)).fetchone()
         if row is None:
             raise ValueError("轮次不存在")
         attached = self.conn.execute("SELECT * FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
@@ -564,14 +569,19 @@ class SourceStoreMixin:
         if attached is not None:
             ids = list(dict.fromkeys(json.loads(attached["source_ids_json"]) + ids))
             content = attached["content"]
+        authored = (row["role"] == "user" and row["content"] != SOURCE_SHADOW
+                    and not self.turn_worker_refs(turn_id))
         with self.source_transaction():
-            self._source_turn_write(turn_id, content, ids, scope)
-            self.conn.execute("UPDATE turns SET content=? WHERE id=?", (SOURCE_SHADOW, turn_id))
+            self._source_turn_write(turn_id, "" if authored else content, ids, scope)
+            if not authored:
+                self.conn.execute("UPDATE turns SET content=? WHERE id=?", (SOURCE_SHADOW, turn_id))
 
     def turn_display(self, turn_id: int, *, scope="gui") -> str | None:
-        row = self.conn.execute("SELECT content FROM turns WHERE id=?", (turn_id,)).fetchone()
+        row = self.conn.execute("SELECT role,content FROM turns WHERE id=?", (turn_id,)).fetchone()
         if row is None:
             return None
+        if row["role"] == "user" and row["content"] != SOURCE_SHADOW:
+            return row["content"]
         attachment = self.conn.execute("SELECT * FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
         if attachment is None:
             return row["content"]
@@ -585,8 +595,8 @@ class SourceStoreMixin:
         row = self.conn.execute("SELECT source_ids_json FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
         return json.loads(row[0]) if row else []
 
-    def source_history_projection(self, rows, *, scope="gui", known_ids=()):
-        """Read-only, newest complete conversation groups first, within quota.
+    def source_history_projection(self, rows, *, scope="gui", known_ids=(), current_user_text=None):
+        """Admit a source-backed follow-up only to the immediately preceding exchange.
 
         Caller supplies only the recent window, including the current user at
         its end. Returned prose must not be exposed until ALL its dependencies
@@ -596,20 +606,40 @@ class SourceStoreMixin:
         limits = self.source_limits()
         cap = limits["chat_dependency_limit"]
         admitted = set(known_ids)
+        from .store import bigrams
+
+        question = current_user_text or ""
+        explicit = bool(_RECENT_SOURCE_REFERENCE.search(question))
+        question_terms = bigrams(question)
         groups = []
         for row in rows[:-1]:
             if row["role"] == "user" or dict(row).get("proactive"):
                 groups.append([])
             if groups:
                 groups[-1].append(row)
-        for group in reversed(groups):
+        for index, group in enumerate(groups):
             entries, required, reason = {}, set(), None
+            relevant = False
+            if index == len(groups) - 1 and any(row["role"] == "assistant" for row in group):
+                previous = next((row for row in group if row["role"] == "user"), None)
+                if previous is not None:
+                    text = self.turn_display(previous["id"], scope=scope)
+                    if text and text != SOURCE_SHADOW:
+                        overlap = len(question_terms & bigrams(text))
+                        relevant = overlap >= 2 and overlap * 2 >= len(question_terms)
+                relevant = relevant or explicit
             for row in group:
                 # Task prose has its own authority and propagation path.
                 if self.turn_worker_refs(row["id"]):
                     continue
+                # An authored user message is already in ordinary history.
+                if row["role"] == "user" and row["content"] != SOURCE_SHADOW:
+                    continue
                 ids = self.turn_source_ids(row["id"])
                 if not ids:
+                    continue
+                if not relevant:
+                    excluded.append({"turn_id": row["id"], "reason": "source_not_current_followup"})
                     continue
                 content = self.turn_display(row["id"], scope=scope)
                 entries[row["id"]] = {"content": content, "packet_ids": ids}

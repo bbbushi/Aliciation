@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS v2_contact_intents (
  topic TEXT NOT NULL,
  reason TEXT NOT NULL,
  content_refs TEXT NOT NULL DEFAULT '[]',
+ basis TEXT,
  state TEXT NOT NULL DEFAULT 'active',
  question_id INTEGER,
  question_version INTEGER,

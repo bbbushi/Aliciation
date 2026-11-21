@@ -3,12 +3,13 @@ const byId = (id) => document.getElementById(id);
 const sessionKey = location.hash.slice(1);
 if (sessionKey) history.replaceState(null, "", location.pathname);
 
-const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代", idle:"发呆"};
+const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代", contact:"主动交流", idle:"发呆"};
 const reasons = {weighted_rotation:"按权重抽签", priority_content:"优先事项", explicit_task:"明确指定",
   no_actionable_work:"无可推进事项", activity_finish_rest:"Alice 提议休息", user_requested_rest:"用户安排休息",
   same_material_window:"同材料窗口用尽", mode_disabled:"模式未开启", value_waiting:"等待价值确认",
   new_material_or_curiosity:"新材料或好奇", voluntary_rest:"自愿休息", idle_disabled:"发呆未开启",
-  actionable_question:"有可推进问题", no_content:"无内容"};
+  actionable_question:"有可推进问题", no_content:"无内容", contact_opportunity:"可判断主动交流",
+  contact_context_reviewed:"已判断本批材料", contact_delivery_mode:"需要选择站内主动消息"};
 const layerLabels = {active:"活跃", warehouse:"仓库", longterm:"长期"};
 const kindLabels = {event:"事件", stance:"立场"};
 const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
@@ -22,7 +23,7 @@ const callStatusLabels = {ok:"成功", error:"失败", cancelled:"取消", strea
 const originLabels = {interest:"兴趣", exploration:"探索", review:"复读审核", user_request:"用户指定",
   problem:"问题", iteration:"迭代", extraction:"提取"};
 const C = ["#2f7a63", "#3d6f9c", "#b07a2f", "#8a5a9e", "#a8544c", "#6d7c46"];
-const modeColors = {interest:C[1], problem:C[2], iteration:C[3], idle:C[5]};
+const modeColors = {interest:C[1], problem:C[2], iteration:C[3], contact:C[0], idle:C[5]};
 const layerColors = {active:C[0], warehouse:C[2], longterm:C[1]};
 const phaseColors = {completed:C[0], db_committed:C[0], file_replaced:C[2], prepared:C[2],
   rolled_back:C[4], aborted:C[4], superseded:C[4], unknown:C[5], unreadable:C[4]};
@@ -659,7 +660,7 @@ function paintSchedule(v, out) {
   weightCard.body.append(donut(keys.map((key) => ({
     label: modes[key],
     value: weights[key] || 0,
-    color: key === "idle" ? C[5] : key === "problem" ? C[2] : key === "iteration" ? C[3] : C[1],
+    color: modeColors[key],
     note: drawable ? `内容分 ${info(key).content_score ?? "—"}`
       : `权重 ${info(key).weight ?? "—"} · 内容分 ${info(key).content_score ?? "—"}`,
   })), {

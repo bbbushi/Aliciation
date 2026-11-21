@@ -867,13 +867,25 @@ async function boot() {
   setChatNotice("");
   const forceSetup = new URLSearchParams(location.search).has("setup");  // ?setup 可主动回到初始化页
   if (state.model_ready === false) showModelOnboarding(state);
-  else if (state.turns > 0 && !forceSetup) await startChat(state);
+  else if (!forceSetup && (state.turns > 0 || state.persona?.installed)) await startChat(state);
   else showWelcome(state, forceSetup);
 }
 
 async function startChat(s) {
   state = s;
+  const url = new URL(location.href);
+  if (url.searchParams.has("setup")) {
+    url.searchParams.delete("setup");
+    history.replaceState(history.state, "", url);
+  }
   $("#welcome").classList.add("hidden");
+  if (s.user_intro_pending) {
+    $("#app").classList.add("hidden");
+    showUserIntro({session_epoch: s.session_epoch});
+    return;
+  }
+  introDraftEpoch = null;
+  hideUserIntro();
   $("#app").classList.remove("hidden");
   $("#name").textContent = s.name;
   document.title = s.name;
@@ -886,6 +898,127 @@ async function startChat(s) {
   resizeComposer();
   $("#input").focus();
 }
+
+let introView = null;
+let introSaving = false;
+let introDraftEpoch = null;
+
+const WIZARD_STEPS = ["供应商", "API Key", "选择模型", "安装人格", "称呼", "兴趣", "开场话题"];
+const INTRO_QUESTIONS = [
+  ["我该怎么称呼你？", "名字或昵称都可以。"],
+  ["你平时喜欢什么？", "可以填一个你喜欢的活动，也可以写好几个。"],
+  ["有什么想先和我聊的？", "你可以留个话题，等准备好再开口。"],
+];
+
+function showWizardProgress(node, step) {
+  node.setAttribute("aria-label", `第 ${step} 步，共 ${WIZARD_STEPS.length} 步：${WIZARD_STEPS[step - 1]}`);
+  const dots = WIZARD_STEPS.map((_, index) => {
+    const dot = document.createElement("span");
+    dot.dataset.state = index + 1 === step ? "current" : index + 1 < step ? "done" : "waiting";
+    return dot;
+  });
+  const count = document.createElement("span");
+  count.className = "wizard-count";
+  count.textContent = `${step} / ${WIZARD_STEPS.length}`;
+  node.replaceChildren(...dots, count);
+}
+
+function showIntroStep(step) {
+  introView.step = step;
+  const {editing} = introView;
+  const [title, hint] = INTRO_QUESTIONS[step];
+  $("#user-intro-title").textContent = editing ? "我的介绍" : title;
+  $("#user-intro-hint").textContent = editing ? "选填你愿意让 Alice 在聊天里用的信息。" : hint;
+  $("#user-intro-back").hidden = editing;
+  $("#user-intro-save").textContent = editing ? "保存介绍" : step === INTRO_QUESTIONS.length - 1 ? "保存并开始聊天" : "继续";
+  $("#user-intro-skip").textContent = editing ? "取消" : "跳过";
+  $("#user-intro-status").textContent = "";
+  document.querySelectorAll("#user-intro-fields [data-intro-field]").forEach((field, index) => {
+    field.hidden = !editing && index !== step;
+  });
+  if (!editing) showWizardProgress($("#user-intro-steps"), step + 5);
+  $("#user-intro-title").focus();
+}
+
+function showUserIntro(profile, editing = false) {
+  hideUserIntro();
+  const backgrounds = [$("#app"), $("#welcome")].map(node => [node, node.inert]);
+  introView = {epoch: profile.session_epoch, editing, backgrounds};
+  for (const [node] of backgrounds) node.inert = true;
+  if (editing || introDraftEpoch !== profile.session_epoch) {
+    $("#user-intro-address").value = profile.address || "";
+    $("#user-intro-interests").value = profile.interests || "";
+    $("#user-intro-topic").value = profile.opening_topic || "";
+  }
+  introDraftEpoch = editing ? null : profile.session_epoch;
+  $("#user-intro").dataset.editing = editing ? "true" : "false";
+  $("#user-intro").classList.remove("hidden");
+  showIntroStep(0);
+}
+
+function hideUserIntro() {
+  for (const [node, inert] of introView?.backgrounds || []) node.inert = inert;
+  introView = null;
+  $("#user-intro").classList.add("hidden");
+}
+
+async function finishUserIntro() {
+  if (!introView || introSaving) return;
+  const view = introView;
+  const status = $("#user-intro-status");
+  const fields = {
+    address: $("#user-intro-address").value,
+    interests: $("#user-intro-interests").value,
+    opening_topic: $("#user-intro-topic").value,
+  };
+  introSaving = true;
+  const controls = document.querySelectorAll("#user-intro-fields, #user-intro-form button, #user-intro-finish");
+  controls.forEach(control => { control.disabled = true; });
+  status.textContent = view.editing ? "正在保存介绍…" : "正在打开聊天…";
+  try {
+    const updated = await postJSON("/api/user-intro", {session_epoch: view.epoch, ...fields});
+    if (introView !== view) return;
+    hideUserIntro();
+    if (view.editing) {
+      state = updated;
+      window.AliceUI.openSettings("general");
+      toast("介绍已保存");
+    } else {
+      await startChat(updated);
+    }
+  } catch (error) {
+    if (introView === view) status.textContent = error.message;
+    else if (!introView) toast("介绍已保存，聊天连接失败，请刷新后继续。", 5000);
+  } finally {
+    introSaving = false;
+    controls.forEach(control => { control.disabled = false; });
+  }
+}
+
+function advanceUserIntro(skip = false) {
+  if (!introView || introSaving) return;
+  const {editing, step} = introView;
+  if (editing && skip) {
+    hideUserIntro();
+    window.AliceUI.openSettings("general");
+    return;
+  }
+  if (skip) $("#user-intro-fields [data-intro-field]:not([hidden]) :is(input, textarea)").value = "";
+  if (editing || step === INTRO_QUESTIONS.length - 1) finishUserIntro();
+  else showIntroStep(step + 1);
+}
+
+$("#user-intro-form").onsubmit = (event) => {
+  event.preventDefault();
+  advanceUserIntro();
+};
+$("#user-intro-skip").onclick = () => advanceUserIntro(true);
+$("#user-intro-back").onclick = () => {
+  if (!introView || introView.editing || introSaving) return;
+  if (introView.step > 0) showIntroStep(introView.step - 1);
+  else showWelcome(state);
+};
+$("#user-intro-finish").onclick = () => finishUserIntro();
 
 /* ---------- 初始化（第一次打开） ---------- */
 
@@ -900,46 +1033,60 @@ function showWelcome(s, reseting = false) {
   restoreModelSettings();
   state = s;
   $("#app").classList.add("hidden");
+  hideUserIntro();
   $("#welcome").classList.remove("hidden");
-  $("#seed-name").textContent = s.name;
-  $("#w-sub").textContent = reseting
-    ? "正在重新设置人格。初始化＝从头开始，旧会话会被归档。"
-    : s.persona && s.persona.installed
-      ? "她已经有一个先装好的人格。也可以换一个人格再开始。"
-      : "模型已连接。导入人格文档，先理解和预览，再安装。";
+  showWizardProgress($("#persona-wizard-progress"), 4);
+  const installed = !!s.persona?.installed;
+  const reviewing = installed && s.user_intro_pending && !reseting;
+  const title = $("#wizard-persona-title");
+  title.textContent = reviewing ? "人格已安装" : `为 ${s.name} 安装人格`;
+  $("#wizard-persona-install").hidden = !!reviewing;
+  $("#w-sub").textContent = reviewing
+    ? "可以查看已经安装的人格，也可以继续让我认识你。"
+    : reseting
+      ? "正在重新设置人格。初始化＝从头开始，旧会话会被归档。"
+      : installed
+        ? "她已经有一个先装好的人格。也可以换一个人格再开始。"
+        : "选好文档后，先预览并确认安装。安装完成就会进入「认识你」。";
 
   /* 初始化＝新会话：旧对话和记忆归档（data/archive/）后丢弃 */
   const mem = s.memory || {};
   const lost = (mem.active || 0) + (mem.warehouse || 0) + (mem.longterm || 0);
   const warn = $("#w-warn");
-  if (s.turns > 0 || lost > 0) {
+  if (!reviewing && (s.turns > 0 || lost > 0)) {
     warn.textContent = `初始化会丢弃现有的 ${s.turns} 轮对话与 ${lost} 条记忆` +
-      "（先归档到 data/archive/，日后还能翻出来）。想接着现在这个她聊，就点上面的「以她开始」。";
+      "（先归档到 data/archive/，日后还能翻出来）。想接着现在这个她聊，就点「以她开始」。";
     warn.classList.remove("hidden");
   } else {
     warn.classList.add("hidden");
   }
 
-  if (s.persona && s.persona.installed) {
-    $("#current-persona").classList.remove("hidden");
+  $("#current-persona").classList.toggle("hidden", !installed);
+  if (installed) {
     $("#cur-meta").textContent = personaMeta(s.persona);
     $("#cur-view").onclick = () => openPersonaView();
+    $("#cur-start").textContent = reviewing ? "继续认识你" : "以她开始";
     $("#cur-start").onclick = () => startChat(s);
   }
+  title.focus();
+  if (reviewing) return;
 
   $("#tab-tags .hint").textContent = s.persona && s.persona.installed
-    ? "用标签重新生成，会替换她现在的底色（旧版自动快照，可回滚）。想保留现在的人格，点上面的「以她开始」。"
+    ? "用标签重新生成，会替换她现在的底色（旧版自动快照，可回滚）。想保留现在的人格，点「以她开始」。"
     : "选 2~4 个气质标签当底色。剩下的性格，由你们的经历慢慢长。";
 
   /* 标签 */
   const list = $("#tag-list");
+  const previousTags = new Set([...list.querySelectorAll(".tag.on")].map(button => button.textContent));
+  const picked = new Set(s.tags.filter(tag => previousTags.has(tag)));
   list.textContent = "";
-  const picked = new Set();
+  $("#seed-go").disabled = picked.size < 2;
   s.tags.forEach((tag) => {
     const el = document.createElement("button");
     el.type = "button";
     el.className = "tag";
-    el.setAttribute("aria-pressed", "false");
+    el.classList.toggle("on", picked.has(tag));
+    el.setAttribute("aria-pressed", String(picked.has(tag)));
     el.textContent = tag;
     el.onclick = () => {
       if (picked.has(tag)) picked.delete(tag);
@@ -967,8 +1114,9 @@ function showWelcome(s, reseting = false) {
   };
 
   /* 导入 */
-  $("#import-method").innerHTML = personaImportMethodHTML("w-import-method", "material");
-  wireImport(
+  const method = $("#w-import-method")?.value ?? "material";
+  $("#import-method").innerHTML = personaImportMethodHTML("w-import-method", method, true);
+  const setWizardImportText = wireImport(
     {
       method: $("#w-import-method"),
       drop: $("#drop"),
@@ -985,7 +1133,9 @@ function showWelcome(s, reseting = false) {
     },
     async (md, src, resumeOpId, installed, method) => {
       if (method === "material") {
-        await openMaterialImport(null, false, {sourceText: md, sourceName: src});
+        await openMaterialImport(null, false, {
+          sourceText: md, sourceName: src, returnToWizard: setWizardImportText,
+        });
         return;
       }
       if (!await confirmQQReset()) {
@@ -1038,16 +1188,17 @@ function showWelcome(s, reseting = false) {
 
 /* ---------- 人格文档导入（初始化页与弹层共用） ---------- */
 
-function personaImportMethodHTML(id, selected = "") {
+function personaImportMethodHTML(id, selected = "", inWizard = false) {
+  const explanation = `<p class="hint">原文保留：先按六层理解材料，剔除生效内容中的身份接管指令，从设定和背景提炼表达倾向，再轻分类；先预览再安装，不收养身份、观点或经历。安装新原稿会归档旧会话。<br>
+    恢复方式：已有 Alice 文件直接校验恢复，不再对新原稿执行结构化生成。<br>
+    full／registry 是聊天装配模式，不会转换人格材料格式。</p>`;
   return `<label class="persona-import-method" for="${id}">人格文档处理方式
     <select id="${id}">
       <option value="" ${!selected ? "selected" : ""}>请选择处理方式</option>
       <option value="material" ${selected === "material" ? "selected" : ""}>原文保留＋六层理解＋轻分类</option>
       <option value="structured" ${selected === "structured" ? "selected" : ""}>恢复 Alice 文件（兼容已有格式）</option>
     </select></label>
-    <p class="hint">原文保留：先按六层理解材料，剔除生效内容中的身份接管指令，从设定和背景提炼表达倾向，再轻分类；先预览再安装，不收养身份、观点或经历。安装新原稿会归档旧会话。<br>
-    恢复方式：已有 Alice 文件直接校验恢复，不再对新原稿执行结构化生成。<br>
-    full／registry 是聊天装配模式，不会转换人格材料格式。</p>
+    ${inWizard ? `<details class="wizard-persona-help"><summary>两种导入方式有什么区别？</summary>${explanation}</details>` : explanation}
     <button type="button" class="btn ghost" id="${id}-resume">查看／继续原文准备（不调用模型）</button>`;
 }
 
@@ -1386,6 +1537,7 @@ function materialBundleHTML(b) {
 
 async function openMaterialImport(p, editActive = false, draft = null, reinterpret = false) {
   const generation = ++materialViewGeneration;
+  const fromWizard = !$("#welcome").classList.contains("hidden");
   let settings = {}, staged = null;
   let draftText = draft?.sourceText || "", draftName = "";
   const sourceName = draft?.sourceName || "";
@@ -1489,7 +1641,15 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
             return;
           }
           const result = await perform({action: "apply", ...materialBinding(pv), mode, config_revision: settings.config_revision});
-          if (result && current()) { toast(result.material_notice || "已应用", 5000); closeModal(); location.reload(); }
+          if (result && current()) {
+            toast(result.material_notice || "已应用", 5000);
+            closeModal();
+            if (result.persona?.installed && (pv.reset || result.user_intro_pending)) {
+              await startChat(result);
+            } else {
+              location.reload();
+            }
+          }
         }},
       ...(canEdit ? [{label: "取消候选（保留档案）", onClick: async () => {
         const result = await perform({action: "cancel", ...materialBinding(pv)});
@@ -1599,7 +1759,14 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
       }},
       {label: "刷新准备状态", onClick: () => renderEditor()},
       {label: "返回选择方式", onClick: () => {
-        materialViewGeneration++; openPersonaImport(draftText, sourceName, "material");
+        if (fromWizard) {
+          closeModal();
+          draft?.returnToWizard?.(draftText, sourceName);
+          $("#w-import-method").focus();
+        } else {
+          materialViewGeneration++;
+          openPersonaImport(draftText, sourceName, "material");
+        }
       }},
       {label: "返回人格", onClick: () => { materialViewGeneration++; openPersonaView(); }},
       {label: "关闭", onClick: () => { materialViewGeneration++; closeModal(); }},
@@ -2308,7 +2475,13 @@ function openPersonaImport(prefill = "", prefillSource = "", selectedMethod = ""
       const installed = await postJSON("/api/persona", { persona_md: md, source: src,
         ...(resumeOpId ? {resume_op_id: resumeOpId} : {}) });
       markInstalled();
-      state = await api("/api/state");
+      if (installed.user_intro_pending) {
+        closeModal();
+        await startChat(installed);
+        showInstalledCoverage(installed.expression_coverage);
+        return;
+      }
+      state = installed;
       const warningCount = (Array.isArray(installed.expression_coverage?.warnings) ? installed.expression_coverage.warnings.length : 0)
         + (Array.isArray(installed.expression_coverage?.review_notices) ? installed.expression_coverage.review_notices.length : 0);
       toast(warningCount ? `人格已替换，旧版已快照；有 ${warningCount} 项覆盖或表达审阅提示，请在当前人格页查看。` : "人格已替换，旧版已快照", warningCount ? 6000 : 3000);
@@ -2402,6 +2575,24 @@ $("#welcome-qq-btn").onclick = openQQSettings;
 
 $("#settings-btn").onclick = () => window.AliceUI.openSettings();
 $("#welcome-settings-btn").onclick = () => window.AliceUI.openSettings();
+$("#edit-user-intro").onclick = async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    if (state?.persona?.installed !== true) {
+      toast("安装人格后可以填写介绍");
+      return;
+    }
+    const profile = await api("/api/user-intro");
+    if ($("#settings-modal").classList.contains("hidden")) return;
+    closeSettings();
+    showUserIntro(profile, true);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 $("#settings-x").onclick = closeSettings;
 $("#settings-modal").addEventListener("click", (e) => {
   if (e.target.id === "settings-modal") closeSettings();
@@ -2430,17 +2621,91 @@ let modelWorking = false;
 let modelCatalog = null;
 let savedModelConfig = null;
 let modelWizard = false;
+const modelWizardScreen = $("#onboarding");
+const modelWizardProviders = $("#model-wizard-providers");
+const modelWizardChoices = modelWizardProviders.querySelectorAll("input");
+
+function updateModelWizardControls() {
+  if (!modelWizard) return;
+  const step = Number(modelWizardScreen.dataset.step);
+  const provider = $("#model-provider");
+  const hasSavedModel = !!(state.model_ready || savedModelConfig?.configured);
+  const reviewing = step === 3 && !modelCatalog;
+  const canKeepSelection = hasSavedModel && provider.value
+    && provider.value === savedModelConfig?.provider && $("#model-key-mode").value === "keep";
+  modelWizardScreen.dataset.modelReview = reviewing ? "true" : "false";
+  modelWizardProviders.hidden = step !== 1;
+  modelWizardProviders.disabled = modelWorking || !modelRevision;
+  modelWizardChoices.forEach(choice => { choice.checked = choice.value === provider.value; });
+  $("#model-wizard-saved").hidden = !reviewing || !savedModelConfig?.configured;
+  $("#model-wizard-saved-chat").textContent = savedModelConfig?.chat_model || "";
+  $("#model-wizard-saved-cheap").textContent = savedModelConfig?.cheap_model || savedModelConfig?.chat_model || "";
+  $("#model-wizard-back").hidden = step === 1;
+  $("#model-wizard-back").disabled = modelWorking;
+  const next = $("#model-wizard-next");
+  next.hidden = step === 3 ? !(reviewing && hasSavedModel) : step === 2 && !(modelCatalog || canKeepSelection);
+  next.disabled = modelWorking || (!reviewing && (!modelRevision || !provider.value));
+  next.textContent = step === 2 ? (modelCatalog ? "继续选择模型" : "查看已保存的模型") : "继续";
+  const keep = $("#onboarding-return");
+  keep.classList.toggle("hidden", !hasSavedModel || reviewing);
+  keep.disabled = modelWorking;
+  if (step === 3) {
+    $("#model-wizard-title").textContent = reviewing ? "已保存的模型" : "想用哪个模型聊天？";
+    $("#model-wizard-hint").textContent = reviewing
+      ? "继续使用当前配置。需要更换时，返回上一步重新获取模型列表。"
+      : "对话和记忆整理可以用同一个模型。";
+  }
+}
+
+function showModelWizardStep(step) {
+  const provider = $("#model-provider");
+  const keyHint = provider.value
+    ? `使用 ${provider.selectedOptions[0].textContent} 的 API Key 获取模型列表。`
+    : "返回第一步选择供应商后，就可以输入 API Key。";
+  const [title, hint] = [
+    ["你想连接哪家的模型？", "选一个你有 API Key 的供应商。"],
+    ["用 API Key 连接模型", keyHint],
+    ["已保存的模型", ""],
+  ][step - 1];
+  modelWizardScreen.dataset.step = step;
+  $("#model-wizard-title").textContent = title;
+  $("#model-wizard-hint").textContent = hint;
+  showWizardProgress($("#model-wizard-progress"), step);
+  updateModelWizardControls();
+  $("#model-wizard-title").focus();
+}
+
+modelWizardProviders.addEventListener("change", event => {
+  if (!modelWizard || modelWorking || !modelRevision) return;
+  const provider = $("#model-provider");
+  if (provider.value === event.target.value) return;
+  provider.value = event.target.value;
+  provider.dispatchEvent(new Event("change"));
+});
+$("#model-wizard-back").onclick = () => {
+  if (!modelWorking) showModelWizardStep(Number(modelWizardScreen.dataset.step) - 1);
+};
+$("#model-wizard-next").onclick = () => {
+  if (modelWorking) return;
+  const step = Number(modelWizardScreen.dataset.step);
+  if (step === 3) useSavedModel();
+  else showModelWizardStep(step + 1);
+};
 
 function modelBusy(on) {
   modelWorking = on;
   const loaded = !!modelRevision;
   ["#model-provider", "#model-key-mode"].forEach(id => { $(id).disabled = on || !loaded; });
   $("#model-key").disabled = on || !loaded || $("#model-key-mode").value !== "replace";
-  $("#model-fetch").disabled = on || !loaded || !$("#model-provider").value;
+  const fetchButton = $("#model-fetch");
+  fetchButton.disabled = on || !loaded || !$("#model-provider").value;
+  fetchButton.classList.toggle("primary", modelWizard);
+  fetchButton.classList.toggle("ghost", !modelWizard);
   ["#model-chat", "#model-cheap"].forEach(id => { $(id).disabled = on || !modelCatalog; });
   const selected = !!modelCatalog && !!$("#model-chat").value && !!$("#model-cheap").value;
   ["#model-test", "#model-save"].forEach(id => { $(id).disabled = on || !loaded || !selected; });
   $("#model-save").textContent = modelWizard ? "验证保存并继续" : "验证并保存";
+  updateModelWizardControls();
 }
 
 function modelResult(message, kind = "") {
@@ -2468,9 +2733,10 @@ function invalidateModelCatalog() {
 async function loadModelSettings() {
   if (modelWorking) return;
   modelRevision = null;
+  savedModelConfig = null;
   invalidateModelCatalog();
   modelBusy(true);
-  modelResult("正在读取本机配置…");
+  modelResult("正在读取本机配置…", "working");
   try {
     const d = await api("/api/model-config", {headers: {"X-Alice-Intent": "model-config"}});
     savedModelConfig = d;
@@ -2549,6 +2815,7 @@ $("#model-fetch").onclick = async () => {
     $("#model-cheap").value = savedModelConfig?.provider === $("#model-provider").value && d.models.includes(savedModelConfig.cheap_model)
       ? savedModelConfig.cheap_model : "__same__";
     modelResult(`已获取 ${d.models.length} 个候选模型。请选择对话模型，再验证并保存。`, "ok");
+    if (modelWizard && modelWizardScreen.dataset.step === "2") showModelWizardStep(3);
   } catch (e) {
     invalidateModelCatalog();
     modelResult(`获取失败：${e.message}`, "error");
@@ -2592,27 +2859,36 @@ function restoreModelSettings() {
   $("#onboarding").classList.add("hidden");
   modelWizard = false;
 }
-function showModelOnboarding(s) {
+function showModelOnboarding(s, step = 1) {
   state = s;
   modelWizard = true;
   $("#welcome").classList.add("hidden");
+  hideUserIntro();
   $("#app").classList.add("hidden");
   $("#settings-modal").classList.add("hidden");
   $("#onboarding").classList.remove("hidden");
   $("#onboarding-model-host").appendChild($("#model-settings"));
   $("#model-settings").classList.remove("hidden");
-  $("#onboarding-return").classList.toggle("hidden", !s.model_ready);
+  showModelWizardStep(step);
   loadModelSettings();
 }
 async function advanceModelOnboarding() {
   const s = await api("/api/state");
   if (!s.model_ready) throw new Error("模型配置尚未完成，请先验证并保存。");
+  const forceSetup = new URLSearchParams(location.search).has("setup");
   restoreModelSettings();
-  if (s.turns > 0 && s.persona?.installed) await startChat(s);
-  else showWelcome(s);
+  if (s.persona?.installed && !s.user_intro_pending && !forceSetup) await startChat(s);
+  else showWelcome(s, forceSetup);
 }
-$("#onboarding-back").onclick = () => showModelOnboarding(state);
-$("#onboarding-return").onclick = () => advanceModelOnboarding().catch(e => modelResult(e.message, "error"));
+$("#onboarding-back").onclick = () => showModelOnboarding(state, 3);
+$("#onboarding-return").onclick = useSavedModel;
+async function useSavedModel() {
+  if (modelWorking) return;
+  modelBusy(true);
+  try { await advanceModelOnboarding(); }
+  catch (e) { modelResult(e.message, "error"); }
+  finally { modelBusy(false); }
+}
 
 $("#exit-btn").onclick = async () => {
   if (shuttingDown || exitPromptPending) return;
@@ -3076,7 +3352,7 @@ boot().catch(showStartupError);
     },
     openSettings(section = "general") {
       if (settingsRoute?.(section)) return;
-      if (modelWizard && section === "general") { byId("model-provider").focus(); return; }
+      if (modelWizard && section === "general") { byId("model-wizard-title").focus(); return; }
       settingsModal.classList.remove("hidden");
       selectSettingsSection(section);
       window.AliceQQ?.open();

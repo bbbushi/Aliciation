@@ -422,12 +422,17 @@ class InvitationService:
         if not autonomy_policy.TEST_CONTROLS_ONLY:
             if not activity.in_window(config["contact_start"], config["contact_end"]):
                 blocked.append("outside_contact_window")
-            if intent is not None and not config.get(intent.motive):
+            if intent is not None and intent.motive != "chat" and not config.get(intent.motive):
                 blocked.append("motive_disabled")
             if intent is not None and intent.next_eligible_at is not None and intent.next_eligible_at > self._now():
                 blocked.append("retry_not_due")
             if not thoughts.contact_capacity(store, config):
                 blocked.append("contact_capacity")
+        if intent is not None and intent.motive == "chat":
+            if not config["activities"][activity.CONTACT_MODE]["seconds"]:
+                blocked.append("mode_disabled")
+            if config["delivery"] != "gui":
+                blocked.append("contact_delivery_mode")
         return tuple(blocked)
 
     def _attempts(self, scope: Scope, intent_id: str) -> tuple[InvitationAttempt, ...]:

@@ -224,17 +224,49 @@ class ChatService:
         }
 
     def state(self) -> dict:
+        from . import user_intro
+
         with self._lock:
+            persona_status = self._persona_stats()
+            turns = self._turn_count()
             return {
                 "name": self.cfg.persona.name,
-                "needs_seed": persona.persona_md() is None,
+                "needs_seed": not persona_status["installed"],
                 "model_ready": _model_config_data(self.cfg.llm, self._config_revision)["configured"],
                 "tags": list(persona.TAGS),
                 "continuity": loop._continuity(self.store),
                 "memory": self._memory_stats(),
-                "turns": self._turn_count(),
-                "persona": self._persona_stats(),
+                "turns": turns,
+                "persona": persona_status,
+                "session_epoch": self._channels.epoch,
+                "user_intro_pending": (persona_status["installed"] and turns == 0
+                                       and self.store.meta_get(user_intro.META_KEY) is None
+                                       and self.store.conn.execute(
+                                           "SELECT 1 FROM turns WHERE role='user' LIMIT 1").fetchone() is None),
             }
+
+    def user_introduction(self, payload=None) -> dict:
+        from . import user_intro
+
+        if payload is None:
+            with self._lock:
+                return {"session_epoch": self._channels.epoch, **user_intro.load(self.store)}
+        if (not isinstance(payload, dict)
+                or set(payload) != {"session_epoch", *user_intro.FIELD_LIMITS}
+                or not isinstance(payload["session_epoch"], str)):
+            raise ValueError("介绍资料请求无效")
+        fields = user_intro.normalize(payload)
+        token = self._channels.reserve("control", wait=False, notify_foreground=False)
+        try:
+            with self._lock:
+                self._channels.check_epoch(payload["session_epoch"])
+                persona_reset.require_clear()
+                if persona.persona_md() is None:
+                    raise ValueError("先安装人格，再填写介绍")
+                self.store.meta_set(user_intro.META_KEY, json.dumps(fields, ensure_ascii=False))
+                return self.state()
+        finally:
+            self._channels.release(token)
 
     def persona_view(self) -> dict:
         """当前人格全文 + 元信息 + 变更记录尾部（GUI 的人格面板用）。"""
@@ -373,8 +405,10 @@ class ChatService:
                     "source_expires_at": worker.get("worker_expires_at"), "discussion": discussion,
                     **worker, **report_fields}
         attachment = self.store.conn.execute(
-            "SELECT scope,content,expires_at FROM source_turns WHERE turn_id=?", (turn_id,)).fetchone()
-        if attachment is None:
+            "SELECT s.scope,s.content,s.expires_at,t.role,t.content AS original "
+            "FROM source_turns s JOIN turns t ON t.id=s.turn_id WHERE s.turn_id=?", (turn_id,)).fetchone()
+        from .store import SOURCE_SHADOW
+        if attachment is None or (attachment["role"] == "user" and attachment["original"] != SOURCE_SHADOW):
             return {"source_bound": False, "source_available": True, "source_expires_at": None,
                     "discussion": discussion, **report_fields}
         available = self._history_source_available_locked(turn_id, attachment)
@@ -393,10 +427,17 @@ class ChatService:
         except (ValueError, TypeError, AttributeError):
             return None
 
-    def history_page(self, after_id=None, limit=60, session_epoch=None, source_turn_ids=None) -> dict:
+    def history_page(self, after_id=None, limit=60, session_epoch=None, source_turn_ids=None, *,
+                     before_id=None, include_older=False) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 100 or
                 (after_id is not None and (type(after_id) is not int or after_id < 0))):
             raise ChannelError(400, "invalid_request", "历史游标或数量无效")
+        if before_id is not None:
+            # TUI 向前翻页（TUI 设计 §4.2）：与增量游标互斥。
+            if after_id is not None:
+                raise ChannelError(400, "invalid_request", "历史游标不能同时指定")
+            if type(before_id) is not int or before_id < 1:
+                raise ChannelError(400, "invalid_request", "历史游标无效")
         if source_turn_ids is None:
             source_turn_ids = []
         if (not isinstance(source_turn_ids, list) or len(source_turn_ids) > 100
@@ -410,9 +451,15 @@ class ChatService:
                 self._channels.check_epoch(session_epoch)
             query = ("SELECT t.*,ct.request_id,ct.channel_id FROM turns t "
                      "LEFT JOIN channel_turns ct ON ct.turn_id=t.id ")
+            next_before_id = None
             if after_id is None:
-                rows = list(reversed(self.store.conn.execute(query + "ORDER BY t.id DESC LIMIT ?", (limit,)).fetchall()))
-                more = False
+                where, params = ("WHERE t.id<? ", (before_id,)) if before_id is not None else ("", ())
+                backwards = include_older or before_id is not None
+                rows = self.store.conn.execute(
+                    query + where + "ORDER BY t.id DESC LIMIT ?", (*params, limit + int(backwards))).fetchall()
+                more = len(rows) > limit
+                rows = list(reversed(rows[:limit]))
+                next_before_id = rows[0]["id"] if backwards and rows else None
             else:
                 rows = self.store.conn.execute(query + "WHERE t.id>? ORDER BY t.id LIMIT ?", (after_id, limit + 1)).fetchall()
                 more, rows = len(rows) > limit, rows[:limit]
@@ -449,8 +496,27 @@ class ChatService:
                     source_updates.append({"id": identity, "content": self._history_turn_display_locked(identity),
                                            **self._history_source_fields_locked(identity)})
             return {"turns": turns, "session_epoch": self._channels.epoch,
-                    "next_after_id": turns[-1]["id"] if turns else (after_id or 0), "has_more": more,
+                    "next_after_id": turns[-1]["id"] if turns else (after_id or 0),
+                    "next_before_id": next_before_id, "has_more": more,
                     "memory": self._memory_stats(), "source_updates": source_updates}
+        finally:
+            self._lock.release()
+
+    def tui_status(self) -> dict:
+        """Only the state the terminal needs to identify the current conversation."""
+        from .activity import lifecycle
+        from .thought_workspace import settings as wake_settings
+
+        if not self._lock.acquire(blocking=False):
+            raise ChannelError(503, "status_unavailable", "Alice 忙碌，稍后查看状态")
+        try:
+            state = self.state()
+            activity = self.chat_activity()
+            wake = lifecycle(wake_settings(self.store))
+            return {"name": state["name"], "session_epoch": state["session_epoch"],
+                    "ready": state["model_ready"] and not state["needs_seed"],
+                    "busy": activity["status"] == "busy",
+                    "wake": {key: wake[key] for key in ("effective", "reason")}}
         finally:
             self._lock.release()
 

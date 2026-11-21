@@ -24,7 +24,7 @@ def tuning_from_settings(config_or_store) -> Tuning:
         config = {**config, "invitation_wait_seconds": 600, "same_topic_retry_seconds": 0}
     activities = config.get("activities") or {}
     modes = []
-    for mode in ("interest", "problem", "iteration", "idle"):
+    for mode in activity.MODES:
         if mode == "idle":
             modes.append(ModePolicy(mode=ActivityMode.IDLE, seconds=activity.fixed_idle_seconds(config), tool_groups=()))
             continue

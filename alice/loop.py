@@ -948,7 +948,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             messages = messages + [{"role": "tool", "tool_call_id": tc.id, "content": result}]
             for manifest in manifests:
                 manifest.add("tool_result", tc.function.name, result)
-    if not source_packets_valid():
+    delivery_sources_valid = source_packets_valid()
+    if not delivery_sources_valid:
         # A model response may arrive after the source licence expired. Do not
         # publish that derived body as a newly saved reply.
         reply = "这轮参考的资料已到期或不再获准使用，需要重新读取后再谈。"
@@ -964,7 +965,8 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
     if on_delta is not None and reply_review_selected and reply_session is None:
         on_delta(reply)  # Only final, post-review and post-licence-check text.
     assistant_id = store.add_turn("assistant", reply, ts=ts + 1, request_id=request_id,
-                                  source_packet_ids=source_context["packet_ids"], source_scope=source_scope,
+                                  source_packet_ids=source_context["packet_ids"] if delivery_sources_valid else (),
+                                  source_scope=source_scope,
                                   worker_refs=source_context["worker_refs"])
     if reply_session is not None:
         reply = store.turn_display(assistant_id, scope=source_scope) or reply_sections.FORMAT_FAILURE
@@ -972,7 +974,7 @@ def chat_turn_steps(store: Store, client, cfg: Config, user_text: str,
             annotation_audit["status"] = "overridden"
         if final_sections is not None and any(final_sections[1:]):
             format_audit["cache_status"] = "ineligible"
-            if (reply == final_sections[0] and reply_session.loaded is None
+            if (delivery_sources_valid and reply == final_sections[0] and reply_session.loaded is None
                     and not source_context["worker_refs"] and not source_context.get("thought_basis")
                     and not growth_refs and not recap_exposed and not source_context["recalled_ids"]
                     and not (memory_session and memory_session.exposed)

@@ -19,13 +19,16 @@ from datetime import datetime
 from . import autonomy_policy
 
 WORK_MODES = ("interest", "problem", "iteration")
-MODES = WORK_MODES + ("idle",)
+CONTACT_MODE = "contact"
+ACTIVE_MODES = WORK_MODES + (CONTACT_MODE,)
+MODES = ACTIVE_MODES + ("idle",)
 DEFAULT_IDLE_SECONDS = 300
 TOOL_GROUPS = ("memory", "history", "persona", "sources", "search")
 DEFAULT_ACTIVITIES = {
     mode: {"seconds": seconds, "tools": list(TOOL_GROUPS if mode == "interest" else TOOL_GROUPS[:-1])}
     for mode, seconds in (("interest", 180), ("problem", 180), ("iteration", 120))
 }
+DEFAULT_ACTIVITIES[CONTACT_MODE] = {"seconds": 120, "tools": ["memory", "history"]}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS thought_agenda (
  question_id INTEGER PRIMARY KEY, activity TEXT NOT NULL,
@@ -45,16 +48,17 @@ CREATE TABLE IF NOT EXISTS autonomous_activity_executions (
 
 
 def validate_activities(value, previous=None):
-    if not isinstance(value, dict) or set(value) != set(WORK_MODES):
-        raise ValueError("活动设置须包含兴趣探索、问题思考、自我迭代")
-    result = copy.deepcopy(previous or DEFAULT_ACTIVITIES)
+    if not isinstance(value, dict) or not set(WORK_MODES) <= value.keys() <= set(ACTIVE_MODES):
+        raise ValueError("活动设置缺少既有模式或包含未知模式")
+    result = copy.deepcopy({**DEFAULT_ACTIVITIES, **(previous or {})})
     for mode, item in value.items():
         if not isinstance(item, dict) or set(item) != {"seconds", "tools"}:
             raise ValueError("每种活动只能设置时长与工具")
         seconds, groups = item["seconds"], item["tools"]
         if type(seconds) is not int or not 0 <= seconds <= 86400:
             raise ValueError("活动时长须为0–86400秒")
-        if (not isinstance(groups, list) or any(not isinstance(g, str) or g not in TOOL_GROUPS for g in groups)
+        available = DEFAULT_ACTIVITIES[CONTACT_MODE]["tools"] if mode == CONTACT_MODE else TOOL_GROUPS
+        if (not isinstance(groups, list) or any(not isinstance(g, str) or g not in available for g in groups)
                 or len(set(groups)) != len(groups)):
             raise ValueError("活动工具组无效")
         result[mode] = {"seconds": seconds, "tools": list(groups)}
@@ -327,6 +331,10 @@ def weights(store, config):
                 continue
             item["reason"] = "new_material_or_curiosity"
         item["weight"] = round((item["content_score"] + debt[mode]) * (.55 if previous == mode else 1), 3)
+    contact = result[CONTACT_MODE]
+    contact["reason"] = contact_readiness(store, config, epoch, stamp)
+    if contact["reason"] == "contact_opportunity":
+        contact["weight"] = round((1 + debt[CONTACT_MODE]) * (.55 if previous == CONTACT_MODE else 1), 3)
     # Waiting work with real content is blocked, not absent; it raises rest tendency.
     waiting = store.conn.execute(
         "SELECT COALESCE(a.activity, CASE q.origin WHEN 'review' THEN 'iteration' "
@@ -338,6 +346,8 @@ def weights(store, config):
     for record in history:
         if record["activity"] == "idle":
             break
+        if record["activity"] == CONTACT_MODE:
+            continue  # A conversation decision is not a research attempt.
         if record["progress"]:
             break
         dry += 1
@@ -349,7 +359,7 @@ def weights(store, config):
         idle["weight"] = round((idle["content_score"]) * (.55 if previous == "idle" else 1), 3)
     for item in result.values():
         item.pop("_rank", None)
-    eligible = [mode for mode in WORK_MODES if result[mode]["weight"] > 0]
+    eligible = [mode for mode in ACTIVE_MODES if result[mode]["weight"] > 0]
     draw_weights = {}
     if eligible and not any(result[mode]["priority"] for mode in eligible):
         draw_weights = {mode: result[mode]["weight"] for mode in eligible}
@@ -358,6 +368,31 @@ def weights(store, config):
     return {"modes": result, "input_stamp": stamp, "idle_seconds": idle_seconds,
             "blocked_modes": blocked_modes, "dry_windows": dry, "previous_activity": previous,
             "draw_weights": draw_weights}
+
+
+def contact_readiness(store, config, epoch, stamp, *, exclude_run=None):
+    from .autonomy_v2 import build
+    from .autonomy_v2.models import Scope
+
+    if not config["activities"][CONTACT_MODE]["seconds"]:
+        return "mode_disabled"
+    if config["delivery"] != "gui":
+        return "contact_delivery_mode"
+    scope = Scope(session_epoch=epoch or "", channel_id="gui")
+    blockers = build(store=store).invitations.delivery_blockers(scope)
+    if blockers:
+        return blockers[0]
+    # Do not pay repeatedly to find a topic in the same context. An explicit
+    # appointment becoming due gives one more opportunity for a fresh decision.
+    last = store.conn.execute(
+        "SELECT MAX(a.started_at) FROM autonomous_activity_runs a JOIN exploration_runs r ON r.id=a.run_id "
+        "WHERE r.epoch=? AND a.activity=? AND a.input_stamp=? AND r.model_calls>0 AND r.id<>?",
+        (epoch, CONTACT_MODE, stamp, exclude_run or "")).fetchone()[0]
+    if last is not None and not store.conn.execute(
+        "SELECT 1 FROM v2_contact_holds WHERE epoch=? AND channel_id='gui' AND intent_id<>'' "
+        "AND resume_at>? AND resume_at<=? LIMIT 1", (epoch, last, time.time())).fetchone():
+        return "contact_context_reviewed"
+    return "contact_opportunity"
 
 
 def choose(store, config, *, question=None):
@@ -369,7 +404,7 @@ def choose(store, config, *, question=None):
             raise ValueError("该问题所属活动时长为0，请先开放")
         return mode, {**projected, "selected": mode, "question_id": question["id"],
                       "reason": "explicit_task", "draw_weights": {}}
-    eligible = [m for m in WORK_MODES if modes[m]["weight"] > 0]
+    eligible = [m for m in ACTIVE_MODES if modes[m]["weight"] > 0]
     priority = [m for m in eligible if modes[m]["priority"]]
     if priority:
         mode = max(priority, key=lambda m: modes[m]["weight"])

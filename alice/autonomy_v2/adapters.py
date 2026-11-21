@@ -570,7 +570,8 @@ def _intent_from_row(row) -> ContactIntent:
                          content_refs=tuple(_loads(row["content_refs"], [])),
                          state=row["state"], question_id=row["question_id"],
                          question_version=row["question_version"], view_id=row["view_id"],
-                         view_revision=row["view_revision"], next_eligible_at=row["next_eligible_at"])
+                         view_revision=row["view_revision"], next_eligible_at=row["next_eligible_at"],
+                         basis=_loads(row["basis"], None))
 
 
 def _attempt_from_row(row) -> InvitationAttempt:
@@ -604,18 +605,18 @@ class InvitationRepositoryAdapter:
         with self.transaction():
             if expected_version is None:
                 self.store.conn.execute(
-                    "INSERT INTO v2_contact_intents(id,epoch,version,motive,topic,reason,content_refs,state,"
+                    "INSERT INTO v2_contact_intents(id,epoch,version,motive,topic,reason,content_refs,basis,state,"
                     "question_id,question_version,view_id,view_revision,next_eligible_at,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent.id, scope_epoch(intent.scope), 1, intent.motive, intent.topic, intent.reason,
-                     dump(list(intent.content_refs)), intent.state, intent.question_id, intent.question_version,
+                     dump(list(intent.content_refs)), dump(intent.basis), intent.state, intent.question_id, intent.question_version,
                      intent.view_id, intent.view_revision, intent.next_eligible_at, time.time(), time.time()))
             else:
                 changed = self.store.conn.execute(
-                    "UPDATE v2_contact_intents SET version=version+1,motive=?,topic=?,reason=?,content_refs=?,"
+                    "UPDATE v2_contact_intents SET version=version+1,motive=?,topic=?,reason=?,content_refs=?,basis=?,"
                     "state=?,question_id=?,question_version=?,view_id=?,view_revision=?,next_eligible_at=?,"
                     "updated_at=? WHERE id=? AND epoch=? AND version=?",
-                    (intent.motive, intent.topic, intent.reason, dump(list(intent.content_refs)), intent.state,
+                    (intent.motive, intent.topic, intent.reason, dump(list(intent.content_refs)), dump(intent.basis), intent.state,
                      intent.question_id, intent.question_version, intent.view_id, intent.view_revision,
                      intent.next_eligible_at, time.time(), intent.id, scope_epoch(intent.scope), expected_version)).rowcount
                 if not changed:
@@ -685,6 +686,11 @@ class InvitationRepositoryAdapter:
         if attempt is None:
             return None
         intent = self.get_intent(scope, attempt.intent_id)
+        if intent.motive == "chat":
+            try:
+                HostAdapter(self.store).validate_intent(scope, intent)
+            except ValueError:
+                return None
         return InvitationIndex(attempt_id=attempt.id, version=attempt.version, topic=intent.topic,
                                state=attempt.state, invitation_turn_id=attempt.invitation_turn_id,
                                expires_at=attempt.expires_at)
@@ -706,8 +712,13 @@ class HostAdapter:
         from .. import thought_workspace as thoughts
         from ..context_memory import version
         if (scope.session_epoch != self.store.meta_get("session_epoch") or scope.channel_id != "gui"
-                or intent.scope != scope or intent.state != "active" or not intent.content_refs):
+                or intent.scope != scope or intent.state != "active"):
             raise ValueError("联系意图不在当前会话或已结束")
+        if intent.motive == "chat":
+            if not intent.basis or not thoughts.valid_basis(self.store, intent.basis):
+                raise ValueError("邀请话题的材料已变化，请重新选择")
+        elif not intent.content_refs:
+            raise ValueError("联系意图须关联有效内容")
         for ref in intent.content_refs:
             kind, _, tail = ref.partition(":")
             identity, sep, expected = tail.partition("@")
@@ -789,7 +800,7 @@ class HostAdapter:
             turn_id = cur.lastrowid
             intent = repo.get_intent(context.scope, current.intent_id)
             self.validate_intent(context.scope, intent)
-            packets = []
+            packets = []  # A standalone chat invitation contains no topic or sourced material.
             for ref in intent.content_refs:
                 identity = int(ref.split(":", 1)[1].split("@", 1)[0])
                 if ref.startswith("question:"):
@@ -839,6 +850,9 @@ class HostAdapter:
                               expansion_turn_id=assistant_turn_id)
             repo.save_attempt(updated, expected_version=current.version)
             from .. import thought_workspace as thoughts
+            intent = repo.get_intent(context.scope, current.intent_id)
+            if intent.motive == "chat":
+                repo.save_intent(replace(intent, state="closed"), expected_version=intent.version)
             thoughts.event(self.store, "invitation_expanded", current.id,
                            {"assistant_turn_id": assistant_turn_id, "invitation_counted": False})
         return repo.get_attempt(attempt.scope, attempt.id)
@@ -865,6 +879,7 @@ class HostAdapter:
                                    "content": memory["content"]})
         return {"attempt_id": material.attempt_id, "intent_id": material.intent_id,
                 "bound_user_turn_id": material.bound_user_turn_id, "materials": bodies,
+                **({"conversation_topic": intent.topic, "purpose": intent.reason} if intent.motive == "chat" else {}),
                 "notice": "这是本次接受邀请后按需载入的展开材料，按其来源与不确定条件使用。"}
 
 

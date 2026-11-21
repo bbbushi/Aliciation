@@ -24,8 +24,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-20 基于 main b003f46 完成 D01–D10 技术债治理：统一预算、工具解析和模型回执，收口观测归属，补维护回执，退出旧人格生成、旧自主选题及主网页旧诊断资产，整理 Orbit、Lab 人工入口和桌面组件清单；交付见 `docs/代码审查/Alice技术债治理与源码复审-20261120.md`。
-- 全仓审查 F01–F17 仍待指定修复范围，复审另确认已有 F18 Orbit 思想忙闲误判和 F19 流式结束观测误报。本轮不宣称这些缺陷已修复；累计 compact 证据、legacy 装配、人格/QQ、旧留存等边界见两份 `docs/代码审查/*20261120.md` 报告。
-- 按本次授权提交 `trial/windows-v0.2-20261028` 并以 PR 交 main，沿用 HTTPS、不直推 main。提交前备份 `.git/pr-prep/20261120-104342-debt-governance` 保存 38 项改动和 86 项私有资料引用，私有文件及载荷 hash 已核对；按 manifest.stored_path 恢复。旧 `.git/main-sync/20261120-100353`、备份分支、stash、worktree 与私有 UI 预览保留。
-- 运行时差异 hash 与治理报告一致；提交前另核 16 个修改 Python 内存编译、3 个 JS 语法、示例 TOML 和差异空白通过。治理会话全仓静态记录为 154 Python/spec、47 JS、9 JSON、7 TOML、29 资产引用。TEST_CONTROLS_ONLY=False；Lab 授权、GUI/QQ/探索、维护回退、人格恢复、四主题及桌面行为待真人。
-- 本轮未读写 user/、起停服务、调用模型/业务接口、构建安装包、迁移或运行机器行为测试。现行人工入口是 Alice Lab 与 tests/lab，旧 pressure 仅供历史参考；既有 UI 证据在 D:/alice_tmp/PR40设置适配-20261119/20261119-215827。
+- 2026-11-21 各线未提交改动收拢上传 ytq（本次提交）：TUI 档案级 socket 终端客户端（连接级 UID 核验免配对、/api/tui/v1 四接口、addons/alice_tui 零依赖客户端、~/.local/bin/alice 启动器，TCP 配对与 tui_access 退役）+ 向导 user_intro + 投影环改版 + 主动交流独立调度（宪法 v13）+ 来源过期连带清空。
+- 待真人验收：TUI 设计 §5 场景（多行粘贴/跨端同步/历史翻页/Ctrl+C 中断核对/第二账户）、向导返回流程、投影环真机体验、自主调度与来源过期联动。
+- 运行时按用户要求全停（8800/8818），重启需手动；~/.alice/alice.sock 为旧版遗留死 socket 可删。SIGINT 优雅退出挂起需复测。
+- 11-20 技术债 D01–D10 已 PR 交 main；F01–F19 未修（docs/代码审查/*20261120）；R5a 遗留 P2-2/P2-3/P3-6 未动。分工与边界不变；历史细节进 git log。
