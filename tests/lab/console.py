@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-MODES = {"interest": "兴趣探索", "problem": "问题思考", "iteration": "自我迭代", "idle": "发呆"}
+MODES = {"interest": "兴趣探索", "problem": "问题思考", "iteration": "自我迭代", "contact": "主动交流", "idle": "发呆"}
 REASONS = {"weighted_rotation": "按权重抽签", "priority_content": "优先事项",
            "no_actionable_work": "无候选，未抽签", "activity_finish_rest": "模型提议休息，未抽签",
            "user_requested_rest": "用户安排休息，未抽签", "explicit_task": "明确指定任务，未抽签"}

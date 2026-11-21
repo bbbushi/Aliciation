@@ -19,6 +19,7 @@ class ActivityMode(str, Enum):
     INTEREST = "interest"
     PROBLEM = "problem"
     ITERATION = "iteration"
+    CONTACT = "contact"
     IDLE = "idle"
 
 
@@ -285,12 +286,13 @@ class ContactIntent:
     reason: str
     content_refs: tuple[str, ...]  # Full payload stays outside invitation indices.
     state: str  # active / deferred / closed
-    motive: str = "share"  # Existing permission toggles: progress / request / share.
+    motive: str = "share"  # Standalone chat follows the active mode and contact grant.
     question_id: int | None = None
     question_version: int | None = None
     view_id: str | None = None
     view_revision: int | None = None
     next_eligible_at: float | None = None
+    basis: dict | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

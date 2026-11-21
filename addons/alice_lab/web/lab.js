@@ -3,14 +3,16 @@ const byId = (id) => document.getElementById(id);
 const sessionKey = location.hash.slice(1);
 if (sessionKey) history.replaceState(null, "", location.pathname);
 
-const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代", idle:"发呆"};
+const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代", contact:"主动交流", idle:"发呆"};
 const reasons = {weighted_rotation:"按权重抽签", priority_content:"优先事项", explicit_task:"明确指定",
   no_actionable_work:"无可推进事项", activity_finish_rest:"Alice 提议休息", user_requested_rest:"用户安排休息",
   same_material_window:"同材料窗口用尽", mode_disabled:"模式未开启", value_waiting:"等待价值确认",
   new_material_or_curiosity:"新材料或好奇", voluntary_rest:"自愿休息", idle_disabled:"发呆未开启",
-  actionable_question:"有可推进问题", no_content:"无内容"};
+  actionable_question:"有可推进问题", no_content:"无内容", contact_opportunity:"可判断主动交流",
+  contact_context_reviewed:"已判断本批材料", contact_delivery_mode:"需要选择站内主动消息"};
 const layerLabels = {active:"活跃", warehouse:"仓库", longterm:"长期"};
 const kindLabels = {event:"事件", stance:"立场"};
+const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
 const phaseLabels = {completed:"已完成", rolled_back:"已回滚", superseded:"已被取代", aborted:"已中止",
   prepared:"已预备", db_committed:"已入库", file_replaced:"已换文件", unknown:"未知", unreadable:"不可读"};
 const purposeLabels = {main:"主对话", main_stream:"主对话·流式", main_fallback:"主对话·回退",
@@ -21,6 +23,20 @@ const callStatusLabels = {ok:"成功", error:"失败", cancelled:"取消", strea
 const originLabels = {interest:"兴趣", exploration:"探索", review:"复读审核", user_request:"用户指定",
   problem:"问题", iteration:"迭代", extraction:"提取"};
 const C = ["#2f7a63", "#3d6f9c", "#b07a2f", "#8a5a9e", "#a8544c", "#6d7c46"];
+const modeColors = {interest:C[1], problem:C[2], iteration:C[3], contact:C[0], idle:C[5]};
+const layerColors = {active:C[0], warehouse:C[2], longterm:C[1]};
+const phaseColors = {completed:C[0], db_committed:C[0], file_replaced:C[2], prepared:C[2],
+  rolled_back:C[4], aborted:C[4], superseded:C[4], unknown:C[5], unreadable:C[4]};
+const statusColors = {open:C[2], resolved:C[0], closed:C[5], unknown:C[4]};
+const purposeColors = {main:C[1], main_stream:C[1], main_fallback:C[2], extraction:C[3], evolution:C[4],
+  distill:C[5], deliberate:C[2], judge:C[0], review:C[3], summary:C[5], vision:C[4], search:C[0]};
+function statusColor(key) {
+  if (statusColors[key]) return statusColors[key];
+  return String(key).startsWith("waiting") ? C[3] : C[4];
+}
+function purposeColor(value) {
+  return purposeColors[value] || "#7c8b83";
+}
 
 let targetMode = null, epoch = null, topic = "schedule", armed = null, working = false;
 let contextFrame = null, connectionId = null, grantExpiry = null, page = "gate", loadedAt = null;
@@ -65,6 +81,10 @@ const fmt = {
   },
   short: (id) => (id ? String(id).slice(0, 8) : "—"),
 };
+function opTime(id) {
+  const m = String(id || "").match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+  return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : "—";
+}
 
 function kpis(specs) {
   const row = el("div", "kpis");
@@ -90,45 +110,261 @@ function card(title, sub, badge) {
 function pill(text, tone) {
   return el("span", "pill" + (tone ? " " + tone : ""), text);
 }
+/* 细节默认收起：摘要行给出「有多少、多近」，需要核对时再展开。 */
+function disclosure(title, meta, content, hint, inline = false) {
+  const box = el("details", "more" + (inline ? " inline" : ""));
+  const summary = node("summary");
+  summary.append(el("span", "more-title", title), el("span", "more-meta", meta || ""));
+  const body = el("div", "more-body");
+  if (hint) body.append(el("p", "more-hint", hint));
+  body.append(content);
+  box.append(summary, body);
+  return box;
+}
 function emptyNote(text) {
   return el("p", "empty", text);
 }
-function barRows(items, opts = {}) {
-  const wrap = el("div", "bars"), max = Math.max(...items.map((i) => i.value || 0), 0.0001);
+/* ---------- 图表语法 ---------- */
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs || {}) n.setAttribute(k, attrs[k]);
+  return n;
+}
+function donut(segments, opts = {}) {
+  const alive = segments.filter((s) => (s.value || 0) > 0);
+  const total = alive.reduce((a, s) => a + s.value, 0);
+  if (!total) return emptyNote("暂无数据。");
+  const size = 128, width = 13, r = (size - width) / 2 - 3, cx = size / 2, len = 2 * Math.PI * r;
+  const chart = sv("svg", {viewBox:`0 0 ${size} ${size}`, class:"donut-ring", role:"img",
+    "aria-label": alive.map((s) => `${s.label} ${fmt.int(s.value)}，占 ${fmt.pct(s.value / total)}`).join("；")});
+  chart.append(sv("circle", {cx, cy:cx, r, fill:"none", stroke:"#e9ede4", "stroke-width":width}));
+  let offset = 0;
+  for (const seg of alive) {
+    const span = (seg.value / total) * len, drawn = Math.max(span - 1.2, 0.4);
+    const arc = sv("circle", {cx, cy:cx, r, fill:"none", stroke:seg.color, "stroke-width":width,
+      "stroke-dasharray":`${drawn} ${len - drawn}`, "stroke-dashoffset":-offset,
+      transform:`rotate(-90 ${cx} ${cx})`});
+    const tip = sv("title");
+    tip.textContent = `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / total)}`;
+    arc.append(tip);
+    chart.append(arc);
+    offset += span;
+  }
+  const big = sv("text", {x:cx, y:cx + 1, "text-anchor":"middle", "font-size":21, "font-weight":600, fill:"#182722"});
+  big.textContent = opts.centerValue ?? fmt.int(total);
+  const small = sv("text", {x:cx, y:cx + 18, "text-anchor":"middle", "font-size":10.5, fill:"#4c6158"});
+  small.textContent = opts.centerLabel || "合计";
+  chart.append(big, small);
+  const legend = el("div", "donut-legend");
+  for (const seg of segments) {
+    if (!(seg.value > 0)) continue;
+    const row = el("div", "dl-row"), dot = el("span", "dot");
+    dot.style.background = seg.color;
+    row.append(dot, el("span", "dl-name", seg.label), el("b", "dl-pct", fmt.pct(seg.value / total)));
+    if (seg.note) row.append(el("span", "dl-note", seg.note));
+    legend.append(row);
+  }
+  const wrap = el("div", "donut");
+  wrap.append(chart, legend);
+  return wrap;
+}
+function waterfall(steps) {
+  let run = 0;
+  const marks = steps.map((step) => {
+    if (step.kind === "total") return {bottom:0, height:run, at:run};
+    if (step.kind === "add") {
+      const mark = {bottom:run, height:step.value || 0};
+      run += step.value || 0;
+      mark.at = run;
+      return mark;
+    }
+    run = step.value || 0;
+    return {bottom:0, height:run, at:run};
+  });
+  const max = Math.max(...marks.map((m) => m.bottom + m.height), 1);
+  const plot = el("div", "wf"), axis = el("div", "wf-axis");
+  steps.forEach((step, i) => {
+    const mark = marks[i], col = el("div", "wf-col"), gap = el("div", "wf-gap");
+    gap.style.height = ((mark.bottom / max) * 100).toFixed(2) + "%";
+    const bar = el("div", "wf-bar" + (step.kind === "total" ? " total" : ""));
+    bar.style.height = ((mark.height / max) * 100).toFixed(2) + "%";
+    bar.style.background = step.color;
+    bar.title = `${step.label} ${fmt.int(step.value)}${step.kind === "add" ? `（累计 ${fmt.int(mark.at)}）` : ""}`;
+    bar.append(el("span", "wf-val", (step.kind === "add" && step.value ? "+" : "") + fmt.int(step.value)));
+    col.append(gap, bar);
+    plot.append(col);
+    axis.append(el("span", "wf-lab", step.label));
+  });
+  const wrap = el("div", "wf-wrap");
+  wrap.append(plot, axis);
+  return wrap;
+}
+function ribbon(items, opts = {}) {
+  const bar = el("div", "ribbon");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", opts.label || "");
   for (const item of items) {
-    const row = el("div", "bar-row");
-    if (opts.labelWidth) row.style.gridTemplateColumns = `${opts.labelWidth}px minmax(0,1fr) 112px`;
-    const name = el("span", "bar-name", item.label);
+    const seg = el("span", "ribbon-seg");
+    seg.style.background = item.color;
+    seg.title = item.title || "";
+    bar.append(seg);
+  }
+  const wrap = el("div", "ribbon-wrap");
+  wrap.append(bar);
+  if (items.length && (opts.start || opts.end)) {
+    const axis = el("div", "ribbon-axis");
+    axis.append(el("span", "", opts.start || ""), el("span", "", opts.end || ""));
+    wrap.append(axis);
+  }
+  return wrap;
+}
+function scatter(points, opts = {}) {
+  const maxX = Math.max(...points.map((p) => p.x || 0), 1);
+  const maxY = Math.max(...points.map((p) => p.y || 0), 1);
+  const wrap = el("div", "scatter"), ycol = el("div", "sc-y");
+  ycol.append(el("span", "", fmt.int(maxY)), el("span", "", "0"));
+  const plot = el("div", "sc-plot");
+  plot.setAttribute("role", "img");
+  plot.setAttribute("aria-label", opts.label || "散点图");
+  for (let i = 1; i < 4; i += 1) {
+    const grid = el("div", "sc-grid");
+    grid.style.bottom = i * 25 + "%";
+    plot.append(grid);
+  }
+  const buckets = new Map();
+  for (const p of points) {
+    const px = (p.x || 0) / maxX, py = (p.y || 0) / maxY;
+    const key = `${Math.round(px * 80)}:${Math.round(py * 80)}`;
+    const slot = buckets.get(key) || {px:0, py:0, n:0, head:p, ring:false};
+    slot.px += px;
+    slot.py += py;
+    slot.n += 1;
+    slot.ring = slot.ring || Boolean(p.ring);
+    buckets.set(key, slot);
+  }
+  for (const slot of buckets.values()) {
+    const px = slot.px / slot.n, py = slot.py / slot.n;
+    const size = Math.min(18, 9 + Math.sqrt(slot.n - 1) * 3.2);
+    const dot = el("span", "sc-dot" + (slot.ring || slot.head.ring ? " imp" : ""));
+    dot.style.left = `calc(5px + (100% - 10px) * ${px.toFixed(4)})`;
+    dot.style.bottom = `calc(5px + (100% - 10px) * ${py.toFixed(4)})`;
+    dot.style.width = size.toFixed(1) + "px";
+    dot.style.height = size.toFixed(1) + "px";
+    dot.style.background = slot.head.color;
+    dot.title = slot.n > 1 ? `${slot.n} 条记忆数值接近` : slot.head.title;
+    plot.append(dot);
+  }
+  const xaxis = el("div", "sc-x");
+  xaxis.append(el("span", "", "0"), el("span", "", `${opts.xName || "横轴"} ${fmt.int(maxX)}`));
+  const right = el("div", "sc-right");
+  right.append(plot, xaxis);
+  wrap.append(ycol, right);
+  return wrap;
+}
+function heatmap(rowLabels, colLabels, values) {
+  const max = Math.max(...values.flat(), 1);
+  const grid = el("div", "heat");
+  grid.style.gridTemplateColumns = `minmax(46px,auto) repeat(${colLabels.length}, minmax(30px,1fr))`;
+  grid.append(el("span", "heat-corner"));
+  for (const label of colLabels) grid.append(el("span", "heat-col", label));
+  rowLabels.forEach((label, r) => {
+    grid.append(el("span", "heat-row", label));
+    colLabels.forEach((col, c) => {
+      const value = values[r][c] || 0, cell = el("span", "heat-cell", value ? fmt.int(value) : "");
+      if (value) {
+        const k = 0.12 + 0.76 * (value / max);
+        cell.style.background = `rgba(47,122,99,${k.toFixed(2)})`;
+        if (k > 0.52) cell.style.color = "#fff";
+      }
+      cell.title = `${label} · ${col}：${value}`;
+      grid.append(cell);
+    });
+  });
+  const wrap = el("div", "heat-wrap");
+  wrap.append(grid);
+  return wrap;
+}
+function histogram(values, edges, labels) {
+  const counts = new Array(edges.length + 1).fill(0);
+  for (const value of values) {
+    let index = edges.findIndex((edge) => value < edge);
+    if (index < 0) index = edges.length;
+    counts[index] += 1;
+  }
+  const max = Math.max(...counts, 1);
+  const plot = el("div", "hist");
+  counts.forEach((count, i) => {
+    const col = el("div", "hist-col");
+    col.append(el("span", "hist-val", fmt.int(count)));
+    const bar = el("div", "hist-bar");
+    bar.style.height = Math.max(count ? 3 : 1, (count / max) * 100) + "%";
+    bar.style.background = i === counts.length - 1 ? C[4] : C[1];
+    bar.style.opacity = count ? "1" : ".3";
+    bar.title = `${labels[i]}：${count} 次`;
+    col.append(bar);
+    plot.append(col);
+  });
+  const axis = el("div", "hist-axis");
+  for (const label of labels) axis.append(el("span", "", label));
+  const wrap = el("div", "hist-wrap");
+  wrap.append(plot, axis);
+  return wrap;
+}
+function lollipop(items) {
+  const max = Math.max(...items.map((i) => i.value || 0), 1);
+  const wrap = el("div", "lol");
+  for (const item of items) {
+    const row = el("div", "lol-row"), name = el("span", "lol-name", item.label);
     name.title = item.label;
-    row.append(name);
-    const track = el("div", "bar-track"), fill = el("div", "bar-fill");
-    fill.style.width = Math.max(0, Math.min(100, ((item.value || 0) / max) * 100)).toFixed(1) + "%";
-    fill.style.background = item.color || C[1];
-    track.append(fill);
-    const note = el("span", "bar-note", item.note ?? fmt.int(item.value));
-    note.title = item.note ?? fmt.int(item.value);
-    row.append(track, note);
+    const pct = Math.max(2, ((item.value || 0) / max) * 100);
+    const track = el("div", "lol-track"), line = el("span", "lol-line"), dot = el("span", "lol-dot");
+    line.style.width = pct + "%";
+    line.style.background = item.color || C[1];
+    dot.style.left = pct + "%";
+    dot.style.background = item.color || C[1];
+    track.append(line, dot);
+    const note = el("span", "lol-note", item.note ?? fmt.int(item.value));
+    note.title = item.note ?? "";
+    row.append(name, track, note);
     wrap.append(row);
   }
   return wrap;
 }
-function stack(segments) {
-  const bar = el("div", "stack"), legend = el("div", "legend"), total = segments.reduce((a, s) => a + (s.value || 0), 0);
+function unitGrid(cells, label) {
+  const wrap = el("div", "units");
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", label || "");
+  for (const cell of cells) {
+    const unit = el("span", "unit");
+    unit.style.background = cell.color;
+    unit.title = cell.title || "";
+    wrap.append(unit);
+  }
+  return wrap;
+}
+function layerColumn(segments) {
+  const total = segments.reduce((a, s) => a + (s.value || 0), 0);
+  if (!total) return emptyNote("暂无记忆。");
+  const wrap = el("div", "vlayers"), col = el("div", "vlayer");
+  col.setAttribute("role", "img");
+  col.setAttribute("aria-label", segments.map((s) => `${s.label} ${fmt.int(s.value)}`).join("；"));
   for (const seg of segments) {
     if (!seg.value) continue;
     const part = el("span");
-    part.style.width = ((seg.value / (total || 1)) * 100).toFixed(2) + "%";
+    part.style.height = ((seg.value / total) * 100).toFixed(2) + "%";
     part.style.background = seg.color;
-    part.title = `${seg.label} ${fmt.int(seg.value)}`;
-    bar.append(part);
-    const item = el("span");
-    const dot = el("span", "dot");
-    dot.style.background = seg.color;
-    item.append(dot, node("span", `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / (total || 1))}`));
-    legend.append(item);
+    part.title = `${seg.label} ${fmt.int(seg.value)} · ${fmt.pct(seg.value / total)}`;
+    col.append(part);
   }
-  const wrap = el("div");
-  wrap.append(bar, legend);
+  const legend = el("div", "donut-legend");
+  for (const seg of segments) {
+    const row = el("div", "dl-row"), dot = el("span", "dot");
+    dot.style.background = seg.color;
+    row.append(dot, el("span", "dl-name", seg.label), el("b", "dl-pct", fmt.pct((seg.value || 0) / total)));
+    legend.append(row);
+  }
+  wrap.append(col, legend);
   return wrap;
 }
 function table(headers, rows, opts = {}) {
@@ -156,24 +392,211 @@ function table(headers, rows, opts = {}) {
   wrap.append(result);
   return wrap;
 }
-function rawDetails(label, value) {
-  const block = node("details");
-  block.append(node("summary", label), node("pre", JSON.stringify(value, null, 2)));
+/* ---------- 字段翻译：内部字段名与代码值 → 日常说法 ---------- */
+const FIELD_LABELS = {
+  id:"编号", ref:"引用", version:"版本", detail_state:"详情状态", name:"名称", seq:"顺序",
+  created_at:"创建时间", updated_at:"更新时间", last_used_at:"最近使用", promoted_at:"晋升时间",
+  expires_at:"到期时间", expired_at:"过期时间", due_at:"到期", sampled_at:"采样时间",
+  first_event_at:"首个事件", last_event_at:"末个事件", at:"发生时间", ts:"发生时间",
+  layer:"所在层", kind:"类型", salience:"重大事项", pressure:"压力标记",
+  mention_count:"被提及", use_count:"被使用", origin:"来源", scope:"范围",
+  lifecycle:"生命周期", provenance_status:"溯源状态", title:"标题", content:"正文",
+  activity:"活动模式", reason:"原因", schedule_reason:"调度说明", draw_weights:"抽签权重",
+  dry_windows:"连续无进展", blocked_modes:"受阻模式数", content_score:"内容分",
+  importance:"重要度", urgency:"紧迫度", value_waiting:"等待确认",
+  question:"疑问内容", status:"状态", next_step:"下一步", progress:"进展",
+  parent_id:"上级编号", outcome_id:"结论编号", basis:"依据",
+  op_id:"操作号", phase:"阶段", epoch_matches:"属于本会话", db_marker_present:"库内有标记",
+  inserted_count:"已写入条数", before_sha256:"变更前指纹", after_sha256:"变更后指纹",
+  call_id:"调用号", request_id:"请求号", request_seq:"请求序号", session_epoch:"会话代号",
+  purpose:"用途", model:"模型", model_source:"模型来源", duration_ms:"耗时",
+  usage:"用量", usage_state:"用量状态", attempt:"第几次尝试", tool_round:"工具轮次",
+  error_type:"错误类型", fallback:"回退", storage:"存储状态", response_started:"已开始响应",
+  counts:"分层计数", items:"条目", notice:"说明", pending_dropped:"已丢弃",
+  scan_limit:"扫描上限", truncated:"是否截断", scan_incomplete:"扫描不完整",
+  total_chars:"总字数", count:"条数", chars:"字数", estimated_tokens:"估算 token",
+  finished:"已结束", event_count:"事件数", blocks:"装配块", selections:"取舍决策",
+  gaps:"采集缺口", delivery:"投递", assistant_turn_id:"回复编号", sdk_dropped:"SDK 丢弃",
+  body:"正文留存", body_state:"正文状态", content_hash:"内容指纹", messages_hash:"消息指纹",
+  start:"起点", end:"终点", message_seq:"消息序号", block_seq:"装配块序号",
+  role:"角色", input:"输入", tools:"工具清单", parameters:"参数", bindings:"绑定",
+  order:"消息顺序", prompt:"输入", completion:"输出", model_tokens:"模型 token",
+  source_id:"来源编号", included:"是否采用", modes:"各模式权重", mode:"模式",
+  token:"操作令牌", source_hash:"来源指纹", before_version:"变更前版本", after_version:"变更后版本",
+  projection_chars:"投影字数", rollback_token:"回滚令牌", rollback_of:"回滚自", format:"格式",
+  metadata:"元信息",
+};
+const MEMORY_ORIGINS = {conversation:"对话", chat:"对话", document:"文档", web:"网页",
+  manual:"手动", import:"导入", extraction:"提取", discovery:"发现", system:"系统"};
+const PROVENANCE = {valid:"有效", confirmed:"已确认", unverified:"未核实",
+  legacy_unverified:"旧数据未核", needs_review:"待复核", invalid:"已失效", superseded:"已被取代"};
+const SCOPES = {local:"本机", global:"全局", gui:"界面", shared:"共享", private:"私有"};
+const EXPR_STATUS = {applied:"已生效", preparing:"准备中", prepare_failed:"准备失败",
+  state_unconfirmed:"状态未确认", unreadable:"不可读", rolled_back:"已回滚"};
+const BODY_STATES = {stored:"已留存", head:"仅留开头", on_disk:"已存磁盘", none:"未留存",
+  historical_not_captured:"当时未采集", rolling_capture:"滚动采集", not_captured:"未采集"};
+const FIELD_ENUMS = {
+  layer: layerLabels, kind: {...kindLabels, question:"疑问"},
+  lifecycle: lifecycleLabels, phase: phaseLabels,
+  purpose: purposeLabels, activity: modes, reason: reasons,
+  origin: {...originLabels, ...MEMORY_ORIGINS},
+  body: BODY_STATES, body_state: BODY_STATES,
+  storage: {committed:"已落库", pending:"待写入"},
+  usage_state: {ok:"已回执", unknown:"未知", missing:"缺失", unsupported:"不支持"},
+  status: {...questionStatus, ...callStatusLabels, ...EXPR_STATUS, entered:"已开始"},
+  role: {user:"用户", assistant:"Alice", system:"系统", tool:"工具"},
+  salience: {0:"否", 1:"是"}, pressure: {0:"否", 1:"是"},
+  included: {true:"已采用", false:"未采用"},
+  provenance_status: PROVENANCE, scope: SCOPES,
+};
+const VALUE_LABELS = {
+  ok:"正常", error:"失败", cancelled:"取消", stream_interrupted:"流中断", entered:"已开始",
+  none:"无", unknown:"未知", unsupported:"不支持", missing:"缺失",
+  committed:"已落库", pending:"待写入", stored:"已留存", head:"仅留开头", on_disk:"已存磁盘",
+  historical_not_captured:"当时未采集", rolling_capture:"滚动采集", not_captured:"未采集",
+};
+const TIME_KEY = /(^|_)(at|ts)$/;
+function humanize(key) { return String(key).replace(/_/g, " "); }
+function fieldLabel(key) {
+  return FIELD_LABELS[key] || modes[key] || layerLabels[key] || kindLabels[key] || humanize(key);
+}
+function fieldValue(key, value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  const table = FIELD_ENUMS[key];
+  if (table && table[value] !== undefined) return table[value];
+  if (VALUE_LABELS[value] !== undefined && typeof value === "string") return VALUE_LABELS[value];
+  if (typeof value === "number") {
+    if (TIME_KEY.test(key)) return value ? fmt.time(value) : (/expire|due/.test(key) ? "无期限" : "—");
+    if (/_ms$/.test(key)) return fmt.dur(value);
+    if (/tokens?$/.test(key)) return fmt.tok(value) + " tok";
+    if (key === "content_score" || key === "importance" || key === "urgency") return String(value) + " / 3";
+    return fmt.int(value);
+  }
+  if (Array.isArray(value)) return value.length ? `${value.length} 项` : "—";
+  if (typeof value === "string" && /^\[.*\]$/.test(value.trim())) {
+    try {
+      const list = JSON.parse(value);
+      if (Array.isArray(list) && list.length) {
+        return list.map((v) => (SCOPES[v] || String(v))).join("、");
+      }
+    } catch (err) { /* 不是 JSON 就按普通文本处理 */ }
+  }
+  if (typeof value === "object") return "见下方分组";
+  const text = String(value);
+  if (/sha256$/.test(key)) return text.slice(0, 8) + "…";
+  return text;
+}
+function isFlat(obj) {
+  return !!obj && typeof obj === "object" && !Array.isArray(obj)
+    && Object.values(obj).every((v) => v === null || typeof v !== "object");
+}
+function pairText(obj) {
+  return Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${fieldLabel(k)} ${fieldValue(k, v)}`).join(" · ") || "—";
+}
+function fieldCell(key, text) {
+  const cell = el("div", "field");
+  cell.append(el("span", "field-k", fieldLabel(key)), el("span", "field-v", text));
+  return cell;
+}
+function fieldTable(obj, depth = 0, skip = []) {
+  const box = el("div", "fields");
+  const nested = [];
+  for (const [key, value] of Object.entries(obj || {})) {
+    if (value === undefined || skip.includes(key)) continue;
+    if ((value && typeof value === "object" && !Object.keys(value).length)) continue;
+    if (isFlat(value)) {
+      const text = pairText(value);
+      if (text !== "—") box.append(fieldCell(key, text));
+    } else if (Array.isArray(value)) {
+      const records = value.filter((v) => v && typeof v === "object");
+      const text = !value.length ? ""
+        : records.length ? `${value.length} 条记录`
+        : value.slice(0, 8).map((v) => String(v)).join("、") + (value.length > 8 ? ` 等 ${value.length} 项` : "");
+      if (text) box.append(fieldCell(key, text));
+      if (records.length && depth < 2) nested.push([key, records]);
+    } else if (value && typeof value === "object") {
+      box.append(fieldCell(key, "分组"));
+      if (depth < 2) nested.push([key, [value]]);
+    } else {
+      const text = fieldValue(key, value);
+      if (text !== "—") box.append(fieldCell(key, text));
+    }
+  }
+  for (const [key, records] of nested) {
+    const group = el("div", "field-sub");
+    group.append(el("div", "field-sub-head", fieldLabel(key)));
+    for (const record of records.slice(0, 20)) group.append(fieldTable(record, depth + 1));
+    if (records.length > 20) group.append(el("p", "field-hint", `另有 ${records.length - 20} 条未展开。`));
+    box.append(group);
+  }
+  return box;
+}
+function recordTitle(obj) {
+  const bits = [];
+  const skip = [];
+  const identKey = ["id", "op_id", "call_id", "request_id"].find((k) => obj[k] != null);
+  if (identKey) {
+    const text = String(obj[identKey]);
+    bits.push(text.length > 20 ? text.slice(0, 20) + "…" : text);
+    if (identKey !== "request_id") skip.push(identKey);
+  }
+  if (obj.purpose) { bits.push(purposeLabel(obj.purpose)); skip.push("purpose"); }
+  else if (obj.activity) { bits.push(modes[obj.activity] || obj.activity); skip.push("activity"); }
+  else if (obj.phase) { bits.push(phaseLabels[obj.phase] || obj.phase); skip.push("phase"); }
+  else if (obj.name) bits.push(String(obj.name));
+  else if (obj.question) {
+    const text = String(obj.question);
+    bits.push(text.length > 26 ? text.slice(0, 26) + "…" : text);
+    skip.push("question");
+  }
+  if (obj.status) { bits.push(statusLabel(obj.status)); skip.push("status"); }
+  else if (obj.lifecycle) { bits.push(lifecycleLabels[obj.lifecycle] || obj.lifecycle); skip.push("lifecycle"); }
+  return { title: bits.join(" · ") || "记录", skip };
+}
+function fieldRecords(value) {
+  const box = el("div", "field-body");
+  const records = Array.isArray(value) ? value : (value && typeof value === "object" ? [value] : []);
+  if (!records.length) return box;
+  box.append(el("p", "field-hint", "内部字段名和代码值已翻译成日常说法。"));
+  records.slice(0, 20).forEach((record, index) => {
+    const item = el("div", "field-item");
+    if (!record || typeof record !== "object") {
+      item.append(el("span", "field-v", String(record)));
+    } else {
+      const { title, skip } = recordTitle(record);
+      const head = el("div", "field-head");
+      head.append(el("span", "field-index", String(index + 1).padStart(2, "0")));
+      head.append(el("span", "field-title", title));
+      item.append(head, fieldTable(record, 0, skip));
+    }
+    box.append(item);
+  });
+  if (records.length > 20) box.append(el("p", "field-hint", `另有 ${records.length - 20} 条未展开，可在上方明细表里按序号查看。`));
+  return box;
+}
+function dataDetails(label, value, opts = {}) {
+  const block = el("details", "raw" + (opts.inline ? " inline" : ""));
+  block.append(node("summary", label));
+  let built = false;
+  const build = () => {
+    if (built) return;
+    built = true;
+    block.append(fieldRecords(value));
+  };
+  block.addEventListener("toggle", () => { if (block.open) build(); });
+  if (opts.open) { build(); block.open = true; }
   return block;
+}
+function renderValue(target, value) {
+  target.replaceChildren(fieldRecords(value));
+  target.hidden = false;
 }
 function line(label, value) {
   const row = el("div", "line");
   row.append(node("span", label), node("b", value));
   return row;
-}
-function keyValues(obj, skip = []) {
-  const wrap = el("div", "rows");
-  for (const [key, value] of Object.entries(obj || {})) {
-    if (skip.includes(key)) continue;
-    if (value == null || typeof value === "object") continue;
-    wrap.append(line(key, String(value)));
-  }
-  return wrap;
 }
 function gridOf(cards) {
   const grid = el("div", "grid");
@@ -193,10 +616,11 @@ function mountCards(out, items) {
     }
   }
 }
-const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
 function statusLabel(value) {
   if (!value) return "—";
   if (questionStatus[value]) return questionStatus[value];
+  if (callStatusLabels[value]) return callStatusLabels[value];
+  if (EXPR_STATUS[value]) return EXPR_STATUS[value];
   if (String(value).startsWith("waiting")) return "等待中";
   return value;
 }
@@ -226,66 +650,77 @@ function paintSchedule(v, out) {
     {label:"抽签记录", value: fmt.int(recs.length), hint: "本会话最近 30 次"},
   ]));
 
+  const weights = drawable ? cur.draw_weights
+    : Object.fromEntries(keys.map((key) => [key, info(key).weight || 0]));
+  const weightTotal = Object.keys(weights).reduce((a, key) => a + (weights[key] || 0), 0);
+  const topKey = Object.keys(weights).reduce((best, key) => ((weights[key] || 0) > (weights[best] || 0) ? key : best), keys[0]);
   const weightCard = card("抽签权重", drawable
     ? "按权重归一化得到抽中概率；内容分来自问题重要度/紧急度与轮转债。"
     : "本次存在优先事项，直接指定，不进入抽签。");
-  weightCard.body.append(barRows(keys.map((key) => ({
+  weightCard.body.append(donut(keys.map((key) => ({
     label: modes[key],
-    value: info(key).weight || 0,
-    color: key === "idle" ? C[2] : C[1],
-    note: `${probability(cur.draw_weights, key)} · 分 ${info(key).content_score ?? "—"}`,
-  }))));
-  if (!drawable) weightCard.body.append(el("p", "note", "没有 draw_weights：优先事项或明确指定时不会抽签。"));
+    value: weights[key] || 0,
+    color: modeColors[key],
+    note: drawable ? `内容分 ${info(key).content_score ?? "—"}`
+      : `权重 ${info(key).weight ?? "—"} · 内容分 ${info(key).content_score ?? "—"}`,
+  })), {
+    centerValue: drawable ? probability(cur.draw_weights, topKey) : fmt.int(weightTotal),
+    centerLabel: drawable ? modes[topKey] : "权重合计",
+  }));
+  if (!drawable && weightTotal) weightCard.body.append(el("p", "note", "没有 draw_weights：优先事项或明确指定时不会抽签。"));
 
   const dry = cur.dry_windows || 0, blocked = cur.blocked_modes || 0;
+  const dryAdd = 2 * Math.min(dry, 3), blockAdd = 2 * Math.min(blocked, 3);
   const restCard = card("发呆分构成", "发呆分 = 1 + 2×无进展轮（最多 3）+ 2×受阻模式（最多 3）。");
-  restCard.body.append(stack([
-    {label:"基数", value:1, color:C[5]},
-    {label:"无进展", value:2 * Math.min(dry, 3), color:C[2]},
-    {label:"受阻", value:2 * Math.min(blocked, 3), color:C[4]},
+  restCard.body.append(waterfall([
+    {label:"基数", value:1, kind:"base", color:C[5]},
+    {label:"无进展", value:dryAdd, kind:"add", color:C[2]},
+    {label:"受阻", value:blockAdd, kind:"add", color:C[4]},
+    {label:"合计", value:1 + dryAdd + blockAdd, kind:"total", color:C[0]},
   ]));
   restCard.body.append(line("发呆权重", String(info("idle").weight ?? "—")));
   restCard.body.append(line("发呆秒数", cur.idle_seconds ? cur.idle_seconds + "s" : "未开启"));
 
-  const recentCard = card("最近实际选择", "最近 12 次调度，含原因与当时概率。");
+  const recentCard = card("最近选择", "最近一次在下面；色带是最近 12 次的模式序列，单次留痕收在页尾。");
   if (!recs.length) recentCard.body.append(emptyNote("还没有运行记录。"));
   else {
-    const tl = el("div", "tl tl-cols");
-    for (const item of recs.slice(0, 12)) {
-      const row = el("div", "tl-item");
-      row.append(el("div", "tl-at", fmt.clock(item.at)));
-      const dotEl = el("div", "tl-node");
-      dotEl.style.background = item.activity === "idle" ? C[2] : C[1];
-      row.append(dotEl);
-      const body = el("div", "tl-body"), title = el("div", "tl-title");
-      title.append(node("span", modes[item.activity] || item.activity));
-      title.append(pill(reasons[item.reason] || item.reason || "原因未记录", item.reason === "weighted_rotation" ? "ok" : ""));
-      const chance = probability(item.draw_weights, item.activity);
-      if (chance !== "—") title.append(pill("概率 " + chance));
-      body.append(title);
-      body.append(el("div", "tl-sub", item.draw_weights && Object.keys(item.draw_weights).length
-        ? "抽签池 " + Object.keys(item.draw_weights).map((k) => modes[k]).join(" / ")
-        : item.reason === "weighted_rotation" ? "旧记录未保存抽签权重。" : "这次没有抽签。"));
-      row.append(body);
-      tl.append(row);
+    const latest = recs[0];
+    const pick = el("div", "pick");
+    pick.append(el("span", "pick-label", "最近一次"), el("span", "pick-time", fmt.clock(latest.at)),
+      el("b", null, modes[latest.activity] || latest.activity));
+    pick.append(pill(reasons[latest.reason] || latest.reason || "原因未记录",
+      latest.reason === "weighted_rotation" ? "ok" : ""));
+    const lastChance = probability(latest.draw_weights, latest.activity);
+    if (lastChance !== "—") pick.append(pill("概率 " + lastChance));
+    recentCard.body.append(pick);
+    const seq = recs.slice(0, 12).slice().reverse();
+    recentCard.body.append(ribbon(seq.map((item) => ({
+      color: modeColors[item.activity] || C[5],
+      title: `${fmt.clock(item.at)} ${modes[item.activity] || item.activity} · ${reasons[item.reason] || "原因未记录"}`,
+    })), {label:"最近选择的模式序列", start:fmt.clock(seq[0].at), end:fmt.clock(seq[seq.length - 1].at)}));
+    const usedModes = [...new Set(seq.map((item) => item.activity))];
+    const modeLegend = el("div", "legend");
+    for (const key of usedModes) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = modeColors[key] || C[5];
+      item.append(dot, node("span", modes[key] || key));
+      modeLegend.append(item);
     }
-    recentCard.body.append(tl);
-  }
-
-  const tableCard = card("记录明细", "按时间倒序；展开可看当时的完整权重。");
-  if (!recs.length) tableCard.body.append(emptyNote("暂无记录。"));
-  else {
-    tableCard.body.append(table(["时间", "活动", "原因", "当时概率", "无进展"], recs.map((item) => [
-      fmt.time(item.at), modes[item.activity] || item.activity, reasons[item.reason] || item.reason || "—",
-      probability(item.draw_weights, item.activity), item.dry_windows ?? "—",
-    ])));
-    tableCard.body.append(rawDetails("查看原始记录", recs));
+    recentCard.body.append(modeLegend);
   }
 
   mountCards(out, [
-    {box: weightCard.box}, {box: restCard.box},
-    {box: recentCard.box, wide:true}, {box: tableCard.box, wide:true},
+    {box: weightCard.box}, {box: restCard.box}, {box: recentCard.box, wide:true},
   ]);
+  if (recs.length) {
+    const detail = el("div");
+    detail.append(table(["时间", "活动", "原因", "当时概率", "无进展"], recs.map((item) => [
+      fmt.time(item.at), modes[item.activity] || item.activity, reasons[item.reason] || item.reason || "—",
+      probability(item.draw_weights, item.activity), item.dry_windows ?? "—",
+    ])), dataDetails("查看全部字段", recs));
+    out.append(disclosure("决策留痕", `${recs.length} 条 · 最近 ${fmt.clock(recs[0].at)}`,
+      detail, "每次选择的当时概率与抽签池；按时间倒序。"));
+  }
 }
 
 function paintMemory(v, out) {
@@ -303,7 +738,7 @@ function paintMemory(v, out) {
   ]));
 
   const layerCard = card("三层分布", "活跃层进上下文，仓库层待晋升，长期层是稳定结论。");
-  layerCard.body.append(stack([
+  layerCard.body.append(layerColumn([
     {label:"活跃", value:counts.active || 0, color:C[0]},
     {label:"仓库", value:counts.warehouse || 0, color:C[2]},
     {label:"长期", value:counts.longterm || 0, color:C[1]},
@@ -313,42 +748,60 @@ function paintMemory(v, out) {
   const soonest = items.reduce((min, i) => (i.expires_at && (!min || i.expires_at < min) ? i.expires_at : min), null);
   layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
   layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
+  const bodyAllowed = targetMode === "body" || targetMode === "isolated";
+  layerCard.body.append(el("p", "card-sub auto-bottom", bodyAllowed
+    ? "正文授权：含正文，可按 ID 读取。"
+    : "正文授权：仅元数据；标题与正文需在 Alice 单独勾选。"));
 
-  const ranked = [...items].sort((a, b) => (b.salience || 0) - (a.salience || 0)
-    || (b.use_count || 0) - (a.use_count || 0)).slice(0, 8);
-  const heatCard = card("重要与常用", "与 Alice 自己的排序取向一致：先 salience（重大事项 0/1），再取用次数。");
-  heatCard.body.append(ranked.length
-    ? barRows(ranked.map((i) => ({label:`#${i.id} ${kindLabels[i.kind] || i.kind || ""}`,
-        value:i.use_count || 0, color:i.salience ? C[3] : C[1],
-        note:`${i.salience ? "重要" : "一般"} · ${fmt.int(i.use_count)} 次`})))
+  const heatCard = card("提及 × 取用", "横轴被提及次数，纵轴被取用次数；带圈的是重大事项。右下角 = 说过很多次、却很少用到。");
+  heatCard.body.append(items.length
+    ? scatter(items.map((i) => ({
+        x:i.mention_count || 0, y:i.use_count || 0,
+        color:layerColors[i.layer] || C[5],
+        ring:Boolean(i.salience),
+        title:`#${i.id} ${kindLabels[i.kind] || ""} · 提及 ${fmt.int(i.mention_count)} · 取用 ${fmt.int(i.use_count)}${i.salience ? " · 重要" : ""}`,
+      })), {xName:"提及", label:`${items.length} 条记忆的提及与取用分布`})
     : emptyNote("还没有记忆。"));
-  if (ranked.length) {
+  if (items.length) {
+    const mix = el("div", "legend");
+    for (const key of Object.keys(layerLabels)) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = layerColors[key];
+      item.append(dot, node("span", layerLabels[key]));
+      mix.append(item);
+    }
+    const imp = el("span");
+    imp.append(el("span", "dot ring"), node("span", "重大事项"));
+    mix.append(imp);
+    heatCard.body.append(mix);
+    const sumMention = items.reduce((a, i) => a + (i.mention_count || 0), 0);
+    const sumUse = items.reduce((a, i) => a + (i.use_count || 0), 0);
+    const never = items.filter((i) => !i.use_count).length;
+    const talky = items.filter((i) => (i.mention_count || 0) >= 5 && (i.use_count || 0) <= 1).length;
+    const stats = el("div", "rows stats");
+    stats.append(line("合计提及 / 取用", `${fmt.int(sumMention)} / ${fmt.int(sumUse)}`));
+    stats.append(line("从未被取用", `${never} 条`));
+    stats.append(line("提及多、取用少", `${talky} 条`));
+    heatCard.body.append(stats);
     heatCard.body.append(el("p", "note",
-      "salience 只有 0/1 两档（生日、健康、重大决定、重要约定、强烈情绪），不是连续价值分；层与取用次数才是长期依据。"));
+      "salience 只有 0/1 两档，不是连续价值分；点越大，表示落在附近的记忆越多。"));
   }
 
-  const listCard = card("最近记忆", `按 id 倒序，最多 ${items.length} 条；只有元数据。`);
-  if (!items.length) listCard.body.append(emptyNote("还没有记忆。"));
-  else {
-    listCard.body.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
+  const pair = el("div", "grid equal");
+  pair.append(layerCard.box, heatCard.box);
+  out.append(pair);
+  if (items.length) {
+    const lastUse = items.reduce((max, i) => Math.max(max, i.last_used_at || 0), 0);
+    const detail = el("div");
+    detail.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
       String(i.id), layerLabels[i.layer] || i.layer || "—", kindLabels[i.kind] || i.kind || "—",
       i.salience ? pill("重要", "warn") : "—", fmt.int(i.mention_count), fmt.int(i.use_count),
       fmt.ago(i.last_used_at), i.expires_at ? fmt.time(i.expires_at) : "—",
       lifecycleLabels[i.lifecycle] || i.lifecycle || i.provenance_status || "—",
-    ]), {cards:true}));
-    listCard.body.append(rawDetails("查看原始元数据", items));
+    ]), {cards:true}), dataDetails("查看全部字段", items));
+    out.append(disclosure("最近记忆", `${items.length} 条 · 最近取用 ${lastUse ? fmt.ago(lastUse) : "无"}`,
+      detail, "按 id 倒序；只有元数据，正文需单独授权。"));
   }
-
-  const noteCard = card("正文与标题", "元数据授权只到 id 与计数；标题、正文要 Alice 单独勾选正文授权后再读。");
-  noteCard.body.append(el("p", "note",
-    targetMode === "body" ? "当前连接已含正文授权，可在下方按 ID 读取已留存的正文。"
-      : "当前连接只有元数据授权，按 ID 读取正文会被拒绝。"));
-  const column = el("div", "col");
-  column.append(layerCard.box, noteCard.box);
-  const pair = el("div", "grid");
-  pair.append(column, heatCard.box);
-  out.append(pair);
-  mountCards(out, [{box: listCard.box, wide:true}]);
 }
 
 function paintQuestions(v, out) {
@@ -360,6 +813,9 @@ function paintQuestions(v, out) {
     origins[i.origin || "unknown"] = (origins[i.origin || "unknown"] || 0) + 1;
   }
   const latest = items.reduce((max, i) => Math.max(max, i.updated_at || 0), 0);
+  const rank = (status) => status === "open" ? 2 : String(status || "").startsWith("waiting") ? 1 : 0;
+  const ordered = [...items].sort((a, b) =>
+    rank(b.status) - rank(a.status) || (b.updated_at || 0) - (a.updated_at || 0));
   out.append(kpis([
     {label:"疑问总数", value: fmt.int(items.length), hint:"最多 40 条"},
     {label:"待处理", value: fmt.int(open)},
@@ -367,23 +823,25 @@ function paintQuestions(v, out) {
     {label:"最近更新", value: latest ? fmt.ago(latest) : "—"},
   ]));
 
+  const statusKeys = Object.keys(statuses).sort((a, b) => statuses[b] - statuses[a]);
+  const originKeys = Object.keys(origins).sort((a, b) => origins[b] - origins[a]);
   const statusCard = card("状态分布", "waiting* 表示在等外部条件，不是卡住。");
-  statusCard.body.append(Object.keys(statuses).length
-    ? barRows(Object.entries(statuses).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: statusLabel(key), value:n, color:C[0]})))
+  statusCard.body.append(statusKeys.length
+    ? donut(statusKeys.map((key) => ({label:statusLabel(key), value:statuses[key], color:statusColor(key)})),
+        {centerValue:fmt.int(items.length), centerLabel:"疑问"})
     : emptyNote("暂无疑问。"));
 
-  const originCard = card("来源分布", "谁把它放进 Alice 的工作台。");
-  originCard.body.append(Object.keys(origins).length
-    ? barRows(Object.entries(origins).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: originLabels[key] || key, value:n, color:C[3]})))
+  const originCard = card("来源 × 状态", "行是来源，列是状态；格子越深，数量越多。");
+  originCard.body.append(originKeys.length && statusKeys.length
+    ? heatmap(originKeys.map((key) => originLabels[key] || key), statusKeys.map((key) => statusLabel(key)),
+        originKeys.map((origin) => statusKeys.map((status) =>
+          items.filter((i) => (i.origin || "unknown") === origin && (i.status || "unknown") === status).length)))
     : emptyNote("暂无来源记录。"));
 
-  const listCard = card("疑问清单", "按更新时间倒序；隔离测试里可直接推进一步。");
+  const listCard = card("疑问清单", "待处理优先，其余按更新时间；默认显示 6 条。");
   if (!items.length) listCard.body.append(emptyNote("当前会话没有疑问。"));
   else {
-    const wrap = el("div", "rows");
-    for (const item of items) {
+    const questionRow = (item) => {
       const box = el("div", "tl-item");
       box.style.borderBottom = "1px solid var(--rule-soft)";
       const left = el("div", "tl-at", "#" + item.id);
@@ -403,7 +861,7 @@ function paintQuestions(v, out) {
       body.append(el("div", "tl-sub", meta.join(" · ")));
       if (topic === "questions" && targetMode === "isolated" && item.status === "open") {
         const button = node("button", "探索此疑问");
-        button.className = "quiet";
+        button.className = "quiet explore";
         button.style.marginTop = "6px";
         button.onclick = () => perform(async () => {
           await api("control", {id:item.id, version:item.version}, {command:"run"});
@@ -411,13 +869,20 @@ function paintQuestions(v, out) {
         body.append(button);
       }
       box.append(left, dotEl, body);
-      wrap.append(box);
-    }
+      return box;
+    };
+    const wrap = el("div", "rows");
+    for (const item of ordered.slice(0, 6)) wrap.append(questionRow(item));
     listCard.body.append(wrap);
+    if (items.length > 8) {
+      const rest = el("div", "rows");
+      for (const item of ordered.slice(6)) rest.append(questionRow(item));
+      listCard.body.append(disclosure(`其余 ${items.length - 6} 条`, "按需要展开", rest, null, true));
+    }
     if (targetMode !== "isolated") {
       listCard.body.append(el("p", "note", "日常连接只读：推进疑问要在隔离实例里操作，这里只显示状态。"));
     }
-    listCard.body.append(rawDetails("查看原始记录", items));
+    listCard.body.append(dataDetails("查看全部字段", ordered));
   }
   out.append(gridOf([statusCard.box, originCard.box]));
   mountCards(out, [{box: listCard.box, wide:true}]);
@@ -446,17 +911,29 @@ function paintCalls(v, out) {
     {label:"中位耗时", value: fmt.dur(median)},
   ]));
 
-  const trendCard = card("耗时趋势", "每次模型调用一根柱，左旧右新。");
+  const peak = Math.max(...items.map((i) => i.duration_ms || 0), 1);
+  const useLog = peak > Math.max(median || 1, 1) * 5 && peak > 20000;
+  const heightOf = (value) => useLog
+    ? Math.log10(1 + Math.max(0, value)) / Math.log10(1 + peak)
+    : Math.max(0, value) / peak;
+  const trendCard = card("耗时趋势", useLog
+    ? `每次模型调用一根柱，左旧右新；存在超长调用（峰值 ${fmt.dur(peak)}），高度按对数压缩。`
+    : "每次模型调用一根柱，左旧右新；虚线是本次样本的中位数。");
   if (!items.length) trendCard.body.append(emptyNote("还没有调用回执。"));
   else {
-    const max = Math.max(...items.map((i) => i.duration_ms || 0), 1);
     const cols = el("div", "cols");
     for (const item of items) {
-      const bar = el("div");
-      bar.style.height = Math.max(2, ((item.duration_ms || 0) / max) * 100) + "%";
+      const bar = el("div", "col-bar");
+      bar.style.height = Math.max(2, heightOf(item.duration_ms || 0) * 100) + "%";
       bar.style.background = item.status && item.status !== "ok" ? C[4] : item.attempt > 1 ? C[2] : C[1];
       bar.title = `${fmt.clock(item.ts)} · ${purposeLabels[item.purpose] || item.purpose} · ${fmt.dur(item.duration_ms)}${item.status && item.status !== "ok" ? " · " + item.status : ""}`;
       cols.append(bar);
+    }
+    if (median) {
+      const ref = el("div", "ref");
+      ref.style.bottom = (heightOf(median) * 100).toFixed(1) + "%";
+      ref.append(el("span", "ref-lab", "中位 " + fmt.dur(median)));
+      cols.append(ref);
     }
     trendCard.body.append(cols);
     const axis = el("div", "axis");
@@ -468,6 +945,13 @@ function paintCalls(v, out) {
       dot.style.background = color; s.append(dot, node("span", text)); legend.append(s);
     }
     trendCard.body.append(legend);
+    const dist = el("div", "trend-extra");
+    dist.append(el("div", "mini-head", "耗时分布"),
+      el("p", "mini-hint", "按调用次数分桶；最后一桶 ≥30s。"));
+    dist.append(durations.length
+      ? histogram(durations, [1000, 3000, 10000, 30000], ["<1s", "1–3s", "3–10s", "10–30s", "≥30s"])
+      : emptyNote("还没有带耗时的回执。"));
+    trendCard.body.append(dist);
   }
 
   const purposeMap = {};
@@ -479,18 +963,23 @@ function paintCalls(v, out) {
     const u = i.usage;
     if (u && typeof u === "object") slot.tokens += (u.prompt || 0) + (u.completion || 0);
   }
-  const purposeCard = card("用途分布", "同一请求里可能有多次调用：主对话、记忆提取、评审分别计量。");
-  purposeCard.body.append(Object.keys(purposeMap).length
-    ? barRows(Object.entries(purposeMap).sort((a, b) => b[1].count - a[1].count).map(([key, s]) => ({
-        label: purposeLabel(key), value:s.count, color:C[3],
-        note:`${s.count} 次 · ${fmt.tok(s.tokens)} tok`})))
+  const purposeCard = card("用途分布", "一格代表一次调用；颜色是用途，悬停看时间与耗时。");
+  purposeCard.body.append(items.length
+    ? unitGrid(items.map((i) => ({
+        color:purposeColor(i.purpose),
+        title:`${fmt.clock(i.ts)} · ${purposeLabel(i.purpose)} · ${fmt.dur(i.duration_ms)}`,
+      })), `${items.length} 次调用的用途`)
     : emptyNote("暂无调用。"));
-
-  const stateCard = card("回执完整度", "哪些调用拿到了真实用量。");
-  stateCard.body.append(line("有 usage 回执", `${tokens.known} / ${items.length}`));
-  stateCard.body.append(line("缺失丢弃", fmt.int(v.pending_dropped)));
-  stateCard.body.append(line("未知用量条数", fmt.int(items.length - tokens.known)));
-  if (v.notice) stateCard.body.append(el("p", "note", v.notice));
+  if (items.length) {
+    const used = el("div", "legend");
+    for (const [key, slot] of Object.entries(purposeMap).sort((a, b) => b[1].count - a[1].count)) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = purposeColor(key);
+      item.append(dot, node("span", `${purposeLabel(key)} ${slot.count} · ${fmt.tok(slot.tokens)}`));
+      used.append(item);
+    }
+    purposeCard.body.append(used);
+  }
 
   const modelMap = {};
   for (const i of items) {
@@ -501,26 +990,30 @@ function paintCalls(v, out) {
     const u = i.usage;
     if (u && typeof u === "object") slot.tokens += (u.prompt || 0) + (u.completion || 0);
   }
-  const modelCard = card("模型分布", "回执里报告的模型；缺失时按未知计。");
+  const modelCard = card("模型分布", "回执里报告的模型；点越靠右，调用越多。");
   modelCard.body.append(Object.keys(modelMap).length
-    ? barRows(Object.entries(modelMap).sort((a, b) => b[1].count - a[1].count).map(([key, s]) => ({
-        label: key, value:s.count, color:C[1],
-        note:`${s.count} 次 · ${fmt.tok(s.tokens)} tok`})), {labelWidth:128})
+    ? lollipop(Object.entries(modelMap).sort((a, b) => b[1].count - a[1].count).map(([key, slot]) => ({
+        label:key, value:slot.count, color:C[1],
+        note:`${slot.count} 次 · ${fmt.tok(slot.tokens)} tok`})))
     : emptyNote("暂无模型回执。"));
 
-  const tableCard = card("调用明细", "最近 40 次，按时间倒序。");
-  tableCard.body.append(items.length ? table(
-    ["时间", "用途", "模型", "状态", "耗时", "入", "出"],
-    items.slice().reverse().map((i) => {
-      const u = i.usage && typeof i.usage === "object" ? i.usage : {};
-      return [fmt.time(i.ts), purposeLabel(i.purpose), i.model || "—",
-        callStatusLabels[i.status] || i.status || "—", fmt.dur(i.duration_ms),
-        fmt.tok(u.prompt), fmt.tok(u.completion)];
-    })) : emptyNote("暂无调用。"));
-  if (items.length) tableCard.body.append(rawDetails("查看原始回执", items));
-
-  out.append(gridOf([trendCard.box, purposeCard.box, stateCard.box, modelCard.box]));
-  mountCards(out, [{box: tableCard.box, wide:true}]);
+  out.append(trendCard.box);
+  mountCards(out, [{box: purposeCard.box}, {box: modelCard.box}]);
+  if (items.length) {
+    const detail = el("div");
+    detail.append(table(
+      ["时间", "用途", "模型", "状态", "耗时", "入", "出"],
+      items.slice().reverse().map((i) => {
+        const u = i.usage && typeof i.usage === "object" ? i.usage : {};
+        return [fmt.time(i.ts), purposeLabel(i.purpose), i.model || "—",
+          callStatusLabels[i.status] || i.status || "—", fmt.dur(i.duration_ms),
+          fmt.tok(u.prompt), fmt.tok(u.completion)];
+      })), dataDetails("查看全部字段", items.slice().reverse()));
+    if (v.notice) detail.append(el("p", "note", v.notice));
+    out.append(disclosure("调用明细",
+      `${items.length} 次 · 中位 ${fmt.dur(median)}${failed ? ` · ${failed} 次未成功` : ""}`,
+      detail, `按时间倒序；usage 回执 ${tokens.known}/${items.length}${v.pending_dropped ? `，丢弃 ${v.pending_dropped} 条` : ""}，缺失按未知计。`));
+  }
 }
 
 function paintPersona(v, out) {
@@ -537,12 +1030,28 @@ function paintPersona(v, out) {
 
   const phaseMap = {};
   for (const i of items) phaseMap[i.phase || "unknown"] = (phaseMap[i.phase || "unknown"] || 0) + 1;
-  const phaseCard = card("阶段分布", "终态之外还留在日志里的，都是需要人工核对的迁移。");
-  phaseCard.body.append(items.length
-    ? barRows(Object.entries(phaseMap).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({
-        label: phaseLabels[key] || key, value:n,
-        color:["completed"].includes(key) ? C[0] : ["rolled_back", "aborted", "superseded"].includes(key) ? C[5] : C[2]})))
-    : emptyNote("没有人格导入记录。"));
+  const phaseCard = card("导入序列", "一个色块一次导入，左旧右新；颜色是阶段，计数在下方图例。");
+  if (!items.length) phaseCard.body.append(emptyNote("没有人格导入记录。"));
+  else {
+    const chrono = items.slice().reverse();
+    phaseCard.body.append(ribbon(chrono.map((item) => ({
+      color:phaseColors[item.phase] || C[5],
+      title:`${item.op_id} · ${phaseLabels[item.phase] || item.phase}`,
+    })), {label:"导入操作序列"}));
+    const counts = el("div", "legend");
+    for (const [key, n] of Object.entries(phaseMap).sort((a, b) => b[1] - a[1])) {
+      const item = el("span"), dot = el("span", "dot");
+      dot.style.background = phaseColors[key] || C[5];
+      item.append(dot, node("span", `${phaseLabels[key] || key} ${n}`));
+      counts.append(item);
+    }
+    phaseCard.body.append(counts);
+    const inserted = items.reduce((a, i) => a + (i.inserted_count || 0), 0);
+    const unfinished = items.filter((i) => !["completed", "rolled_back", "superseded", "aborted"].includes(i.phase)).length;
+    phaseCard.body.append(line("插入合计", `${fmt.int(inserted)} 条`));
+    phaseCard.body.append(line("未到终态", `${fmt.int(unfinished)} 条`));
+    phaseCard.body.append(line("最近一次", opTime(items[0] && items[0].op_id)));
+  }
 
   const resetCard = card("重置与迁移", "只读操作元数据，不触发恢复。");
   const reset = v.reset;
@@ -558,13 +1067,12 @@ function paintPersona(v, out) {
     const exprItems = Array.isArray(expr.items) ? expr.items : [];
     resetCard.body.append(line("表达更新", `${exprItems.length} 条`));
     if (exprItems.length) {
-      resetCard.body.append(rawDetails("查看表达更新", exprItems.slice(0, 8)));
+      resetCard.body.append(dataDetails("查看全部字段", exprItems.slice(0, 8)));
     }
   }
 
-  const listCard = card("导入记录", "op_id 可以对照 Alice 的日志定位。");
-  if (!items.length) listCard.body.append(emptyNote("没有记录。"));
-  else {
+  out.append(gridOf([phaseCard.box, resetCard.box]));
+  if (items.length) {
     const wrap = el("div", "rows");
     items.forEach((item, index) => {
       const row = el("div", "tl-item");
@@ -590,106 +1098,14 @@ function paintPersona(v, out) {
       row.append(body);
       wrap.append(row);
     });
-    listCard.body.append(wrap, rawDetails("查看原始记录", v));
-    if (v.truncated || v.scan_incomplete) listCard.body.append(el("p", "note", "本次扫描不完整，列表可能少于实际记录。"));
-    if (v.notice) listCard.body.append(el("p", "note", v.notice));
+    const detail = el("div");
+    detail.append(wrap, dataDetails("查看全部字段", v));
+    if (v.truncated || v.scan_incomplete) detail.append(el("p", "note", "本次扫描不完整，列表可能少于实际记录。"));
+    if (v.notice) detail.append(el("p", "note", v.notice));
+    const flag = v.truncated || v.scan_incomplete ? " · 扫描不完整" : "";
+    out.append(disclosure("导入记录", `${items.length} 条${flag} · 最近 ${opTime(items[0].op_id)}`,
+      detail, "op_id 可以对照 Alice 的日志定位。"));
   }
-  out.append(gridOf([phaseCard.box, resetCard.box]));
-  mountCards(out, [{box: listCard.box, wide:true}]);
-}
-
-const kindLabelsCtx = {stable:"系统与规则", background:"背景", index:"索引", history:"对话历史",
-  tool_result:"工具结果", selection:"选择决策"};
-function requestSegments(request) {
-  const groups = {};
-  for (const block of request.blocks || []) {
-    const key = block.name === "tool_schemas" ? "tool" : (block.kind || "other");
-    groups[key] = (groups[key] || 0) + (block.estimated_tokens || 0);
-  }
-  const palette = {stable:C[1], background:C[0], index:C[5], history:C[4], tool_result:C[2], tool:C[3], other:C[5]};
-  return Object.entries(groups).map(([key, value]) => ({
-    label: key === "tool" ? "工具定义" : (kindLabelsCtx[key] || key), value, color: palette[key] || C[5]}));
-}
-async function paintContext(out) {
-  const [requests, status] = await Promise.all([
-    api("observe", {}, {topic:"context"}).then((r) => r.result),
-    api("observe", {}, {topic:"context_status"}).then((r) => r.result).catch(() => null),
-  ]);
-  const list = requests.requests || [];
-  const calls = list.reduce((n, r) => n + (r.calls || []).length, 0);
-  const blocks = list.reduce((n, r) => n + (r.blocks || []).length, 0);
-  const bodyOk = status?.can_read_body;
-
-  out.append(kpis([
-    {label:"最近请求", value: fmt.int(list.length), hint:"观测窗口内"},
-    {label:"模型调用", value: fmt.int(calls)},
-    {label:"装配块", value: fmt.int(blocks)},
-    {label:"正文授权", value: bodyOk ? "已授权" : "未授权", hint: bodyOk ? "可按片段读原文" : "仅元数据"},
-  ]));
-
-  const overview = card("请求组成", "每个请求一条堆叠条；长度按装配块估算 token 归一化。");
-  if (!list.length) overview.body.append(emptyNote("还没有上下文观测记录。"));
-  else {
-    const wrap = el("div", "rows");
-    for (const request of list.slice(0, 6)) {
-      const row = el("div");
-      const head = el("div", "line");
-      head.append(node("span", `${fmt.time(request.first_event_at)} · ${(request.calls || []).length} 次调用 · ${(request.blocks || []).length} 块`),
-        node("b", request.finished ? "已结束" : "进行中"));
-      row.append(head, stack(requestSegments(request)));
-      wrap.append(row);
-    }
-    const open = node("button", "打开完整观测器");
-    open.className = "inline-action";
-    open.onclick = () => { try { openContext(); } catch (err) { feedback(err.message, true); } };
-    wrap.append(open);
-    overview.body.append(wrap);
-  }
-
-  const tableCard = card("最近请求", "点开原始记录可核对事件数与决策留痕。");
-  if (list.length) {
-    tableCard.body.append(table(["时间", "调用", "工具轮次", "装配块", "估算 tokens", "事件", "状态"], list.map((r) => {
-      const estimated = (r.blocks || []).reduce((n, b) => n + (b.estimated_tokens || 0), 0);
-      const rounds = (r.calls || []).reduce((n, c) => Math.max(n, c.tool_round || 0), 0);
-      return [fmt.time(r.first_event_at), String((r.calls || []).length), rounds || "—",
-        String((r.blocks || []).length), fmt.tok(estimated), fmt.int(r.event_count),
-        r.finished ? "已结束" : "进行中"];
-    })));
-    tableCard.body.append(rawDetails("查看原始请求投影", list));
-  } else tableCard.body.append(emptyNote("暂无请求。"));
-
-  const stateCard = card("采集状态", "协议版本与采集范围决定这里能看到多少。");
-  if (!status) stateCard.body.append(emptyNote("采集状态不可读。"));
-  else {
-    stateCard.body.append(line("协议版本", status.protocol_version || "—"));
-    stateCard.body.append(line("元数据采集", status.capture?.metadata ? "开启" : "关闭"));
-    stateCard.body.append(line("正文采集", status.capture?.body ? "开启" : "关闭"));
-    if (status.quota) {
-      stateCard.body.append(line("正文额度", `${fmt.int(status.quota.requests?.used)} / ${fmt.int(status.quota.requests?.limit)} 请求`));
-      stateCard.body.append(line("占用", fmt.tok(status.quota.body_dir_bytes) + " / " + fmt.tok(status.quota.limit_bytes)));
-    }
-  }
-  if (requests.notice) stateCard.body.append(el("p", "note", requests.notice));
-
-  const blockLabels = {constitution:"宪法", persona_core:"人格核心", tool_schemas:"工具定义",
-    memory_active:"活跃记忆", knowledge_index:"见闻索引", recent_turns:"近期回合",
-    recall:"召回结果", question_index:"疑问索引"};
-  const blockMap = {};
-  for (const request of list) {
-    for (const block of request.blocks || []) {
-      const key = block.name || block.kind || "未命名";
-      blockMap[key] = (blockMap[key] || 0) + (block.estimated_tokens || 0);
-    }
-  }
-  const blocksCard = card("装配块用量", "按名称合并最近请求里的估算 token。");
-  const topBlocks = Object.entries(blockMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  blocksCard.body.append(topBlocks.length
-    ? barRows(topBlocks.map(([key, value]) => ({
-        label: blockLabels[key] || key, value, color:C[3], note:fmt.tok(value) + " tok"})))
-    : emptyNote("还没有装配块记录。"));
-
-  out.append(overview.box, tableCard.box);
-  mountCards(out, [{box: stateCard.box}, {box: blocksCard.box}]);
 }
 
 /* ---------- 页面装配 ---------- */
@@ -711,6 +1127,7 @@ function setPage(next) {
   byId("refresh").hidden = next !== "dashboard";
   byId("bench-body").hidden = targetMode !== "isolated";
   byId("bench-note").hidden = targetMode === "isolated";
+  document.querySelector("main").classList.toggle("embedded", next === "dashboard" && topic === "context");
   document.querySelectorAll("#topics button").forEach((btn) => {
     btn.disabled = !connected;
     btn.setAttribute("aria-pressed", String(next === "dashboard" && btn.dataset.topic === topic));
@@ -737,11 +1154,13 @@ function stamp() {
 }
 async function show(next = topic) {
   if (next !== "context") {
+    unmountContext();
     const data = await api("observe", {}, {topic:next});
     const value = data.result;
     if (value && value.status && value.status !== "ok") throw new Error(value.error || "数据暂不可读，请稍后再试");
     topic = next;
     const output = byId("observations");
+    output.hidden = false;
     output.replaceChildren();
     byId("body-controls").hidden = !(next === "memory" && ["body", "isolated"].includes(targetMode));
     setPage("dashboard");
@@ -750,16 +1169,15 @@ async function show(next = topic) {
     else if (next === "questions") paintQuestions(value, output);
     else if (next === "calls") paintCalls(value, output);
     else if (next === "persona_operations") paintPersona(value, output);
-    else output.append(rawDetails("查看数据", value));
+    else output.append(dataDetails("查看全部字段", value));
     stamp();
     return;
   }
   topic = "context";
-  const output = byId("observations");
-  output.replaceChildren();
+  byId("observations").replaceChildren();
   byId("body-controls").hidden = true;
   setPage("dashboard");
-  await paintContext(output);
+  mountContext();
   stamp();
 }
 async function load(next = topic) {
@@ -794,7 +1212,7 @@ async function perform(operation) {
   }
 }
 function connect(mode, message, url) {
-  closeContext();
+  unmountContext();
   clearTimeout(grantExpiry);
   connectionId = null;
   targetMode = mode; epoch = null; armed = null;
@@ -826,20 +1244,25 @@ function showConnection(info) {
 }
 
 /* ---------- 上下文观测桥 ---------- */
-function closeContext() {
-  if (byId("context-window").open) byId("context-window").close();
-  contextFrame?.remove();
-  contextFrame = null;
-}
-function openContext() {
+function mountContext() {
   if (!connectionId) throw new Error("请先连接 Alice");
+  const host = byId("context-host");
+  host.hidden = false;
+  if (contextFrame) return;
   const frame = node("iframe");
   frame.title = "上下文观测";
   frame.allow = "clipboard-write";
   frame.src = "/context-inspector/";
-  byId("context-frame-host").replaceChildren(frame);
+  host.replaceChildren(frame);
   contextFrame = frame;
-  byId("context-window").showModal();
+}
+function unmountContext() {
+  if (!contextFrame) return;
+  contextFrame.remove();
+  contextFrame = null;
+  const host = byId("context-host");
+  host.replaceChildren();
+  host.hidden = true;
 }
 window.AliceLabContext = {
   async read(caller, name, params, signal) {
@@ -866,10 +1289,6 @@ window.AliceLabContext = {
     }
   },
 };
-byId("close-context").onclick = closeContext;
-byId("context-window").addEventListener("close", () => {
-  if (!byId("context-window").open) closeContext();
-});
 
 /* ---------- 事件绑定 ---------- */
 async function api(action, params = {}, fields = {}, signal) {
@@ -938,8 +1357,7 @@ byId("body-form").onsubmit = (event) => {
   perform(async () => {
     const id = event.target.elements.id.value.trim();
     const data = (await api("observe", {id}, {topic:"memory_detail", connection_id:connectionId})).result;
-    byId("body-result").textContent = JSON.stringify(data, null, 2);
-    byId("body-result").hidden = false;
+    renderValue(byId("body-result"), data);
   });
 };
 byId("chat").onsubmit = (event) => {
@@ -970,9 +1388,7 @@ async function p1(action, params = {}) {
   if (state.status !== "ok") throw new Error(state.error || "核查状态暂不可用");
   const result = (await api("experiment", {...params, action, dataset_id:state.dataset_id})).result;
   if (result.status !== "ok") throw new Error(result.error || "核查操作未完成");
-  const output = byId("p1-output");
-  output.textContent = JSON.stringify(result, null, 2);
-  output.hidden = false;
+  renderValue(byId("p1-output"), result);
   return result;
 }
 byId("p1-list").onclick = () => perform(() => p1("list"));

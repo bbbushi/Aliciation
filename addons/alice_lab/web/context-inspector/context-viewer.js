@@ -82,9 +82,11 @@
     current = null;
     old.controller?.abort();
     clearTimeout(old.expiryTimer);
-    if (old.dialog.open) old.dialog.close();
-    old.dialog.remove();
-    old.rows.length = 0;
+    if (old.dialog) {                       /* 弹窗态（缓存注释窗仍用）；内联态无 dialog，由页面区接管 */
+      if (old.dialog.open) old.dialog.close();
+      old.dialog.remove();
+    }
+    if (old.rows) old.rows.length = 0;
     old.payload = null;
     if (old.opener?.isConnected) old.opener.focus();
   }
@@ -150,18 +152,17 @@
     }
   }
 
+  /* 05-21：完整上下文不再弹独立窗——内联挂载进观测页折叠区（options.container 必填）。
+     工具条/目录/正文渲染与原弹窗一致；scope 失配改为就地提示而非关闭。 */
   function open(options) {
     close();
+    const container = options.container;
+    if (!container) return;
     const calls = options.calls || [];
-    if (!calls.length) return;
-    const dialog = node("dialog", null, "acv-dialog");
-    dialog.setAttribute("aria-label", "完整上下文");
-    const head = node("header", null, "acv-head");
-    const title = node("h2", "完整上下文");
-    const closeButton = node("button", "关闭");
-    closeButton.type = "button";
-    closeButton.onclick = close;
-    head.append(title, closeButton);
+    if (!calls.length) {
+      container.replaceChildren(node("p", "本请求暂无模型调用。", "ci-hint"));
+      return;
+    }
     const toolbar = node("div", null, "acv-toolbar");
     const selectLabel = node("label", "模型调用 ");
     const select = document.createElement("select");
@@ -188,11 +189,12 @@
     toc.setAttribute("aria-label", "上下文目录");
     const body = node("div", null, "acv-body");
     layout.append(toc, body);
-    dialog.append(head, toolbar, note, layout);
-    const state = {dialog, rows: [], controller: null, payload: null, revision: 0, opener: document.activeElement};
+    const frame = node("div", null, "acv-inline");
+    frame.append(toolbar, note, layout);
+    container.replaceChildren(frame);
+    const state = {rows: [], controller: null, payload: null, revision: 0,
+                   requestId: options.requestId, scope: options.scope};
     current = state;
-    dialog.addEventListener("close", () => { if (current === state) close(); });
-    dialog.addEventListener("cancel", e => { e.preventDefault(); close(); });
     function row(label, content, warning = false) {
       const section = node("section", null, "acv-message" + (warning ? " acv-missing" : ""));
       const heading = node("h3", label);
@@ -245,7 +247,9 @@
           {request_id: options.requestId, call_id: select.value}, controller.signal);
         if (current !== state || revision !== state.revision) return;
         if (data.status === "reset" || options.scope && data.scope && data.scope !== options.scope) {
-          close(); return;
+          note.textContent = "会话已更换，请重新展开本节读取。";
+          note.classList.add("acv-warning");
+          return;
         }
         if (data.status !== "ok") {
           throw new Error(data.status === "busy" ? "会话忙碌，请稍后重新读取。"
@@ -281,8 +285,6 @@
       try { await navigator.clipboard.writeText(text); if (current === state) copy.textContent = "已复制"; }
       catch (_) { if (current === state) note.textContent = "复制未成功，可在正文中选择文本复制。"; }
     };
-    document.body.append(dialog);
-    dialog.showModal();
     load();
   }
   window.addEventListener("pagehide", close);

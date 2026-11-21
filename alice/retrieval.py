@@ -105,7 +105,7 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
     prefix_plan_out：可选回填实际使用的计划对象（loop 取元数据用）。
     最新一条用户消息带上当前时间。
     """
-    from . import context as ctx
+    from . import context as ctx, user_intro
     from .thought import _render_stances, _write_section
     now = now if now is not None else time.time()
     manifest = ctx.ContextManifest()
@@ -153,7 +153,8 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         from .discovery_memory import source_history_block
         window = ctx.complete_round_suffix(raw_rows, cfg.context.recent_turns)
         restored, source_exclusions = store.source_history_projection(
-            window, scope=source_scope, known_ids=[p["id"] for p in source_packets])
+            window, scope=source_scope, known_ids=[p["id"] for p in source_packets],
+            current_user_text=current_user_text)
         source_turns = [{"turn_id": tid, "packet_ids": entry["packet_ids"]}
                         for tid, entry in sorted(restored.items())]
         continuation_ids = list(dict.fromkeys(pid for row in source_turns for pid in row["packet_ids"]))
@@ -184,6 +185,10 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         manifest.add("stable", "constitution+persona+memory-area", system_prompt)
     messages = [{"role": "system", "content": system_prompt}]
     material_tokens = ctx.estimate_tokens(system_prompt) + window_continuation_tokens + compact_material_tokens
+    introduction = user_intro.model_text(store) if source_scope == "gui" else ""
+    if introduction:
+        material_tokens += ctx.estimate_tokens(introduction)
+        messages.append({"role": "user", "content": introduction})
     if memory_session is not None:
         block = memory_session.initial()
         material_tokens += ctx.estimate_tokens(block)
@@ -299,7 +304,7 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
         manifest.add("stable", "constitution+persona+memory-area", system_prompt)
     for m in deduped:
         kind = "index" if m["content"].startswith("本轮本机记忆资料") else "background"
-        manifest.add(kind, "material", m["content"])
+        manifest.add(kind, "user_introduction" if m["content"] == introduction else "material", m["content"])
     if continuation_block:
         manifest.add("background", "source_continuation", continuation_block)
     if compact_block:

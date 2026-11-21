@@ -17,7 +17,7 @@
       <button id="thought-wake" class="btn ghost" type="button">切换状态</button>
       <button id="thought-rest" class="btn ghost" type="button" hidden>让她休息一会儿</button>
     </div>
-    <p class="settings-hint">清醒时选择兴趣探索、问题思考或自我迭代；睡眠时待机，仍回应你的消息和任务。服务关闭后不运行。</p>
+    <p class="settings-hint">清醒时可探索、思考、自我迭代或主动交流；睡眠时待机，仍回应你的消息和任务。</p>
     <details class="settings-group settings-inline-details" open><summary>探索与联系设置</summary><form id="thought-config">
       <fieldset class="settings-fieldset"><legend>自主探索</legend>
       <label>运行状态<select name="wake_state"><option value="sleeping">睡眠 · 待机</option><option value="awake">清醒 · 空闲时自主活动</option></select></label>
@@ -34,11 +34,12 @@
         <label>清醒开始时间（北京时间）<input name="window_start" type="time" required></label>
         <label>清醒结束时间（北京时间）<input name="window_end" type="time" required></label>
       </div></details>
-      <details class="settings-help settings-inline-details"><summary>三种活动的时长与工具权限</summary><p class="settings-hint">时长为单段上限，0暂停该模式；实际还受单轮时间与共享额度限制。模式倾向由内容和执行历史形成。</p><div id="thought-activities"></div></details>
+      <details class="settings-help settings-inline-details"><summary>活动时长与工具权限</summary><p class="settings-hint">时长为单段上限，0暂停该模式；实际还受单轮时间与共享额度限制。模式倾向由内容和执行历史形成。</p><div id="thought-activities"></div></details>
       </fieldset>
       <fieldset class="settings-fieldset"><legend>主动联系</legend>
       <label><input name="proactive_enabled" type="checkbox">允许主动联系</label>
       <label>联系方式<select name="delivery"><option value="next_chat">下次聊天时按需要提起</option><option value="gui">主动写入站内聊天</option></select></label>
+      <p class="settings-hint">主动交流模式需要允许主动联系并选择站内聊天。Alice 先问你是否方便，你接受后再聊具体话题。</p>
       <p class="settings-hint">站内主动消息由服务运行时写入聊天历史；页面打开时自动同步。当前不向 QQ 或关闭页面后的系统通知推送。下次聊天模式由 Alice 结合你当时的话决定是否采用。</p>
       <div class="thought-actions"><label><input name="progress" type="checkbox">进展反馈</label><label><input name="request" type="checkbox">必要询问</label><label><input name="share" type="checkbox">兴趣分享</label></div>
       <details class="settings-help settings-inline-details"><summary>联系次数与时段</summary><div class="thought-fields">
@@ -59,7 +60,7 @@
       <div class="thought-actions settings-actions"><button id="thought-discard" class="link" type="button">放弃设置草稿并重新读取</button><button class="btn primary" type="submit">保存设置</button></div>
     </form></details>
     <h3>未解决的疑问</h3><form id="thought-record" class="settings-group"><label for="thought-question">留下一个想继续研究的问题</label><textarea id="thought-question" maxlength="300" required></textarea><div class="settings-actions"><button class="btn ghost" type="submit">收纳疑问</button></div></form>
-    <div class="thought-actions"><button id="thought-run" class="btn ghost" type="button">现在探索一轮（调用模型）</button><button id="thought-stop" class="link" type="button">暂停当前探索</button></div>
+    <div class="thought-actions"><button id="thought-run" class="btn ghost" type="button">运行一轮自主活动（调用模型）</button><button id="thought-stop" class="link" type="button">暂停当前活动</button></div>
     <div id="thought-questions"></div><details><summary>已解决与关闭的问题</summary><div id="thought-closed"></div></details>
     <h3>已采纳的思辨</h3><p class="settings-hint">这是当前看法，不表示所有主张已经独立验证。点击查看依据与未知。</p><div id="thought-stances"></div>
     <details><summary>最近探索</summary><div id="thought-runs"></div></details>
@@ -67,8 +68,9 @@
     <details><summary>旧版主动交流记录</summary><div id="thought-contacts"></div></details>
     <details id="thought-detail"><summary>所选记录详情</summary><pre id="thought-detail-body"></pre></details>`;
   const el = (id) => document.getElementById(id);
-  const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代"};
+  const modes = {interest:"兴趣探索", problem:"问题思考", iteration:"自我迭代", contact:"主动交流"};
   const groups = {memory:"记忆读取", history:"历史读取", persona:"人格材料读取", sources:"来源资料读取", search:"外部搜索"};
+  const groupsFor = (mode) => mode === "contact" ? ["memory", "history"] : Object.keys(groups);
   for (const [mode, title] of Object.entries(modes)) {
     const fieldset = document.createElement("fieldset");
     const legend = document.createElement("legend"); legend.textContent = title; fieldset.appendChild(legend);
@@ -76,9 +78,9 @@
     const seconds = document.createElement("input"); seconds.name = `activity-${mode}-seconds`; seconds.type = "number"; seconds.min = "0"; seconds.max = "86400"; seconds.required = true;
     time.appendChild(seconds); fieldset.appendChild(time);
     const tools = document.createElement("div"); tools.className = "thought-actions";
-    for (const [group, label] of Object.entries(groups)) {
+    for (const group of groupsFor(mode)) {
       const wrapper = document.createElement("label"), input = document.createElement("input");
-      input.type = "checkbox"; input.name = `activity-${mode}-${group}`; wrapper.append(input, document.createTextNode(label)); tools.appendChild(wrapper);
+      input.type = "checkbox"; input.name = `activity-${mode}-${group}`; wrapper.append(input, document.createTextNode(groups[group])); tools.appendChild(wrapper);
     }
     fieldset.appendChild(tools); el("thought-activities").appendChild(fieldset);
   }
@@ -89,6 +91,8 @@
   const communicationOutcomes = {no_contact:"本窗口不发起联系", intent_recorded:"意图已保留，待后续重新判断", invitation_prepared:"已准备简短邀请", delivery_blocked:"意图已保留，当前投递受阻", not_evaluated:"没有收到交流决定"};
   const contactBlockers = {waiting_user_availability:"等待用户恢复方便，先做其他事", topic_waiting_user:"本话题等待相关回应或约定", master_disabled:"总开关关闭", not_awake:"当前待机", contact_permission_disabled:"未开放主动邀请", resting:"发呆休息中", awaiting_reply:"已有邀请等待回应", source_changed:"内容或来源已变化", outside_contact_window:"联系时段外", motive_disabled:"此类邀请未开放", retry_not_due:"尚未到再邀时间", contact_capacity:"联系次数或冷却限制"};
   const blockerText = (items) => (items || []).map((key) => contactBlockers[key] || key).join("、");
+  Object.assign(reasons, {contact_evaluated:"已完成交流判断", contact_context_reviewed:"已判断本批材料适不适合主动交流"});
+  Object.assign(contactBlockers, {contact_delivery_mode:"需要选择站内主动消息", mode_disabled:"主动交流模式已暂停"});
   const form = el("thought-config");
   form.addEventListener("input", () => { dirty = true; });
   function status(message, error = false) {
@@ -162,7 +166,7 @@
       for (const [mode, value] of Object.entries(next.settings.activities || {})) {
         const secondsField = form.elements.namedItem(`activity-${mode}-seconds`);
         if (secondsField) secondsField.value = value.seconds;
-        for (const group of Object.keys(groups)) form.elements.namedItem(`activity-${mode}-${group}`).checked = value.tools.includes(group);
+        for (const group of groupsFor(mode)) form.elements.namedItem(`activity-${mode}-${group}`).checked = value.tools.includes(group);
       }
     }
     const awake = next.lifecycle?.effective === "awake";
@@ -192,7 +196,7 @@
     for (const run of next.runs.filter((item) => item.activity?.activity !== "idle").slice(0,6)) {
       const plan = run.activity_plan?.detail_state === "loaded" ? run.activity_plan : null;
       const item = card(`${modes[run.activity?.activity] || "探索"} · ${labels[run.status] || run.status}`,
-        plan?.result?.change || plan?.object || reasons[run.reason] || "");
+        plan?.result?.change || plan?.object || reasons[run.reason] || contactBlockers[run.reason] || "");
       if (run.status === "paused") item.appendChild(button("继续", () => act("resume", {run_id:run.id})));
       el("thought-runs").appendChild(item);
     }
@@ -238,7 +242,7 @@
     event.preventDefault(); if (!snapshot) return;
     const settings = {};
     for (const field of form.elements) if (field.name && !field.name.startsWith("activity-")) settings[field.name] = field.type === "checkbox" ? field.checked : field.type === "number" ? Number(field.value) : field.value;
-    settings.activities = Object.fromEntries(Object.keys(modes).map((mode) => [mode, {seconds: form.elements.namedItem(`activity-${mode}-seconds`) ? Number(form.elements.namedItem(`activity-${mode}-seconds`).value) : snapshot.settings.activities[mode].seconds, tools:Object.keys(groups).filter((group) => form.elements.namedItem(`activity-${mode}-${group}`).checked)}]));
+    settings.activities = Object.fromEntries(Object.keys(modes).map((mode) => [mode, {seconds: form.elements.namedItem(`activity-${mode}-seconds`) ? Number(form.elements.namedItem(`activity-${mode}-seconds`).value) : snapshot.settings.activities[mode].seconds, tools:groupsFor(mode).filter((group) => form.elements.namedItem(`activity-${mode}-${group}`).checked)}]));
     act("settings", {revision:draftRevision, settings});
   };
   el("thought-record").onsubmit = (event) => { event.preventDefault(); act("record", {question:el("thought-question").value}); };
@@ -258,9 +262,7 @@
   const modal = el("settings-modal");
   function syncVisibility() {
     const modalHidden = modal.classList.contains("hidden");
-    const next = panel.closest("#orbit-page-thoughts")
-      ? document.body.dataset.orbitPage === "thoughts" && modalHidden
-      : !modalHidden && !panel.classList.contains("hidden");
+    const next = !modalHidden && !panel.classList.contains("hidden");
     if (next === visible) return;
     visible = next;
     if (visible) refresh();
@@ -268,7 +270,6 @@
   const visibilityObserver = new MutationObserver(syncVisibility);
   visibilityObserver.observe(modal, {attributes:true,attributeFilter:["class"]});
   visibilityObserver.observe(panel, {attributes:true,attributeFilter:["class"]});
-  visibilityObserver.observe(document.body, {attributes:true,attributeFilter:["data-orbit-page"]});
   syncVisibility();
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
   window.addEventListener("pagehide", () => clearInterval(timer));

@@ -274,7 +274,7 @@
 
   /* ---------- 五、页面路由与切页五连（04a §1） ---------- */
 
-  const PAGE_KEYS = ["chat", "discovery", "thoughts", "settings"];
+  const PAGE_KEYS = ["chat", "discovery", "settings"];
   const pages = {};            // key → 容器元素（install 时填充）
   const pageHooks = [];        // 页级副作用（如 P4 球面引擎的启停）：切页时按最终页名回调
   let currentPage = "chat";
@@ -305,8 +305,47 @@
     el.classList.remove("is-leaving");
   }
 
+  /* ---- 子页覆盖的进出场（与 writePage 同一套原语）----
+     进入子页 = 当前页 freeze 成 fixed 盒子淡出 125ms（is-leaving）后隐藏，
+               子页以 orbit-page-in 240ms 上浮淡入 —— 与独立页之间的切换完全一致。
+     退出/切页时 uncover 还原，当前页重播 is-entering。 */
+  let coverToken = 0;
+  function coverUnderlyingPage() {
+    const el = pages[currentPage];
+    if (!el || el.style.visibility === "hidden") return;   // 已被子页覆盖：子页间切换不重复退场
+    const reduce = root.dataset.motion !== "on" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) { el.style.visibility = "hidden"; return; }
+    const token = ++coverToken;
+    freezePage(el);                           // 先量 rect 再冻结：子页尚未显示，布局未变
+    el.classList.add("is-leaving");           // orbit-page-out 125ms 淡出（与页切换同一支）
+    later(() => {
+      if (token !== coverToken) return;       // 期间已 uncover：过期计时器不得再动 DOM
+      unfreezePage(el);
+      el.style.visibility = "hidden";
+    }, 140);
+  }
+  function uncoverPages() {
+    coverToken++;
+    for (const key of PAGE_KEYS) {
+      const el = pages[key];
+      if (!el) continue;
+      unfreezePage(el);
+      if (el.style.visibility) el.style.visibility = "";
+    }
+  }
+  // 切页时若子页还开着：先关掉（且不回 hub），让目标页正常接管
+  function closeSubpageForRoute() {
+    const modal = $("settings-modal");
+    if (modal && modal.classList.contains("orbit-page-mode") && !modal.classList.contains("hidden")) {
+      suppressReturnOnClose = true;
+      window.AliceUI?.closeSettings();
+    }
+  }
+
   function writePage(name) {
     if (document.body.dataset.orbitPage === name) return;
+    closeSubpageForRoute();
+    uncoverPages();
     cancelPageEntry?.();
     cancelPageEntry = null;
     document.body.dataset.orbitPage = name;
@@ -357,6 +396,8 @@
     }
     if (window.OrbitBG && typeof window.OrbitBG.setPage === "function") window.OrbitBG.setPage(name);
     window.OrbitBG?.setFocus?.(name);
+    // 分区导航条当前项（discovery 独立页与子页互通）
+    if (name === "discovery") markSectionNav(name);
     for (const hook of pageHooks) hook();
     if (name === "discovery") window.AliceDiscovery?.open?.(false);
     else if (!leaving.some(([key]) => key === "discovery")) window.AliceDiscovery?.close(false);
@@ -580,9 +621,221 @@
 
   function returnToSettings() {
     route("settings");
+    const modal = $("settings-modal");
+    if (modal) {
+      modal.classList.remove("orbit-page-mode");   // 回 hub 时收起 page 形态
+      const title = modal.querySelector("#settings-title");
+      if (title) title.textContent = "设置";
+    }
     if (!pages.settings.contains(document.activeElement) && !dock.contains(document.activeElement)) {
       (dockTucked ? dockToggle : dockIcons.primary.settings)?.focus({ preventScroll: true });
     }
+  }
+
+  /* ---- 子页导航条：把设置各分区提升为「独立页」呈现（统一页转场） ----
+     从 hub 点进任意分区 → 打开全屏子页 + 顶部导航条；导航条可在各子页间互通。
+     thoughts/discovery 已有独立页走 route；其余复用 settings-modal 但以 page 形态呈现。
+     不搬移任何 section DOM、不碰各模块 setVisible 契约。 */
+  const SECTION_NAV = [
+    ["general", "对话与模型"], ["appearance", "外观"], ["discovery", "联网搜索"],
+    ["observer", "外部观察"], ["qq", "QQ 连接"], ["workers", "DSH 授权"],
+    ["claude", "Claude 授权"], ["thoughts", "思想与探索"],
+  ];
+  let sectionNavEls = [];              // 所有已插入的分区导航条实例（modal / P2 / P3 各一条）
+  let suppressReturnOnClose = false;   // 从子页跳到 thoughts/discovery 时，关 modal 不回 hub
+  let suppressRoute = false;           // openSectionPage 内部调原生 openSettings 时放行，防递归
+  let currentSubKey = "general";       // 划页手势：当前子页分区（openSectionPage 写入）
+  let subpageSwipeReset = null;        // 划页手势的中止入口（modal 被外部关闭时清中间态）
+
+  function createSectionNav() {
+    const nav = document.createElement("nav");
+    nav.className = "orbit-section-nav";
+    nav.setAttribute("aria-label", "设置分区导航");
+    for (const [key, label] of SECTION_NAV) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label; b.dataset.section = key;
+      wire(b, "click", () => openSectionPage(key));
+      nav.appendChild(b);
+    }
+    return nav;
+  }
+
+  function registerNav(nav) {
+    sectionNavEls.push(nav);
+    undos.push(() => { nav.remove(); sectionNavEls = sectionNavEls.filter((n) => n !== nav); });
+  }
+
+  // 设置 modal 的导航条：懒插入（首进 page 形态时），置于窗头之下
+  function ensureModalNav() {
+    const modal = $("settings-modal");
+    if (!modal || modal.querySelector(".modal-card > .orbit-section-nav")) return;
+    const nav = createSectionNav();
+    const head = modal.querySelector(".modal-card > .modal-head");
+    const card = modal.querySelector(".modal-card");
+    if (head) head.after(nav); else card.prepend(nav);
+    registerNav(nav);
+  }
+
+  function markSectionNav(key) {
+    for (const nav of sectionNavEls) {
+      nav.querySelectorAll("button").forEach((b) => {
+        if (b.dataset.section === key) b.setAttribute("aria-current", "page");
+        else b.removeAttribute("aria-current");
+      });
+    }
+    // 不用 scrollIntoView：它会滚动最近的滚动祖先（#app/body），把对话页内容滚出视口。
+  }
+
+  function replayPageEntry(el) {
+    if (!el) return;
+    // 减动效/动效关不在此门控：与独立页一致，交给 CSS 降级为 orbit-fade-in 125ms
+    el.classList.remove("is-entering");
+    void el.offsetWidth;                       // 强制 reflow 让动画重播
+    el.classList.add("is-entering");
+    later(() => el.classList.remove("is-entering"), 400);
+  }
+
+  function openSectionPage(key, { replay = true } = {}) {
+    ensureModalNav();
+    const modal = $("settings-modal");
+    if (!modal || !window.AliceUI) return;
+    coverUnderlyingPage();                     // 当前页走与页切换相同的 125ms 退场，再让子页入场
+    // 镜头随子页退出 P4 特写：与「设置 → 思想与探索」一致，神经球/房间从 1.32 倍平滑退回常态。
+    // （writePage 里的 setFocus 只在切页时触发，子页是覆盖层不经过它，必须在这里补。）
+    window.OrbitBG?.setFocus?.("settings-sub");
+    modal.classList.add("orbit-page-mode");    // CSS：独立页视觉（与 P3 同配方）+ orbit-page-in 转场
+    currentSubKey = key;                       // 划页手势读当前分区序号用
+    // 页头标题跟随分区，读作独立页（如「QQ 连接」），回 hub 时由 returnToSettings 还原
+    const label = SECTION_NAV.find(([k]) => k === key)?.[1];
+    const title = modal.querySelector("#settings-title");
+    if (title && label) title.textContent = label;
+    suppressRoute = true;                      // 原生 openSettings 内部不再路由回这里
+    try { window.AliceUI.openSettings(key); }
+    finally { suppressRoute = false; }
+    markSectionNav(key);                       // modal 已可见时 spy 不触发，这里显式标记
+    if (replay) replayPageEntry(modal);        // 划页提交时改用 3D 翻页入场，不叠加这支
+  }
+
+  /* ---- 子页 3D 左右划切换（2026-11-20 用户需求）----
+     设置子页以 3D 透视呈现；按住横向拖 = 跟手 1:1（TRACK，无任何过渡），
+     松手按距离（>90px）或速度（>0.55px/ms）决定翻页或快速弹回（RELEASE，过渡接管），
+     首尾分区橡皮筋；入场飞行途中可被接住继续拖。切换走 openSectionPage(replay:false)，
+     与导航条/dock 共用一套分区状态。 */
+  function installSubpageSwipe() {
+    const modal = $("settings-modal");
+    const card = modal?.querySelector(".modal-card");
+    if (!modal || !card) return;
+    const reduce = () => root.dataset.motion !== "on" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // phase：null=静止，"out"=飞出相（不可接），"in"=入场相（可按下结算后续划）
+    const sw = { down: false, locked: false, phase: null, pid: 0, x0: 0, y0: 0, vx: 0, lastX: 0, lastT: 0, dragged: false };
+
+    const idxNow = () => SECTION_NAV.findIndex(([k]) => k === currentSubKey);
+    // orbit-ring-live：环已接管横向手势（orbit-ring.js 装环时标记）——划页让位，避免整卡拖拽与环旋转打架
+    const active = () => modal.classList.contains("orbit-page-mode") && !modal.classList.contains("hidden")
+      && !modal.classList.contains("orbit-ring-live");
+
+    // TRACK：1:1 透视姿态。左拖 = 左缘压进屏幕深处（rotateY 负）；边界橡皮筋 0.18。
+    const trackPose = (d) => {
+      const i = idxNow();
+      const edge = (i <= 0 && d > 0) || (i >= SECTION_NAV.length - 1 && d < 0);
+      const dd = edge ? d * 0.18 : d;
+      const k = Math.min(Math.abs(dd), 300) / 300;        // 深度随距离缓增、封顶
+      card.style.transform =
+        `translateX(${(dd * 0.42).toFixed(1)}px) rotateY(${(dd * 0.05 * (1 - k * 0.35)).toFixed(2)}deg) scale(${(1 - k * 0.03).toFixed(3)})`;
+    };
+    const clearTransform = () => {
+      card.classList.remove("orbit-swiping");
+      card.style.transition = ""; card.style.transform = ""; card.style.opacity = "";
+    };
+    subpageSwipeReset = () => { sw.down = false; sw.locked = false; sw.phase = null; clearTransform(); };
+    undos.push(() => { subpageSwipeReset = null; });
+
+    // RELEASE·翻页提交：当前页 3D 飞出 → 内容瞬换并落到对侧入场姿态 → 过渡回正位
+    const commit = (dir) => {                  // dir=1 下一页（左划），dir=-1 上一页
+      sw.phase = "out"; sw.locked = false;
+      const nextKey = SECTION_NAV[idxNow() + dir]?.[0];
+      card.classList.remove("orbit-swiping");
+      const dur = reduce() ? 110 : 200;
+      const fly = dir === 1 ? "translateX(-55%) rotateY(-32deg)" : "translateX(55%) rotateY(32deg)";
+      const enter = dir === 1 ? "translateX(55%) rotateY(32deg)" : "translateX(-55%) rotateY(-32deg)";
+      card.style.transition = `transform ${dur}ms cubic-bezier(.45,.1,.55,1), opacity ${dur}ms ease`;
+      card.style.transform = fly; card.style.opacity = "0";
+      later(() => {
+        if (!nextKey || !active()) { clearTransform(); sw.phase = null; return; }
+        // 瞬换：内容已换、姿态直接落到对侧（无过渡），再整页转正
+        card.classList.add("orbit-swiping");   // transition:none
+        sw.phase = "in";                       // 入场相：可被新按下结算（支持快速连划）
+        openSectionPage(nextKey, { replay: false });
+        card.style.transform = enter; card.style.opacity = "0";
+        void card.offsetWidth;
+        card.classList.remove("orbit-swiping");
+        const durIn = reduce() ? 110 : 260;
+        card.style.transition = `transform ${durIn}ms cubic-bezier(.2,.7,.2,1), opacity ${durIn}ms ease`;
+        card.style.transform = ""; card.style.opacity = "";
+        later(() => { card.style.transition = ""; sw.phase = null; }, durIn + 60);
+      }, dur + 10);
+    };
+    // RELEASE·弹回：快（160ms），不带弹跳——按钮关页没有力，就不该有 bounce
+    const snapBack = () => {
+      card.classList.remove("orbit-swiping");
+      card.style.transition = "transform 160ms cubic-bezier(.2,.7,.2,1), opacity 120ms ease";
+      card.style.transform = ""; card.style.opacity = "";
+      later(() => { card.style.transition = ""; }, 200);
+    };
+    const guardClick = (e) => { e.stopPropagation(); e.preventDefault(); };  // 拖过就吃掉误点
+
+    wire(card, "pointerdown", (e) => {
+      if (!active() || e.button > 0) return;
+      if (sw.phase === "out") return;          // 飞出相（≈200ms）不可接
+      // 入场相被再次按下：立即结算到正位，从这里接新一划——快速连划不丢手势
+      if (sw.phase === "in" || card.style.transform) {
+        card.classList.remove("orbit-swiping");
+        card.style.transition = "none";
+        card.style.transform = ""; card.style.opacity = "";
+        void card.offsetWidth;
+        card.style.transition = "";
+        sw.phase = null;
+      }
+      if (e.target.closest("input, textarea, select, option, summary, [contenteditable], .orbit-hub-item")) return;
+      sw.locked = false;
+      sw.down = true; sw.pid = e.pointerId; sw.x0 = e.clientX; sw.y0 = e.clientY;
+      sw.vx = 0; sw.lastX = e.clientX; sw.lastT = performance.now(); sw.dragged = false;
+    });
+    wire(card, "pointermove", (e) => {
+      if (!sw.down || e.pointerId !== sw.pid) return;
+      const dx = e.clientX - sw.x0, dy = e.clientY - sw.y0;
+      if (!sw.locked) {
+        if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.3) return;   // 等横向意图确认
+        if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { sw.down = false; return; }  // 纵向滚动
+        sw.locked = true; sw.dragged = true;
+        card.classList.add("orbit-swiping");   // 关过渡 + 禁选择（跟手必须零延迟）
+        try { card.setPointerCapture(sw.pid); } catch { /* 指针已不在 */ }
+      }
+      // 速度只在 ≥8ms 窗口采样：亚毫秒窗口会把抖动放大成几百 px/ms，轻拖误判成甩
+      const t = performance.now();
+      if (t - sw.lastT >= 8) { sw.vx = (e.clientX - sw.lastX) / (t - sw.lastT); sw.lastT = t; sw.lastX = e.clientX; }
+      trackPose(dx);
+    });
+    const release = (e) => {
+      if (!sw.down || e.pointerId !== sw.pid) return;
+      sw.down = false;
+      if (!sw.locked) return;                  // 未锁横向：是普通点击，放行
+      const dx = e.clientX - sw.x0;
+      const dir = dx < 0 ? 1 : -1;
+      const i = idxNow();
+      const target = i + dir;
+      const go = Math.abs(dx) > 90 || Math.abs(sw.vx) > 0.55;
+      sw.locked = false;
+      card.addEventListener("click", guardClick, { capture: true, once: true });
+      later(() => card.removeEventListener("click", guardClick, true), 50);
+      if (go && target >= 0 && target < SECTION_NAV.length) commit(dir);
+      else snapBack();                         // 未过阈值或越界方向：弹回
+    };
+    wire(card, "pointerup", release);
+    wire(card, "pointercancel", (e) => {
+      if (sw.down && sw.locked) { sw.down = false; sw.locked = false; snapBack(); }
+      else sw.down = false;
+    });
   }
 
   function installSettingsRoutes() {
@@ -592,22 +845,11 @@
     let modalVisible = !modal.classList.contains("hidden");
     let returnOnClose = true;
 
-    function showThoughts() {
-      if (!modal.classList.contains("hidden")) {
-        returnOnClose = false;
-        ui.closeSettings();
-      }
-      route("thoughts");
-      later(() => {
-        if (document.body.dataset.orbitPage === "thoughts" && modal.classList.contains("hidden")) {
-          $("thought-title")?.focus({ preventScroll: true });
-        }
-      }, 0);
-    }
-
     function handleRoute(section) {
-      if (section !== "thoughts") return false;
-      showThoughts();
+      if (suppressRoute) return false;         // openSectionPage 内部的原生调用，放行
+      // 统一页形态：任何入口（dock、旧导航、welcome、功能事件）打开设置分区
+      // 都走 openSectionPage —— 与 hub 徽章同一条 page 视觉 + 导航条 + 转场。
+      openSectionPage(section);
       return true;
     }
     if (ui.registerSettingsRoute) {
@@ -621,14 +863,23 @@
     }
     spy(modal, { attributes: true, attributeFilter: ["class"] }, () => {
       const visible = !modal.classList.contains("hidden");
-      if (modalVisible && !visible && returnOnClose) returnToSettings();
+      // 不在这里改 modal.class——spy 监听的正是 class，改它会再触发一轮回调，
+      // 与 hidden/returnOnClose 状态机交错，是「关不掉」的元凶。page-mode 类留着无害。
+      if (modalVisible && !visible && returnOnClose && !suppressReturnOnClose) returnToSettings();
       modalVisible = visible;
-      if (!visible) returnOnClose = true;
+      if (!visible) {
+        returnOnClose = true; suppressReturnOnClose = false;
+        subpageSwipeReset?.();                // 中途被关（Esc/切页）：清掉划页的中间态
+        // 子页退出：底层页恢复可见；若本次关闭没有伴随切页（回 hub 同名早退），
+        // 给当前页补播一次 is-entering，与独立页返回的入场节奏一致。
+        uncoverPages();
+        // 镜头还给当前页（回 hub = 1.32 倍特写；回对话/探索 = 常态）。伴随切页时 writePage
+        // 已设过同值，这里幂等；同名早退（回 hub）时 writePage 不触发，必须在这里补。
+        window.OrbitBG?.setFocus?.(currentPage);
+        const el = pages[currentPage];
+        if (el && !el.hidden && !el.classList.contains("is-entering")) replayPageEntry(el);
+      }
     });
-    if (modal.querySelector('[data-settings="thoughts"][aria-pressed="true"]')) {
-      ui.selectSettings("general");
-      if (modalVisible) showThoughts();
-    }
   }
 
   /* ---------- 十一、页面骨架与搬移（结构壳：02a/02b/02c） ---------- */
@@ -653,6 +904,8 @@
     p2.setAttribute("data-density", "wide");
     app.insertBefore(p2, app.querySelector(".terminal-foot") || null);
     undos.push(() => p2.remove());
+    // 分区导航条（页级跨子页跳转）：内容发现页顶部也挂同一条，可直达其余设置子页
+    registerNav(p2.appendChild(createSectionNav()));
     // 05 轮次 12 追记：P2 ×（discovery.js goChat 会切回房间视图并聚焦输入框）——orbit 下
     // 捕获段拦截改道，关闭必回设置页；其余按钮（含 #discovery-go-chat「回到对话」）不受影响
     wire(p2, "click", (event) => {
@@ -685,63 +938,10 @@
     }
     pages.discovery = p2;
 
-    // P3：#orbit-page-thoughts；#thought-settings 整容器搬入 + 双列/抽屉栈（02b）
-    const thought = $("thought-settings");
-    const p3 = document.createElement("section");
-    p3.id = "orbit-page-thoughts";
-    p3.className = "orbit-page";
-    p3.setAttribute("data-density", "wide");
-    app.insertBefore(p3, app.querySelector(".terminal-foot") || null);
-    undos.push(() => p3.remove());
-    if (thought) {
-      moveNode(thought, p3);
-      thought.classList.remove("hidden");
-      undos.push(() => thought.classList.add("hidden"));
-      const thoughtHead = thought.querySelector(".thought-head");
-      subClass(thoughtHead, "orbit-page-head");
-      subClass($("thought-lifecycle"), "orbit-state-chip");
-      const actions = document.createElement("div");
-      actions.className = "thought-actions";
-      thoughtHead.appendChild(actions);
-      undos.push(() => actions.remove());
-      moveNode($("thought-refresh"), actions);
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "orbit-page-close";
-      close.setAttribute("aria-label", "关闭思想与探索页，回到设置");
-      close.setAttribute("data-tip", "关闭");
-      close.appendChild(svg("x"));
-      actions.appendChild(close);
-      wire(close, "click", returnToSettings);
-
-      const policy = $("thought-config").closest("details");
-      const records = [];
-      for (let node = policy.nextElementSibling; node; node = node.nextElementSibling) {
-        records.push(node);
-      }
-      const body = document.createElement("div");
-      body.className = "orbit-body";
-      const mainCol = document.createElement("div");
-      mainCol.className = "orbit-thought-column";
-      const side = document.createElement("div");
-      side.className = "orbit-thought-column";
-      const history = document.createElement("details");
-      history.className = "settings-group";
-      const summary = document.createElement("summary");
-      summary.textContent = "探索与联系记录";
-      history.appendChild(summary);
-      side.appendChild(history);
-      body.append(mainCol, side);
-      thought.appendChild(body);
-      undos.push(() => body.remove());
-      moveNode(policy, side, history);
-      for (const node of records) {
-        moveNode(node, node.matches("details:not(#thought-detail)") ? history : mainCol);
-      }
-    }
-    pages.thoughts = p3;
-
     // P4：#orbit-page-settings hub（02c §一：新建，无现有节点搬入）
+    // （2026-11-21 用户裁定：思想与探索不再是独立页——#thought-settings 留在
+    //   settings-body，与其他分区同样经 openSectionPage/全息环打开，P3 页与
+    //   route("thoughts") 整链退役。）
     const p4 = document.createElement("section");
     p4.id = "orbit-page-settings";
     p4.className = "orbit-page";
@@ -767,6 +967,7 @@
       ["qq", "QQ 连接", "qq"],
       ["workers", "DSH 授权", "dsh"],
       ["claude", "Claude 授权", "claude"],
+      ["thoughts", "思想与探索", "stars"],
     ];
     for (const [key, name, icon] of HUB) {
       const b = document.createElement("button");
@@ -777,26 +978,16 @@
       const strong = document.createElement("strong");
       strong.textContent = name;
       b.append(s, strong);
-      wire(b, "click", () => window.AliceUI?.openSettings(key));
+      wire(b, "click", () => openSectionPage(key));
       grid.appendChild(b);
     }
-    // 跨页跳转行（裁定②）：不带 data-settings，走 orbit 路由
-    const jump = document.createElement("button");
-    jump.type = "button";
-    jump.className = "orbit-hub-item";
-    jump.setAttribute("data-jump", "");
-    jump.setAttribute("data-tip", "打开思想与探索");
-    const js = svg("stars");
-    const jn = document.createElement("strong");
-    jn.textContent = "去思想与探索";
-    jump.append(js, jn);
-    wire(jump, "click", () => route("thoughts"));
-    grid.appendChild(jump);
+
     // 三站 dock 以设置页访问内容发现与人格。
     const EXTRA = [
-      ["内容发现", "search", () => route("discovery")],
+      ["内容发现", "search", () => openSectionPage("discovery")],   // 2026-11-21：与其他分区统一，开环不再跳独立页
       ["人格", "diamond", () => { const t = $("persona-btn"); if (t) t.click(); }],
     ];
+    window.OrbitRoute = route;               // 环内深链接（如发现屏 → P2 完整页）复用同一路由
     for (const [name, icon, onOpen] of EXTRA) {
       const b = document.createElement("button");
       b.type = "button";
@@ -1006,20 +1197,9 @@
     if (soothe) { subText(soothe, "记忆已保存，下次继续。"); subAttr(soothe, "title", "对话、人格与记忆都在本机"); }
     const restart = $("restart-instructions");
     if (restart) subText(restart.querySelector(":scope > summary"), "重启命令");
-    // OB1（02b 还原表 #12）：45 字 hint 替身；原句全文入悬停（title 先于正文改写登记）
-    const ob1hint = document.querySelector("#onboarding .onboarding-card .hint");
-    if (ob1hint) {
-      const original = ob1hint.textContent.trim();
-      subAttr(ob1hint, "title", original);
-      subText(ob1hint, "Alice 需要模型。选择供应商，填入 API Key。");
-    }
     // OB2（02b §五.0 全部运行时适配）
     const tools = document.querySelector(".welcome-tools");
     if (tools) subStyle(tools, "display:none"); // 裁定①：orbit 域隐藏不删除
-    const back = $("onboarding-back");
-    if (back) { subText(back, "←"); subAttr(back, "title", "返回模型配置"); subAttr(back, "aria-label", "返回模型配置"); }
-    const doneStep = document.querySelector("#welcome .onboarding-steps li:first-child");
-    if (doneStep) { subText(doneStep, "✓"); subAttr(doneStep, "title", "模型 API 已配置"); subAttr(doneStep, "aria-label", "模型 API 已配置"); }
     const tagsHint = document.querySelector("#tab-tags .hint");
     if (tagsHint) {
       subText(tagsHint, "选 2~4 个气质标签当底色。");
@@ -1079,6 +1259,7 @@
     installTip();
     installPages();
     installSettingsRoutes();
+    installSubpageSwipe();
     applyTextRewrites();
     installPanelLayout();
     installMirrors();

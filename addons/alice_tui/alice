@@ -1,0 +1,26 @@
+#!/bin/sh
+# Alice 命令行入口（Claude Code 式体验）：
+#   alice            → 打开终端客户端（TUI），连接正在运行的 Alice 服务
+#   alice tui        → 同上（显式）
+#   alice <子命令>…  → 走服务端 CLI（serve / memory / recall / consolidate / …）
+# 本脚本为仓库正本；~/.local/bin/alice 是指向它的符号链接。
+set -e
+SELF="$0"
+if [ -L "$SELF" ]; then
+    SELF="$(readlink -f "$SELF" 2>/dev/null || echo "$SELF")"
+fi
+ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY=python3
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+cmd="$1"
+case "$cmd" in
+    ""|tui|chat)
+        [ $# -gt 0 ] && shift
+        exec "$PY" "$ROOT/addons/alice_tui" "$@"
+        ;;
+    *)
+        exec "$PY" -m alice "$@"
+        ;;
+esac

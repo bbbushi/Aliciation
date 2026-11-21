@@ -159,6 +159,9 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         self.conn.executescript(MAINTENANCE_SCHEMA)
         self.conn.executescript(THOUGHT_SCHEMA)
         self.conn.executescript(AUTONOMY_V2_SCHEMA)
+        if "basis" not in {row["name"] for row in self.conn.execute("PRAGMA table_info(v2_contact_intents)")}:
+            with self.conn:
+                self.conn.execute("ALTER TABLE v2_contact_intents ADD COLUMN basis TEXT")
         self.purge_source_packets()
 
     def _migrate(self) -> None:
@@ -246,15 +249,16 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
                  source_packet_ids=(), source_scope="gui", worker_refs=()) -> int:
         # A short transaction binds the actual row ID to its request before any
         # network call or callback. No model call is inside this transaction.
+        authored = role == "user" and not worker_refs
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO turns (ts, role, content) VALUES (?, ?, ?)",
                 (ts if ts is not None else time.time(), role,
-                 WORKER_SHADOW if worker_refs else SOURCE_SHADOW if source_packet_ids else content),
+                 WORKER_SHADOW if worker_refs else SOURCE_SHADOW if source_packet_ids and not authored else content),
             )
             turn_id = cur.lastrowid
             if source_packet_ids:
-                self._source_turn_write(turn_id, content, source_packet_ids, source_scope)
+                self._source_turn_write(turn_id, "" if authored else content, source_packet_ids, source_scope)
             if worker_refs:
                 self._worker_turn_write(turn_id, content, worker_refs, source_scope)
             if request_id is not None:

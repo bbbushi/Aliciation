@@ -105,7 +105,7 @@ def save_settings(store, patch):
     for key, value in patch.items():
         default = DEFAULTS[key]
         if key == "activities":
-            value = activity.validate_activities(value)
+            value = activity.validate_activities(value, previous=result["activities"])
         elif key == "wake_state":
             if not isinstance(value, str) or value not in {"awake", "sleeping"}:
                 raise ValueError("清醒状态无效")
@@ -320,6 +320,11 @@ def expire_dependencies(store):
     """No prose copies survive a revoked/deleted dependency in these new stores."""
     epoch = store.meta_get("session_epoch") or ""
     with store.source_transaction():
+        for intent in store.conn.execute("SELECT id,basis FROM v2_contact_intents WHERE epoch=? "
+                                        "AND motive='chat' AND topic<>''", (epoch,)).fetchall():
+            if not valid_basis(store, json.loads(intent["basis"]) or {}):
+                store.conn.execute("UPDATE v2_contact_intents SET topic='',reason='',state='closed',"
+                                   "version=version+1,updated_at=? WHERE id=?", (time.time(), intent["id"]))
         for plan in store.conn.execute("SELECT run_id,basis FROM v2_activity_plans WHERE epoch=? AND object<>''",
                                        (epoch,)).fetchall():
             if not valid_basis(store, json.loads(plan['basis'])):
@@ -463,10 +468,14 @@ class ThoughtSession:
             invitations = build(store=self.store).invitations
             repo = invitations.repository
             for intent in repo.eligible_intents(Scope(session_epoch=self.epoch, channel_id="gui"), now_at=time.time()):
+                if intent.motive == "chat" and self.context.get("activity_mode") != activity.CONTACT_MODE:
+                    continue
                 current = True
                 try:
                     invitations.host.validate_intent(intent.scope, intent)
                 except ValueError:
+                    if intent.motive == "chat":
+                        continue
                     current = False
                 ref = f"intent:{intent.id}@{intent.version}"
                 self.intents[ref] = intent
@@ -596,6 +605,8 @@ class ThoughtSession:
         store, now = self.store, time.time()
         if name == 'activity_browse':
             return self._browse_activity(args)
+        if name == "contact_plan":
+            return self._plan_contact(args)
         if name == 'activity_plan':
             from .autonomy_v2.planning import ActivityPlanning
             planning = ActivityPlanning(store)
@@ -734,7 +745,7 @@ class ThoughtSession:
                         mid = int(ref.split(":", 1)[1].split("@", 1)[0])
                         accepted_basis["memories"][str(mid)] = version(store.get_memory(mid))
                         accepted_basis["packets"].extend(p["id"] for p in store.observation_sources(mid, scope="gui"))
-                self.context["thought_basis"] = merge_basis(self.context.get("thought_basis"), accepted_basis)
+                self.context["thought_basis"] = merge_basis(self.context.get("thought_basis"), accepted_basis, intent.basis)
                 self.bind_sources()
                 self.context.setdefault("invitation_expanded", []).append(attempt.id)
                 return {"status": "accepted", "attempt": ref, "expansion": body,
@@ -937,6 +948,47 @@ class ThoughtSession:
                 "resulting_status": receipt.resulting_status.value if receipt.resulting_status else None,
                 "reason": receipt.reason, "communication": communication}
 
+    def _plan_contact(self, args):
+        from .autonomy_v2 import build
+        from .autonomy_v2.models import CommunicationPlan, ContactIntent, FinishDecision, ProgressKind, ProgressReport
+
+        if self.context.get("activity_mode") != activity.CONTACT_MODE or self.context.get("user_turn_id"):
+            raise ValueError("主动交流计划只在对应自主活动内使用")
+        ctx = execution_context(self.store, self.context)
+        stack = build(store=self.store)
+        existing = stack.communication.get(ctx)
+        if existing is not None and existing["decision"] != "unknown":
+            return {"status": "finished", "communication": existing}
+        decision = args["decision"]
+        basis = current_basis(self.store, self.context)
+        intent = None
+        reason = text(args.get("purpose", ""), 240)
+        if decision == "none":
+            if set(args) != {"decision", "purpose"}:
+                raise ValueError("没有想聊的话题时，只说明不联系的原因")
+        elif decision in {"invite", "later"}:
+            why_now = text(args.get("why_now", ""), 240)
+            ref = args.get("intent_ref")
+            if ref:
+                intent = self.intents.get(ref)
+                if intent is None or "topic" in args:
+                    raise ValueError("沿用本轮可重新判断的意图时，请只引用该话题")
+            else:
+                topic = text(args.get("topic", ""), 80)
+                if len(topic.splitlines()) != 1:
+                    raise ValueError("请用一句话概括话题")
+                intent = ContactIntent(id="ci_" + uuid.uuid4().hex[:16], version=1, scope=ctx.scope,
+                    motive="chat", topic=topic, reason=reason, content_refs=(), state="active", basis=basis)
+            reason = f"{reason}。时机：{why_now}"
+        else:
+            raise ValueError("交流决定无效")
+        plan = CommunicationPlan(decision=decision, reason=reason, intent=intent,
+            invitation_text="现在方便聊两句吗？我有个话题想和你聊。" if decision == "invite" else "")
+        report = ProgressReport(decision=FinishDecision.DONE, progress_kind=ProgressKind.NONE,
+                                summary="完成本轮交流判断")
+        stack.activity_finish(ctx, None, report, communication=plan, basis=basis)
+        return {"status": "finished", "communication": stack.communication.get(ctx)}
+
     def _contact_intent(self, args, *, reason):
         from dataclasses import replace
         from .autonomy_v2.models import ContactIntent
@@ -946,6 +998,8 @@ class ThoughtSession:
         motive = args.get("motive", old.motive if old else "share")
         if old is None and "motive" not in args:
             raise ValueError("新联系意图须说明 motive：progress/request/share")
+        if old is not None and old.motive == "chat":
+            raise ValueError("日常话题请在主动交流模式中重新判断")
         if motive not in {"progress", "request", "share"}:
             raise ValueError("联系动机无效")
         topic = text(args.get("topic", old.topic if old else ""), 80)
@@ -1030,8 +1084,11 @@ class ThoughtSession:
                              context_hint=hint if isinstance(hint, str) else "")
 
 
-def tools(scope, *, free_interest=False):
+def tools(scope, *, free_interest=False, contact=False):
     if scope != "gui":
         return []
-    return [tool for tool in sdk_group("thought")
-            if free_interest or tool["function"]["name"] != "activity_browse"]
+    if contact:
+        return [tool for tool in sdk_group("thought")
+                if tool["function"]["name"] in {"contact_plan", "thought_search", "thought_load"}]
+    excluded = {"contact_plan"} if free_interest else {"contact_plan", "activity_browse"}
+    return [tool for tool in sdk_group("thought") if tool["function"]["name"] not in excluded]

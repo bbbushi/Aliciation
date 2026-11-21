@@ -46,12 +46,13 @@
 
     <section id="observe" aria-labelledby="observe-title" hidden>
       <h3 id="observe-title" class="sr-only">运行数据</h3>
+      <div id="context-host" hidden></div>
       <div id="observations"></div>
       <details id="body-controls" hidden><summary>查看已授权的记忆正文</summary>
         <form id="body-form" class="actions">
           <label>记忆 ID<input name="id" required maxlength="160"></label>
           <button>读取正文</button>
-        </form><pre id="body-result" hidden></pre>
+        </form><div id="body-result" class="io" hidden></div>
       </details>
     </section>
 
@@ -77,7 +78,7 @@
           <details><summary>记录详情与人工判级</summary><form id="p1-operation" class="actions">
             <label>操作<select name="action"><option value="detail">查看记录</option><option value="label">保存人工标签</option><option value="cancel">取消</option><option value="calibrations">一致性记录</option><option value="calibrate">确认一致性</option></select></label>
             <label>该操作的记录参数（JSON）<input name="params" value="{}" maxlength="1800"></label><button>执行</button>
-          </form></details><pre id="p1-output" hidden></pre>
+          </form></details><div id="p1-output" class="io" hidden></div>
         </details>
       </div>
     </section>
@@ -85,8 +86,4 @@
     <p id="feedback" role="status" aria-live="polite"></p>
   </main>
 </div>
-<dialog id="context-window" aria-label="上下文观测">
-  <div class="context-window-bar"><button id="close-context" class="quiet" type="button" autofocus>返回 Lab</button></div>
-  <div id="context-frame-host"></div>
-</dialog>
 </body></html>

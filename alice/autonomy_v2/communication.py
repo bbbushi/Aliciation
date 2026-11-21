@@ -49,7 +49,7 @@ class CommunicationService:
             if decision == "none" and (plan.intent is not None or plan.invitation_text):
                 raise ValueError("无需联系时不提交意图或邀请文本")
             if decision != "none" and plan.intent is None:
-                raise ValueError("现在邀请或留待以后须关联真实问题、观点或已有意图")
+                raise ValueError("现在邀请或留待以后须有可用的交流意图")
         intent_id = attempt_id = None
         blockers = ()
         if plan is not None and plan.intent is not None:
@@ -59,6 +59,7 @@ class CommunicationService:
             # its content, so the journal cannot outlive revoked source rights.
             from ..thought_workspace import merge_basis
             from ..context_memory import version
+            basis = merge_basis(basis, intent.basis)
             for ref in intent.content_refs:
                 kind, tail = ref.split(":", 1)
                 identity = int(tail.split("@", 1)[0])

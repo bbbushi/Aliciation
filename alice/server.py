@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 import threading
@@ -22,17 +21,19 @@ from .local_connector import ConnectorSpec, LocalConnectorManager
 from .runtime_paths import runtime_distribution
 from .service import ChatService
 from .lab_observation import ObservationGrant
+from .local_socket import TrackedConnections, start_unix_listener
 
 WEB_DIR = PROJECT_ROOT / "web"
 DEFAULT_PORT = 8800
 REQUEST_IO_TIMEOUT = 30.0
 CHANNEL_PREFIX = "/api/channels/v1"
+TUI_PREFIX = "/api/tui/v1"
 GUI_READ_PATHS = {"/api/state", "/api/history", "/api/persona", "/api/settings",
-                  "/api/metrics", "/api/chat/activity"}
+                  "/api/metrics", "/api/chat/activity", "/api/user-intro"}
 GUI_WRITE_PATHS = {"/api/persona", "/api/seed", "/api/reset", "/api/settings",
                    "/api/metrics/toggle", "/api/persona/expression",
                    "/api/persona/expression-update", "/api/persona/residency",
-                   "/api/persona/material"}
+                   "/api/persona/material", "/api/user-intro"}
 
 
 def _strict_object(pairs):
@@ -129,42 +130,16 @@ class _ShutdownGate:
         return self._result
 
 
-class _DrainingHTTPServer(ThreadingHTTPServer):
-    """Count accepted workers, including incomplete and non-API requests."""
-
-    daemon_threads = False
-    block_on_close = False  # The shutdown handler needs the owner's final result first.
-
+class _DrainingHTTPServer(TrackedConnections, ThreadingHTTPServer):
     def __init__(self, address, gate: _ShutdownGate):
         self._gate = gate
+        self.request_timeout = REQUEST_IO_TIMEOUT
         super().__init__(address, BaseHTTPRequestHandler)
 
-    def get_request(self):
-        request, address = super().get_request()
-        try:
-            request.settimeout(REQUEST_IO_TIMEOUT)
-        except BaseException:
-            request.close()
-            raise
-        return request, address
 
-    def process_request(self, request, client_address):
-        self._gate.connection_opened(request)
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self._gate.connection_done(request)
-            raise
+def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None, *, terminal=False):
+    observation_grant = None if terminal else ObservationGrant(svc)
 
-    def process_request_thread(self, request, client_address):
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._gate.connection_done(request)
-
-
-def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None):
-    observation_grant = ObservationGrant(svc)
     class Handler(BaseHTTPRequestHandler):
         server_version = "AliceGUI/0.1"
 
@@ -596,6 +571,8 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("orbit.js", "application/javascript; charset=utf-8")
             elif path == "/orbit-bg.js":
                 self._file("orbit-bg.js", "application/javascript; charset=utf-8")
+            elif path == "/orbit-ring.js":
+                self._file("orbit-ring.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.js":
                 self._file("chat-search.js", "application/javascript; charset=utf-8")
             elif path == "/chat-search.css":
@@ -614,12 +591,16 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._file("assets/dsh-avatar-small-v1.png", "image/png")
             elif path in {"/assets/claude-avatar-large-v1.png", "/assets/claude-avatar-small-v1.png"}:
                 self._file(path.lstrip("/"), "image/png")
+            elif path == "/assets/alice-wizard-avatar-v1.png":
+                self._file("assets/alice-wizard-avatar-v1.png", "image/png")
             elif path == "/discovery.css":
                 self._file("discovery.css", "text/css; charset=utf-8")
             elif path == "/style.css":
                 self._file("style.css", "text/css; charset=utf-8")
             elif path == "/api/state":
                 self._json(svc.state())
+            elif path == "/api/user-intro":
+                self._json(svc.user_introduction())
             elif path == "/api/history":
                 self._history()
             elif path == "/api/chat/activity":
@@ -743,7 +724,12 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             if path in GUI_WRITE_PATHS and not self._trusted_json("gui"):
                 self._json({"error": "此操作仅供本机 GUI 使用", "code": "gui_only"}, 403)
                 return
-            if path == "/api/persona/residency":
+            if path == "/api/user-intro":
+                try:
+                    self._json(svc.user_introduction(self._bounded_body(8192)))
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 400)
+            elif path == "/api/persona/residency":
                 try:
                     self._json(svc.persona_residency(self._body()))
                 except ChannelError:
@@ -897,7 +883,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         # ---------- SSE 流式对话 ----------
 
         def _sse_chat(self, text: str, *, request_id=None, session_epoch=None,
-                      search_intent=None, worker_target=None) -> None:
+                      search_intent=None, worker_target=None, public_tui=False) -> None:
             connected = True
             started = False
 
@@ -913,7 +899,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self.end_headers()
                 except OSError:
                     connected = False
-                emit({"type": "start", **(info or {})})
+                event_info = info or {}
+                if public_tui:
+                    event_info = {key: event_info[key] for key in ("request_id", "session_epoch") if key in event_info}
+                emit({"type": "start", **event_info})
 
             def emit(obj) -> None:
                 nonlocal connected
@@ -930,23 +919,31 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 except OSError:
                     connected = False  # Never turn a browser disconnect into another model call.
 
+            def search_progress(info) -> None:
+                fields = {"status": info.get("status"), "phase": info.get("phase")} if public_tui else info
+                emit({"type": "search", **fields})
+
             try:
                 result = svc.send(
                     text,
                     on_delta=lambda piece: emit({"type": "delta", "text": piece}),
                     on_tool=lambda name: emit({"type": "tool", "name": name}),
-                    on_reasoning=lambda piece: emit({"type": "reasoning", "text": piece}),
+                    on_reasoning=None if public_tui else lambda piece: emit({"type": "reasoning", "text": piece}),
                     request_id=request_id, session_epoch=session_epoch,
                     nonblocking=True, on_accepted=start,
-                    search_intent=search_intent, on_search_progress=lambda info: emit({"type": "search", **info}),
+                    search_intent=search_intent, on_search_progress=search_progress,
                     worker_target=worker_target,
                     on_reply_saved=lambda: emit({"type": "reply_saved"}),
                 )
-                for line in result["events"]:
-                    emit({"type": "meta", "text": line})
-                emit({"type": "done", "reply": result["reply"], "memory": result["memory"],
-                      "evaluation_id": result.get("evaluation_id"),
-                      **{key: result.get(key) for key in ("request_id", "session_epoch", "user_turn_id", "assistant_turn_id", "worker_target")}})
+                done = {"type": "done", "reply": result["reply"],
+                        **{key: result.get(key) for key in (
+                            "request_id", "session_epoch", "user_turn_id", "assistant_turn_id")}}
+                if not public_tui:
+                    for line in result["events"]:
+                        emit({"type": "meta", "text": line})
+                    done.update(memory=result["memory"], evaluation_id=result.get("evaluation_id"),
+                                worker_target=result.get("worker_target"))
+                emit(done)
             except ChannelError as exc:
                 if not started:
                     self._channel_error(exc)
@@ -961,7 +958,63 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 except Exception:
                     pass
 
-    return Handler
+    class TuiHandler(Handler):
+        """Only the terminal contract is reachable on the UID-authenticated listener."""
+
+        def do_GET(self):
+            self._dispatch(self._get_terminal)
+
+        def do_POST(self):
+            self._dispatch(self._post_terminal)
+
+        def _dispatch(self, route):
+            if not gate.admit():
+                self._json({"error": "服务正在退出", "code": "draining"}, 503)
+                return
+            try:
+                parsed = urlparse(self.path)
+                route(parsed.path, parsed.query)
+            except ChannelError as exc:
+                self._channel_error(exc)
+            except ValueError:
+                self._json({"error": "终端请求参数无效", "code": "invalid_request"}, 400)
+            finally:
+                gate.leave()
+
+        def _get_terminal(self, path, query):
+            if path == TUI_PREFIX + "/status" and not query:
+                self._json(svc.tui_status())
+            elif path == TUI_PREFIX + "/history":
+                params = parse_qs(query, keep_blank_values=True, max_num_fields=5)
+                allowed = {"after_id", "before_id", "limit", "session_epoch", "source_turn_ids"}
+                if set(params) - allowed or any(len(v) != 1 or not v[0] for v in params.values()):
+                    raise ValueError("历史查询参数无效")
+                params = {key: value[0] for key, value in params.items()}
+                for key in ("after_id", "before_id", "limit"):
+                    if key in params:
+                        params[key] = int(params[key])
+                if "source_turn_ids" in params:
+                    params["source_turn_ids"] = [int(value) for value in params["source_turn_ids"].split(",")]
+                self._json(svc.history_page(**params, include_older=True))
+            else:
+                self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+
+        def _post_terminal(self, path, query):
+            if query or path not in (TUI_PREFIX + "/chat", TUI_PREFIX + "/chat/status"):
+                self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+                return
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("终端请求必须使用 JSON")
+            body = self._bounded_body(65536)
+            if (set(body) != {"text", "request_id", "session_epoch"}
+                    or any(not isinstance(value, str) or not value.strip() for value in body.values())):
+                raise ValueError("终端请求身份无效")
+            if path.endswith("/status"):
+                self._json(svc.gui_request_status(body))
+            else:
+                self._sse_chat(**body, public_tui=True)
+
+    return TuiHandler if terminal else Handler
 
 
 def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = True,
@@ -970,6 +1023,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         raise ValueError("服务只能监听本机回环地址 127.0.0.1 或 localhost")
     config_path = Path(config_path).resolve() if config_path is not None else USER_DIR / "config.toml"
     gate = _ShutdownGate()
+    unix_server = None
     # Bind before constructing Store or running startup maintenance. A duplicate launch
     # must fail without opening or changing the existing local conversation.
     try:
@@ -1015,12 +1069,20 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         for line in boot_events:
             print(f"（{line}）")
         print(f"已就绪：{url} （Ctrl+C 退出）")
+        if not getattr(host_control, "lab_session", False):
+            try:
+                unix_server = start_unix_listener(
+                    USER_DIR, make_handler(svc, gate, runtime_info, terminal=True), gate, REQUEST_IO_TIMEOUT)
+            except OSError as exc:
+                print(f"（终端入口未启用：{exc}）")
         if open_browser:
             timer = threading.Timer(0.5, lambda: webbrowser.open(url))
             timer.daemon = True
             timer.start()
     except BaseException as exc:
         try:
+            if unix_server is not None:
+                unix_server.stop()
             if connectors is not None:
                 connectors.close()
             if svc is not None:
@@ -1043,11 +1105,16 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         print("\n再见。")
     finally:
         gate.begin()
+        if unix_server is not None:
+            try:
+                unix_server.stop()
+            except OSError as exc:
+                print(f"（本机 socket 收尾失败：{exc}）")
         if connectors is not None:
             connectors.close()
         svc.begin_shutdown()
-        # The shutdown request is detached from connection accounting; all other
-        # workers, even half-open or static requests, must leave before Store closes.
+        # Wait for both transports before closing Store. The GUI shutdown handler
+        # detaches its own connection so it can receive the final result.
         gate.wait_idle()
         try:
             warning = svc.close(extract=host_control.extract_on_exit if host_control is not None else True)

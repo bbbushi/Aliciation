@@ -243,7 +243,6 @@
           col.append(segEl);
         }
       }
-      col.style.setProperty("--h", "100%");
       wrap.append(col);
       const label = node("div", null, "lbl");
       label.append(node("div", `${purposeLabels[call.purpose] || call.purpose}`));
@@ -265,18 +264,16 @@
     body.append(chart);
     if (state.mode === "delta") {
       body.append(node("p", "Delta 模式：与同请求上一次调用比较；斜线纹=该类减少。", "ci-hint"));
-    } else if (stats.length) {
-      const lastSeg = stats[stats.length - 1].seg;
-      body.append(legend(lastSeg.totals, lastSeg.total));
     }
   }
 
   function renderDNA(request, call) {
-    const body = el("ci-dna");
+    const body = el("ci-dna"), meta = el("ci-dna-meta");
     clearBodies(body);
     body.replaceChildren();
-    if (!call) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (!call) { if (meta) meta.textContent = "选择一次调用"; body.append(node("p", "选择一次调用。", "ci-hint")); return; }
     const seg = segmentsOf(request, call);
+    if (meta) meta.textContent = `${seg.segments.length} 段 · ${kfmt(seg.total)} 字`;
     const dna = node("div", null, "ci-dna");
     let position = 0;
     const maxChars = Math.max(1, ...seg.segments.map((s) => s.chars));
@@ -286,9 +283,11 @@
       row.append(node("span", String(position), `ci-pos ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`));
       const mid = node("div", null, "ci-dna-mid");
       mid.append(node("p", `${s.label} · ${s.kindLabel} · ${s.chars} 字 · 消息 #${s.message_seq}`));
+      const track = node("div", null, "ci-dna-track");
       const bar = node("div", null, `ci-dna-bar ${(KIND_BY_KEY.get(s.key) || {}).cls || "k-other"}`);
       bar.style.width = `${Math.max(2, (s.chars / maxChars) * 100)}%`;
-      mid.append(bar);
+      track.append(bar);
+      mid.append(track);
       mid.append(bodyButton(request.request_id, s.content_hash, s.bodyState));
       row.append(mid);
       dna.append(row);
@@ -298,10 +297,11 @@
   }
 
   function renderBrowser(request, call) {
-    const body = el("ci-browser");
+    const body = el("ci-browser"), meta = el("ci-browser-meta");
     clearBodies(body);
     body.replaceChildren();
-    if (!request) { body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (!request) { if (meta) meta.textContent = "选择请求"; body.append(node("p", "选择一次调用。", "ci-hint")); return; }
+    if (meta) meta.textContent = `${(request.blocks || []).length} 块 · ${(request.selections || []).length} 条决策`;
     const tree = node("div", null, "ci-tree");
     const selectedSources = new Set(((call && call.bindings) || []).map((b) => b.block_seq));
     const byKind = new Map();
@@ -349,10 +349,13 @@
     const request = requests.find((r) => r.request_id === state.requestId) || null;
     renderKPIs(request, null);
     const call = (request ? request.calls : []).find((c) => c.call_id === state.callId) || null;
-    const full = el("ci-full-context");
-    full.disabled = !state.canReadBody || !state.fullCall || !request?.calls.length;
-    full.title = !state.canReadBody ? "需在 Alice 授予正文后重新连接" :
-      !state.fullCall ? "完整上下文需要新版 Alice" : "";
+    /* 05-21：完整上下文内联——展开时跟随选择刷新；收起时折标只报状态 */
+    if (el("ci-full-fold").open) mountFull();
+    else {
+      el("ci-full-meta").textContent = !state.canReadBody ? "需授予正文后可用"
+        : !state.fullCall ? "需要新版 Alice"
+        : request ? `${request.calls.length} 次调用可通读` : "暂无上下文请求";
+    }
     renderKPIs(request, call);
     renderComposition(request, call);
     renderTrend(request);
@@ -373,7 +376,8 @@
       const label = value => value == null ? "未知" : value ? "开" : "关";
       status(`采集：元数据 ${label(state.capture.metadata)} · 正文 ${label(state.capture.body)}`
         + ` · 读取：${state.canReadBody ? "含正文" : "仅元数据"}`
-        + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB · 保留 ${quota.retention_days} 天` : "")
+        + (quota ? ` · 正文库 ${(quota.body_dir_bytes / 1048576).toFixed(1)} / ${(quota.limit_bytes / 1048576).toFixed(0)} MiB`
+          + (Number.isFinite(quota.retention_days) ? ` · 保留 ${quota.retention_days} 天` : "") : "")
         + (quota?.requests ? ` · 滚动留存 ${quota.requests.used ?? "?"}/${quota.requests.limit} 个请求` : "")
         + (state.canReadBody && !state.fullCall ? " · 完整上下文需要新版 Alice" : ""));
       const data = await window.ContextInspectorClient.get("requests");
@@ -405,17 +409,38 @@
   }
 
   el("ci-mode-total").addEventListener("click", () => setMode("total"));
-  el("ci-full-context").addEventListener("click", () => {
-    const request = state.requests.find(r => r.request_id === state.requestId);
-    if (!request) return;
-    window.AliceContextViewer.open({requestId: request.request_id, calls: request.calls,
-      callId: state.callId, scope: window.ContextInspectorClient.getScope()});
-  });
+  /* 05-21：完整上下文内联折叠区——展开/换选时挂载进页内，不再弹独立窗 */
+  const fullFold = el("ci-full-fold"), fullReader = el("ci-full-reader"), fullMeta = el("ci-full-meta");
+  let fullKey = null;
+  function mountFull(force) {
+    const request = state.requests.find(r => r.request_id === state.requestId) || null;
+    const gate = !state.canReadBody ? "需在 Alice 授予正文后重新连接"
+      : !state.fullCall ? "完整上下文需要新版 Alice"
+      : !request ? "暂无上下文请求。" : "";
+    if (gate) {
+      fullKey = null;
+      fullReader.replaceChildren(node("p", gate, "ci-hint"));
+      fullMeta.textContent = gate;
+      return;
+    }
+    const key = `${request.request_id}/${state.callId ?? ""}`;
+    if (!force && fullKey === key && fullReader.querySelector(".acv-inline")) {
+      fullMeta.textContent = `${request.calls.length} 次调用 · 通读当前选中调用`;
+      return;
+    }
+    fullMeta.textContent = `${request.calls.length} 次调用`;
+    fullKey = key;
+    window.AliceContextViewer.open({container: fullReader, requestId: request.request_id,
+      calls: request.calls, callId: state.callId, scope: window.ContextInspectorClient.getScope()});
+  }
+  fullFold.addEventListener("toggle", () => { if (fullFold.open) mountFull(); });
   el("ci-mode-delta").addEventListener("click", () => setMode("delta"));
 
   el("ci-refresh").addEventListener("click", tick);
   window.addEventListener("alice-observer-scope-changed", () => {
     state.requests = [];state.requestId = state.callId = null;lastSignature = "";
+    fullKey = null;
+    fullReader.replaceChildren(node("p", "会话已更换，重新展开本节读取。", "ci-hint"));
     renderAll();
   });
   const timer = setInterval(tick, 3500);

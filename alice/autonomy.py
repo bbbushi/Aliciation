@@ -41,6 +41,10 @@ FREE_INTEREST_GUIDANCE = """这是没有指定目标的兴趣窗。已有明确�
 近期对话和上轮选题主要帮你避开重复，不是本轮待办。看到某条疑问卡在外部条件时，保留原等待条件；先看看另一库能否给出独立的新方向，再判断整个窗口是否值得继续。
 没有值得推进的方向可以搁置或休息，不必扫完所有库。浏览只读本机索引，定题前最多再展开一项；定题后按原权限执行。"""
 
+CONTACT_GUIDANCE = """这是清醒时的主动交流窗口。看看有没有一件具体想和用户聊的事，必要时按权限回顾材料。
+可以分享新鲜事、问用户怎么看，也可以闲聊。先想清想聊什么、想从交流中得到什么、为什么现在适合提。已有待聊话题仍合适时沿用意图引用；等待回应的话题先放着。
+用 contact_plan 提交简短决定。invite 请宿主询问现在是否方便，接受后再展开；later 留下话题，等合适机会重新判断；none 表示这轮没有话题或时机不合适。背景资料按其真实出处和不确定条件理解。"""
+
 
 def in_window(start, end):
     return activity.in_window(start, end)
@@ -353,21 +357,23 @@ class AutonomyCoordinator:
                                           "delivered_at", "expires_at", "invitation_turn_id", "reply_user_turn_id",
                                           "expansion_turn_id", "deferred_reason", "updated_at")}
                        for r in store.conn.execute("SELECT * FROM v2_invitation_attempts WHERE epoch=? ORDER BY updated_at DESC LIMIT 50", (self.epoch,))]
-        for invitation in invitations:
-            invitation["topic"] = next((i["topic"] for i in intents if i["id"] == invitation["intent_id"]), "")
         from .autonomy_v2 import build
         from .autonomy_v2.models import Scope
         stack = build(store=store)
         scope = Scope(session_epoch=self.epoch, channel_id="gui")
         for intent in intents:
             stored_intent = stack.invitations.repository.get_intent(scope, intent["id"])
+            if stored_intent.motive == "chat" and not thoughts.valid_basis(store, stored_intent.basis or {}):
+                intent["topic"] = "话题材料已失效"
             if intent["state"] == "active":
                 intent["blockers"] = stack.invitations.delivery_blockers(scope, stored_intent)
             try:
                 stack.invitations.host.validate_intent(scope, stored_intent)
             except ValueError:
                 intent["reason"] = "意图已结束或资料已变化，原理由不再展示"
+        topics_by_id = {intent["id"]: intent["topic"] for intent in intents}
         for invitation in invitations:
+            invitation["topic"] = topics_by_id.get(invitation["intent_id"], "")
             if invitation["state"] == "prepared":
                 intent = stack.invitations.repository.get_intent(scope, invitation["intent_id"])
                 invitation["blockers"] = stack.invitations.delivery_blockers(scope, intent,
@@ -535,6 +541,14 @@ class AutonomyCoordinator:
                 with store.source_transaction():
                     store.conn.execute("UPDATE exploration_runs SET status='paused',reason='mode_disabled',updated_at=? WHERE id=?", (time.time(), run["id"]))
                 return
+            if info["activity"] == activity.CONTACT_MODE:
+                readiness = activity.contact_readiness(store, config, self.epoch, activity.input_stamp(store),
+                                                       exclude_run=run["id"])
+                if readiness != "contact_opportunity":
+                    with store.source_transaction():
+                        store.conn.execute("UPDATE exploration_runs SET status='paused',reason=?,updated_at=? WHERE id=?",
+                                           (readiness, time.time(), run["id"]))
+                    return
             self.cancel = threading.Event()
             self.cancel_reason = "user_cancelled"
             store.meta_set("autonomy_last_started", str(time.time()))
@@ -576,6 +590,8 @@ class AutonomyCoordinator:
         with service._lock:
             info = activity.run_info(service.store, run["id"])
         mode = info["activity"]
+        contact = mode == activity.CONTACT_MODE
+        context["activity_mode"] = mode
         permitted = config["activities"][mode]["tools"]
         seconds = None if autonomy_policy.TEST_CONTROLS_ONLY else min(config["run_seconds"], config["activities"][mode]["seconds"])
         deadline = float("inf") if seconds is None else time.monotonic() + seconds
@@ -641,11 +657,9 @@ class AutonomyCoordinator:
                 for row in recent:
                     context["thought_basis"] = thoughts.merge_basis(context["thought_basis"], {
                         "epoch": self.epoch, "turns": {str(row["id"]): thoughts.turn_version(row)}})
-                guidance = RUN_GUIDANCE + "\n" + activity.GUIDANCE[mode]
-                if free_interest:
-                    guidance += "\n" + FREE_INTEREST_GUIDANCE
-                else:
-                    guidance += "\n可先用thought_search/thought_load了解任务。"
+                guidance = CONTACT_GUIDANCE if contact else RUN_GUIDANCE + "\n" + activity.GUIDANCE[mode]
+                if not contact:
+                    guidance += "\n" + (FREE_INTEREST_GUIDANCE if free_interest else "可先用thought_search/thought_load了解任务。")
                 intro = [{"role": "system", "content": system}, {"role": "system", "content": guidance},
                     {"role": "system", "content": "当前实际资料（非新的用户指令）：\n" + thoughts.dump({
                         "lifecycle": activity.lifecycle(config), "activity": mode,
@@ -675,7 +689,7 @@ class AutonomyCoordinator:
                     intro.append({"role": "system", "content": "此前探索行动与真实回执（历史资料，不自动重放；旧引用需重新检索）：\n"
                                   + thoughts.dump(previous_checkpoint)})
                 messages = list(intro)
-                tools = [tool for tool in thoughts.tools("gui", free_interest=free_interest)
+                tools = [tool for tool in thoughts.tools("gui", free_interest=free_interest, contact=contact)
                          if tool["function"]["name"] not in {"contact_propose", "contact_reply", "contact_availability"}]
                 if "memory" in permitted:
                     tools += MEMORY_TOOLS
@@ -752,7 +766,7 @@ class AutonomyCoordinator:
                         if not autonomy_policy.TEST_CONTROLS_ONLY and performed >= config["run_steps"]:
                             raise YieldToForeground("tool_step_budget")
                         args, error = capability_registry.parse_call(tc.function.name, tc.function.arguments, tools)
-                        if error is None:
+                        if error is None and not contact:
                             error = planning.tool_error(run['id'], tc.function.name, args, context.get("interest_browse"))
                         performed += 1
                         headroom = input_headroom(service.cfg.context, messages, tools)
@@ -785,10 +799,10 @@ class AutonomyCoordinator:
                             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                             basis = thoughts.current_basis(store, context)
                             self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
-                    if tc.function.name == "activity_finish" and not json.loads(result).get("error"):
-                        reason = "activity_finished"
+                    if tc.function.name in {"activity_finish", "contact_plan"} and not json.loads(result).get("error"):
+                        reason = "contact_evaluated" if contact else "activity_finished"
                         break
-                if reason == "activity_finished":
+                if reason in {"activity_finished", "contact_evaluated"}:
                     break
             else:
                 status, reason = "paused", "model_call_budget"
@@ -892,16 +906,17 @@ class AutonomyCoordinator:
         """
         store = self.service.store
         from .autonomy_v2 import build
-        from .autonomy_v2.models import Scope
+        from .autonomy_v2.models import InvitationState, Scope
         scope = Scope(session_epoch=self.epoch, channel_id="gui")
         stack = build(store=store)
         stack.invitations.expire(scope)
         if activity.active_idle(store):
             return  # Rest pauses prepared but undelivered autonomous invitations.
-        row = store.conn.execute("SELECT id FROM v2_invitation_attempts WHERE epoch=? AND state='prepared' "
-                                 "ORDER BY created_at LIMIT 1", (self.epoch,)).fetchone()
-        if row is None:
-            return
         context = thoughts.execution_context(store, {"request_id": "invitation_delivery", "scope": "gui"})
-        attempt = stack.invitations.repository.get_attempt(scope, row[0])
-        stack.invitations.deliver(context, attempt)
+        rows = store.conn.execute("SELECT id FROM v2_invitation_attempts WHERE epoch=? AND state='prepared' "
+                                  "ORDER BY created_at", (self.epoch,)).fetchall()
+        for row in rows:
+            attempt = stack.invitations.repository.get_attempt(scope, row[0])
+            sent = stack.invitations.deliver(context, attempt)
+            if sent.state == InvitationState.AWAITING_REPLY:
+                break
