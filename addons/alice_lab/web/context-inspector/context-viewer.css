@@ -138,3 +138,27 @@
   .acv-note { padding: 6px 12px; }
   .acv-body { padding: 10px; }
 }
+
+/* 05-21：完整上下文内联挂载（观测页折叠区内，非弹窗）——复用 acv-* 基础类，补齐
+   原 .acv-dialog 前缀下的按钮/框体样式与容器高度 */
+.acv-inline {
+  display: flex; flex-direction: column;
+  height: 520px; max-height: 68vh;
+  border: 1px solid var(--ci-line, #e7eae3); border-radius: 10px;
+  background: var(--ci-card, #fff); overflow: hidden;
+  font: 14px/1.6 system-ui, -apple-system, "PingFang SC", sans-serif;
+  color: var(--ci-ink, #1b2a23);
+}
+.acv-inline button, .acv-inline select, .acv-inline input {
+  font: inherit; font-size: 13px; color: var(--ci-ink, #1b2a23);
+  border: 1px solid var(--ci-line, #e7eae3); background: #fff;
+  border-radius: 8px; padding: 6px 10px; box-sizing: border-box;
+}
+.acv-inline button { cursor: pointer; transition: border-color 140ms cubic-bezier(.23,1,.32,1), background-color 140ms cubic-bezier(.23,1,.32,1); }
+.acv-inline button:hover:not(:disabled) { border-color: #b9c9bd; background: #f8fbf8; }
+.acv-inline button:disabled { opacity: .45; cursor: default; }
+.acv-inline :focus-visible { outline: 2px solid var(--ci-accent, #225942); outline-offset: 2px; }
+.acv-inline .acv-toolbar { padding: 10px 12px 6px; }
+.acv-inline .acv-note { padding: 4px 12px; }
+.acv-inline .acv-layout { border-top: 1px solid var(--ci-line, #e7eae3); }
+.acv-inline .acv-toc { background: var(--ci-bg, #fbfbf8); }

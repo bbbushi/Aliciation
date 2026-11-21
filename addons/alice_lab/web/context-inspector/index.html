@@ -11,7 +11,6 @@
 <header class="ci-top">
   <div class="ci-head-row">
     <h1>上下文观测</h1>
-    <button id="ci-full-context" class="ci-btn" type="button" disabled>查看完整上下文</button>
     <button id="ci-refresh" class="ci-btn" type="button">刷新</button>
     <p id="ci-status" class="ci-status" role="status">正在读取观测状态…</p>
   </div>
@@ -52,6 +51,16 @@
     <div class="ci-fold-body">
       <p class="ci-hint">按类别展开装配块与选择决策；未进入当前调用的材料如实标注。</p>
       <div id="ci-browser" class="ci-card-body"><p class="ci-hint">选择一次调用。</p></div>
+    </div>
+  </details>
+  <details class="ci-card ci-fold" id="ci-full-fold">
+    <summary>
+      <h2 class="ci-fold-title">完整上下文</h2>
+      <span class="ci-fold-meta" id="ci-full-meta">按真实消息顺序通读</span>
+    </summary>
+    <div class="ci-fold-body">
+      <p class="ci-hint">按真实消息顺序平铺正文、工具调用字段、SDK 工具定义与模型参数；支持搜索、目录跳转与整段复制。展开即读取当前选中的调用。</p>
+      <div id="ci-full-reader"><p class="ci-hint">选择一次请求后展开本节。</p></div>
     </div>
   </details>
 </main>

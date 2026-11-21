@@ -349,10 +349,13 @@
     const request = requests.find((r) => r.request_id === state.requestId) || null;
     renderKPIs(request, null);
     const call = (request ? request.calls : []).find((c) => c.call_id === state.callId) || null;
-    const full = el("ci-full-context");
-    full.disabled = !state.canReadBody || !state.fullCall || !request?.calls.length;
-    full.title = !state.canReadBody ? "需在 Alice 授予正文后重新连接" :
-      !state.fullCall ? "完整上下文需要新版 Alice" : "";
+    /* 05-21：完整上下文内联——展开时跟随选择刷新；收起时折标只报状态 */
+    if (el("ci-full-fold").open) mountFull();
+    else {
+      el("ci-full-meta").textContent = !state.canReadBody ? "需授予正文后可用"
+        : !state.fullCall ? "需要新版 Alice"
+        : request ? `${request.calls.length} 次调用可通读` : "暂无上下文请求";
+    }
     renderKPIs(request, call);
     renderComposition(request, call);
     renderTrend(request);
@@ -406,17 +409,38 @@
   }
 
   el("ci-mode-total").addEventListener("click", () => setMode("total"));
-  el("ci-full-context").addEventListener("click", () => {
-    const request = state.requests.find(r => r.request_id === state.requestId);
-    if (!request) return;
-    window.AliceContextViewer.open({requestId: request.request_id, calls: request.calls,
-      callId: state.callId, scope: window.ContextInspectorClient.getScope()});
-  });
+  /* 05-21：完整上下文内联折叠区——展开/换选时挂载进页内，不再弹独立窗 */
+  const fullFold = el("ci-full-fold"), fullReader = el("ci-full-reader"), fullMeta = el("ci-full-meta");
+  let fullKey = null;
+  function mountFull(force) {
+    const request = state.requests.find(r => r.request_id === state.requestId) || null;
+    const gate = !state.canReadBody ? "需在 Alice 授予正文后重新连接"
+      : !state.fullCall ? "完整上下文需要新版 Alice"
+      : !request ? "暂无上下文请求。" : "";
+    if (gate) {
+      fullKey = null;
+      fullReader.replaceChildren(node("p", gate, "ci-hint"));
+      fullMeta.textContent = gate;
+      return;
+    }
+    const key = `${request.request_id}/${state.callId ?? ""}`;
+    if (!force && fullKey === key && fullReader.querySelector(".acv-inline")) {
+      fullMeta.textContent = `${request.calls.length} 次调用 · 通读当前选中调用`;
+      return;
+    }
+    fullMeta.textContent = `${request.calls.length} 次调用`;
+    fullKey = key;
+    window.AliceContextViewer.open({container: fullReader, requestId: request.request_id,
+      calls: request.calls, callId: state.callId, scope: window.ContextInspectorClient.getScope()});
+  }
+  fullFold.addEventListener("toggle", () => { if (fullFold.open) mountFull(); });
   el("ci-mode-delta").addEventListener("click", () => setMode("delta"));
 
   el("ci-refresh").addEventListener("click", tick);
   window.addEventListener("alice-observer-scope-changed", () => {
     state.requests = [];state.requestId = state.callId = null;lastSignature = "";
+    fullKey = null;
+    fullReader.replaceChildren(node("p", "会话已更换，重新展开本节读取。", "ci-hint"));
     renderAll();
   });
   const timer = setInterval(tick, 3500);
