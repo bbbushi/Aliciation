@@ -113,6 +113,7 @@ def chat(
     timeout: float | None = None,
     observation: dict | None = None,
     on_attempt_usage=None,
+    before_attempt=None,
 ):
     """非流式调用；每次实际尝试回报用量，默认最多三次尝试。"""
     kwargs: dict[str, Any] = {
@@ -137,11 +138,13 @@ def chat(
         admit = getattr(store, "_background_admit", None)
         if admit is not None and not (observation or {}).get("background_reserved"):
             admit(store)
+        send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
+        if before_attempt is not None:
+            before_attempt()  # A host rejection is not a provider attempt or a retryable error.
         sdk_attempt = trace_call.begin_attempt(attempt_no + 1) if trace_call is not None else None
         started = time.monotonic()
         response, failure = None, None
         try:
-            send_kwargs = (trace_call.request_kwargs() if trace_call is not None else None) or kwargs
             response = client.chat.completions.create(**send_kwargs)
             if sdk_attempt is not None:
                 sdk_attempt.response_started()

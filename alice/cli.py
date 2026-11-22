@@ -46,10 +46,11 @@ def cmd_recall(store: Store, query: str) -> None:
     print("（注：命中会累计这些记忆的使用次数）")
 
 
-def _seed_wizard(store: Store, client, cfg: Config) -> None:
+def _seed_wizard(service) -> None:
     from . import persona
+    from .config import PERSONA_FILE
 
-    print(f"首次运行：为你的 {cfg.persona.name} 选择人格底色（选 2~4 个，输入数字，如 1,3,5）")
+    print(f"首次运行：为你的 {service.cfg.persona.name} 选择人格底色（选 2~4 个，输入数字，如 1,3,5）")
     for i, t in enumerate(persona.TAGS, 1):
         print(f"{i:2d}. {t}", end="\n" if i % 5 == 0 else "   ")
     print()
@@ -65,8 +66,8 @@ def _seed_wizard(store: Store, client, cfg: Config) -> None:
         except (ValueError, IndexError):
             pass
         print("输入无效，请重新选择（例：1,3,5）")
-    path = persona.seed_from_tags(store, client, cfg, tags)
-    print(f"人格底色已生成：{path}")
+    service.seed(tags)
+    print(f"人格底色已生成：{PERSONA_FILE}")
 
 
 def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
@@ -92,23 +93,24 @@ def _run_maintenance_cmd(store: Store, cfg: Config, kind: str) -> None:
     print("结果：" + (json.dumps(result, ensure_ascii=False) if result else "未执行（任务已被认领或失效）"))
 
 
-def cmd_chat(store: Store, cfg: Config) -> None:
-    from . import consolidation, persona, skills
-    from .llm import make_client
-
-    summary = consolidation.run_if_due(store, cfg)
-    if summary:
-        _print_consolidation(summary)
-    client = make_client(cfg)
-    if persona.persona_md() is None:
-        _seed_wizard(store, client, cfg)
-    for watcher in (persona.evolve_if_due, skills.distill_if_due):
-        due = watcher(store, client, cfg)
-        if due:
-            print(f"（{due}）")
+def cmd_chat(cfg: Config, config_path: Path) -> None:
+    from . import persona
     from .loop import run_chat
+    from .service import ChatService
 
-    run_chat(store, client, cfg)
+    service = ChatService(cfg, config_path=config_path, _foreground_cli=True)
+    entered_chat = False
+    try:
+        if persona.persona_md() is None:
+            _seed_wizard(service)
+        for event in service.prepare():
+            print(f"（{event}）")
+        entered_chat = True
+        run_chat(service)
+    finally:
+        if entered_chat and cfg.maintenance.replaces_extraction:
+            print("（退出前跳过同步提取：compact 模式已启用，待下次空闲压缩）")
+        service.close(extract=entered_chat)
 
 
 def main(argv: list[str] | None = None) -> int | None:
@@ -200,6 +202,9 @@ def main(argv: list[str] | None = None) -> int | None:
             run_server(port=args.port, open_browser=not args.no_open,
                        cfg=load(config_path), config_path=config_path)
             return
+        if args.cmd is None:
+            cmd_chat(load(config_path), config_path)
+            return
         with InstanceLock(appconfig.DATA_DIR):
             _run_command(args, config_path)
     except InstanceBusy as exc:
@@ -213,19 +218,22 @@ def main(argv: list[str] | None = None) -> int | None:
 
 def _run_command(args, config_path: Path) -> None:
     from . import config as appconfig
-    from . import consolidation, persona, persona_reset, skills, thought
+    from . import consolidation, persona, persona_mode_install, persona_reset, skills, thought
     from .config import load
     from .llm import make_client
     from .store import Store
 
     cfg = load(config_path)
     reset_record = persona_reset.before_open()
+    mode_change = persona_mode_install.read_change(appconfig.DB_PATH, config_path)
+    reset_cfg = persona_mode_install.reset_config(cfg, mode_change, reset_record)
     store = Store(appconfig.DB_PATH)
     try:
-        persona_reset.after_open(store, cfg, reset_record)
+        persona_reset.after_open(store, reset_cfg, reset_record)
         if not store.meta_get("session_epoch"):
             store.meta_set("session_epoch", uuid.uuid4().hex)
         persona.recover_imports(store)
+        persona_mode_install.finish(store, cfg, appconfig.DB_PATH, config_path, mode_change, discard_uncommitted=True)
         persona.recover_growth(store)
         if args.cmd == "memory":
             cmd_memory(store, args.layer)
@@ -251,8 +259,6 @@ def _run_command(args, config_path: Path) -> None:
             print(f"人格已安装：{persona.install_persona(store, cfg, md)}")
         elif args.cmd == "distill":
             print(skills.distill(store, make_client(cfg), cfg))
-        else:
-            cmd_chat(store, cfg)
     finally:
         store.close()
 

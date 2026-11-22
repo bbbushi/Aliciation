@@ -532,7 +532,8 @@ class SourceStoreMixin:
                 config = self.conn.execute("SELECT value FROM discovery_config WHERE id=1").fetchone()
                 if config is not None:
                     value = json.loads(config[0])
-                    value["provider_key"] = ""
+                    value.pop("provider_key", None)
+                    value["brave_key"] = ""
                     self.conn.execute("UPDATE discovery_config SET value=? WHERE id=1", (_dump(value),))
         return removed
 

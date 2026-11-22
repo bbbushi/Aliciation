@@ -1214,11 +1214,8 @@
   function mirrorState() {
     // OrbitBG：discoveryRunning / thoughtState（单向传入，orbit-bg 不自查业务 DOM）
     const running = window.AliceDiscovery?.isSearching() ?? false;
-    const lifecycle = $("thought-lifecycle");
-    const stop = $("thought-stop");
-    let thoughtState = 0;
-    if (stop && !stop.classList.contains("hidden") && !stop.disabled) thoughtState = 1;
-    else if (lifecycle && lifecycle.dataset.state === "sleeping") thoughtState = 2;
+    const state = document.documentElement.dataset.thoughtActivity;
+    const thoughtState = state === "sleeping" ? 2 : state === "running" ? 1 : 0;
     if (window.OrbitBG && typeof window.OrbitBG.setState === "function") {
       window.OrbitBG.setState({ discoveryRunning: running, thoughtState });
     }
@@ -1237,8 +1234,7 @@
     wire(window, "alice:discovery-state", mirrorState);
     wire(window, "alice:discovery-cleared", mirrorState);
     const watch = [
-      [$("thought-lifecycle"), { attributes: true, attributeFilter: ["data-state"], childList: true, characterData: true, subtree: true }],
-      [$("thought-stop"), { attributes: true, attributeFilter: ["class", "disabled"] }],
+      [document.documentElement, { attributes: true, attributeFilter: ["data-thought-activity"] }],
       [$("chat-new-attempt"), { attributes: true, attributeFilter: ["class"] }],
       [$("chat-notice"), { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] }],
     ];

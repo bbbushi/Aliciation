@@ -12,12 +12,12 @@ from .channels import ChannelError
 GRANT_SECONDS = 900
 READS = {
     "schedule": set(), "context": {"request_id"}, "calls": {"request_id"},
-    "body": {"request_id", "hash"}, "memory": set(), "memory_detail": {"id"},
+    "body": {"request_id", "hash"}, "memory": set(), "memory_detail": {"id"}, "memory_status": {"id"},
     "questions": set(), "persona_operations": set(), "reply_cache": {"request_id"},
     "context_status": set(), "context_call": {"request_id", "call_id"},
 }
-BODY_READS = {"body", "memory_detail", "reply_cache", "context_call"}
-REQUIRED = {"body": {"request_id", "hash"}, "memory_detail": {"id"},
+BODY_READS = {"body", "memory_detail", "memory_status", "reply_cache", "context_call"}
+REQUIRED = {"body": {"request_id", "hash"}, "memory_detail": {"id"}, "memory_status": {"id"},
             "reply_cache": {"request_id"}, "context_call": {"request_id", "call_id"}}
 
 
@@ -47,6 +47,8 @@ def read(service, topic, params, *, bodies=False, scope=None):
         return service.observer_reply_cache(scope=scope, **params)
     if topic == "memory_detail":
         return service.observer_detail(scope=scope, view="memories", id=params["id"])
+    if topic == "memory_status":
+        return service.observer_memory_available(scope=scope, id=params["id"])
     return service.lab_data_metadata(topic, scope=scope, include_titles=bodies)
 
 

@@ -394,6 +394,8 @@ function renderMemory(m) {
     const e = m.extraction;
     if (e.last_status === "skipped_source_protected") {
       extraction = ` · 最近提取：跳过 ${e.skipped ?? 0} 轮（来源保护）`;
+    } else if (e.last_status === "skipped_compact_covered") {
+      extraction = " · 最近提取：已压缩或受来源保护";
     } else if (e.last_status === "reviewed") {
       extraction = e.written ? ` · 最近提取：新增 ${e.written} 条` : " · 最近提取：无新增";
     } else if (e.last_status === "review_failed") {
@@ -524,9 +526,8 @@ function renderTurnMetadata(node) {
 }
 
 function redactSourceNode(node, pending = false) {
+  discardTurnReveal(node);
   renderTurnBubbles(node, node.dataset.workerBound === "true" ? WORKER_HISTORY_PLACEHOLDER : SOURCE_HISTORY_PLACEHOLDER);
-  // Streamed reasoning can contain the same source material as the final text.
-  node.querySelector("details.think")?.remove();
   node.dataset.sourceAvailable = pending ? "unknown" : "false";
   renderTurnMetadata(node);
 }
@@ -596,12 +597,17 @@ function sourceProjectionIds() {
   // A disabled legacy grant may be resumed without revocation. Recheck task
   // projections even while hidden; only the server can restore their text.
   return [...turnNodes].filter(([, node]) => node.isConnected && (userWorkerTargets.has(node)
+    || node.dataset.proactive === "true"
     || node.dataset.workerBound === "true"
     || node.dataset.sourceBound !== "false" && node.dataset.sourceAvailable !== "false")).map(([id]) => id);
 }
 
 function invalidateSourceDisplays() {
   sourceProjectionVersion++;
+  for (const node of $("#msgs").querySelectorAll(".assistant.is-streaming:not([data-turn-id])")) {
+    discardTurnReveal(node);
+    renderTurnBubbles(node, "（正在核对资料资格）");
+  }
   if (composerWorkerReference) composerWorkerReference.title = "";
   if (uncertainSend?.workerReference) uncertainSend.workerReference.title = "";
   renderComposerWorkerReference();
@@ -678,6 +684,10 @@ function setChatNotice(message) {
 function renderActivity() {
   const el = $("#chat-activity");
   if (!activity) return;
+  const root = document.documentElement;
+  if (activity.thought_state && root.dataset.thoughtActivity !== activity.thought_state) {
+    root.dataset.thoughtActivity = activity.thought_state;
+  }
   window.AliceChatSearch?.observeActivity(activity);
   connectionStatus(activity.status === "draining" ? "正在关闭"
     : activity.status === "busy" ? "正在处理" : "本机已连接",
@@ -881,7 +891,7 @@ async function startChat(s) {
   $("#welcome").classList.add("hidden");
   if (s.user_intro_pending) {
     $("#app").classList.add("hidden");
-    showUserIntro({session_epoch: s.session_epoch});
+    showUserIntro({session_epoch: s.session_epoch, revision: "0"});
     return;
   }
   introDraftEpoch = null;
@@ -942,9 +952,7 @@ function showIntroStep(step) {
 
 function showUserIntro(profile, editing = false) {
   hideUserIntro();
-  const backgrounds = [$("#app"), $("#welcome")].map(node => [node, node.inert]);
-  introView = {epoch: profile.session_epoch, editing, backgrounds};
-  for (const [node] of backgrounds) node.inert = true;
+  introView = {epoch: profile.session_epoch, revision: profile.revision, editing};
   if (editing || introDraftEpoch !== profile.session_epoch) {
     $("#user-intro-address").value = profile.address || "";
     $("#user-intro-interests").value = profile.interests || "";
@@ -953,13 +961,26 @@ function showUserIntro(profile, editing = false) {
   introDraftEpoch = editing ? null : profile.session_epoch;
   $("#user-intro").dataset.editing = editing ? "true" : "false";
   $("#user-intro").classList.remove("hidden");
+  window.AliceUI.syncOverlays();
   showIntroStep(0);
 }
 
+function clearIntroConflict() {
+  $("#user-intro-conflict").hidden = true;
+  $("#user-intro-current").textContent = "";
+}
+
 function hideUserIntro() {
-  for (const [node, inert] of introView?.backgrounds || []) node.inert = inert;
   introView = null;
+  clearIntroConflict();
   $("#user-intro").classList.add("hidden");
+}
+
+function returnFromIntroToSettings() {
+  hideUserIntro();
+  window.AliceUI.openSettings("general");
+  window.AliceUI.syncOverlays();
+  if (!$("#settings-modal").classList.contains("hidden")) $("#edit-user-intro").focus({ preventScroll: true });
 }
 
 async function finishUserIntro() {
@@ -976,18 +997,31 @@ async function finishUserIntro() {
   controls.forEach(control => { control.disabled = true; });
   status.textContent = view.editing ? "正在保存介绍…" : "正在打开聊天…";
   try {
-    const updated = await postJSON("/api/user-intro", {session_epoch: view.epoch, ...fields});
+    const updated = await postJSON("/api/user-intro", {session_epoch: view.epoch, revision: view.revision, ...fields});
     if (introView !== view) return;
-    hideUserIntro();
     if (view.editing) {
       state = updated;
-      window.AliceUI.openSettings("general");
+      returnFromIntroToSettings();
       toast("介绍已保存");
     } else {
       await startChat(updated);
     }
   } catch (error) {
-    if (introView === view) status.textContent = error.message;
+    if (introView === view) {
+      status.textContent = error.message;
+      if (error.code === "intro_revision_conflict") {
+        clearIntroConflict();
+        view.conflict = null;
+        try {
+          const latest = await api("/api/user-intro");
+          if (introView === view && latest.session_epoch === view.epoch) {
+            view.conflict = latest;
+            $("#user-intro-current").textContent = `已保存的介绍 · 称呼 ${latest.address || "（空）"} · 兴趣 ${latest.interests || "（空）"} · 开场话题 ${latest.opening_topic || "（空）"}`;
+            $("#user-intro-conflict").hidden = false;
+          }
+        } catch (_) { /* Saving again can recheck the latest revision. */ }
+      }
+    }
     else if (!introView) toast("介绍已保存，聊天连接失败，请刷新后继续。", 5000);
   } finally {
     introSaving = false;
@@ -999,8 +1033,7 @@ function advanceUserIntro(skip = false) {
   if (!introView || introSaving) return;
   const {editing, step} = introView;
   if (editing && skip) {
-    hideUserIntro();
-    window.AliceUI.openSettings("general");
+    returnFromIntroToSettings();
     return;
   }
   if (skip) $("#user-intro-fields [data-intro-field]:not([hidden]) :is(input, textarea)").value = "";
@@ -1019,6 +1052,14 @@ $("#user-intro-back").onclick = () => {
   else showWelcome(state);
 };
 $("#user-intro-finish").onclick = () => finishUserIntro();
+$("#user-intro-keep-draft").onclick = () => {
+  if (!introView?.conflict || introSaving) return;
+  introView.revision = introView.conflict.revision;
+  introView.conflict = null;
+  clearIntroConflict();
+  $("#user-intro-status").textContent = "草稿已保留。再次点击保存会覆盖刚才显示的介绍。";
+  $("#user-intro-save").focus();
+};
 
 /* ---------- 初始化（第一次打开） ---------- */
 
@@ -3080,12 +3121,34 @@ function revealFlush(txt) {  // 丢弃未揭示尾部（正文由 done 的完整
   revealStates.delete(txt);
 }
 
-function handleEvent(ev, node, userNode, requestId) {
+function discardTurnReveal(node) {
+  if (!node) return;
+  revealFlush(node);
+  const thinking = node.querySelector("details.think");
+  revealFlush(thinking?.querySelector(".r-txt"));
+  thinking?.remove();
+}
+
+function suspendUnconfirmedReply(node) {
+  if (!node) return;
+  if (node.dataset.sourceBound === "true") {
+    redactSourceNode(node, true);
+    return;
+  }
+  discardTurnReveal(node);
+  if (node.dataset.sourceBound !== "false" && node.dataset.raw?.trim()) {
+    renderTurnBubbles(node, "（回复待确认，正文已暂时收起）");
+  }
+}
+
+function handleEvent(ev, node, userNode, requestId, sourceVersion) {
   if (ev.type === "done" || ev.type === "error") {
     replyMotion(node, false);
     window.AliceWorkers?.refreshAfterTurn();
   }
   const raw = () => node.dataset.raw || "";
+  const canReveal = sourceVersion === sourceProjectionVersion
+    && !(node.dataset.sourceBound === "true" && node.dataset.sourceAvailable !== "true");
   if (ev.type === "start" || ev.type === "accepted") {
     if (ev.session_epoch) {
       sessionEpoch = ev.session_epoch;
@@ -3095,9 +3158,11 @@ function handleEvent(ev, node, userNode, requestId) {
     noteRequestNode(node, ev.request_id || requestId, "assistant");
     markUserWorkerTarget(userNode, { channel: "gui", ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
   } else if (ev.type === "reasoning") {
+    if (!canReveal) return;
     revealPush(ensureThinking(node), ev.text, (el, s) => { el.textContent = s; });
     scrollBottom();
   } else if (ev.type === "delta") {
+    if (!canReveal) return;
     const think = node.querySelector("details.think");
     if (think && !node.dataset.thinkCollapsed) {  // 正文开始揭示时收起思考块，可再展开
       think.open = false;
@@ -3124,23 +3189,26 @@ function handleEvent(ev, node, userNode, requestId) {
   } else if (ev.type === "meta") {
     sysline(ev.text);
   } else if (ev.type === "done") {
-    // 完整回复对齐进句级缓冲，按句子节奏放完，不一次性倒出（对不上时立即显示兜底）
-    if (ev.reply) revealSync(node, ev.reply, (container, shown) => { renderTurnBubbles(container, shown); scrollBottom(); });
-    else revealFlush(node);  // 没有完整回复：未揭示尾部不再等待
-    revealComplete(node.querySelector("details.think .r-txt"));  // 思考不能丢字
-    if (!raw().trim() && !revealActive(node)) renderTurnBubbles(node, "（沉默）");
+    if (ev.discard_preview) discardTurnReveal(node);
+    if (canReveal) {
+      if (ev.reply) revealSync(node, ev.reply, (container, shown) => { renderTurnBubbles(container, shown); scrollBottom(); });
+      else revealFlush(node);
+      revealComplete(node.querySelector("details.think .r-txt"));
+      if (!raw().trim() && !revealActive(node)) renderTurnBubbles(node, "（沉默）");
+    }
     renderMemory(ev.memory);
     if (ev.session_epoch) sessionEpoch = ev.session_epoch;
     const id = ev.request_id || requestId;
     markTurn(userNode, { id: ev.user_turn_id, role: "user", request_id: id, channel: "gui",
       ...(Object.hasOwn(ev, "worker_target") ? { worker_target: ev.worker_target } : {}) });
-    markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui" });
+    markTurn(node, { id: ev.assistant_turn_id, role: "assistant", request_id: id, channel: "gui",
+      source_bound: ev.source_bound, source_available: ev.source_available,
+      source_expires_at: ev.source_expires_at, worker_bound: ev.worker_bound });
     confirmComposerRequest(id);
     setChatNotice("");
     scrollBottom();
   } else if (ev.type === "error") {
-    revealComplete(node.querySelector("details.think .r-txt"));
-    revealFlush(node);
+    suspendUnconfirmedReply(node);
     const hasVisibleText = [...node.querySelectorAll(":scope > .txt")].some(t => t.textContent.trim());
     if (!raw().trim() && !hasVisibleText) node.remove();
     sysline(ev.message);
@@ -3177,6 +3245,7 @@ async function send() {
     ...(sessionEpoch ? { session_epoch: sessionEpoch } : {}),
     ...(workerTarget ? { worker_target: workerTarget } : {}) };
   const epochAtSend = sessionEpoch;
+  const sourceVersion = sourceProjectionVersion;
   uncertainSend = { requestId, text, epoch: epochAtSend, workerReference, draftUnchanged: true };
   renderComposerWorkerReference();
   window.AliceChatSearch?.begin(requestId, epochAtSend);
@@ -3255,12 +3324,13 @@ async function send() {
           return;
         }
         if (event.type === "done" || event.type === "error") terminal = true;
-        handleEvent(event, node, userNode, requestId);
+        handleEvent(event, node, userNode, requestId, sourceVersion);
       }
     }
     if (!terminal) throw new Error("连接结束，但尚未收到处理结果");
   } catch (e) {
     replyMotion(node, false);
+    suspendUnconfirmedReply(node);
     connectionStatus("结果待确认", "error");
     setChatNotice("连接中断，结果尚未确认。请先同步记录；不要把断线当成没有处理。再次发送相同文字会沿用原请求。");
     if (node && !node.querySelector(".txt").textContent.trim()) node.remove();
@@ -3315,13 +3385,15 @@ boot().catch(showStartupError);
   const app = byId("app");
   const nav = byId("app-nav");
   const narrow = matchMedia("(max-width: 900px)");
-  const modals = [byId("modal"), byId("settings-modal")];
+  const introModal = byId("user-intro");
+  const modals = [introModal, byId("modal"), byId("settings-modal")];
   const shutdownScreen = byId("shutdown-screen");
   let activeModal = null;
   let modalReturn = null;
   let lastTrigger = null;
-  const visible = (el) => !!el && !el.closest(".hidden, [inert]") && el.getClientRects().length > 0;
-  const focusable = (root) => [...root.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')].filter(visible);
+  const visible = (el) => !!el && !el.closest('.hidden, [hidden], [inert], [aria-hidden="true"]') && el.getClientRects().length > 0;
+  const focusable = (root) => [...root.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]')]
+    .filter(el => el.tabIndex >= 0 && !el.matches(":disabled") && visible(el));
   const focus = (el) => { if (visible(el)) el.focus({ preventScroll: true }); };
   const settingsModal = byId("settings-modal");
   const settingsNav = settingsModal.querySelector(".settings-nav");
@@ -3361,6 +3433,7 @@ boot().catch(showStartupError);
       loadRuntimeInfo();
     },
     closeSettings,
+    syncOverlays: syncModal,
     registerSettingsRoute(handler) {
       settingsRoute = handler;
       return () => { if (settingsRoute === handler) settingsRoute = null; };
@@ -3471,7 +3544,10 @@ boot().catch(showStartupError);
       if (root) {
         e.preventDefault(); e.stopImmediatePropagation();
         if (activeModal === shutdownScreen) return;
-        if (activeModal === byId("settings-modal")) byId("settings-x").click();
+        if (activeModal === introModal) {
+          if (introView?.editing) advanceUserIntro(true);
+          else byId("user-intro-back").click();
+        } else if (activeModal === byId("settings-modal")) byId("settings-x").click();
         else if (activeModal) byId("modal-x").click();
         else setNav(false);
       }

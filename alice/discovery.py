@@ -40,7 +40,7 @@ DEFAULTS = {
     "observation_ttl_hours": None,
     "daily_queries": 60, "daily_models": 120, "allow_chat_interests": False,
     "share_in_qq": False, "save_memories": False, "provider_kind": "native",
-    "provider_endpoint": "", "provider_key": "", "provider_engines": "duckduckgo",
+    "provider_endpoint": "", "brave_key": "", "provider_engines": "duckduckgo",
     "bilibili_access": "native", "zhihu_access": "third_party", "tieba_access": "native", "network_mode": "system", "daily_network": 1000, "daily_response_mib": 1024,
     "tieba_read_replies": False, "tieba_read_nested": False, "tieba_reply_limit": 200, "tieba_text_limit": 30000,
     "daily_shares": 20, "daily_memory_writes": 10, "pool_capacity": 100,
@@ -399,6 +399,7 @@ class DiscoveryCoordinator:
             row = conn.execute("SELECT value FROM discovery_config WHERE id=1").fetchone()
             previous = json.loads(row["value"])
             merged = {**copy.deepcopy(DEFAULTS), **previous}
+            merged.pop("provider_key", None)  # Legacy values have no verifiable provider binding.
             merged.pop("tieba_forums", None)  # Replaced by per-interest, non-exclusive preferences.
             previous_platforms = previous.get("platforms", {})
             if not isinstance(previous_platforms, dict):
@@ -589,8 +590,8 @@ class DiscoveryCoordinator:
             return True, ""
         if settings["provider_kind"] == "native" and platform != "web":
             return False, "需配置并允许第三方搜索通道"
-        if settings["provider_kind"] == "brave" and not settings["provider_key"]:
-            return False, "请配置搜索服务密钥"
+        if settings["provider_kind"] == "brave" and not settings["brave_key"]:
+            return False, "请填写并保存 Brave 搜索密钥"
         if settings["provider_kind"] == "searxng" and not settings["provider_endpoint"]:
             return False, "请配置固定搜索服务地址"
         return True, ""
@@ -620,8 +621,10 @@ class DiscoveryCoordinator:
         revision, settings = self._config_locked()
         self.service.store.decay_interests(self.service.cfg.memory.interest_decay_days)
         now = time.time()
-        public = {k: copy.deepcopy(v) for k, v in settings.items() if k not in ("provider_key", "platforms")}
-        public.update(revision=revision, provider_key_present=bool(settings["provider_key"]))
+        public = {k: copy.deepcopy(v) for k, v in settings.items()
+                  if k not in ("brave_key", "provider_key", "platforms")}
+        public.update(revision=revision, brave_key_present=bool(settings["brave_key"]),
+                      provider_key_present=settings["provider_kind"] == "brave" and bool(settings["brave_key"]))
         learning_preview = self.service.store.learning_preview(self.service.cfg)
         platforms = []
         for identity, label in PLATFORMS.items():
@@ -837,11 +840,13 @@ class DiscoveryCoordinator:
             self.service._lock.release()
 
     def _save_settings_locked(self, revision, previous, changes):
-        permitted = set(DEFAULTS) - {"platforms", "provider_key"} | {"provider_key", "clear_provider_key"}
+        permitted = set(DEFAULTS) - {"platforms", "brave_key"} | {"provider_key", "clear_provider_key"}
         if not isinstance(changes, dict) or set(changes) - permitted:
             raise ChannelError(400, "invalid_request", "设置字段无效")
         settings = copy.deepcopy(previous)
         for key, value in changes.items():
+            if key in {"provider_key", "clear_provider_key"}:
+                continue  # These fields apply to the selected provider after validation.
             if key in {"search_quota_testing", "enabled", "background_enabled", "chat_search_enabled", "remember_observations", "allow_paid", "allow_chat_interests", "share_in_qq", "save_memories", "tieba_read_replies", "tieba_read_nested"}:
                 settings[key] = _bool(value)
             elif key in ("window_start", "window_end"):
@@ -895,20 +900,22 @@ class DiscoveryCoordinator:
                     if not parsed.path:
                         value += "/search"
                 settings[key] = value
-            elif key == "provider_key":
-                value = _string(value, 512, empty=True)
-                if any(c.isspace() for c in value):
-                    raise ChannelError(400, "invalid_request", "搜索密钥不能包含空白")
-                if value:
-                    settings[key] = value
             elif key == "provider_engines":
                 value = _string(value, 8192)
                 engines = [name.strip() for name in value.split(",")]
                 if not engines or any(not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", name) for name in engines):
                     raise ChannelError(400, "invalid_request", "请指定有效引擎名称，用英文逗号分隔")
                 settings[key] = ",".join(dict.fromkeys(engines))
-            elif key == "clear_provider_key" and _bool(value):
-                settings["provider_key"] = ""
+        key = _string(changes.get("provider_key", ""), 512, empty=True)
+        clear_key = _bool(changes.get("clear_provider_key", False))
+        if any(c.isspace() for c in key):
+            raise ChannelError(400, "invalid_request", "搜索密钥不能包含空白")
+        if (key or clear_key) and settings["provider_kind"] != "brave":
+            raise ChannelError(400, "invalid_request", "请先选择 Brave 搜索服务再修改密钥")
+        if key and clear_key:
+            raise ChannelError(400, "invalid_request", "填写新密钥和移除密钥只能选择一项")
+        if key or clear_key:
+            settings["brave_key"] = key
         # Thoughts settings own autonomous model permission. Discovery allow_paid
         # and daily_models still govern the explicit discovery worker.
         self._cancel.set()
@@ -1327,8 +1334,9 @@ class DiscoveryCoordinator:
                     data = self._execute(job, cancel, settings, "tieba_forum_check", {"forum_name": name}, deadline)
                     result = _forum_check_result(data, name)
                 except _Stopped as exc:
-                    self._store_step(job, cancel, lambda: publish(index, unverified(name, exc.code)), settle=True)
-                    if (self._unavailable or exc.code.startswith("proxy_") or exc.code in {
+                    reason = exc.code
+                    self._store_step(job, cancel, lambda: publish(index, unverified(name, reason)), settle=True)
+                    if (self._unavailable or reason.startswith("proxy_") or reason in {
                             "cancelled", "foreground_busy", "session_changed", "quota_exceeded", "timeout",
                             "tieba_api_error", "verification_required", "http_401", "http_403", "http_429",
                             "network", "tls", "dns", "dns_resolution", "dns_non_public", "dns_fake_ip", "dns_invalid"}):
@@ -1998,12 +2006,13 @@ class DiscoveryCoordinator:
 
     def search_documents(self, job, cancel, settings, platform, query, deadline, *, limit=None, interest=None):
         """搜索一个平台并返回排序后的候选——前台后台同一次序、同一传输分发。"""
-        provider = {"kind": "native"} if not _third_party(platform, settings) else {
-            "kind": settings["provider_kind"], "api_key": settings["provider_key"],
-            "endpoint": settings["provider_endpoint"], "allow_loopback": True,
-            "engines": [name.strip() for name in settings["provider_engines"].split(",")]}
-        if platform == "web" and provider["kind"] == "native":
-            provider["kind"] = "bing_rss"
+        kind = settings["provider_kind"] if _third_party(platform, settings) else "native"
+        provider = {"kind": "bing_rss" if platform == "web" and kind == "native" else kind}
+        if kind == "brave":
+            provider["api_key"] = settings["brave_key"]
+        elif kind == "searxng":
+            provider.update(endpoint=settings["provider_endpoint"], allow_loopback=True,
+                            engines=[name.strip() for name in settings["provider_engines"].split(",")])
         browser = platform in ("bilibili", "zhihu") and settings[platform + "_access"] == "browser"
         native_bili = platform == "bilibili" and settings["bilibili_access"] == "native"
         payload = {"query": query, "limit": limit or settings["search_results"]}

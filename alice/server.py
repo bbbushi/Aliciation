@@ -604,7 +604,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             elif path == "/api/history":
                 self._history()
             elif path == "/api/chat/activity":
-                self._json(svc.chat_activity())
+                self._json(svc.chat_activity(include_thought_state=True))
             elif path == "/api/connectors/qq":
                 self._connector_route()
             elif (path in ("/api/collaborators", "/api/worker-tasks", "/api/worker-permissions/list", "/api/claude-policy", "/api/workers")
@@ -935,7 +935,7 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     worker_target=worker_target,
                     on_reply_saved=lambda: emit({"type": "reply_saved"}),
                 )
-                done = {"type": "done", "reply": result["reply"],
+                done = {"type": "done",
                         **{key: result.get(key) for key in (
                             "request_id", "session_epoch", "user_turn_id", "assistant_turn_id")}}
                 if not public_tui:
@@ -943,7 +943,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                         emit({"type": "meta", "text": line})
                     done.update(memory=result["memory"], evaluation_id=result.get("evaluation_id"),
                                 worker_target=result.get("worker_target"))
-                emit(done)
+                if connected:
+                    done.update(svc.gui_reply_for_delivery(session_epoch=done["session_epoch"],
+                                                           assistant_turn_id=done["assistant_turn_id"]))
+                    emit(done)
             except ChannelError as exc:
                 if not started:
                     self._channel_error(exc)

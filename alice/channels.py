@@ -114,6 +114,11 @@ class ChannelCoordinator:
                          "THEN 'interrupted' ELSE 'completed_with_warning' END, "
                          "error_code='process_interrupted', maintenance_status='interrupted',updated_at=? "
                          "WHERE status IN ('accepted','user_committed','running','generated')", (time.time(),))
+            conn.execute("UPDATE v2_invitation_attempts SET state='unknown',version=version+1,"
+                         "deferred_reason='reply_not_delivered',updated_at=? WHERE epoch=? AND state='accepted' "
+                         "AND expansion_request_id IN (SELECT request_id FROM channel_requests WHERE session_epoch=? "
+                         "AND status IN('failed','interrupted','completed','completed_with_warning'))",
+                         (time.time(), epoch, epoch))
         with self.condition:
             self.epoch = epoch
             self.cache.clear()
@@ -395,6 +400,9 @@ class ChannelCoordinator:
         with conn:
             conn.execute("UPDATE channel_requests SET status=?,error_code=?,maintenance_status=?,updated_at=? WHERE request_id=?",
                          (state, error_code, "warning" if error_code or warning else "completed", time.time(), request_id))
+            conn.execute("UPDATE v2_invitation_attempts SET state='unknown',version=version+1,"
+                         "deferred_reason='reply_not_delivered',updated_at=? "
+                         "WHERE epoch=? AND expansion_request_id=? AND state='accepted'", (time.time(), self.epoch, request_id))
         self.publish_locked(request_id)
 
     def status(self, channel_id, request_id):

@@ -318,13 +318,10 @@ def public_question(row, *, full=False):
 
 def expire_dependencies(store):
     """No prose copies survive a revoked/deleted dependency in these new stores."""
+    from .autonomy_v2 import build
+    from .autonomy_v2.models import Scope
     epoch = store.meta_get("session_epoch") or ""
     with store.source_transaction():
-        for intent in store.conn.execute("SELECT id,basis FROM v2_contact_intents WHERE epoch=? "
-                                        "AND motive='chat' AND topic<>''", (epoch,)).fetchall():
-            if not valid_basis(store, json.loads(intent["basis"]) or {}):
-                store.conn.execute("UPDATE v2_contact_intents SET topic='',reason='',state='closed',"
-                                   "version=version+1,updated_at=? WHERE id=?", (time.time(), intent["id"]))
         for plan in store.conn.execute("SELECT run_id,basis FROM v2_activity_plans WHERE epoch=? AND object<>''",
                                        (epoch,)).fetchall():
             if not valid_basis(store, json.loads(plan['basis'])):
@@ -349,6 +346,7 @@ def expire_dependencies(store):
                         if store.conn.execute("SELECT 1 FROM proactive_turns WHERE turn_id=?", (row["turn_id"],)).fetchone():
                             store.conn.execute("UPDATE turns SET content=? WHERE id=?", (SOURCE_SHADOW, row["turn_id"]))
                             store.conn.execute("UPDATE source_turns SET content='' WHERE turn_id=?", (row["turn_id"],))
+        build(store=store).invitations.withdraw_unavailable(Scope(session_epoch=epoch, channel_id="gui"), include_closed=True)
 
 
 class ThoughtSession:

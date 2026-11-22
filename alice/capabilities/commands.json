@@ -127,7 +127,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "用户指定单篇条目时用1，避免引入不需要的其他页面"
+            "description": "用户指定单篇条目时用1。该参数可减少条目数，不能提高用户设置的单次结果上限。"
           },
           "fresh": {
             "type": "boolean",

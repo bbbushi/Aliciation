@@ -110,7 +110,7 @@
   </div>
 </section>
 
-<section id="user-intro" class="screen setup-wizard hidden" aria-labelledby="user-intro-title">
+<section id="user-intro" class="screen setup-wizard hidden" role="dialog" aria-modal="true" aria-labelledby="user-intro-title">
   <div class="wizard-frame">
     <div class="welcome-card wizard-card">
       <div class="wizard-top">
@@ -129,6 +129,10 @@
             <textarea id="user-intro-topic" rows="2" maxlength="180" placeholder="比如最近在玩的一款游戏"></textarea></div>
         </fieldset>
         <p id="user-intro-status" class="hint" role="status"></p>
+        <section id="user-intro-conflict" hidden aria-label="目前已保存的介绍">
+          <p id="user-intro-current"></p>
+          <button id="user-intro-keep-draft" class="link" type="button">保留草稿，准备覆盖这份介绍</button>
+        </section>
         <div class="wizard-actions">
           <button id="user-intro-back" class="btn ghost" type="button" hidden>上一步</button>
           <button id="user-intro-skip" class="btn ghost" type="button">跳过</button>

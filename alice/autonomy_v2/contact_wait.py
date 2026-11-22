@@ -88,9 +88,11 @@ class ContactWait:
         rows = self.store.conn.execute(
             "SELECT a.* FROM v2_invitation_attempts a JOIN v2_contact_intents i "
             "ON a.intent_id=i.id AND a.epoch=i.epoch WHERE a.epoch=? AND i.state='active' "
-            "AND a.state='deferred' AND NOT EXISTS(SELECT 1 FROM v2_invitation_attempts b "
+            "AND a.state='deferred' AND NOT EXISTS(SELECT 1 FROM v2_contact_holds h "
+            "WHERE h.epoch=a.epoch AND h.intent_id=a.intent_id AND h.channel_id=?) "
+            "AND NOT EXISTS(SELECT 1 FROM v2_invitation_attempts b "
             "WHERE b.intent_id=a.intent_id AND b.epoch=a.epoch AND b.created_at>a.created_at) "
-            "ORDER BY a.updated_at", (scope.session_epoch,)).fetchall()
+            "ORDER BY a.updated_at", (scope.session_epoch, scope.channel_id)).fetchall()
         for row in rows:
             self.hold(scope, reason='prior_unanswered', attempt_id=row['id'], intent_id=row['intent_id'])
         self.store.meta_set(key, '1')

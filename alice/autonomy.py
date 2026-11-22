@@ -361,10 +361,14 @@ class AutonomyCoordinator:
         from .autonomy_v2.models import Scope
         stack = build(store=store)
         scope = Scope(session_epoch=self.epoch, channel_id="gui")
+        stale_intents = set()
         for intent in intents:
             stored_intent = stack.invitations.repository.get_intent(scope, intent["id"])
-            if stored_intent.motive == "chat" and not thoughts.valid_basis(store, stored_intent.basis or {}):
+            try:
+                stack.invitations.host.validate_intent_material(stored_intent)
+            except ValueError:
                 intent["topic"] = "话题材料已失效"
+                stale_intents.add(intent["id"])
             if intent["state"] == "active":
                 intent["blockers"] = stack.invitations.delivery_blockers(scope, stored_intent)
             try:
@@ -374,6 +378,10 @@ class AutonomyCoordinator:
         topics_by_id = {intent["id"]: intent["topic"] for intent in intents}
         for invitation in invitations:
             invitation["topic"] = topics_by_id.get(invitation["intent_id"], "")
+            if invitation["intent_id"] in stale_intents:
+                invitation["invitation_text"] = ""
+                if invitation["state"] in {"prepared", "awaiting_reply", "accepted", "deferred"}:
+                    invitation.update(state="withdrawn", deferred_reason="source_changed")
             if invitation["state"] == "prepared":
                 intent = stack.invitations.repository.get_intent(scope, invitation["intent_id"])
                 invitation["blockers"] = stack.invitations.delivery_blockers(scope, intent,
@@ -795,7 +803,8 @@ class AutonomyCoordinator:
                         raw = search.execute(args, tool_call_id=tc.id)
                         with service._lock:
                             self._gate(run, config, revision, basis, latest, deadline)
-                            result = tool_receipt(search.attach_locked(raw, context), tc)
+                            budget = None if headroom is None else max(0, headroom - 256)
+                            result = tool_receipt(search.attach_locked(raw, context, max_tokens=budget), tc)
                             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                             basis = thoughts.current_basis(store, context)
                             self._save_checkpoint(run, previous_checkpoint + messages[len(intro):], basis, step=True)
