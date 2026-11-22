@@ -137,14 +137,29 @@ def replace_llm_values(path: Path, changes: dict[str, str], expected_revision: s
     return _replace_string_values(path, changes, expected_revision, section="llm")
 
 
-def replace_persona_mode(path: Path, mode: str, expected_revision: str) -> str:
+def persona_mode_revision(path: Path) -> tuple[str, str]:
+    """Read the revision and the effective mode from the same config snapshot."""
+    from .config import PersonaConfig
+
+    source = _read(path)
+    _, settings = _parse(source)
+    persona = settings.get("persona", {})
+    if not isinstance(persona, dict):
+        raise ConfigEditError("人格配置格式无效")
+    mode = persona.get("expression_mode", PersonaConfig().expression_mode)
+    if mode not in ("full", "registry"):
+        raise ConfigEditError("请修正配置中的 persona.expression_mode")
+    return hashlib.sha256(source).hexdigest(), mode
+
+
+def replace_persona_mode(path: Path, mode: str, expected_revision: str, *, publish=True) -> str:
     """只改人格装配模式；保留其余字段、注释和凭据，校验后原子发布。"""
     if mode not in ("full", "registry"):
         raise ConfigEditError("人格装配模式无效")
-    return _replace_string_values(path, {"expression_mode": mode}, expected_revision, section="persona")
+    return _replace_string_values(path, {"expression_mode": mode}, expected_revision, section="persona", publish=publish)
 
 
-def _replace_string_values(path: Path, changes: dict[str, str], expected_revision: str, *, section: str) -> str:
+def _replace_string_values(path: Path, changes: dict[str, str], expected_revision: str, *, section: str, publish=True) -> str:
     source = _read(path)
     current = hashlib.sha256(source).hexdigest()
     if current != expected_revision:
@@ -161,7 +176,7 @@ def _replace_string_values(path: Path, changes: dict[str, str], expected_revisio
     if parsed != expected:
         raise ConfigEditError("配置文件使用了复杂 TOML 写法，界面无法安全保留，请手工编辑")
 
-    return _publish_config(path, output, expected_revision)
+    return _publish_config(path, output, expected_revision) if publish else hashlib.sha256(output).hexdigest()
 
 
 def replace_observation_settings(path: Path, *, enabled: bool, metadata: bool,

@@ -64,6 +64,8 @@
         `translate(-50%, -50%) rotateY(${off.toFixed(2)}deg) translateZ(${R}px)`;
       p.el.style.opacity = ab >= 128 ? "0" : (front ? "1" : "0.45").toString();
       p.el.classList.toggle("is-front", front);
+      if (!front && p.el.contains(document.activeElement)) stage.focus({ preventScroll: true });
+      p.el.inert = !front;
       p.el.setAttribute("aria-hidden", front ? "false" : "true");
     });
   }
@@ -94,8 +96,10 @@
   /* ---------- 基座隐藏了非当前分区 → 环模式下强制全员在场 ---------- */
   function keepVisible(section) {
     if (section.hasAttribute("hidden")) section.removeAttribute("hidden");
-    section.classList.remove("hidden");
-    section.style.display = "";                                // 交还环面板样式控制
+    // 此处由监听 class 的 sectionObs 调用；无条件 remove 即使值不变也会
+    // 再产生属性通知，让观察器不断触发自身，阻塞浏览器绘制与输入。
+    if (section.classList.contains("hidden")) section.classList.remove("hidden");
+    if (section.style.display) section.style.display = "";      // 交还环面板样式控制
   }
 
   /* ---------- 安装 / 还原 ---------- */
@@ -124,6 +128,9 @@
     stage = document.createElement("div");
     stage.className = "orbit-ring-stage";
     stage.setAttribute("data-ring", "");
+    stage.setAttribute("role", "group");
+    stage.setAttribute("aria-label", "设置投影环");
+    stage.setAttribute("aria-keyshortcuts", "ArrowLeft ArrowRight");
     stage.tabIndex = 0;                                        // 键盘左右箭头的落点
     track = document.createElement("div");
     track.className = "orbit-ring";
@@ -258,9 +265,10 @@
     stage.addEventListener("pointercancel", release);
     /* 键盘：stage 聚焦时左右箭头换屏 */
     stage.addEventListener("keydown", (e) => {
+      if (e.target !== stage || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       e.preventDefault();
-      const t = idx + (e.key === "ArrowLeft" ? 1 : -1);        // 环绕
+      const t = idx + (e.key === "ArrowLeft" ? -1 : 1);        // 环绕
       setIndex(t);
       switchTo(ORDER[wrapIdx(t)][0]);
     });
@@ -276,7 +284,7 @@
         .find((b) => b.getAttribute("aria-current") === "page")?.dataset.section;
       if (cur) syncTo(cur, { animate: true });
     });
-    panels.forEach((p) => p.el.querySelectorAll(":scope > section").forEach((s) =>
+    panels.forEach((p) => p.el.querySelectorAll(":scope > .orbit-ring-panel-body > section").forEach((s) =>
       sectionObs.observe(s, { attributes: true, attributeFilter: ["hidden", "class"] })));
     sectionObs.observe(m.querySelector(".orbit-section-nav") || m, { subtree: true, attributeFilter: ["aria-current"] });
 
@@ -293,6 +301,8 @@
   }
   function teardown() {
     const m = modal();
+    active = false;
+    if (sectionObs) { sectionObs.disconnect(); sectionObs = null; }
     /* 还原基座可见性约定：当前分区之外补回 hidden class。
        **只动 class、绝不设 hidden 属性**——基座漏斗（app.js selectSettingsSection）
        只切换 class；一旦留下属性隐藏，之后的任何 class 切换都救不回来（空正文），
@@ -309,7 +319,6 @@
     }
     bodyEl()?.classList.remove("orbit-ring-host");
     if (m && m._ringUndos) { m._ringUndos.splice(0).forEach((f) => f()); }
-    if (sectionObs) { sectionObs.disconnect(); sectionObs = null; }
   }
 
   /* ---------- 状态机：主题 × 视口 × page-mode ---------- */

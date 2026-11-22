@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS v2_invitation_attempts (
  updated_at REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS v2_attempt_epoch_state ON v2_invitation_attempts(epoch,state,updated_at);
+CREATE INDEX IF NOT EXISTS v2_attempt_turn ON v2_invitation_attempts(invitation_turn_id);
 CREATE INDEX IF NOT EXISTS v2_intent_epoch_state ON v2_contact_intents(epoch,state,updated_at);
 CREATE TABLE IF NOT EXISTS v2_contact_decisions (
  run_id TEXT PRIMARY KEY,

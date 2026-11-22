@@ -91,7 +91,8 @@
   const communicationOutcomes = {no_contact:"本窗口不发起联系", intent_recorded:"意图已保留，待后续重新判断", invitation_prepared:"已准备简短邀请", delivery_blocked:"意图已保留，当前投递受阻", not_evaluated:"没有收到交流决定"};
   const contactBlockers = {waiting_user_availability:"等待用户恢复方便，先做其他事", topic_waiting_user:"本话题等待相关回应或约定", master_disabled:"总开关关闭", not_awake:"当前待机", contact_permission_disabled:"未开放主动邀请", resting:"发呆休息中", awaiting_reply:"已有邀请等待回应", source_changed:"内容或来源已变化", outside_contact_window:"联系时段外", motive_disabled:"此类邀请未开放", retry_not_due:"尚未到再邀时间", contact_capacity:"联系次数或冷却限制"};
   const blockerText = (items) => (items || []).map((key) => contactBlockers[key] || key).join("、");
-  Object.assign(reasons, {contact_evaluated:"已完成交流判断", contact_context_reviewed:"已判断本批材料适不适合主动交流"});
+  Object.assign(reasons, {contact_evaluated:"已完成交流判断", contact_context_reviewed:"已判断本批材料适不适合主动交流",
+    contact_attempt_limit:"本批材料已尝试，未形成判断。等待新材料或约定时间", model_finished:"模型已结束，未提交结束回执"});
   Object.assign(contactBlockers, {contact_delivery_mode:"需要选择站内主动消息", mode_disabled:"主动交流模式已暂停"});
   const form = el("thought-config");
   form.addEventListener("input", () => { dirty = true; });
@@ -209,8 +210,12 @@
         : "未回应或暂时忙碌，暂停主动邀请；恢复方便时可在聊天中告诉 Alice。"));
     }
     for (const attempt of next.invitations || []) {
+      const waitingUntil = attempt.state === "awaiting_reply" && attempt.expires_at
+        ? `（等待至 ${new Date(attempt.expires_at*1000).toLocaleTimeString()}）` : "";
+      const reason = {source_changed:"话题材料已失效", reply_not_delivered:"未确认本轮展开回复",
+        expansion_binding_changed:"展开所依据的邀请已变化"}[attempt.deferred_reason];
       const node = card(`${labels[attempt.state] || attempt.state} · ${attempt.topic || "（无主题）"}`,
-        `${attempt.invitation_text}${attempt.expires_at ? `（等待至 ${new Date(attempt.expires_at*1000).toLocaleTimeString()}）` : ""}`);
+        [attempt.invitation_text + waitingUntil, reason].filter(Boolean).join(" · "));
       if (attempt.state === "prepared") {
         const note = document.createElement("p");
         note.textContent = attempt.blockers?.length ? `当前未投递：${blockerText(attempt.blockers)}` : "等待宿主下一个投递节拍";

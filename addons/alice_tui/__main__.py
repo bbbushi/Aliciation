@@ -569,38 +569,62 @@ class App:
                 lines.append(f"上一次请求暂不可确认（{exc}）")
         self.note("\n".join(lines), "brand_bold")
 
-    def _history_row(self, turn: dict) -> str:
-        body = scrub(turn.get("content") or "").replace("\n", " ")
-        who = "你" if turn["role"] == "user" else self.name
-        mark = style("user_mark", "›") if turn["role"] == "user" else style("brand", "•")
-        return f"#{turn['id']} {mark} {who}  {body[:160]}"
+    def _history_lines(self, turns: list[dict], keyword: str, width: int) -> list[str]:
+        lines = []
+        now = time.time()
+        for turn in turns:
+            body = scrub(turn.get("content") or "")
+            if turn.get("source_available") and turn.get("source_bound") and (turn.get("source_expires_at") or 0) <= now:
+                body = "此条资料已到期。"
+            if keyword not in body:
+                continue
+            label = "你" if turn["role"] == "user" else self.name
+            if turn.get("proactive"):
+                label += " · 主动邀请"
+            lines.extend(wrap_line(f"#{turn['id']} {label}", width))
+            for line in body.split("\n"):
+                lines.extend(wrap_line(line, width))
+            lines.append("")
+        return lines or ["本页未找到该关键词。" if keyword else "暂无记录。"]
 
     def cmd_history(self, keyword: str) -> None:
         cursor = None
+        offset = 0
+        frame = None
         self.erase()
         self.term.write("\x1b[?1049h")
         try:
             while True:
                 try:
-                    rows = max(1, min(15, self.term.height() - 4))
-                    page = self.client.history(before_id=cursor, limit=rows, session_epoch=self.epoch)
+                    page = self.client.history(before_id=cursor, limit=15, session_epoch=self.epoch)
                 except TuiApiError as exc:
-                    self.term.write("\x1b[2J\x1b[H" + scrub(str(exc)) + "\n按 q 返回\n")
                     page = {}
+                    heading = "历史暂不可读"
+                    error = scrub(str(exc))
                 else:
-                    turns = page["turns"]
-                    matches = [turn for turn in turns if keyword in scrub(turn.get("content") or "")]
+                    turns = page.get("turns", [])
                     scope = f"#{turns[0]['id']}–#{turns[-1]['id']}" if turns else "暂无记录"
-                    lines = [f"历史 {scope} · 本页 {len(turns)} 条"] \
-                        + [self._history_row(turn) for turn in matches]
-                    if keyword and not matches:
-                        lines.append("本页未找到该关键词。")
-                    lines.append("Enter 更早一页 · r 刷新 · q 返回" if page["has_more"]
-                                 else "r 刷新 · q 返回")
-                    self.term.write("\x1b[2J\x1b[H")
-                    self.term.print_lines([self.term.clip(line) for line in lines])
+                    heading = f"历史 {scope} · 本页 {len(turns)} 条"
                 refresh_at = time.monotonic() + SYNC_INTERVAL
+                layout = None
+                deadlines = [turn.get("source_expires_at") or 0 for turn in page.get("turns", [])
+                             if turn.get("source_bound") and turn.get("source_available")]
                 while time.monotonic() < refresh_at:
+                    width, height = max(4, self.term.width() - 1), max(1, self.term.height() - 3)
+                    now = time.time()
+                    current = (width, sum(deadline <= now for deadline in deadlines))
+                    if current != layout:
+                        layout = current
+                        lines = self._history_lines(page["turns"], keyword, width) if page else wrap_line(error, width)
+                    last = max(0, len(lines) - height)
+                    offset = min(last, max(0, offset))
+                    hint = "↑↓/PgUp/PgDn 滚动 · " + ("Enter 更早 · " if page.get("has_more") else "") + "r 刷新 · q 返回"
+                    drawn = [self.term.clip(f"{heading} · {offset + 1}/{len(lines)}"),
+                             *lines[offset:offset + height], self.term.clip(hint)]
+                    if drawn != frame:
+                        self.term.write("\x1b[2J\x1b[H")
+                        self.term.print_lines(drawn)
+                        frame = drawn
                     key = self.editor.poll_key(timeout=0.25)
                     if key in ("q", "esc", "exit", "interrupt"):
                         return
@@ -608,9 +632,16 @@ class App:
                         break
                     if key == "enter" and page.get("has_more"):
                         cursor = page["next_before_id"]
+                        offset = 0
                         break
+                    if key == "home":
+                        offset = 0
+                    elif key == "end":
+                        offset = last
+                    else:
+                        offset += {"up": -1, "down": 1, "page_up": -height, "page_down": height}.get(key, 0)
         finally:
-            self.term.write("\x1b[?1049l")
+            self.term.write("\x1b[2J\x1b[H\x1b[?1049l")
             self.dirty = True
 
     def run_command(self, draft: str) -> bool:
@@ -622,7 +653,7 @@ class App:
         elif name == "/status":
             self.cmd_status()
         elif name == "/help":
-            self.note("/history [关键词]  翻看历史\n/status  会话与原请求状态\n"
+            self.note("/history [关键词]  查看历史，方向键或 PgUp/PgDn 滚动\n/status  会话与原请求状态\n"
                       "Enter 发送 · Ctrl+J 换行 · / 命令菜单 · Tab 补全 · Esc 关菜单\n"
                       "Ctrl+O  本轮工具进度 · Ctrl+C 停止等待或清空草稿 · Ctrl+D 关闭终端客户端")
         else:

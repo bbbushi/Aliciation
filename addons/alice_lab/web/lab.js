@@ -9,7 +9,8 @@ const reasons = {weighted_rotation:"按权重抽签", priority_content:"优先�
   same_material_window:"同材料窗口用尽", mode_disabled:"模式未开启", value_waiting:"等待价值确认",
   new_material_or_curiosity:"新材料或好奇", voluntary_rest:"自愿休息", idle_disabled:"发呆未开启",
   actionable_question:"有可推进问题", no_content:"无内容", contact_opportunity:"可判断主动交流",
-  contact_context_reviewed:"已判断本批材料", contact_delivery_mode:"需要选择站内主动消息"};
+  contact_context_reviewed:"已判断本批材料", contact_attempt_limit:"已尝试但未形成判断，等待新材料或约定时间",
+  contact_delivery_mode:"需要选择站内主动消息"};
 const layerLabels = {active:"活跃", warehouse:"仓库", longterm:"长期"};
 const kindLabels = {event:"事件", stance:"立场"};
 const lifecycleLabels = {live:"在用", stale:"陈旧", archived:"已归档", pending:"待定"};
@@ -40,6 +41,8 @@ function purposeColor(value) {
 
 let targetMode = null, epoch = null, topic = "schedule", armed = null, working = false;
 let contextFrame = null, connectionId = null, grantExpiry = null, page = "gate", loadedAt = null;
+let memoryBodyRevision = 0, memoryBodyTimer = null, memoryBodyRequest = null;
+const MEMORY_BODY_CHECK_MS = 3500;
 
 /* ---------- 基础工具 ---------- */
 function node(tag, text) {
@@ -726,15 +729,14 @@ function paintSchedule(v, out) {
 function paintMemory(v, out) {
   const counts = v.counts || {}, items = v.items || [];
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const pressured = items.filter((i) => i.pressure).length;
-  const important = items.filter((i) => i.salience >= 1).length;
+  const summary = v.visible_summary || {};
   out.append(kpis([
-    {label:"记忆总数", value: fmt.int(total), hint:"三层合计"},
+    {label:"记忆总数", value: fmt.int(total), hint:"全库三层合计"},
     {label:"活跃", value: fmt.int(counts.active)},
     {label:"仓库", value: fmt.int(counts.warehouse)},
     {label:"长期", value: fmt.int(counts.longterm)},
-    {label:"重要事项", value: fmt.int(important), hint:"salience=1，最近 40 条"},
-    {label:"压力中", value: fmt.int(pressured), hint:"pressure=1"},
+    {label:"重要事项", value: fmt.int(summary.important), hint:"观测范围内"},
+    {label:"压力中", value: fmt.int(summary.pressured), hint:"观测范围内"},
   ]));
 
   const layerCard = card("三层分布", "活跃层进上下文，仓库层待晋升，长期层是稳定结论。");
@@ -743,17 +745,16 @@ function paintMemory(v, out) {
     {label:"仓库", value:counts.warehouse || 0, color:C[2]},
     {label:"长期", value:counts.longterm || 0, color:C[1]},
   ]));
-  const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const usedThisWeek = items.filter((i) => i.last_used_at && i.last_used_at >= weekAgo).length;
-  const soonest = items.reduce((min, i) => (i.expires_at && (!min || i.expires_at < min) ? i.expires_at : min), null);
-  layerCard.body.append(line("近 7 天有取用", `${usedThisWeek} 条`));
-  layerCard.body.append(line("最近到期", soonest ? fmt.time(soonest) : "无期限"));
+  layerCard.body.append(line("可观察记忆", fmt.int(summary.visible_count)));
+  layerCard.body.append(line("近 7 天有取用（可观察）", fmt.int(summary.used_this_week)));
+  layerCard.body.append(line("最近到期（可观察）", summary.next_expiry ? fmt.time(summary.next_expiry)
+    : summary.visible_count == null ? "—" : "无待到期记录"));
   const bodyAllowed = targetMode === "body" || targetMode === "isolated";
   layerCard.body.append(el("p", "card-sub auto-bottom", bodyAllowed
     ? "正文授权：含正文，可按 ID 读取。"
     : "正文授权：仅元数据；标题与正文需在 Alice 单独勾选。"));
 
-  const heatCard = card("提及 × 取用", "横轴被提及次数，纵轴被取用次数；带圈的是重大事项。右下角 = 说过很多次、却很少用到。");
+  const heatCard = card("提及 × 取用", "最近 40 条可观察记忆。横轴是提及次数，纵轴是取用次数，带圈标出重要事项。");
   heatCard.body.append(items.length
     ? scatter(items.map((i) => ({
         x:i.mention_count || 0, y:i.use_count || 0,
@@ -791,6 +792,12 @@ function paintMemory(v, out) {
   pair.append(layerCard.box, heatCard.box);
   out.append(pair);
   if (items.length) {
+    const ranked = [...items].sort((a, b) => (b.salience || 0) - (a.salience || 0)
+      || (b.use_count || 0) - (a.use_count || 0) || b.id - a.id).slice(0, 8);
+    out.append(disclosure("重要与常用", "最近 40 条中，先按重要性、再按取用次数排列",
+      lollipop(ranked.map(i => ({label:`#${i.id} ${kindLabels[i.kind] || i.kind || ""}`,
+        value:i.use_count || 0, color:i.salience ? C[3] : C[1],
+        note:`${i.salience ? "重要" : "一般"} · ${fmt.int(i.use_count)} 次`})))));
     const lastUse = items.reduce((max, i) => Math.max(max, i.last_used_at || 0), 0);
     const detail = el("div");
     detail.append(table(["#", "层", "类型", "重要", "提及", "使用", "最近使用", "到期", "状态"], items.map((i) => [
@@ -1119,6 +1126,7 @@ const topics = {
 };
 
 function setPage(next) {
+  if (next !== "dashboard") clearMemoryBody();
   page = next;
   const connected = Boolean(targetMode);
   byId("gate").hidden = next !== "gate";
@@ -1153,6 +1161,7 @@ function stamp() {
   byId("stamp").textContent = loadedAt.toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", second:"2-digit"}) + " 更新";
 }
 async function show(next = topic) {
+  if (next !== "memory") clearMemoryBody();
   if (next !== "context") {
     unmountContext();
     const data = await api("observe", {}, {topic:next});
@@ -1213,6 +1222,7 @@ async function perform(operation) {
 }
 function connect(mode, message, url) {
   unmountContext();
+  clearMemoryBody();
   clearTimeout(grantExpiry);
   connectionId = null;
   targetMode = mode; epoch = null; armed = null;
@@ -1220,13 +1230,71 @@ function connect(mode, message, url) {
   byId("connected-actions").hidden = !mode;
   byId("target").hidden = !url;
   if (url) byId("target").href = url; else byId("target").removeAttribute("href");
-  for (const id of ["observations", "body-result", "chat-reply", "p1-output"]) {
+  for (const id of ["observations", "chat-reply", "p1-output"]) {
     byId(id).replaceChildren();
     if (id !== "observations") byId(id).hidden = true;
   }
   setPage(mode ? "dashboard" : "gate");
   if (!mode) byId("stamp").textContent = "";
 }
+
+function clearMemoryBody() {
+  memoryBodyRevision++;
+  clearTimeout(memoryBodyTimer);
+  memoryBodyRequest?.abort();
+  memoryBodyRequest = null;
+  const output = byId("body-result");
+  output.replaceChildren();
+  output.hidden = true;
+}
+
+function currentMemoryBody(identity, revision) {
+  return identity && identity === connectionId && revision === memoryBodyRevision
+    && page === "dashboard" && topic === "memory" && !document.hidden
+    && ["body", "isolated"].includes(targetMode);
+}
+
+function memoryBodyFailure(error, identity, revision) {
+  if (!currentMemoryBody(identity, revision)) return;
+  if (["invalid_grant", "connection_changed"].includes(error.code)) {
+    connect(null, "观察连接已失效，请重新连接。");
+  } else {
+    clearMemoryBody();
+    feedback(error.name === "AbortError" ? "正文资格核对超时，请重新读取。" : error.message, true);
+  }
+}
+
+function checkMemoryBody(identity, revision, id) {
+  memoryBodyTimer = setTimeout(async () => {
+    if (!currentMemoryBody(identity, revision)) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MEMORY_BODY_CHECK_MS);
+    memoryBodyRequest = controller;
+    try {
+      const {result} = await api("observe", {id}, {topic:"memory_status", connection_id:identity}, controller.signal)
+        .catch(async error => {
+          if (error.code !== "invalid_read" || !currentMemoryBody(identity, revision)) throw error;
+          const prior = await api("observe", {id}, {topic:"memory_detail", connection_id:identity}, controller.signal);
+          return {result:{status:prior.result.status, available:prior.result.status === "ok"}};
+        });
+      if (!currentMemoryBody(identity, revision)) return;
+      if (result.status !== "ok" || result.available !== true) {
+        throw new Error(result.status === "busy" ? "Alice 忙碌，暂无法核对正文资格。" : "这条记忆已失效或当前不可读。");
+      }
+      checkMemoryBody(identity, revision, id);
+    } catch (error) {
+      memoryBodyFailure(error, identity, revision);
+    } finally {
+      clearTimeout(timeout);
+      if (memoryBodyRequest === controller) memoryBodyRequest = null;
+    }
+  }, MEMORY_BODY_CHECK_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearMemoryBody();
+});
+window.addEventListener("pagehide", clearMemoryBody);
 function showConnection(info) {
   if (info.mode === "isolated") {
     connect("isolated", `隔离实例 · Alice ${info.app_version} · ${info.lab_profile}`, info.url);
@@ -1354,10 +1422,27 @@ for (const [id, command] of [["capture", "capture"], ["review", "review"], ["sea
 }
 byId("body-form").onsubmit = (event) => {
   event.preventDefault();
-  perform(async () => {
-    const id = event.target.elements.id.value.trim();
-    const data = (await api("observe", {id}, {topic:"memory_detail", connection_id:connectionId})).result;
-    renderValue(byId("body-result"), data);
+  if (memoryBodyRequest || working) return;
+  const identity = connectionId;
+  clearMemoryBody();
+  const revision = memoryBodyRevision;
+  if (!currentMemoryBody(identity, revision)) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MEMORY_BODY_CHECK_MS);
+  memoryBodyRequest = controller;
+  const id = event.target.elements.id.value.trim();
+  const button = event.submitter;
+  if (button) button.disabled = true;
+  api("observe", {id}, {topic:"memory_detail", connection_id:identity}, controller.signal).then(({result}) => {
+    if (!currentMemoryBody(identity, revision)) return;
+    if (result.status !== "ok") throw new Error(result.error || "记忆正文暂不可读，请稍后再试。");
+    renderValue(byId("body-result"), result);
+    feedback("");
+    checkMemoryBody(identity, revision, id);
+  }).catch(error => memoryBodyFailure(error, identity, revision)).finally(() => {
+    clearTimeout(timeout);
+    if (memoryBodyRequest === controller) memoryBodyRequest = null;
+    if (button) button.disabled = false;
   });
 };
 byId("chat").onsubmit = (event) => {

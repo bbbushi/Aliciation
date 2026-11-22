@@ -19,8 +19,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 11-22 桌面 0.1.39 已从 7ff3174 加本次弹层解锁和版本改动做隔离构建，未纳入 TUI 半成品；已安装 `/Applications/Alice.app`，旧 0.1.37 保存在 `/Applications/.alice-backup-3w85s50v/Alice.app`。DMG 见 build/latest-release.json。包内资源、签名和 DMG 校验通过；未起服或改 user/，真实交互待验收。
-- 11-22 桌面 0.1.38 已打包（build/latest-release.json）：修复人格导入"分类失败"假警报——WKWebView 60s 无数据超时掐死长准备而服务端实际完成；prepare/reinterpret 改 SSE 流式（阶段进度+15s 心跳），前端 postStream+进度文字，中断文案引导刷新核对。离线假 LLM 全帧序 + 真浏览器真 DeepSeek 端到端（含心跳帧）均过。**待真人验收：导入人格全程看阶段文字、不再报分类失败。**
-- 工作区另有 TUI 线未提交半成品（勿动勿提交）：`alice/cli.py` 独立启动+stop、`addons/alice_tui/*`、server.py 的 on_stop//stop//gui hunks、TUI 设计文档、独立启动第二阶段桌面改动（main.rs 附接共享宿主/停止菜单、desktop_host 管道断开留存、维护更新 shared 拦截；已过 cargo check）——本次提交 server.py 已按 hunk 拆分，只入库 material 流式部分。
-- 版本三处（alice/__init__、tauri.conf.json、Cargo.toml+lock）已同步 0.1.39；人格/设置弹窗与介绍向导共用 `inert` 和焦点管理，关闭最后一个弹层即解锁。11-21 ytq 收拢的投影环/自主调度与来源过期联动不变。
-- 运行时全停，重启需手动；SIGINT 优雅退出挂起待复测。待真人沿用：TUI §3.6 视觉、独立启动 §7 场景表（两入口并发、桌面关窗留存与「停止 Alice」、共享模式维护指引）、向导、投影环、自主调度联动。F01–F19 未修。
+- 2026-11-22 合并 main 139f2e7：Theresa 的 27 项源码修复、7 项复审补修与 Orbit 回归修正入线（结论见 docs/代码审查/Alice源码修复总体报告-20261121.md）；TUI Editor 加固（SS3/PgUp/PgDn）与可滚动来源到期历史视图并入视觉二稿。同期 62e1109 落线 TUI 视觉二稿与独立启动两阶段（按需起宿主、alice stop、桌面附接共享宿主）；79a71b2 代入库 0.1.39 弹层与版本。
+- 11-22 桌面 0.1.39 隔离构建已安装 /Applications/Alice.app（旧 0.1.37 备份于 /Applications/.alice-backup-3w85s50v）；0.1.38 修复导入"分类失败"假警报（SSE 流式+心跳）。待真人验收：导入全程阶段文字、弹层解锁、桌面真实交互。
+- 遗留：updates.rs 的 shared 拦截被隔离构建还原需重打；旧 Brave 密钥须重录；F05 旧往返补提取、F06 历史遮罩原话恢复待裁定；恢复备份 .git/pr-prep/20261122-184055（按 manifest.stored_path）。
+- 运行时：源码档案宿主运行中（`alice` 按需启动链路实测通过）；SIGINT 优雅退出挂起待复测（stop 与 Ctrl+C 同排空链）。待真人：TUI §3.6 视觉、独立启动 §7 场景表（两入口并发、桌面关窗留存与「停止 Alice」、共享模式维护指引）、向导、投影环、自主调度与来源过期联动、QQ 与 macOS/Linux 终端。F01–F19 未修。

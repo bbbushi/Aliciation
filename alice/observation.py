@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from . import config as paths
+from .grounding import decision_metadata
 
 
 class ObservationError(ValueError):
@@ -36,6 +37,12 @@ def context_basis(store, *, limit="10"):
         except (ValueError, TypeError):
             continue
         if isinstance(value, dict):
+            for name in ("transform_review", "recap_reply_review"):
+                if isinstance(value.get(name), dict):
+                    value[name].pop("reason", None)
+            recap = value.get("recap")
+            if isinstance(recap, dict) and "review" in recap:
+                recap["review"] = decision_metadata(recap["review"])
             items.append({"id": row["id"], "recorded_at": row["ts"], "basis": value})
     return {"items": items}
 
@@ -63,6 +70,43 @@ def llm_calls(store, *, limit="100", request_id=None):
     items.sort(key=lambda e: e.get("ts", 0), reverse=True)
     return {"items": items[:count], "scan_limit": 2000, "pending_dropped": dropped,
             "notice": "无正文调用回执；usage未知不等于零，pending未承诺跨崩溃持久。"}
+
+
+def _context_source_reason(store, request):
+    request_id, scope, epoch = (request[key] for key in ("request_id", "scope", "session_epoch"))
+    if epoch != store.meta_get("session_epoch"):
+        return "source_unavailable"
+    receipt = store.conn.execute(
+        "SELECT channel_id,session_epoch,user_turn_id,assistant_turn_id FROM channel_requests WHERE request_id=?",
+        (request_id,)).fetchone()
+    if receipt is None:
+        # Autonomous requests carry their accumulated source proof in the run.
+        run = store.conn.execute("SELECT basis FROM exploration_runs WHERE id=? AND epoch=?",
+                                 (request_id, epoch)).fetchone()
+        from .thought_workspace import valid_basis
+        if run is None or not valid_basis(store, json.loads(run["basis"]), scope=scope):
+            return "source_unavailable"
+        return None
+    if scope != receipt["channel_id"] or epoch != receipt["session_epoch"]:
+        return "source_unavailable"
+
+    now = time.time()
+    for turn_id in (receipt["user_turn_id"], receipt["assistant_turn_id"]):
+        if turn_id is None:
+            continue
+        worker = store.worker_turn_status(turn_id, scope=scope)
+        if worker is not None and not worker["worker_available"]:
+            return "source_unavailable"
+        sources = store.conn.execute("SELECT scope,expires_at,source_ids_json FROM source_turns WHERE turn_id=?",
+                                     (turn_id,)).fetchone()
+        if sources is None:
+            continue
+        ids = json.loads(sources["source_ids_json"])
+        if (sources["scope"] != scope or sources["expires_at"] <= now
+                or not store.source_packets_for(ids, scope=scope, now=now)
+                or scope == "qq-owner" and not store.source_packets_for(ids, scope="gui", now=now)):
+            return "source_unavailable"
+    return None
 
 
 def context_requests(store, *, limit="20", request_id=None):
@@ -99,6 +143,11 @@ def context_requests(store, *, limit="20", request_id=None):
         reason = body_reason(store, request["request_id"], captured=captured, ts=request.get("first_event_at"))
         if not captured and request.get("body_capture_reason") not in (None, "rolling_capture"):
             reason = request["body_capture_reason"]
+        if captured:
+            source_reason = _context_source_reason(store, request)
+            reason = source_reason or reason
+            if reason:
+                request["body_access_reason"] = reason
         for block in request["blocks"]:
             if reason or not block.get("body_state"):
                 block["body_state"] = reason or "historical_not_captured"
@@ -174,8 +223,11 @@ def _aggregate_requests(events, count: int) -> list[dict]:
         elif etype == "reply_postprocessed":
             if data.get("kind") == "reply_sections":
                 bucket["reply_sections"] = data.get("detail")
-            else:
-                bucket["reply_postprocess"] = data
+            elif data.get("kind") == "reply_review" and isinstance(data.get("detail"), dict):
+                # Older events contain a free-text model verdict in this field.
+                detail = data["detail"]
+                bucket["reply_postprocess"] = {"kind": "reply_review", "detail": {
+                    key: detail[key] for key in ("selected", "transform", "status", "error") if key in detail}}
         elif etype == "request_finished":
             bucket["finished"] = True
             bucket["delivery"] = data.get("delivery")
@@ -212,7 +264,9 @@ def context_body(store, *, content_hash=None, request_id=None, max_chars=64000):
                if call.get("input") and call["input"].get("content_hash") == content_hash]
     if not any(s in ("stored", "head", "on_disk") for s in states):
         return {"stored": False, "reason": states[0] if states else "historical_not_captured"}
-    return read_body(store, content_hash, request_id=request_id, limit=max_chars)
+    result = read_body(store, content_hash, request_id=request_id, limit=max_chars)
+    reason = _context_source_reason(store, request) if result.get("stored") else None
+    return {"stored": False, "reason": reason} if reason else result
 
 
 def context_call(store, *, request_id=None, call_id=None):
@@ -226,9 +280,12 @@ def context_call(store, *, request_id=None, call_id=None):
     if call is None:
         raise ObservationError("调用记录不存在或已离开观测窗口")
     from .context_observation import read_body
+    source_reason = None
     def retained_body(entry, limit=200000):
         # Entry belongs to this exact call in the already checked projection;
         # read_body additionally verifies durable request/hash capture evidence.
+        if source_reason:
+            return {"stored": False, "reason": source_reason}
         if entry.get("body") not in {"stored", "head", "on_disk"}:
             return {"stored": False, "reason": entry.get("body", "historical_not_captured")}
         return read_body(store, entry.get("content_hash"), request_id=request_id, limit=limit)
@@ -238,9 +295,11 @@ def context_call(store, *, request_id=None, call_id=None):
         try:
             value = json.loads(loaded["text"])
             if value.get("format") == "ctx-input/1" and isinstance(value.get("messages"), list):
-                return {"request_id": request_id, "call_id": call_id, "complete": True,
-                        "coverage": "snapshot", "purpose": call["purpose"], "tool_round": call["tool_round"],
-                        "input": value, "call": call, "notice": projection["notice"]}
+                source_reason = _context_source_reason(store, request)
+                if not source_reason:
+                    return {"request_id": request_id, "call_id": call_id, "complete": True,
+                            "coverage": "snapshot", "purpose": call["purpose"], "tool_round": call["tool_round"],
+                            "input": value, "call": call, "notice": projection["notice"]}
         except (ValueError, TypeError, AttributeError):
             loaded = {"reason": "snapshot_unreadable"}
     # Older captures only froze content strings; retain their original order
@@ -256,9 +315,15 @@ def context_call(store, *, request_id=None, call_id=None):
         else:
             record.update(retained=False, reason=body.get("reason", entry.get("body")))
         messages.append(record)
+    if any(message["retained"] for message in messages):
+        source_reason = _context_source_reason(store, request)
+        if source_reason:
+            for message in messages:
+                message.pop("content", None)
+                message.update(retained=False, reason=source_reason)
     return {"request_id": request_id, "call_id": call_id, "complete": False,
             "coverage": "messages_only", "purpose": call["purpose"], "tool_round": call["tool_round"],
-            "snapshot_reason": loaded.get("reason", snapshot.get("body", "historical_not_captured")),
+            "snapshot_reason": source_reason or loaded.get("reason", snapshot.get("body", "historical_not_captured")),
             "messages": messages, "call": call, "notice": projection["notice"]}
 
 
@@ -468,9 +533,24 @@ def lab_memory_metadata(store, *, include_titles=False):
     now = time.time()
     fields = MEMORY_META + (",substr(title,1,160) AS title" if include_titles else "")
     rows = store.conn.execute(f"SELECT {fields} FROM memories WHERE {GUI_MEMORY} "
-                              "ORDER BY id DESC LIMIT 40", (now, now))
+                              "ORDER BY id DESC LIMIT 40", (now, now)).fetchall()
+    summary = store.conn.execute(
+        "SELECT COUNT(*) AS visible_count, COUNT(CASE WHEN pressure=1 THEN 1 END) AS pressured, "
+        "COUNT(CASE WHEN salience>=1 THEN 1 END) AS important, "
+        "COUNT(CASE WHEN last_used_at>=? THEN 1 END) AS used_this_week, "
+        f"MIN(CASE WHEN expires_at>? THEN expires_at END) AS next_expiry FROM memories WHERE {GUI_MEMORY}",
+        (now - 7 * 86400, now, now, now)).fetchone()
     return {"counts": {layer: store.count_in_layer(layer) for layer in ("active", "warehouse", "longterm")},
-            "items": [dict(row) for row in rows]}
+            "visible_summary": dict(summary), "items": [dict(row) for row in rows]}
+
+
+def lab_memory_available(store, *, id=None):
+    identity = _number(id)
+    if identity is None:
+        raise ObservationError("缺少条目编号")
+    now = time.time()
+    row = store.conn.execute(f"SELECT 1 FROM memories WHERE id=? AND {GUI_MEMORY}", (identity, now, now)).fetchone()
+    return {"available": row is not None}
 
 
 def list_items(store, *, view="memories", layer="all", kind="all", q="", before=None, ceiling=None) -> dict:

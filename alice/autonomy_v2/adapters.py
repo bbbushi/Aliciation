@@ -658,10 +658,18 @@ class InvitationRepositoryAdapter:
         return self.get_attempt(attempt.scope, attempt.id)
 
     def pending_reply(self, scope: Scope) -> InvitationAttempt | None:
-        row = self.store.conn.execute(
-            "SELECT * FROM v2_invitation_attempts WHERE epoch=? AND state='awaiting_reply' "
-            "AND expires_at>? ORDER BY updated_at DESC LIMIT 1", (scope_epoch(scope), time.time())).fetchone()
-        return _attempt_from_row(row) if row else None
+        for row in self.store.conn.execute(
+                "SELECT a.* FROM v2_invitation_attempts a JOIN v2_contact_intents i ON i.id=a.intent_id "
+                "AND i.epoch=a.epoch AND i.version=a.intent_version AND i.state='active' "
+                "WHERE a.epoch=? AND a.state='awaiting_reply' AND a.expires_at>? ORDER BY a.updated_at DESC",
+                (scope_epoch(scope), time.time())):
+            intent = self.get_intent(scope, row["intent_id"])
+            try:
+                HostAdapter(self.store).validate_intent(scope, intent)
+            except ValueError:
+                continue
+            return _attempt_from_row(row)
+        return None
 
     def due_timeouts(self, scope: Scope, *, now_at: float) -> tuple[InvitationAttempt, ...]:
         rows = self.store.conn.execute(
@@ -686,11 +694,6 @@ class InvitationRepositoryAdapter:
         if attempt is None:
             return None
         intent = self.get_intent(scope, attempt.intent_id)
-        if intent.motive == "chat":
-            try:
-                HostAdapter(self.store).validate_intent(scope, intent)
-            except ValueError:
-                return None
         return InvitationIndex(attempt_id=attempt.id, version=attempt.version, topic=intent.topic,
                                state=attempt.state, invitation_turn_id=attempt.invitation_turn_id,
                                expires_at=attempt.expires_at)
@@ -709,11 +712,17 @@ class HostAdapter:
         self.store = store
 
     def validate_intent(self, scope: Scope, intent: ContactIntent) -> None:
-        from .. import thought_workspace as thoughts
-        from ..context_memory import version
         if (scope.session_epoch != self.store.meta_get("session_epoch") or scope.channel_id != "gui"
                 or intent.scope != scope or intent.state != "active"):
             raise ValueError("联系意图不在当前会话或已结束")
+        self.validate_intent_material(intent)
+
+    def validate_intent_material(self, intent: ContactIntent) -> None:
+        from .. import thought_workspace as thoughts
+        from ..context_memory import version
+        scope = intent.scope
+        if not intent.topic:
+            raise ValueError("邀请话题已失效")
         if intent.motive == "chat":
             if not intent.basis or not thoughts.valid_basis(self.store, intent.basis):
                 raise ValueError("邀请话题的材料已变化，请重新选择")
@@ -838,6 +847,10 @@ class HostAdapter:
             return current  # Idempotent: the saved reply is already bound.
         if current.state != InvitationState.ACCEPTED or current.expansion_request_id != context.request_id:
             raise ValueError("只有本次接受的邀请才能绑定展开回复")
+        intent = repo.get_intent(context.scope, current.intent_id)
+        self.validate_intent(context.scope, intent)
+        if current.intent_version != intent.version:
+            raise ValueError("展开材料与当前意图版本不一致")
         row = self.store.conn.execute(
             "SELECT t.role FROM turns t JOIN channel_requests r ON r.assistant_turn_id=t.id "
             "WHERE t.id=? AND r.request_id=? AND r.user_turn_id=? AND r.session_epoch=? AND r.channel_id=?",
@@ -850,7 +863,6 @@ class HostAdapter:
                               expansion_turn_id=assistant_turn_id)
             repo.save_attempt(updated, expected_version=current.version)
             from .. import thought_workspace as thoughts
-            intent = repo.get_intent(context.scope, current.intent_id)
             if intent.motive == "chat":
                 repo.save_intent(replace(intent, state="closed"), expected_version=intent.version)
             thoughts.event(self.store, "invitation_expanded", current.id,

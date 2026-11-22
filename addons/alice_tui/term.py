@@ -275,24 +275,24 @@ class Editor:
         return self._pending.pop(0) if self._pending else None
 
     def _escape_sequence(self) -> str:
-        """ESC 后读完整 CSI 序列，返回如 '[A' / '[200~'；读不到返回 ''。"""
-        seq = ""
-        while True:
+        """Read CSI or SS3 after Escape. Only an isolated Escape returns ''."""
+        seq = self._next_char(timeout=0.05) or ""
+        if seq not in {"[", "O"}:
+            return seq
+        for _ in range(32):
             ch = self._next_char(timeout=0.05)
             if ch is None:
-                return seq
+                break
             seq += ch
-            if seq == "[":
-                continue
-            if ch.isdigit() or ch in ";?<":
-                continue
-            return seq  # 终止字母（ABCDHF 等）或 '~'
+            if "@" <= ch <= "~":
+                break
+        return seq
 
     def poll_key(self, timeout: float | None = None) -> str | None:
         """读一个语义键。返回：
         字符本身 / 'enter' / 'newline' / 'backspace' / 'up' 'down' 'left' 'right'
-        'home' 'end' / 'tab' / 'esc' / 'exit'(Ctrl+D) / 'expand'(Ctrl+O)
-        / 'interrupt'(Ctrl+C) / 'paste'(整段粘贴文本) / None(超时无输入)。"""
+        'home' 'end' / 'page_up' 'page_down' / 'tab' / 'esc' / 'exit'(Ctrl+D) / 'expand'(Ctrl+O)
+        / 'interrupt'(Ctrl+C) / 'paste'(整段粘贴文本) / None(无输入或未识别)。"""
         ch = self._next_char(timeout)
         if ch is None:
             return None
@@ -300,17 +300,19 @@ class Editor:
             return self._read_paste(ch)
         if ch == "\x1b":
             seq = self._escape_sequence()
-            if seq == "[A": return "up"
-            if seq == "[B": return "down"
-            if seq == "[C": return "right"
-            if seq == "[D": return "left"
-            if seq == "[H": return "home"
-            if seq == "[F": return "end"
+            if seq in ("[A", "OA"): return "up"
+            if seq in ("[B", "OB"): return "down"
+            if seq in ("[C", "OC"): return "right"
+            if seq in ("[D", "OD"): return "left"
+            if seq in ("[H", "OH"): return "home"
+            if seq in ("[F", "OF"): return "end"
+            if seq == "[5~": return "page_up"
+            if seq == "[6~": return "page_down"
             if seq == "[3~": return "backspace"
             if seq == "[200~":
                 self._paste = []
                 return self._read_paste(self._next_char(timeout=0.05))
-            return "esc" if not seq else "esc"
+            return "esc" if not seq else None
         if ch == "\r": return "enter"
         if ch == "\n": return "newline"
         if ch in ("\x7f", "\b"): return "backspace"

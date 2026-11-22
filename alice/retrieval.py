@@ -142,6 +142,8 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
               '内容按当时发言者归属理解，AI旧话只证明曾说过，当前限制以近期原文为准。'
               '被压缩原文仍在库内，可在有效资格内经历史工具追溯。')
         compact_material_tokens = ctx.estimate_tokens(compact_block) + ctx.estimate_tokens(compact_envelope)
+    if source_scope != "gui":
+        raw_rows = [row for row in raw_rows if not row.get("proactive")]
     # 来源接续先于前缀计划算清：本轮初始暴露 = 主动选择的来源 + 历史接续恢复的来源。
     restored, source_exclusions = {}, []
     window_continuation_ids: list[str] = []
@@ -228,8 +230,6 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
                              - cfg.context.reply_reserve_tokens - recap_reserve_tokens - 128)
     # Apply the audience projection BEFORE selection and before serializing rows.
     projected = []
-    if source_scope != "gui":
-        raw_rows = [r for r in raw_rows if not r.get("proactive")]
     for row in raw_rows:
         r = dict(row)
         if store.turn_worker_refs(r["id"]):
@@ -345,6 +345,8 @@ def build_messages(store: Store, cfg: Config, persona_md: str, now: float | None
 
 def tool_recall(store: Store, query: str, *, source_context: dict | None = None,
                 external_only=False, max_chars=None, max_tokens=None) -> str:
+    from .context import estimate_tokens
+
     allowed = bool(source_context and source_context.get("allow_external_recall"))
     known_ids = set(source_context["packet_ids"]) if source_context else set()
     scope = source_context["scope"] if source_context else None
@@ -367,17 +369,21 @@ def tool_recall(store: Store, query: str, *, source_context: dict | None = None,
         from .store import text_score
         present = {m["id"] for _, m in hits}
         observations = [(text_score(query, m["title"] + " " + m["content"]), m)
-                        for m in store.memory_rows(purpose="chat", scope=scope)
-                        if m["origin"] != "conversation" and m["id"] not in present]
+                         for m in store.memory_rows(purpose="chat", scope=scope)
+                         if m["origin"] != "conversation" and m["id"] not in present
+                         and (allowed or known_ids.issuperset(
+                             p["id"] for p in store.observation_sources(m["id"], scope=scope)))]
         observations = sorted((pair for pair in observations if pair[0] >= 0.12), key=lambda pair: -pair[0])
         hits += observations if external_limit is None else observations[:external_limit]
         hits.sort(key=lambda pair: (-pair[0], -pair[1]["use_count"]))
     if not hits:
         return "本次没有查到相关记忆；不代表从未发生，也不能编造细节。"
     lines = []
+    rendered = source_context.setdefault("rendered_packet_ids", set()) if source_context else set()
     external_count = 0
     omitted = False
     for _, m in hits:
+        packets = []
         if m["origin"] != "conversation":
             if source_context is None:
                 continue
@@ -385,8 +391,26 @@ def tool_recall(store: Store, query: str, *, source_context: dict | None = None,
                 continue
             packets = store.external_memory_sources(m["id"], scope=scope)
             ids = list(dict.fromkeys(source_context["packet_ids"] + [p["id"] for p in packets]))
-            if not packets or dependency_limit is not None and len(ids) > dependency_limit:
+            if (not packets or not allowed and any(p["id"] not in known_ids for p in packets)
+                    or dependency_limit is not None and len(ids) > dependency_limit
+                    or not store.source_packets_for(ids, scope=scope)):
                 continue
+            label = ("带来源的观点" if m['kind']=='stance' else "带来源的见闻") if m["lifecycle"] == "memory" else "临时外部见闻"
+            line = f'- {label}（记忆ID {m["id"]}）：{m["title"]}：{m["content"]}'
+            unseen = [packet for packet in packets if packet["id"] not in rendered]
+            shown_ids = [packet["id"] for packet in packets if packet["id"] in rendered]
+            if shown_ids:
+                line += "\n已载入的来源：" + ", ".join(shown_ids)
+            if unseen:
+                line += "\n" + source_block(unseen)
+        else:
+            line = f'- [{_day(m["created_at"])}] {m["title"]}：{conversation_content(m)}'
+        proposed = "查到以下记忆：\n" + "\n".join(lines + [line]) + "\n部分条目因预算未载入。"
+        if ((max_chars is not None and len(proposed) > max_chars)
+                or (max_tokens is not None and estimate_tokens(json.dumps(proposed, ensure_ascii=False)) > max_tokens)):
+            omitted = True
+            continue
+        if packets:
             # Persist the boundary before the tool result is exposed to the
             # model, including when this turn later fails or is retried.
             if source_context.get("user_turn_id"):
@@ -396,18 +420,8 @@ def tool_recall(store: Store, query: str, *, source_context: dict | None = None,
             source_context.setdefault('recalled_memory_ids', []).append(m['id'])
             source_context["recalled_ids"] = list(dict.fromkeys(
                 source_context.get("recalled_ids", []) + [p["id"] for p in packets]))
-            label = ("带来源的观点" if m['kind']=='stance' else "带来源的见闻") if m["lifecycle"] == "memory" else "临时外部见闻"
+            rendered.update(p["id"] for p in packets)
             external_count += 1
-            line = (f'- {label}（记忆ID {m["id"]}）：{m["title"]}：{m["content"]}\n'
-                    + source_block(packets))
-        else:
-            line = f'- [{_day(m["created_at"])}] {m["title"]}：{conversation_content(m)}'
-        proposed = "查到以下记忆：\n" + "\n".join(lines + [line]) + "\n部分条目因预算未载入。"
-        from .context import estimate_tokens
-        if ((max_chars is not None and len(proposed) > max_chars)
-                or (max_tokens is not None and estimate_tokens(proposed) > max_tokens)):
-            omitted = True
-            continue
         lines.append(line)
         seen = source_context.setdefault("counted_recall_ids", set()) if source_context else set()
         if m["id"] not in seen:
