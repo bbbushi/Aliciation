@@ -65,6 +65,15 @@ def decisions(raw, count):
     return [result[i] for i in range(count)]
 
 
+def decision_metadata(decision):
+    if not isinstance(decision, dict) or type(decision.get("valid")) is not bool:
+        return None
+    result = {"valid": decision["valid"]}
+    if type(decision.get("id")) is int:
+        result["id"] = decision["id"]
+    return result
+
+
 # This is an explicit surface gate, not a semantic classifier. Unquoted or
 # implicit transformations may not match; never claim universal coverage.
 TRANSFORM = re.compile(r'改写|润色|翻译|复述|整理成|转成|改成|rewrite|translate|rephrase', re.I)

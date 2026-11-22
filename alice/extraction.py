@@ -6,6 +6,7 @@ import uuid
 import json
 import hashlib
 from datetime import datetime
+from itertools import islice
 
 from .config import Config
 from .llm import chat, parse_json
@@ -13,6 +14,8 @@ from .store import Store
 from .steps import drive
 from . import grounding, metrics
 from .context import messages_tokens
+
+_BATCH_ROWS = 80
 
 EXTRACT_PROMPT = """你是记忆提取器。下面是一段你（一个陪伴型AI）与用户的对话，以及当前已有的近期记忆标题列表。
 
@@ -53,27 +56,68 @@ def extract_pending(store: Store, client, cfg: Config, *, force: bool = False) -
     return drive(extract_pending_steps(store, client, cfg, force=force))
 
 
+def _turns_through(store: Store, cursor: int, through: int | None = None):
+    while page := store.turns_since(cursor, limit=_BATCH_ROWS):
+        for row in page:
+            if through is not None and row["id"] > through:
+                return
+            yield row
+        cursor = page[-1]["id"]
+        if cursor == through:
+            return
+
+
+def _extraction_window(store: Store, cursor: int, minimum_users: int):
+    covered = store.compact_covered_turn_ids()
+    rows = _turns_through(store, cursor)
+    uncovered = []
+    first = None
+    end = cursor
+    compact_skipped = 0
+    for row in rows:
+        end = row["id"]
+        if first is None:
+            first = end
+        if end in covered:
+            compact_skipped += 1
+            continue
+        uncovered.append(row)
+        if len(uncovered) == _BATCH_ROWS:
+            break
+
+    # Count beyond the batch when necessary. These later turns establish the
+    # trigger, while the prompt and committed cursor stay within this batch.
+    users = store.count_user_turns(uncovered)
+    if users < minimum_users:
+        for row in rows:
+            if row["id"] not in covered and row["role"] == "user":
+                users += 1
+                if users >= minimum_users:
+                    break
+    return uncovered, first, end, compact_skipped, users
+
+
 def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = False, request_id=None):
     """把自上次提取后的对话提炼为记忆。返回新增条数；失败不动游标，下次重试。"""
     cursor = int(store.meta_get("extract_cursor", "0") or 0)
-    pending = store.turns_since(cursor)
-    if not pending:
+    minimum_users = 0 if force else cfg.memory.extract_every_turns
+    uncovered, turn_from, turn_to, compact_skipped, users = _extraction_window(store, cursor, minimum_users)
+    if turn_from is None:
         return 0
-    ordinary = store.ordinary_turns(pending)
+    ordinary = store.ordinary_turns(uncovered)
     if not ordinary:
-        # Fixed shadows contain no usable evidence. Advancing the cursor here
-        # prevents force/close/restart from later extracting attachment prose.
-        # M05：整批跳过也留账——用户不必查 SQLite 就能知道这批为何没有新记忆。
+        skipped = compact_skipped + len(uncovered)
+        status = 'skipped_compact_covered' if compact_skipped else 'skipped_source_protected'
         with store.source_transaction():
             store.conn.execute('INSERT INTO memory_extraction_batches '
                 '(created_at,session_epoch,source_json,candidates_json,review_json,status,memory_ids) VALUES(?,?,?,?,?,?,?)',
                 (time.time(), store.meta_get('session_epoch') or '',
-                 json.dumps({'turn_from': pending[0]['id'], 'turn_to': pending[-1]['id'], 'turns': len(pending)}),
-                 '{}', json.dumps({'skipped': len(pending), 'reason': 'all_source_protected'}),
-                 'skipped_source_protected', '[]'))
-        store.meta_set("extract_cursor", pending[-1]["id"])
+                 json.dumps({'turn_from': turn_from, 'turn_to': turn_to, 'turns': skipped}),
+                 '{}', json.dumps({'skipped': skipped, 'compact_covered': compact_skipped,
+                                   'source_protected': len(uncovered)}), status, '[]'))
+            store.meta_set("extract_cursor", turn_to)
         return 0
-    if not force and store.count_user_turns(pending) < cfg.memory.extract_every_turns:
+    if users < minimum_users:
         return 0
 
     horizon = time.time() - 7 * 86400
@@ -87,6 +131,18 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
     snapshot = json.dumps([dict(r) for r in ordinary], ensure_ascii=False, sort_keys=True)
     source = {'epoch': epoch, 'turn_ids': [r['id'] for r in ordinary],
               'sha256': hashlib.sha256(snapshot.encode()).hexdigest()}
+
+    def snapshot_current():
+        if store.meta_get('session_epoch') != epoch or store.meta_get('extract_cursor', '0') != str(cursor):
+            return False
+        covered = store.compact_covered_turn_ids()
+        rows = (row for row in _turns_through(store, cursor, turn_to) if row["id"] not in covered)
+        current = list(islice(rows, _BATCH_ROWS + 1))
+        if len(current) > _BATCH_ROWS:
+            return False
+        projection = [dict(row) for row in store.ordinary_turns(current)]
+        return json.dumps(projection, ensure_ascii=False, sort_keys=True) == snapshot
+
     request = [{"role": "user", "content": prompt}]
     if cfg.context.total_budget_tokens and messages_tokens(request) + cfg.context.reply_reserve_tokens > cfg.context.total_budget_tokens:
         return 0
@@ -100,9 +156,7 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
     )
     raw = resp.choices[0].message.content or ''
     def invalid_output(reason):
-        current = store.ordinary_turns([r for r in store.turns_since(cursor) if r['id'] <= pending[-1]['id']])
-        if (store.meta_get('session_epoch') != epoch or store.meta_get('extract_cursor', '0') != str(cursor)
-                or json.dumps([dict(r) for r in current], ensure_ascii=False, sort_keys=True) != snapshot):
+        if not snapshot_current():
             return
         payload = {'sha256': hashlib.sha256(raw.encode()).hexdigest(), 'chars': len(raw)}
         if len(raw) <= 16000:
@@ -164,9 +218,7 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
         except Exception as exc:
             status = 'review_failed'
             audit['error'] = type(exc).__name__
-    current = store.ordinary_turns([r for r in store.turns_since(cursor) if r['id'] <= pending[-1]['id']])
-    if (store.meta_get('session_epoch') != epoch or store.meta_get('extract_cursor', '0') != str(cursor)
-            or json.dumps([dict(r) for r in current], ensure_ascii=False, sort_keys=True) != snapshot):
+    if not snapshot_current():
         return 0  # Epoch/source revocation cannot publish even an old audit body.
     ids = []
     with store.source_transaction():
@@ -175,7 +227,7 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
                 if decision['valid']:
                     ids.append(store.insert_memory(title=m['title'], content=m['content'],
                         keywords=' '.join(m['keywords']), salience=m['salience'],
-                        created_at=pending[-1]['ts'], pressure=1 if data.get('pressure') == 1 else 0))
+                        created_at=uncovered[-1]['ts'], pressure=1 if data.get('pressure') == 1 else 0))
             # Count only exact titles explicitly present in an actual user turn.
             mentions = data.get('rementioned_titles', [])
             if isinstance(mentions, list):
@@ -186,7 +238,7 @@ def extract_pending_steps(store: Store, client, cfg: Config, *, force: bool = Fa
                     if row and row['provenance_status'] == 'valid':
                         store.conn.execute('UPDATE memories SET mention_count=mention_count+1 WHERE id=?', (row['id'],))
             store.conn.execute("INSERT INTO meta(key,value) VALUES('extract_cursor',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(pending[-1]['id']),))
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(turn_to),))
         store.conn.execute('INSERT INTO memory_extraction_batches '
             '(created_at,session_epoch,source_json,candidates_json,review_json,status,memory_ids) VALUES(?,?,?,?,?,?,?)',
             (time.time(), epoch, json.dumps(source), json.dumps(candidates, ensure_ascii=False),

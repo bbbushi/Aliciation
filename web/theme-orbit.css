@@ -1623,31 +1623,126 @@ html[data-theme=orbit] #settings-modal.orbit-page-mode #settings-title {
 html[data-theme=orbit][data-motion=off] #settings-modal.orbit-page-mode > .modal-card::after,
 html[data-theme=orbit][data-motion=off] #settings-modal.orbit-page-mode::after { animation: none; opacity: .6; }
 
-/* ===== 设置子面板统一到「内容发现」面板语言（2026-11-19 用户明确裁定）=====
-   发现页配方：#0b142280/66 玻璃 + --orbit-line-faint 1px + --orbit-radius-m 圆角 + sp 节奏。
-   原来设置子面板用 legacy var(--line) 实底卡，与发现页玻璃割裂——这里逐类对齐。 ===== */
-html[data-theme=orbit] #settings-modal .settings-group,
-html[data-theme=orbit] #settings-modal .settings-rows {
-  background: #0b142280;                          /* 与 .discovery-overview 同档玻璃 */
-  border: 1px solid var(--orbit-line-faint);
+/* 设置控件沿用 Orbit 页面的半透明材质与细边线。
+   普通设置窗保留侧栏与窄屏布局；page-mode 的舞台、导航与投影环由各自规则布局。 */
+html[data-theme=orbit] #settings-modal {
+  --orbit-settings-inset: var(--sp-6);
+  --orbit-settings-control: 38px;
+  --orbit-settings-margin: var(--sp-6);
+}
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) { padding: var(--orbit-settings-margin); }
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) > .settings-card {
+  max-width: 1080px;
+  max-height: calc(100dvh - 2 * var(--orbit-settings-margin));
+  height: min(780px, calc(100dvh - 2 * var(--orbit-settings-margin)));
+  grid-template-columns: 166px minmax(0, 1fr);
+  background: var(--orbit-surface-glass);
   border-radius: var(--orbit-radius-m);
 }
-html[data-theme=orbit] #settings-modal .settings-row { gap: var(--sp-4); }
-/* 行分隔线跟随玻璃：legacy var(--line) → faint */
-html[data-theme=orbit] #settings-modal .settings-rows > .settings-row + .settings-row { border-top-color: var(--orbit-line-faint); }
-html[data-theme=orbit] #settings-modal .settings-fieldset + .settings-fieldset,
-html[data-theme=orbit] #settings-modal .settings-help,
-html[data-theme=orbit] #settings-modal .settings-qq { border-top-color: var(--orbit-line-faint); }
-/* 状态条（worker/qq/status）：与发现页 .discovery-box 同材质 */
-html[data-theme=orbit] #settings-modal :is(.worker-status, .qq-status, .discovery-status, .settings-result) {
-  background: #0b142266; border-color: var(--orbit-line-faint); border-radius: var(--radius);
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-card > .modal-head {
+  min-height: var(--orbit-win-head-h);
+  padding: var(--sp-2) var(--orbit-settings-inset);
+  background: var(--orbit-surface-glass); border-bottom-color: var(--orbit-line-faint);
 }
-/* 输入控件边框收敛到 faint，贴合玻璃（legacy 2px --line 过重） */
-html[data-theme=orbit] #settings-modal .settings-section :is(input:not([type=checkbox]), select, textarea) {
-  border-color: var(--orbit-line-faint); border-radius: var(--radius);
+html[data-theme=orbit] #settings-modal .modal-title { font: 600 var(--fs-page)/1.4 var(--font); }
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav {
+  gap: var(--sp-1); padding: var(--sp-3);
+  background: var(--orbit-surface-glass); border-color: var(--orbit-line-faint);
+  scrollbar-width: thin; scrollbar-color: var(--orbit-line-strong) transparent;
 }
-/* 说明区/页头提示：去实底 soft，用透明 */
-html[data-theme=orbit] #settings-modal .settings-mode { background: #0b142266; border: 1px solid var(--orbit-line-faint); }
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-height: calc(var(--orbit-settings-control) + 2px); padding: 7px 10px;
+  border: 1px solid transparent; border-radius: var(--orbit-radius-m);
+  background: transparent; color: var(--muted);
+}
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button::before {
+  content: ""; flex: 0 0 7px; height: 7px;
+  border: 1px solid var(--orbit-faint); border-radius: 50%;
+}
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button:hover { color: var(--ink); background: var(--soft); }
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button[aria-pressed=true] {
+  border-color: var(--orbit-line-strong); background: var(--accent-soft); color: var(--accent-hover);
+}
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button[aria-pressed=true]::before {
+  border-color: var(--accent); background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button:focus-visible { outline-offset: -3px; }
+html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-body {
+  gap: var(--sp-4); padding: var(--orbit-settings-inset);
+}
+html[data-theme=orbit] #settings-modal .settings-page-head .panel-title { font: 600 var(--fs-page)/1.4 var(--font); }
+html[data-theme=orbit] #settings-modal .settings-page-note { margin: 0; }
+
+html[data-theme=orbit] #settings-modal
+  :is(.settings-group, .discovery-settings-pane) {
+  background: var(--orbit-surface-glass); border: 1px solid var(--line); border-radius: var(--orbit-radius-m);
+}
+html[data-theme=orbit] #settings-modal :is(.worker-field-group, .qq-step, .qq-qr-box, .discovery-box, .discovery-setting-group, .discovery-daily-editor) {
+  background: var(--orbit-surface-glass);
+  border-color: var(--line); border-radius: var(--orbit-radius-m);
+}
+html[data-theme=orbit] #settings-modal .worker-permission-boundary {
+  border-color: color-mix(in srgb, var(--warning) 58%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning-bg) 76%, var(--card));
+}
+html[data-theme=orbit] #settings-modal :is(.worker-status, .qq-status, .discovery-status) {
+  padding: 9px 11px; border: 1px solid var(--line); border-inline-start: 2px solid var(--orbit-line-strong);
+  background: var(--orbit-surface-glass); border-radius: var(--radius);
+}
+html[data-theme=orbit] #settings-modal :is(.worker-status[data-error=true], .discovery-status[data-kind=waiting]) {
+  border-inline-start-color: var(--warning);
+}
+html[data-theme=orbit] #settings-modal :is(.qq-status.error, .discovery-status[data-kind=error]) {
+  border-inline-start-color: var(--danger);
+}
+html[data-theme=orbit] #settings-modal .settings-mode { background: var(--soft); border: 1px solid var(--line); }
+html[data-theme=orbit] #settings-modal #lab-code { font-family: var(--mono); }
+
+html[data-theme=orbit] #settings-modal .settings-section
+  :is(input:not([type=checkbox], [type=radio]), select, textarea) {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); min-height: var(--orbit-settings-control); padding: 7px 10px;
+}
+html[data-theme=orbit] #settings-modal .settings-section
+  :is(input, select, textarea, summary):focus-visible { outline-offset: 2px; }
+html[data-theme=orbit] #settings-modal .settings-section summary::marker { color: var(--orbit-faint); }
+html[data-theme=orbit] #settings-modal .settings-section details[open] > summary::marker { color: var(--accent); }
+
+html[data-theme=orbit] #settings-modal .btn {
+  min-height: var(--orbit-settings-control); padding: 7px 13px;
+  border-width: 1px; border-radius: var(--radius); font-size: var(--fs-sub);
+}
+html[data-theme=orbit] #settings-modal .btn.primary {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hover);
+}
+html[data-theme=orbit] #settings-modal .btn.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--on-accent);
+}
+html[data-theme=orbit] #settings-modal .discovery-settings-nav button { border: 1px solid transparent; border-radius: var(--radius); }
+html[data-theme=orbit] #settings-modal .discovery-settings-nav button[aria-current=page],
+html[data-theme=orbit] #settings-modal .discovery-daily-item[aria-pressed=true] {
+  border-color: var(--orbit-line-strong); background: var(--accent-soft);
+}
+html[data-theme=orbit] #settings-modal .discovery-settings-nav button:focus-visible { outline-offset: -3px; }
+html[data-theme=orbit] #settings-modal .discovery-settings-savebar { background: transparent; }
+
+@media (max-width: 800px) {
+  html[data-theme=orbit] #settings-modal { --orbit-settings-inset: 18px; --orbit-settings-margin: var(--sp-3); }
+  html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) > .settings-card {
+    height: calc(100dvh - 2 * var(--orbit-settings-margin)); grid-template-columns: minmax(0, 1fr);
+  }
+  html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav { padding: 6px var(--sp-2); }
+}
+@media (max-width: 540px) {
+  html[data-theme=orbit] #settings-modal { --orbit-settings-inset: 14px; --orbit-settings-margin: var(--sp-2); }
+  html[data-theme=orbit] #settings-modal:not(.orbit-page-mode) .settings-nav button::before { display: none; }
+}
+@media (pointer: coarse) {
+  html[data-theme=orbit] #settings-modal { --orbit-settings-control: 44px; }
+}
 
 /* ===== 子面板切换动效（occasional 档，eligible）：内容淡入 + 8px 上浮，180ms ease-out =====
    hidden 是 display:none !important，transition 无法跨 display，改用 animation 绑在"刚显示"的 section。 */

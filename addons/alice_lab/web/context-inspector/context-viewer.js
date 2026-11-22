@@ -14,7 +14,7 @@
     too_large: "超过单条采集上限", body_budget_exceeded: "正文库容量不足",
     view_budget_exceeded: "超过本次查看容量", write_failed: "采集写入失败",
     capture_index_unavailable: "留存索引不可用", snapshot_unreadable: "快照无法解析",
-    hash_mismatch: "正文与记录摘要不一致"})[value] || value || "未记录";
+    hash_mismatch: "正文与记录摘要不一致", source_unavailable: "原资料已失效或不可核对"})[value] || value || "未记录";
   const pretty = value => typeof value === "string" ? value : JSON.stringify(value, null, 2);
 
   function replySectionsSummary(audit) {

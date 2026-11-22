@@ -85,6 +85,16 @@ def awake(store, *, testing_policy=True):
     return lifecycle(settings(store), testing_policy=testing_policy)["effective"] == "awake"
 
 
+def presentation_state(store):
+    if not awake(store):
+        return "sleeping"
+    if active_idle(store):
+        return "resting"
+    running = store.conn.execute("SELECT 1 FROM exploration_runs WHERE epoch=? AND status='running' LIMIT 1",
+                                 (store.meta_get("session_epoch"),)).fetchone()
+    return "running" if running else "awake"
+
+
 def origin_mode(origin):
     return "iteration" if origin == "review" else "interest" if origin in {"interest", "exploration"} else "problem"
 
@@ -385,13 +395,14 @@ def contact_readiness(store, config, epoch, stamp, *, exclude_run=None):
     # Do not pay repeatedly to find a topic in the same context. An explicit
     # appointment becoming due gives one more opportunity for a fresh decision.
     last = store.conn.execute(
-        "SELECT MAX(a.started_at) FROM autonomous_activity_runs a JOIN exploration_runs r ON r.id=a.run_id "
-        "WHERE r.epoch=? AND a.activity=? AND a.input_stamp=? AND r.model_calls>0 AND r.id<>?",
-        (epoch, CONTACT_MODE, stamp, exclude_run or "")).fetchone()[0]
+        "SELECT a.started_at,d.decision FROM autonomous_activity_runs a JOIN exploration_runs r ON r.id=a.run_id "
+        "LEFT JOIN v2_contact_decisions d ON d.run_id=r.id AND d.epoch=r.epoch "
+        "WHERE r.epoch=? AND a.activity=? AND a.input_stamp=? AND r.model_calls>0 AND r.id<>? "
+        "ORDER BY a.started_at DESC LIMIT 1", (epoch, CONTACT_MODE, stamp, exclude_run or "")).fetchone()
     if last is not None and not store.conn.execute(
         "SELECT 1 FROM v2_contact_holds WHERE epoch=? AND channel_id='gui' AND intent_id<>'' "
-        "AND resume_at>? AND resume_at<=? LIMIT 1", (epoch, last, time.time())).fetchone():
-        return "contact_context_reviewed"
+        "AND resume_at>? AND resume_at<=? LIMIT 1", (epoch, last["started_at"], time.time())).fetchone():
+        return "contact_context_reviewed" if last["decision"] in {"none", "later", "invite"} else "contact_attempt_limit"
     return "contact_opportunity"
 
 

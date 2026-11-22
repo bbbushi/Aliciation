@@ -5,6 +5,7 @@ import json
 
 
 META_KEY = "user_introduction_v1"
+REVISION_KEY = "user_introduction_revision"
 FIELD_LIMITS = {"address": 40, "interests": 180, "opening_topic": 180}
 
 
@@ -29,6 +30,10 @@ def load(store):
         return normalize(value) if isinstance(value, dict) else normalize({})
     except ValueError:
         return normalize({})
+
+
+def revision(store):
+    return store.meta_get(REVISION_KEY) or "0"
 
 
 def model_text(store):

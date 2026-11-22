@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 from collections import deque
 import re
@@ -225,23 +226,35 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         return float(v) if v else 0.0
 
     # ---------- 对话轮次 ----------
+    def proactive_receipt(self, turn_id: int):
+        """Both generations record the turn only after actual GUI delivery."""
+        return self.conn.execute(
+            "SELECT p.contact_id,c.basis,NULL AS invitation_id,NULL AS invitation_text "
+            "FROM proactive_turns p LEFT JOIN thought_contacts c ON c.id=p.contact_id WHERE p.turn_id=? "
+            "UNION ALL SELECT NULL,NULL,id,invitation_text FROM v2_invitation_attempts "
+            "WHERE invitation_turn_id=? AND epoch=? AND delivered_at IS NOT NULL LIMIT 1",
+            (turn_id, turn_id, self.meta_get("session_epoch"))).fetchone()
+
     def turn_display(self, turn_id: int, *, scope="gui"):
         from .thought_workspace import valid_basis
-        row = self.conn.execute("SELECT c.basis FROM proactive_turns p JOIN thought_contacts c ON c.id=p.contact_id WHERE p.turn_id=?", (turn_id,)).fetchone()
+        row = self.proactive_receipt(turn_id)
         if row is not None:
-            import json
-            if scope != "gui" or not valid_basis(self, json.loads(row[0]), scope=scope):
+            if scope != "gui":
+                return SOURCE_SHADOW
+            if row["invitation_id"] is not None and not row["invitation_text"]:
+                return SOURCE_SHADOW
+            if row["contact_id"] is not None and not valid_basis(self, json.loads(row["basis"] or "{}"), scope=scope):
                 return SOURCE_SHADOW
         return super().turn_display(turn_id, scope=scope)
 
     def model_history_turns(self, limit):
         rows = super().model_history_turns(limit)
-        return [{**dict(row), "proactive": self.conn.execute("SELECT 1 FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone() is not None}
+        return [{**dict(row), "proactive": self.proactive_receipt(row["id"]) is not None}
                 for row in rows if self.turn_display(row["id"], scope="gui") != SOURCE_SHADOW
                 or self.turn_source_ids(row["id"])]
 
     def ordinary_turns(self, rows):
-        return [{**dict(row), "proactive": self.conn.execute("SELECT 1 FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone() is not None}
+        return [{**dict(row), "proactive": self.proactive_receipt(row["id"]) is not None}
                 for row in super().ordinary_turns(rows)
                 if self.turn_display(row["id"], scope="gui") != SOURCE_SHADOW]
 
@@ -375,10 +388,11 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         ).fetchone()["c"]
 
     def context_history_rounds(self, *, scope: str, before_id: int, limit: int = 200,
-                               user_id: int | None = None) -> list:
+                               user_id: int | None = None, after_id: int | None = None,
+                               oldest_first: bool = False) -> list:
         """C3: same-epoch/channel complete ordinary request pairs, never shadows.
 
-        Untagged legacy/CLI messages are deliberately outside this first adapter.
+        Untagged legacy messages are outside this adapter.
         Filter attachments and notifications before LIMIT, even after expiry.
         """
         if scope not in ("gui", "qq-owner"):
@@ -402,7 +416,10 @@ class Store(MaintenanceStoreMixin, LearningStoreMixin, WorkerStoreMixin, Observa
         if user_id is not None:
             sql += " AND u.id=?"
             args.append(user_id)
-        sql += " ORDER BY u.id DESC LIMIT ?"
+        if after_id is not None:
+            sql += " AND u.id>?"
+            args.append(after_id)
+        sql += " ORDER BY u.id ASC LIMIT ?" if oldest_first else " ORDER BY u.id DESC LIMIT ?"
         args.append(min(max(limit, 1), 200))
         return self.conn.execute(sql, args).fetchall()
 

@@ -327,7 +327,7 @@ def handler_for(lab, session_key):
                     self.reply(200, {"status": "alice-lab-ready"})
                     return
                 if not lab.lock.acquire(blocking=False):
-                    self.reply(409, {"error": "正在处理另一项操作"})
+                    self.reply(409, {"code": "busy", "error": "正在处理另一项操作"})
                     return
                 try:
                     if body == {"action": "exit_lab", "params": {}}:

@@ -148,9 +148,9 @@
                   <div class="discovery-provider-config">
                     <label id="discovery-endpoint-field" class="discovery-field hidden">服务地址<input id="discovery-endpoint" type="url" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="https://搜索服务地址"></label>
                     <label id="discovery-engines-field" class="discovery-field hidden">搜索引擎（英文逗号分隔）<input id="discovery-engines" type="text" maxlength="8192" autocomplete="off" spellcheck="false" placeholder="duckduckgo"></label>
-                    <label id="discovery-key-field" class="discovery-field hidden">搜索服务密钥<input id="discovery-key" type="password" maxlength="512" autocomplete="new-password" placeholder="留空保留现有密钥" aria-describedby="discovery-key-state"></label>
+                    <label id="discovery-key-field" class="discovery-field hidden">Brave 搜索密钥<input id="discovery-key" type="password" maxlength="512" autocomplete="new-password" placeholder="留空保留现有密钥" aria-describedby="discovery-key-state"></label>
                     <p id="discovery-key-state" class="discovery-hint hidden"></p>
-                    <label id="discovery-clear-key-field" class="discovery-check hidden"><input id="discovery-clear-key" type="checkbox"><span>移除已保存的搜索服务密钥</span></label>
+                    <label id="discovery-clear-key-field" class="discovery-check hidden"><input id="discovery-clear-key" type="checkbox"><span>移除已保存的 Brave 密钥</span></label>
                   </div>
                 </div>
               </div>
@@ -589,12 +589,16 @@
   function toggleEnabled() {
     if (!fresh || working || !snapshot || !resolveDrafts()) return;
     const s = snapshot.settings;
-    if (!s.enabled && s.daily_models !== 0 && !s.allow_paid) {
+    if (!s.enabled && requiresDiscoveryPaid({ ...s, enabled: true })) {
       showPreferences(true, "discovery-paid");
       status("请确认模型使用许可，或在每日额度中关闭后台模型请求，再开启发现。", "waiting");
       return;
     }
     mutate("settings", { settings: { enabled: !s.enabled } }, "正在更新寻找状态…", s.enabled ? "已暂停发现。已找到的资料仍可查看。" : "已开启发现，将按已保存的平台、兴趣、时段与额度寻找。");
+  }
+  function requiresDiscoveryPaid(settings) {
+    return snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled
+      && settings.daily_models !== 0 && !settings.allow_paid;
   }
   function renderOverview() {
     const s = snapshot?.settings;
@@ -700,7 +704,7 @@
   }
   function providerFields() {
     tiebaScopeFields();
-    const provider = $("discovery-provider").value, keySupported = ["brave", "searxng"].includes(provider);
+    const provider = $("discovery-provider").value, keySupported = provider === "brave";
     const networkSupported = has(snapshot?.settings, "network_mode") && ["system", "direct"].includes(snapshot.settings.network_mode);
     $("discovery-network-mode").disabled = !networkSupported;
     if (!networkSupported) $("discovery-network-mode").value = "";
@@ -735,7 +739,7 @@
     text("discovery-tieba-hint", !tiebaSupported ? "当前服务尚未提供贴吧访问方式，此项不会提交。"
       : $("discovery-tieba-access").value === "native" ? "通过贴吧查找公开帖子。回帖范围在下方设置。"
       : "搜索词交给选定服务，需在贴吧平台卡单独授权。回帖范围在下方设置。");
-    text("discovery-key-state", snapshot?.settings?.provider_key_present ? "已保存密钥；内容不会回显。" : "尚未保存搜索服务密钥。SearXNG 是否需要密钥取决于该服务。");
+    text("discovery-key-state", snapshot?.settings?.brave_key_present ? "已保存 Brave 密钥。" : "请填写并保存 Brave 搜索密钥。");
   }
   function fillSettings(force = false) {
     const s = snapshot?.settings; if (!s || settingsDirty && !force) return;
@@ -1313,7 +1317,11 @@
     if (first && event.target !== first) { event.preventDefault(); return; }
     revealSetting(event.target);
   }, true);
-  $("discovery-provider").addEventListener("change", providerFields);
+  $("discovery-provider").addEventListener("change", () => {
+    $("discovery-key").value = "";
+    $("discovery-clear-key").checked = false;
+    providerFields();
+  });
   $("discovery-bilibili-access").addEventListener("change", providerFields);
   $("discovery-zhihu-access").addEventListener("change", providerFields);
   $("discovery-tieba-access").addEventListener("change", providerFields);
@@ -1362,8 +1370,8 @@
       settings.provider_endpoint = $("discovery-endpoint").value.trim();
       settings.provider_engines = engines.join(",");
     }
-    if (snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled && settings.daily_models !== 0 && !settings.allow_paid) { showPreferences(true, "discovery-paid"); status("请允许后台模型使用，或在每日额度中关闭后台模型请求。", "waiting"); return; }
-    if (["brave", "searxng"].includes(settings.provider_kind)) {
+    if (requiresDiscoveryPaid(settings)) { showPreferences(true, "discovery-paid"); status("请允许后台模型使用，或在每日额度中关闭后台模型请求。", "waiting"); return; }
+    if (settings.provider_kind === "brave") {
       if ($("discovery-key").value.trim()) settings.provider_key = $("discovery-key").value.trim();
       if ($("discovery-clear-key").checked) settings.clear_provider_key = true;
     }

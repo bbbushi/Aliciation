@@ -369,9 +369,14 @@ class InvitationService:
     def record_intent(self, context: ExecutionContext, intent: ContactIntent) -> ContactIntent:
         """Persist the wish to talk independently of delivery permission/time."""
         self.host.validate_intent(context.scope, intent)
+        # Material withdrawal scrubs the topic but keeps the question link for
+        # history. A real decline still blocks a new intent for that question.
         duplicate = self.repository.store.conn.execute(
-            "SELECT id FROM v2_contact_intents WHERE epoch=? AND id<>? "
-            "AND (topic=? OR (question_id IS NOT NULL AND question_id=?)) LIMIT 1",
+            "SELECT i.id FROM v2_contact_intents i WHERE i.epoch=? AND i.id<>? "
+            "AND (i.topic=? OR i.question_id=?) "
+            "AND (i.state='active' OR i.topic<>'' OR EXISTS ("
+            "SELECT 1 FROM v2_invitation_attempts a WHERE a.epoch=i.epoch "
+            "AND a.intent_id=i.id AND a.state='declined')) LIMIT 1",
             (context.scope.session_epoch, intent.id, intent.topic, intent.question_id)).fetchone()
         if duplicate is not None:
             raise ValueError("该主题已有联系意图，请沿用意图索引并等待合适机会；已拒绝的话题不自动重邀")
@@ -480,10 +485,13 @@ class InvitationService:
             self.host.validate_foreground_reply(context, attempt)
         now = self._now()
         intent = self.repository.get_intent(context.scope, attempt.intent_id)
+        self.host.validate_intent(context.scope, intent)
+        if not late and (attempt.intent_version != intent.version or attempt.expires_at is None or attempt.expires_at <= now):
+            raise ValueError("邀请已到期或话题已变更，请刷新核对")
         if reply.decision == ReplyDecision.ACCEPT:
-            self.host.validate_intent(context.scope, intent)
             waits.clear(context.scope, intent_id=intent.id)
             updated = replace(attempt, state=InvitationState.ACCEPTED,
+                                      intent_version=intent.version,
                                       reply_user_turn_id=context.user_turn_id,
                                       expansion_request_id=context.request_id)
             saved = self.repository.save_attempt(updated, expected_version=attempt.version)
@@ -494,8 +502,7 @@ class InvitationService:
             updated = replace(attempt, state=InvitationState.DEFERRED,
                                       deferred_reason=(reply.reason or "user_deferred")[:500])
             saved = self.repository.save_attempt(updated, expected_version=attempt.version)
-            intent = replace(intent, state="active",
-                                     next_eligible_at=retry)
+            intent = replace(intent, next_eligible_at=retry)
             self.repository.save_intent(intent, expected_version=intent.version)
             waits.hold(context.scope, reason="user_deferred", attempt_id=saved.id,
                        intent_id=intent.id, resume_at=retry)
@@ -510,17 +517,66 @@ class InvitationService:
                        {"decision": reply.decision.value, "user_turn_id": context.user_turn_id})
         return saved
 
+    def withdraw_unavailable(self, scope: Scope, *, include_closed=False) -> None:
+        from ..discovery_memory import SOURCE_SHADOW
+        store = self.repository.store
+        epoch, now = scope.session_epoch, self._now()
+        with self.repository.transaction():
+            ids = [row[0] for row in store.conn.execute(
+                "SELECT i.id FROM v2_contact_intents i WHERE i.epoch=? AND (i.state='active' "
+                "OR (? AND i.motive='chat' AND i.topic<>'') OR (i.topic='' AND EXISTS ("
+                "SELECT 1 FROM v2_invitation_attempts a WHERE a.epoch=i.epoch AND a.intent_id=i.id "
+                "AND (a.state IN('prepared','awaiting_reply','accepted','deferred') OR a.invitation_text<>''))))",
+                (epoch, int(include_closed)))]
+            for identity in ids:
+                intent = self.repository.get_intent(scope, identity)
+                try:
+                    self.host.validate_intent_material(intent)
+                except ValueError:
+                    pass
+                else:
+                    continue
+                store.conn.execute("UPDATE v2_contact_intents SET topic='',reason='',content_refs='[]',basis=NULL,"
+                    "next_eligible_at=NULL,state='closed',version=version+1,updated_at=? WHERE id=? AND epoch=?",
+                    (now, identity, epoch))
+                store.conn.execute("UPDATE v2_invitation_attempts SET invitation_text='', "
+                    "deferred_reason=CASE WHEN state IN('prepared','awaiting_reply','accepted','deferred') "
+                    "THEN 'source_changed' ELSE deferred_reason END, "
+                    "state=CASE WHEN state IN('prepared','awaiting_reply','accepted','deferred') "
+                    "THEN 'withdrawn' ELSE state END,version=version+1,updated_at=? WHERE intent_id=? AND epoch=?",
+                    (now, identity, epoch))
+                turns = "SELECT invitation_turn_id FROM v2_invitation_attempts WHERE intent_id=? AND epoch=?"
+                store.conn.execute(f"UPDATE turns SET content=? WHERE id IN ({turns})", (SOURCE_SHADOW, identity, epoch))
+                store.conn.execute(f"UPDATE source_turns SET content='' WHERE turn_id IN ({turns})", (identity, epoch))
+                store.conn.execute("DELETE FROM v2_contact_holds WHERE epoch=? AND channel_id=? AND "
+                    "(intent_id=? OR (intent_id='' AND reason IN('await_timeout','prior_unanswered') "
+                    "AND attempt_id IN (SELECT id FROM v2_invitation_attempts WHERE intent_id=? AND epoch=?)))",
+                    (epoch, scope.channel_id, identity, identity, epoch))
+
     def expire(self, scope: Scope) -> tuple[InvitationAttempt, ...]:
         """Silent persisted deadline handling; no model call or follow-up."""
         now = self._now()
         from .contact_wait import ContactWait
         waits = ContactWait(self.repository.store)
+        self.withdraw_unavailable(scope)
         with self.repository.transaction():
             waits.bootstrap(scope)
         expired = []
         for attempt in self.repository.due_timeouts(scope, now_at=now):
-            intent = self.repository.get_intent(scope, attempt.intent_id)
             with self.repository.transaction():
+                attempt = self.repository.get_attempt(scope, attempt.id)
+                if attempt.state != InvitationState.AWAITING_REPLY:
+                    continue
+                intent = self.repository.get_intent(scope, attempt.intent_id)
+                if intent.state != "active" or intent.version != attempt.intent_version:
+                    self.repository.save_attempt(replace(attempt, state=InvitationState.WITHDRAWN,
+                        deferred_reason="intent_version_changed"), expected_version=attempt.version)
+                    continue
+                try:
+                    self.host.validate_intent(scope, intent)
+                except ValueError:
+                    self.withdraw_unavailable(scope)
+                    continue
                 updated = replace(attempt, state=InvitationState.DEFERRED,
                                           deferred_reason="await_timeout")
                 saved = self.repository.save_attempt(updated, expected_version=attempt.version)
@@ -541,6 +597,15 @@ class InvitationService:
                          assistant_turn_id: int) -> InvitationAttempt:
         attempt = self.repository.get_attempt(context.scope, attempt_id)
         return self.host.commit_expansion(context, attempt, assistant_turn_id=assistant_turn_id)
+
+    def mark_expansion_unconfirmed(self, context: ExecutionContext, *, attempt_id: str, reason: str) -> None:
+        attempt = self.repository.get_attempt(context.scope, attempt_id)
+        if attempt.state != InvitationState.ACCEPTED or attempt.expansion_request_id != context.request_id:
+            return
+        self.repository.save_attempt(replace(attempt, state=InvitationState.UNKNOWN, deferred_reason=reason),
+                                     expected_version=attempt.version)
+        from .. import thought_workspace as thoughts
+        thoughts.event(self.repository.store, "invitation_expansion_failed", attempt_id, {"reason": reason})
 
 
 @dataclass(slots=True, kw_only=True)

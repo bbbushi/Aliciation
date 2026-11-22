@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as appconfig
-from . import consolidation, loop, maintenance, observation, persona, persona_reset, skills, thought
+from . import consolidation, loop, maintenance, observation, persona, persona_mode_install, persona_reset, skills, thought
 from .config import Config, load
 from .channels import ChannelCoordinator, ChannelError
 from .config_edit import (ConfigConflict, revision, replace_llm_values, replace_channels,
@@ -87,12 +87,15 @@ class ChatService:
     """拥有 Store 与 client 的生命周期；所有写操作经 _lock 串行（单一永久会话语义）。"""
 
     def __init__(self, cfg: Config | None = None, db_path=None, client=None, *, config_path=None,
-                 allow_unconfigured: bool = False, _maintenance_activation: bool = False, lab_experiments=False):
+                 allow_unconfigured: bool = False, _maintenance_activation: bool = False, lab_experiments=False,
+                 _foreground_cli: bool = False):
         from .instance_lock import InstanceLock
 
         database = Path(db_path) if db_path is not None else appconfig.DB_PATH
+        self._database = database.parent.resolve() / database.name
         self._profile_database = (database.parent.resolve() / database.name
                                   == appconfig.DB_PATH.parent.resolve() / appconfig.DB_PATH.name)
+        self._foreground_cli = _foreground_cli
         self._instance_lock = InstanceLock(database.parent, maintenance=_maintenance_activation)
         self._instance_lock.acquire()
         try:
@@ -110,6 +113,8 @@ class ChatService:
         self._config_revision = revision(self._config_path) if config_path is not None or cfg is None else None
         self.cfg = cfg if cfg is not None else load(self._config_path)
         reset_record = persona_reset.before_open() if self._profile_database else None
+        mode_change = persona_mode_install.read_change(self._database, self._config_path)
+        reset_cfg = persona_mode_install.reset_config(self.cfg, mode_change, reset_record)
         self.store = Store(database)
         from .reply_sections import ReplyCache
         self._reply_cache = ReplyCache()
@@ -127,10 +132,14 @@ class ChatService:
             from .background_runtime import BackgroundRuntime
             self._background = BackgroundRuntime()
             self.store._background_admit = self._admit_background_model
-            persona_reset.after_open(self.store, self.cfg, reset_record)
+            persona_reset.after_open(self.store, reset_cfg, reset_record)
             if not self.store.meta_get("session_epoch"):
                 self.store.meta_set("session_epoch", uuid.uuid4().hex)
             persona.recover_imports(self.store)
+            recovered_revision = persona_mode_install.finish(self.store, self.cfg, self._database, self._config_path,
+                                                            mode_change, discard_uncommitted=True)
+            if recovered_revision is not None:
+                self._config_revision = recovered_revision
             persona.recover_growth(self.store)  # No model call or old-file replay during recovery.
             from .expression_update import recover as recover_expression
             recover_expression(self.store)
@@ -152,13 +161,14 @@ class ChatService:
             from .context_workspace import WorkingSet
             self._context_workspace = WorkingSet(self.cfg)
             self._discovery = DiscoveryCoordinator(self)
-            self._discovery.start()
             # 双维护空闲执行器（设计草案 §6）：聊天优先；启动时清点上一进程遗留任务
             self._maintenance = maintenance.MaintenanceRunner(self)
-            self._maintenance.start()
             from .autonomy import AutonomyCoordinator
             self._autonomy = AutonomyCoordinator(self)
-            self._autonomy.start()
+            if not self._foreground_cli:
+                self._discovery.start()
+                self._maintenance.start()
+                self._autonomy.start()
         except BaseException:
             self._shutting_down = True
             discovery = getattr(self, "_discovery", None)
@@ -250,10 +260,11 @@ class ChatService:
 
         if payload is None:
             with self._lock:
-                return {"session_epoch": self._channels.epoch, **user_intro.load(self.store)}
+                return {"session_epoch": self._channels.epoch, "revision": user_intro.revision(self.store),
+                        **user_intro.load(self.store)}
         if (not isinstance(payload, dict)
-                or set(payload) != {"session_epoch", *user_intro.FIELD_LIMITS}
-                or not isinstance(payload["session_epoch"], str)):
+                or set(payload) != {"session_epoch", "revision", *user_intro.FIELD_LIMITS}
+                or not isinstance(payload["session_epoch"], str) or not isinstance(payload["revision"], str)):
             raise ValueError("介绍资料请求无效")
         fields = user_intro.normalize(payload)
         token = self._channels.reserve("control", wait=False, notify_foreground=False)
@@ -263,7 +274,11 @@ class ChatService:
                 persona_reset.require_clear()
                 if persona.persona_md() is None:
                     raise ValueError("先安装人格，再填写介绍")
-                self.store.meta_set(user_intro.META_KEY, json.dumps(fields, ensure_ascii=False))
+                if payload["revision"] != user_intro.revision(self.store):
+                    raise ChannelError(409, "intro_revision_conflict", "介绍已在另一处保存，当前草稿仍在。")
+                with self.store.source_transaction():
+                    self.store.meta_set(user_intro.META_KEY, json.dumps(fields, ensure_ascii=False))
+                    self.store.meta_set(user_intro.REVISION_KEY, uuid.uuid4().hex)
                 return self.state()
         finally:
             self._channels.release(token)
@@ -348,6 +363,7 @@ class ChatService:
         with self._lock:
             return [
                 {"role": r["role"], "content": self._history_turn_display_locked(r["id"]), "ts": r["ts"],
+                 "proactive": self.store.proactive_receipt(r["id"]) is not None,
                  **self._history_source_fields_locked(r["id"])}
                 for r in self.store.recent_turns(limit)
             ]
@@ -472,13 +488,14 @@ class ChatService:
                     delivery = next((s for s in ("send_unknown", "failed", "sending", "ready") if s in states),
                                     "platform_confirmed" if states else "pending")
                 source_fields = self._history_source_fields_locked(row["id"])
-                proactive = self.store.conn.execute("SELECT contact_id FROM proactive_turns WHERE turn_id=?", (row["id"],)).fetchone()
+                proactive = self.store.proactive_receipt(row["id"])
                 report = source_fields.get("worker_report")
                 turns.append({"id": row["id"], "role": row["role"], "content": self._history_turn_display_locked(row["id"]), "ts": row["ts"],
                               "request_id": None if report else row["request_id"],
                               "channel": "gui" if report or proactive else row["channel_id"] or "local",
                               "sender_label": (self.cfg.persona.name if report.get("kind") == "alice_summary" else "协作状态") if report else "所有者", "delivery": None if report else delivery,
-                              "proactive": proactive is not None, "contact_id": proactive[0] if proactive else None,
+                              "proactive": proactive is not None, "contact_id": proactive["contact_id"] if proactive else None,
+                              "invitation_id": proactive["invitation_id"] if proactive else None,
                               **source_fields})
             source_updates = []
             if source_turn_ids:
@@ -520,8 +537,15 @@ class ChatService:
         finally:
             self._lock.release()
 
-    def chat_activity(self) -> dict:
-        return self._channels.activity()
+    def chat_activity(self, *, include_thought_state=False) -> dict:
+        result = self._channels.activity()
+        if include_thought_state and self._lock.acquire(blocking=False):
+            try:
+                from . import activity
+                result["thought_state"] = activity.presentation_state(self.store)
+            finally:
+                self._lock.release()
+        return result
 
     def gui_request_status(self, payload: dict) -> dict:
         """Read-only identity-bound lookup. Never accepts or reruns a GUI request."""
@@ -548,6 +572,22 @@ class ChatService:
                                                 "assistant_turn_id", "error_code", "maintenance_status")}
         finally:
             self._lock.release()
+
+    def gui_reply_for_delivery(self, *, session_epoch: str, assistant_turn_id: int) -> dict:
+        """Project the saved reply again after SSE notices have been written."""
+        with self._lock:
+            self._channels.check_epoch(session_epoch)
+            reply = self.store.turn_display(assistant_turn_id, scope="gui")
+            if reply is None:
+                raise ChannelError(503, "status_unavailable", "已保存回复暂不可核对，请同步历史")
+            fields = self._history_source_fields_locked(assistant_turn_id)
+            if fields["source_bound"] and (not fields["source_available"]
+                                          or (fields["source_expires_at"] or 0) <= time.time()):
+                fields["source_available"] = False
+                reply = loop.SOURCE_UNAVAILABLE_REPLY
+            return {"reply": reply, "discard_preview": reply == loop.SOURCE_UNAVAILABLE_REPLY,
+                    **{key: fields[key] for key in ("source_bound", "source_available", "source_expires_at", "worker_bound")
+                       if key in fields}}
 
     def authenticate_channel(self, token):
         return self._channels.authenticate(token)
@@ -596,6 +636,9 @@ class ChatService:
 
     def observer_detail(self, *, scope=None, **kwargs) -> dict:
         return self._observer_read(observation.detail, scope=scope, **kwargs)
+
+    def observer_memory_available(self, *, scope=None, id=None) -> dict:
+        return self._observer_read(observation.lab_memory_available, scope=scope, id=id)
 
     def observer_llm_calls(self, *, scope=None, limit="100", request_id=None) -> dict:
         return self._observer_read(observation.llm_calls, scope=scope,
@@ -961,6 +1004,7 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                self._require_material_mode_clear_locked()
             if reset:
                 self._workers.drain()
                 self._workers.join_worker_reports()
@@ -1008,6 +1052,7 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                self._require_material_mode_clear_locked()
                 from . import persona_material as pm
                 if pm.MARKER_PREFIX in md_text and self._channels.enabled():
                     raise ValueError("原文人格尚不支持QQ，请先暂停QQ渠道，再恢复这份人格")
@@ -1040,6 +1085,7 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                self._require_material_mode_clear_locked()
             self._workers.drain()
             self._workers.join_worker_reports()
             with self._lock:
@@ -1053,6 +1099,7 @@ class ChatService:
         from .persona_growth import digest
         with self._channels.control(), self._workers.control_lock, self._lock:
             persona_reset.require_clear()
+            self._require_material_mode_clear_locked()
             if self.store.meta_get("session_epoch") != payload["session_epoch"]:
                 raise ChannelError(409, "session_changed", "会话已更换，请重新打开当前人格后再编辑")
             if digest(persona.persona_md() or "") != payload["revision"]:
@@ -1089,6 +1136,7 @@ class ChatService:
                 return update.detail(self.store, payload.get("token"))
         with self._channels.control(), self._workers.control_lock, self._lock:
             persona_reset.require_clear()
+            self._require_material_mode_clear_locked()
             if action == "prepare":
                 return update.prepare(self.store, self.client, self.cfg, payload)
             if action == "apply":
@@ -1115,6 +1163,7 @@ class ChatService:
                 return self._persona_residency_status_locked()
         with self._channels.control(), self._workers.control_lock, self._lock:
             persona_reset.require_clear()
+            self._require_material_mode_clear_locked()
             if action == "set_mode":
                 return self._set_persona_mode_locked(payload)
             if action == "prepare":
@@ -1201,6 +1250,8 @@ class ChatService:
         with self._channels.control(), self._workers.control_lock:
             with self._lock:
                 persona_reset.require_clear()
+                if action != "apply":
+                    self._require_material_mode_clear_locked()
                 if action in {"delete_preparation", "restore_preparation"}:
                     return decorate(archives.move(payload, prep.root(), prep._staged_path(),
                                                   restore=action == "restore_preparation"))
@@ -1219,6 +1270,14 @@ class ChatService:
                     return decorate(prep.material_split(self.store, self.cfg, payload))
                 if action == "cancel":
                     return decorate(prep.material_cancel(self.store, payload))
+                pending_mode = persona_mode_install.read_change(self._database, self._config_path)
+                if pending_mode is not None:
+                    persona.recover_imports(self.store)
+                    recovered_revision = persona_mode_install.finish(self.store, self.cfg, self._database, self._config_path,
+                                                                    pending_mode, discard_uncommitted=True)
+                    if recovered_revision is not None:
+                        self._config_revision = recovered_revision
+                    self._channels.set_ready(persona.persona_md() is not None)
                 if prep.material_replayed(self.store, payload):
                     return {**self.state(), "material_notice": "该材料操作已提交，未重复安装或归档。"}
                 ready = prep.material_install_candidate(self.store, self.cfg, payload,
@@ -1239,16 +1298,24 @@ class ChatService:
                     raise ValueError("排空协作期间材料计划已变化，请重新核对")
                 if self._config_revision is not None:
                     self._check_config_revision_locked(payload.get("config_revision"), required=True)
+                mode_change = None
                 if ready["material_mode"] != self.cfg.persona.expression_mode:
-                    new_revision = replace_persona_mode(self._config_path, ready["material_mode"], self._config_revision)
-                    self.cfg.persona.expression_mode = ready["material_mode"]
-                    self._config_revision = new_revision
+                    mode_change = persona_mode_install.stage(self._database, self._config_path, self._config_revision, ready)
+                candidate_cfg = persona_mode_install.candidate_config(self.cfg, mode_change)
                 if ready["reset"]:
                     archived = self._archive_locked(plan=ready)
-                    persona.commit_import_plan(self.store, self.cfg, ready, archived_from=archived, archived=True)
-                    persona_reset.complete()
+                    persona.commit_import_plan(self.store, candidate_cfg, ready, archived_from=archived, archived=True)
                 else:
-                    persona.commit_import_plan(self.store, self.cfg, ready)
+                    persona.commit_import_plan(self.store, candidate_cfg, ready)
+                if mode_change is not None:
+                    try:
+                        self._config_revision = persona_mode_install.finish(self.store, self.cfg, self._database,
+                                                                            self._config_path, mode_change)
+                    except Exception:
+                        self._channels.set_ready(False)
+                        raise
+                if ready["reset"]:
+                    persona_reset.complete()
                 self._channels.set_ready(persona.persona_md() is not None)
                 # Successful file + DB marker remain authoritative even if UI cleanup fails.
                 try:
@@ -1335,6 +1402,7 @@ class ChatService:
                 prior = self._channels.lookup(request)
                 if prior is not None:
                     return self._replayed_result(prior)
+                self._require_material_mode_clear_locked()
                 self._workers.validate_chat_target_locked(request)
                 accepted = self._channels.accept_locked(request)
                 if on_accepted is not None:
@@ -1390,15 +1458,17 @@ class ChatService:
                 evaluation_warning = "P1核查未能绑定本轮（许可过期、配置变化或捕获未完成）；真实聊天继续，请查看核查记录"
         persisted, maintenance_warnings = [], []
         source_warning = None
-        try:
-            source_ids, source_explicit = self._discovery.select_for_chat_locked(request)
-        except Exception:
-            self._discovery.chat_accounting_failed()
-            source_ids, source_explicit = [], False
-            source_warning = "资料读取暂失败，已暂停资料共享；本轮聊天继续"
+        source_ids, source_explicit, search_session = [], False, None
+        settings = {}
+        if not self._foreground_cli:
+            try:
+                source_ids, source_explicit = self._discovery.select_for_chat_locked(request)
+            except Exception:
+                self._discovery.chat_accounting_failed()
+                source_warning = "资料读取暂失败，已暂停资料共享；本轮聊天继续"
+            search_session = self._discovery.prepare_chat_locked(request, owner_token, on_search_progress)
+            _, settings = self._discovery._config_locked()
         source_usage = {}
-        search_session = self._discovery.prepare_chat_locked(request, owner_token, on_search_progress)
-        _, settings = self._discovery._config_locked()
         if search_session is not None:
             from .autonomy_policy import search_settings
             settings = search_settings(settings)
@@ -1413,16 +1483,18 @@ class ChatService:
                 source_packet_ids=source_ids, source_scope=request["channel_id"],
                 source_allow_external_recall=source_explicit, source_usage_out=source_usage,
                 search_session=search_session, tool_round_limit=settings.get("tool_round_limit", 4),
-                worker_session=self._workers.prepare_chat_locked(request),
-                working_set=getattr(self, "_context_workspace", None),
-                reply_cache=self._reply_cache,
+                worker_session=None if self._foreground_cli else self._workers.prepare_chat_locked(request),
+                working_set=None if self._foreground_cli else self._context_workspace,
+                reply_cache=None if self._foreground_cli else self._reply_cache,
+                store_lock=self._lock,
             )
-            try:
-                self._discovery.record_chat_locked(request, source_usage,
-                    explicit=source_explicit or bool(search_session and search_session.calls))
-            except Exception:
-                self._discovery.chat_accounting_failed()
-                source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
+            if not self._foreground_cli:
+                try:
+                    self._discovery.record_chat_locked(request, source_usage,
+                        explicit=source_explicit or bool(search_session and search_session.calls))
+                except Exception:
+                    self._discovery.chat_accounting_failed()
+                    source_warning = "资料共享记录暂失败；原回复已保存，已暂停后续资料共享"
             events = yield from self._watchers_steps(request_id=request_id)
             try:
                 # 双维护（草案 §6）：回复后的路径只做廉价阈值检查和排队，不同步执行。
@@ -1444,20 +1516,26 @@ class ChatService:
             except Exception:
                 self._evaluations.abort_chat(job)
                 record = {"status": "failed"}
-            queue = record["status"] == "queued"
+            if record["status"] == "queued":
+                try:
+                    queued = yield lambda: self._evaluations.enqueue(job)
+                except Exception:
+                    self._evaluations.abort_chat(job)
+                    queued = False
+                if not queued:
+                    evaluation_warning = "P1 核查未能排入执行，真实回复已保存。请查看核查记录。"
+            else:
+                evaluation_warning = "P1 核查未能使用本轮回复，真实回复已保存。请查看核查记录。"
         if evaluation_warning:
             events.append(evaluation_warning)
         result = {"reply": reply, "events": events, "memory": self._memory_stats()}
-        self._channels.finish_locked(request_id, warning=bool(maintenance_warnings) or any("暂失败" in event for event in events))
+        if evaluation_warning:
+            result["evaluation_warning"] = evaluation_warning
+        self._channels.finish_locked(request_id, warning=bool(maintenance_warnings or evaluation_warning)
+                                     or any("暂失败" in event for event in events))
         result.update(self._channels.publish_locked(request_id))
         if job:
             result["evaluation_id"] = job["id"]
-        if job and queue:
-            try:
-                yield lambda: self._evaluations.enqueue(job)
-            except Exception:
-                self._evaluations.abort_chat(job)
-                result["events"].append("P1核查未能排入执行，真实回复已保存；请查看核查记录")
         return result
 
     # ---------- 设置 ----------
@@ -1553,7 +1631,12 @@ class ChatService:
                 self._discovery.model_config_changed()
                 return {"enabled": enabled, "app_id": binding["app_id"], "owner_openid": binding["sender_id"]}
 
+    def _require_material_mode_clear_locked(self) -> None:
+        if persona_mode_install.journal_path(self._database).exists():
+            raise ChannelError(409, "persona_mode_pending", "人格装配保存尚未完成，请重试安装收尾或重启恢复")
+
     def _check_config_revision_locked(self, supplied: str | None, *, required: bool) -> None:
+        self._require_material_mode_clear_locked()
         if self._config_revision is None:
             raise ValueError("此服务未绑定配置文件，无法从界面保存配置")
         if required and not isinstance(supplied, str):
@@ -1780,7 +1863,10 @@ class ChatService:
     def _watchers_steps(self, *, request_id=None):
         request_id = request_id or "maintenance_" + uuid.uuid4().hex
         events: list[str] = []
-        for watcher in (persona.evolve_if_due_steps, thought.deliberate_if_due_steps, skills.distill_if_due_steps):
+        watchers = [persona.evolve_if_due_steps, skills.distill_if_due_steps]
+        if not self._foreground_cli:
+            watchers.insert(1, thought.deliberate_if_due_steps)
+        for watcher in watchers:
             try:
                 msg = yield from watcher(self.store, self.client, self.cfg, request_id=request_id)
             except Exception as e:  # Never return provider exception bodies or credentials.

@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from .config import Config
 from .llm import chat, parse_json
@@ -29,8 +30,8 @@ from .steps import drive
 from .context import input_token_limit, messages_tokens, over_input_budget
 from . import grounding
 
-# 注意：本模块不顶层导入 .store（store.py 反向导入本模块的 SCHEMA/Mixin，
-# 顶层互导会炸）。类型注解经 __future__ annotations 为字符串；text_score 在用到处局部导入。
+if TYPE_CHECKING:
+    from .store import Store
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS maintenance_tasks (
@@ -276,11 +277,23 @@ def compact_span(store: Store, cfg: Config, *, scope: str = "gui") -> tuple[list
     floor = recent[0]["id"] if recent else 0
     if floor <= cursor:
         return [], cursor
-    rows = store.context_history_rounds(scope=scope, before_id=floor)
-    span = [r for r in rows if r["user_id"] > cursor and r["assistant_id"] < floor]
-    span = span[-cfg.maintenance.compact_max_span_rounds:]
-    span.reverse()  # 最旧在前
+    span = store.context_history_rounds(scope=scope, before_id=floor, after_id=cursor,
+                                      limit=cfg.maintenance.compact_max_span_rounds, oldest_first=True)
     return span, cursor
+
+
+def _advance_extract_cursor(store: Store, cursor: int, end_turn_id: int, covered: set[int]) -> int:
+    # Extraction spans channels and legacy turns. Stop before its first ordinary
+    # turn outside compact coverage, even if we compacted later GUI pairs.
+    while cursor < end_turn_id:
+        rows = [row for row in store.turns_since(cursor) if row["id"] <= end_turn_id]
+        if not rows:
+            return end_turn_id
+        for row in store.ordinary_turns(rows):
+            if row["id"] not in covered:
+                return row["id"] - 1
+        cursor = rows[-1]["id"]
+    return cursor
 
 
 def compact_preview(store: Store, cfg: Config, *, scope: str = "gui") -> dict:
@@ -422,6 +435,7 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
     current, current_cursor = compact_span(store, cfg, scope=scope)
     if (store.meta_get("session_epoch") != epoch or task_epoch != epoch
             or current_cursor != cursor
+            or _int_meta(store, "extract_cursor") != extract_cursor
             or [dict(r) for r in current] != snapshot_rows
             or _version_of_pairs(current) != _version_of_pairs(span)
             or store.active_compact_state(scope) != prior_state
@@ -434,8 +448,7 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
         return fail("state_review_rejected", extra={"review": verdicts[0].get("reason", "")[:200]})
     _gate(should_stop, chat_active)
     covered_prev = sorted(store.compact_covered_turn_ids())
-    covered_new = sorted(set(covered_prev)
-                         | {tid for r in span for tid in (r["user_id"], r["assistant_id"])})
+    covered_new = set(covered_prev) | {tid for r in span for tid in (r["user_id"], r["assistant_id"])}
     batch_id = uuid.uuid4().hex
     end_turn_id = max(r["assistant_id"] for r in span)
     # Normal extraction may already have covered this span. Reuse its reviewed
@@ -458,14 +471,12 @@ def compact_task_steps(store: Store, client, cfg: Config, task_id: int, *, reque
             "covered_turn_ids,processed_pairs,session_epoch,scope,chars,active,created_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
             (batch_id, task_id, span[0]["user_id"], end_turn_id, state_text,
-             json.dumps(covered_new), json.dumps(
+             json.dumps(sorted(covered_new)), json.dumps(
                  [{"user_id": r["user_id"], "assistant_id": r["assistant_id"],
                    "version": _version_pair(r)} for r in span]),
              epoch, scope, len(state_text), time.time()))
         store.meta_set("compact_cursor", str(end_turn_id))
-        # R01 去重契约：本批已形成记忆/接续状态的轮次不再回到常规提取；
-        # 只前进不后退（replaces_extraction 关闭时保护既有提取进度）。
-        store.meta_set("extract_cursor", str(max(_int_meta(store, "extract_cursor"), end_turn_id)))
+        store.meta_set("extract_cursor", str(_advance_extract_cursor(store, extract_cursor, end_turn_id, covered_new)))
         for m in kept_memories:
             written.append(store.insert_memory(
                 title=m["title"], content=m["content"], keywords=" ".join(m["keywords"]),

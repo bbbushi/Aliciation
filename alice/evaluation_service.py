@@ -125,17 +125,18 @@ class EvaluationCoordinator:
         except Exception:
             pass  # Evaluation failure must never mask the real chat outcome.
 
-    def enqueue(self, job):
+    def enqueue(self, job) -> bool:
         with self.service._lock:
             if not self._current(job):
                 if job["epoch"] == self.epoch and job["dataset_id"] == self.repo.dataset_id:
                     self.repo.fail(job["id"], "cancelled", "shutdown")
-                return
+                return False
             if self.thread is not None and self.thread.is_alive():
                 self.repo.fail(job["id"], "failed", "worker_busy")
-                return
+                return False
             self.thread = threading.Thread(target=self._work, args=(job,), name="AliceP1", daemon=False)
             self.thread.start()
+            return True
 
     def _current(self, job):
         return (not self.stopping.is_set() and job["epoch"] == self.epoch

@@ -31,6 +31,7 @@
 
   const state = { requests: [], requestId: null, callId: null, mode: "total",
     capture: {}, canReadBody: false, fullCall: false };
+  const BODY_CHECK_MS = 3500;
 
   function status(message, kind = "") {
     const n = el("ci-status");
@@ -46,7 +47,8 @@
     capture_disabled: "当轮正文采集已关闭", rolling_window_evicted: "已移出最近10请求窗口",
     retention_expired: "已超过7天留存期", body_budget_exceeded: "正文库容量不足",
     too_large: "正文超过单条采集上限", write_failed: "正文写入失败",
-    capture_index_unavailable: "正文留存索引不可用", not_retained: "正文文件未留存或已清理"})[reason] || reason || "原因未记录";
+    capture_index_unavailable: "正文留存索引不可用", not_retained: "正文文件未留存或已清理",
+    source_unavailable: "原资料已失效或不可核对"})[reason] || reason || "原因未记录";
 
   function bodyButton(requestId, contentHash, bodyState) {
     if (!contentHash || bodyState === "none") return node("span", "（未留存正文）", "ci-hint");
@@ -60,17 +62,23 @@
     const pre = node("pre", null, "ci-body");
     pre.hidden = true;
     button.addEventListener("click", async () => {
-      if (!pre.hidden) { pre.hidden = true; return; }
+      if (!state.canReadBody || document.hidden) return;
+      if (!pre.hidden) { pre.textContent = ""; pre.hidden = true; return; }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), BODY_CHECK_MS);
+      const current = () => pre.isConnected && state.canReadBody && !document.hidden;
       button.disabled = true;
       try {
-        const data = await window.ContextInspectorClient.get("body", {request_id: requestId, hash: contentHash});
+        const data = await window.ContextInspectorClient.get("body", {request_id: requestId, hash: contentHash}, controller.signal);
+        if (!current()) return;
         pre.textContent = data.stored ? (data.text || "（空）") + (data.truncated ? "\n…（已截断）" : "")
           : `未留存正文（${bodyReason(data.reason)}）`;
       } catch (error) {
-        pre.textContent = error.message;
+        if (current()) pre.textContent = error.name === "AbortError" ? "正文读取超时，请稍后重试。" : error.message;
       } finally {
+        clearTimeout(timeout);
         button.disabled = false;
-        pre.hidden = false;
+        if (current()) pre.hidden = false;
       }
     });
     wrap.append(button, pre);
@@ -363,12 +371,17 @@
     renderBrowser(request, call);
   }
 
-  let lastSignature = "", refreshing = false;
+  let lastSignature = "", refresh = null;
   async function tick() {
-    if (refreshing || document.hidden) return;
-    refreshing = true;
+    if (refresh || document.hidden) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BODY_CHECK_MS);
+    refresh = controller;
     try {
-      const info = await window.ContextInspectorClient.get("status");
+      const info = await window.ContextInspectorClient.get("status", {}, controller.signal);
+      if (info.can_read_body !== true && state.canReadBody) withholdBodies();
+      const data = await window.ContextInspectorClient.get("requests", {}, controller.signal);
+      if (controller.signal.aborted || document.hidden) return;
       state.canReadBody = info.can_read_body === true;
       state.fullCall = info.full_call !== false;
       state.capture = info.capture || {};
@@ -380,23 +393,28 @@
           + (Number.isFinite(quota.retention_days) ? ` · 保留 ${quota.retention_days} 天` : "") : "")
         + (quota?.requests ? ` · 滚动留存 ${quota.requests.used ?? "?"}/${quota.requests.limit} 个请求` : "")
         + (state.canReadBody && !state.fullCall ? " · 完整上下文需要新版 Alice" : ""));
-      const data = await window.ContextInspectorClient.get("requests");
+      const previousRequestId = state.requestId;
       state.requests = data.requests || [];
       const selected = state.requests.find(item => item.request_id === state.requestId) || state.requests[0];
       state.requestId = selected?.request_id ?? null;
       if (!selected?.calls.some(call => call.call_id === state.callId))
         state.callId = selected?.calls.at(-1)?.call_id ?? null;
       const signature = JSON.stringify([state.canReadBody, state.fullCall, data.scope,
-        state.requests.map(r => [r.request_id, r.event_count, r.finished, r.calls.length])]);
+        state.requests.map(r => [r.request_id, r.event_count, r.finished, r.calls.length, r.body_access_reason])]);
       if (signature !== lastSignature) {
         lastSignature = signature;
+        if (!state.canReadBody || state.requestId !== previousRequestId || selected?.body_access_reason) {
+          window.AliceContextViewer.close();
+        }
         renderAll();
         if (!state.requests.length) el("ci-requestbar").append(node("p", "暂无上下文请求。", "ci-hint"));
       }
     } catch (error) {
-      status(error.message, "warn");
+      withholdBodies();
+      if (!document.hidden) status(error.name === "AbortError" ? "正文资格核对超时，已收起正文。" : error.message, "warn");
     } finally {
-      refreshing = false;
+      clearTimeout(timeout);
+      refresh = null;
     }
   }
 
@@ -412,13 +430,25 @@
   /* 05-21：完整上下文内联折叠区——展开/换选时挂载进页内，不再弹独立窗 */
   const fullFold = el("ci-full-fold"), fullReader = el("ci-full-reader"), fullMeta = el("ci-full-meta");
   let fullKey = null;
+  function withholdBodies() {
+    const wasReadable = state.canReadBody;
+    state.canReadBody = false;
+    lastSignature = "";
+    fullKey = null;
+    fullFold.open = false;
+    window.AliceContextViewer.close();
+    fullReader.replaceChildren();
+    if (wasReadable) renderAll();
+  }
+
   function mountFull(force) {
     const request = state.requests.find(r => r.request_id === state.requestId) || null;
     const gate = !state.canReadBody ? "需在 Alice 授予正文后重新连接"
       : !state.fullCall ? "完整上下文需要新版 Alice"
-      : !request ? "暂无上下文请求。" : "";
+      : !request ? "暂无上下文请求。" : request.body_access_reason ? bodyReason(request.body_access_reason) : "";
     if (gate) {
       fullKey = null;
+      window.AliceContextViewer.close();
       fullReader.replaceChildren(node("p", gate, "ci-hint"));
       fullMeta.textContent = gate;
       return;
@@ -433,17 +463,33 @@
     window.AliceContextViewer.open({container: fullReader, requestId: request.request_id,
       calls: request.calls, callId: state.callId, scope: window.ContextInspectorClient.getScope()});
   }
-  fullFold.addEventListener("toggle", () => { if (fullFold.open) mountFull(); });
+  fullFold.addEventListener("toggle", () => {
+    if (fullFold.open) mountFull();
+    else {
+      fullKey = null;
+      window.AliceContextViewer.close();
+      fullReader.replaceChildren();
+    }
+  });
   el("ci-mode-delta").addEventListener("click", () => setMode("delta"));
 
   el("ci-refresh").addEventListener("click", tick);
   window.addEventListener("alice-observer-scope-changed", () => {
+    withholdBodies();
     state.requests = [];state.requestId = state.callId = null;lastSignature = "";
-    fullKey = null;
-    fullReader.replaceChildren(node("p", "会话已更换，重新展开本节读取。", "ci-hint"));
     renderAll();
   });
-  const timer = setInterval(tick, 3500);
-  window.addEventListener("pagehide", () => clearInterval(timer), {once:true});
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      refresh?.abort();
+      withholdBodies();
+    } else tick();
+  });
+  const timer = setInterval(tick, BODY_CHECK_MS);
+  window.addEventListener("pagehide", event => {
+    if (!event.persisted) clearInterval(timer);
+    refresh?.abort();
+    withholdBodies();
+  });
   tick();
 })();

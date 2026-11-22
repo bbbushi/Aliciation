@@ -20,11 +20,12 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 - 四工作区（核心 `alice/`+`web/` / 测试 `tests/` / 附加 `addons/` / 资料 `docs/`、`tools/`）依赖单向指向核心；测试与 addons 只走公共面（`service.ChatService`、HTTP API、CLI），不 import `alice` 内部。详见 `docs/工作约束/工作区约定.md`。
 - **能力增减须同步能力层JSON注册表与必要自我事实**（`alice/capabilities/commands.json`、`alice/constitution.json`）；注册表与SDK工具同源，宪法不重复工具目录或用户操作教程——自模型与实际能力须一致（2026-11-11用户确认的新组织方式）。
 - 提交只暂存自己碰的路径，不用 `git add -A`（工作区常有另一棒的半成品）。
-- **分支流程（2026-11-21 用户再次纠正）**：当前用户的改动推 `ytq`（2026-10-30 的"推 trial"规则作废；trial 是 ytq 经 PR 汇入的集成分支，不直接推）。验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。当前 origin 使用 HTTPS。
+- **分支流程（2026-10-30 用户纠正）**：当前用户的改动推 `trial/windows-v0.2-20261028`；`ytq` 属于其他协作者，不作为当前用户的推送目标。验收后走 **PR 合入 main**（不再本地 merge 推 main）；**main 不接受直接 push**。合并前跑共存检查：`compileall` + 起服验证 + grep 对方分支可能触碰的路径（语义冲突 git 报不出来，三处旧路径 bug 的教训）。当前 origin 使用 HTTPS。
 
 ## 当前
 
-- 2026-11-21 各线未提交改动收拢上传 ytq（本次提交）：TUI 档案级 socket 终端客户端（连接级 UID 核验免配对、/api/tui/v1 四接口、addons/alice_tui 零依赖客户端、~/.local/bin/alice 启动器，TCP 配对与 tui_access 退役）+ 向导 user_intro + 投影环改版 + 主动交流独立调度（宪法 v13）+ 来源过期连带清空。
-- 待真人验收：TUI 设计 §5 场景（多行粘贴/跨端同步/历史翻页/Ctrl+C 中断核对/第二账户）、向导返回流程、投影环真机体验、自主调度与来源过期联动。
-- 运行时按用户要求全停（8800/8818），重启需手动；~/.alice/alice.sock 为旧版遗留死 socket 可删。SIGINT 优雅退出挂起需复测。
-- 11-20 技术债 D01–D10 已 PR 交 main；F01–F19 未修（docs/代码审查/*20261120）；R5a 遗留 P2-2/P2-3/P3-6 未动。分工与边界不变；历史细节进 git log。
+- 2026-11-22 基于 main e4b7c50（PR44），按用户授权将 27 项源码修改、7 项复审补修、Orbit 设置样式与卡死回归修正提交到 trial/windows-v0.2-20261028，并以 PR 交 main；沿用 HTTPS，不直推 main。ytq 的 7ff3174 尚未合入本批。
+- 最新结论见 docs/代码审查/Alice源码修复总体报告-20261121.md：源码改动不代表全部真实验收完成。F25 的 keepVisible 仅在隐藏状态存在时改写 class，拆环前停用并断开监听；用户已确认对话与模型打开、切外观返回与关闭，其他路径待验。F10 原并发路径由基线消除，本轮补 busy 回执。
+- 提交前 31 个 Python 内存编译、8 个 JS 语法、能力 JSON 和差异空白检查通过；既有 160 Python/spec、48 JS/MJS、9 JSON、7 TOML、36 资产引用及未定义名检查仅作静态证据。TEST_CONTROLS_ONLY=False；未读写 user/、起停服务、调用模型或运行机器行为测试，人工入口为 Alice Lab 与 tests/lab。
+- 旧 Brave 密钥须重录。F05 旧往返补提取、F06 历史遮罩原话恢复与原文选择仍待裁定。来源到期/断线、提取、Lab 撤销与忙碌、人格恢复、邀请版本、四主题、QQ 与 macOS/Linux TUI 待真人。新增 alice/persona_mode_install.py 和四份审查文档一并纳入本批。
+- 提交备份 .git/pr-prep/20261122-184055-source-fixes 与 codex/before-source-fixes-pr-20261122-184055 保存 48 项改动和 86 项私有资料引用，恢复按 manifest.stored_path。旧 main-sync/20261121-212134、pr-prep/20261120-104342-debt-governance、stash、worktree 与私有 UI 预览保留，不纳入提交。
