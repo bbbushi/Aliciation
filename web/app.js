@@ -975,9 +975,7 @@ function showIntroStep(step) {
 
 function showUserIntro(profile, editing = false) {
   hideUserIntro();
-  const backgrounds = [$("#app"), $("#welcome")].map(node => [node, node.inert]);
-  introView = {epoch: profile.session_epoch, editing, backgrounds};
-  for (const [node] of backgrounds) node.inert = true;
+  introView = {epoch: profile.session_epoch, editing};
   if (editing || introDraftEpoch !== profile.session_epoch) {
     $("#user-intro-address").value = profile.address || "";
     $("#user-intro-interests").value = profile.interests || "";
@@ -990,7 +988,6 @@ function showUserIntro(profile, editing = false) {
 }
 
 function hideUserIntro() {
-  for (const [node, inert] of introView?.backgrounds || []) node.inert = inert;
   introView = null;
   $("#user-intro").classList.add("hidden");
 }
@@ -1011,8 +1008,8 @@ async function finishUserIntro() {
   try {
     const updated = await postJSON("/api/user-intro", {session_epoch: view.epoch, ...fields});
     if (introView !== view) return;
-    hideUserIntro();
     if (view.editing) {
+      hideUserIntro();
       state = updated;
       window.AliceUI.openSettings("general");
       toast("介绍已保存");
@@ -3363,7 +3360,9 @@ boot().catch(showStartupError);
   const app = byId("app");
   const nav = byId("app-nav");
   const narrow = matchMedia("(max-width: 900px)");
-  const modals = [byId("modal"), byId("settings-modal")];
+  const introModal = byId("user-intro");
+  const introTitle = byId("user-intro-title");
+  const modals = [byId("modal"), byId("settings-modal"), introModal];
   const shutdownScreen = byId("shutdown-screen");
   let activeModal = null;
   let modalReturn = null;
@@ -3493,8 +3492,10 @@ boot().catch(showStartupError);
       byId("welcome").inert = true;
       modals.forEach((el) => { el.inert = el !== next; });
       next.setAttribute("tabindex", "-1");
-      // QQ explicitly focuses its section. Preserve that focus if already set.
-      if (!next.contains(document.activeElement)) focus(focusable(next)[0] || next);
+      // Preserve explicit focus. The intro heading can only receive focus once the prior modal releases it.
+      if (!next.contains(document.activeElement)) {
+        focus(next === introModal ? introTitle : focusable(next)[0] || next);
+      }
     } else {
       activeModal = null;
       app.inert = false;
@@ -3519,6 +3520,10 @@ boot().catch(showStartupError);
       if (root) {
         e.preventDefault(); e.stopImmediatePropagation();
         if (activeModal === shutdownScreen) return;
+        if (activeModal === introModal) {
+          if (introView?.editing) advanceUserIntro(true);
+          return;
+        }
         if (activeModal === byId("settings-modal")) byId("settings-x").click();
         else if (activeModal) byId("modal-x").click();
         else setNav(false);
