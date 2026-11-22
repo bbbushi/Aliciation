@@ -137,7 +137,8 @@ class _DrainingHTTPServer(TrackedConnections, ThreadingHTTPServer):
         super().__init__(address, BaseHTTPRequestHandler)
 
 
-def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None, *, terminal=False):
+def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None,
+                 *, terminal=False, on_stop=None):
     observation_grant = None if terminal else ObservationGrant(svc)
 
     class Handler(BaseHTTPRequestHandler):
@@ -1044,6 +1045,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         def _get_terminal(self, path, query):
             if path == TUI_PREFIX + "/status" and not query:
                 self._json(svc.tui_status())
+            elif path == TUI_PREFIX + "/gui" and not query:
+                # 独立启动说明 §4：本机控制面向原生端提供 GUI 就绪信息（socket 已核验同账户）。
+                from . import __version__
+                self._json({"url": runtime_info["gui_url"], "app_version": __version__})
             elif path == TUI_PREFIX + "/history":
                 params = parse_qs(query, keep_blank_values=True, max_num_fields=5)
                 allowed = {"after_id", "before_id", "limit", "session_epoch", "source_turn_ids"}
@@ -1060,7 +1065,31 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
 
         def _post_terminal(self, path, query):
-            if query or path not in (TUI_PREFIX + "/chat", TUI_PREFIX + "/chat/status"):
+            if query:
+                self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+                return
+            if path == TUI_PREFIX + "/stop":
+                # 显式停止（独立启动说明 §5）：socket 已核验同账户身份，控制面与
+                # 日常聊天权限分开；与 GUI 关闭走同一条排空收尾链，等同一个结果。
+                if self.headers.get_content_type() != "application/json" or self._bounded_body(16) != {}:
+                    raise ValueError("停止请求无效")
+                if on_stop is None:
+                    self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+                    return
+                if not gate.begin():
+                    self._json({"error": "服务正在退出", "code": "draining"}, 409)
+                    return
+                svc.begin_shutdown()
+                gate.detach_shutdown_connection(self.connection)
+                # 本线程与 serve_forever 分离；run() 仍是 ChatService.close 的所有者。
+                on_stop()
+                code, result = gate.wait_result()
+                try:
+                    self._json(result, code)
+                except OSError:
+                    pass  # 终端已断开；宿主仍会完成收尾。
+                return
+            if path not in (TUI_PREFIX + "/chat", TUI_PREFIX + "/chat/status"):
                 self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -1097,7 +1126,8 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
     connectors = None
     try:
         runtime_info = {"restart_command": _restart_command(config_path, httpd.server_port),
-                        "desktop": host_control is not None}
+                        "desktop": host_control is not None,
+                        "gui_url": f"http://127.0.0.1:{httpd.server_port}"}
         effective_cfg = cfg if cfg is not None else load(config_path)
         if getattr(sys, "frozen", False):
             effective_cfg.plugins.context_inspector_enabled = False
@@ -1132,7 +1162,9 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         if not getattr(host_control, "lab_session", False):
             try:
                 unix_server = start_unix_listener(
-                    USER_DIR, make_handler(svc, gate, runtime_info, terminal=True), gate, REQUEST_IO_TIMEOUT)
+                    USER_DIR,
+                    make_handler(svc, gate, runtime_info, terminal=True, on_stop=httpd.shutdown),
+                    gate, REQUEST_IO_TIMEOUT)
             except OSError as exc:
                 print(f"（终端入口未启用：{exc}）")
         if open_browser:
@@ -1161,6 +1193,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         if host_control is not None:
             host_control.ready(httpd, gate, svc)
         httpd.serve_forever()
+        print("\n收到停止请求，正在收尾。")
     except KeyboardInterrupt:
         print("\n再见。")
     finally:
@@ -1192,5 +1225,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
             code, result = 500, {"status": "failed", "error": "监听端口关闭未能确认；请在终端检查进程"}
         result.update(runtime_info)
         gate.finish(code, result)
+        if host_control is None:
+            print("已停止，对话与记忆已保存。")
         if host_control is not None:
             host_control.closed(code, result)

@@ -111,6 +111,71 @@ def cmd_chat(store: Store, cfg: Config) -> None:
     run_chat(store, client, cfg)
 
 
+def _unix_json(path: Path, method: str, target: str, body: bytes | None = None,
+               timeout: float | None = 5.0) -> tuple[int, dict]:
+    """档案 socket 上的最小 JSON HTTP 调用（CLI 控制面）。"""
+    import http.client
+    import socket as _socket
+
+    class _UnixConnection(http.client.HTTPConnection):
+        def __init__(self):
+            super().__init__("localhost", timeout=timeout)
+
+        def connect(self):
+            sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(str(path))
+            self.sock = sock
+
+    conn = _UnixConnection()
+    try:
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        conn.request(method, target, body=body, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read(16384)
+        try:
+            payload = json.loads(raw) if raw else {}
+        except ValueError:
+            payload = {}
+        return resp.status, payload
+    finally:
+        conn.close()
+
+
+def _stop_host(user_dir: Path) -> int:
+    """显式停止（独立启动说明 §5）：排空收尾后清理 socket 与锁，等待同一结果。"""
+    from .local_socket import socket_path
+
+    path = socket_path(user_dir)
+    if not path.exists():
+        print(f"未在运行：{user_dir} 没有宿主。")
+        return 0
+    try:
+        status, payload = _unix_json(path, "POST", "/api/tui/v1/stop", b"{}", timeout=None)
+    except ConnectionRefusedError:
+        print("未在运行：socket 端点已陈旧，下次启动宿主时会自动清理。")
+        return 0
+    except PermissionError:
+        print("停止失败：socket 权限不符，请确认这是当前系统账户的档案。")
+        return 1
+    except OSError as exc:
+        print(f"停止失败：无法连接宿主端点（{type(exc).__name__}）。")
+        return 1
+    if status == 200:
+        message = payload.get("message") if isinstance(payload, dict) else None
+        print(message or "已停止，对话与记忆已保存。")
+        return 0
+    if status in (409, 503):
+        print("宿主已在停止中，等待它收尾完成即可。")
+        return 0
+    if status == 404:
+        print("停止失败：宿主版本较旧，没有停止接口；请在宿主窗口按 Ctrl+C 退出。")
+        return 1
+    detail = payload.get("error") if isinstance(payload, dict) else None
+    print(f"停止失败：宿主返回 HTTP {status}" + (f"（{detail}）" if detail else ""))
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(
         prog="alice",
@@ -136,6 +201,7 @@ def main(argv: list[str] | None = None) -> int | None:
     p_serve = sub.add_parser("serve", help="启动本地图形界面（浏览器）")
     p_serve.add_argument("--port", type=int, default=8800, help="监听端口（默认 8800）")
     p_serve.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    sub.add_parser("stop", help="停止正在运行的本机档案宿主（先排空收尾，再清理 socket 与锁）")
     p_worker = sub.add_parser("discovery-worker", help="内容发现独立工作进程（固定 JSON 行协议）")
     p_worker.add_argument("--input-bytes", type=int, default=192 * 1024)
     p_desktop = sub.add_parser("desktop-host", help="桌面宿主专用私有管道入口")
@@ -185,6 +251,10 @@ def main(argv: list[str] | None = None) -> int | None:
             # Never print database contents, credentials, or provider exceptions.
             print(json.dumps({"error": public_error(exc)}, ensure_ascii=False))
             return 1
+
+    if args.cmd == "stop":
+        # 不进入 InstanceLock：宿主持有档案锁，停止只与本机 socket 对话。
+        return _stop_host(appconfig.USER_DIR)
 
     try:
         if args.cmd == "desktop-host":

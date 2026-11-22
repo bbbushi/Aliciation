@@ -85,6 +85,10 @@ impl Drop for ActionGuard {
 pub async fn maintenance_action(window: WebviewWindow, app: tauri::AppHandle,
     state: tauri::State<'_, Arc<Backend>>, action: String, backup_id: Option<String>, confirmed: bool) -> Result<Value, String> {
     if window.label() != "maintenance" { return Err("此入口仅供应用内备份与恢复窗口使用".into()); }
+    if state.shared.load(Ordering::SeqCst) {
+        // 本会话未接管宿主：alive() 只认本进程的子进程，放行会让维护误判宿主已停止。
+        return Err("宿主由其他入口启动（如 alice）；请先执行 alice stop，并重启 Alice 桌面后再使用备份与恢复".into());
+    }
     if !matches!(action.as_str(), "status" | "verify" | "prepare" | "pause" | "restore" | "rollback" | "resume") {
         return Err("不支持的维护操作".into());
     }
