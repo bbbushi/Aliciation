@@ -275,7 +275,7 @@ def _accept_bundles(material, suggestions):
     return result, isolated
 
 
-def _run_phase(store, client, cfg, record, payload, instruction, phase):
+def _run_phase(store, client, cfg, record, payload, instruction, phase, on_progress=None):
     path = root() / (record["token"] + ".json")
     error = None
     for attempt_index in range(MAX_ATTEMPTS):
@@ -288,8 +288,13 @@ def _run_phase(store, client, cfg, record, payload, instruction, phase):
             _write_audit(path, record)
         prompt = instruction + ("\n这是本阶段唯一一次协议修订。错误：" + error if error else "")
         try:
+            if on_progress:
+                on_progress({"type": "phase", "stage": stage, "status": "started"})
             value, raw = _attempt_call(store, client, cfg, payload, prompt, record["token"], stage, reserve)
             attempt.update(status="received", raw=raw)
+            if on_progress:
+                on_progress({"type": "phase", "stage": stage, "status": "received",
+                             "duration_ms": max(0, int((time.monotonic() - started) * 1000))})
             return value
         except _UnparseableReceipt as exc:
             raw = exc.raw
@@ -297,12 +302,17 @@ def _run_phase(store, client, cfg, record, payload, instruction, phase):
             if len(raw) <= cfg.expression.max_review_chars:
                 attempt["raw"] = raw
             error = str(exc)
+            if on_progress:
+                on_progress({"type": "phase", "stage": stage, "status": "unparseable", "error": str(exc)})
             if attempt_index + 1 == MAX_ATTEMPTS:
                 record["issues"].append({"code": phase + "_invalid", "reason": error})
         except (RuntimeError, ValueError) as exc:
             attempt.update(status="network_unknown" if isinstance(exc, RuntimeError) else "preflight_failed",
                            error=str(exc)[:300])
             record["issues"].append({"code": phase + "_failed", "reason": attempt["error"]})
+            if on_progress:
+                on_progress({"type": "phase", "stage": stage, "status": attempt["status"],
+                             "error": attempt["error"]})
             return None
         finally:
             attempt["duration_ms"] = max(0, int((time.monotonic() - started) * 1000))
@@ -314,7 +324,7 @@ def _run_phase(store, client, cfg, record, payload, instruction, phase):
     return None
 
 
-def material_prepare(store, client, cfg, source_text, *, name=None, editing=False):
+def material_prepare(store, client, cfg, source_text, *, name=None, editing=False, on_progress=None):
     token = "mat_" + uuid.uuid4().hex
     material = pi.initialize(pm.source_material(source_text, limits=cfg))
     record = {"token": token, "policy": POLICY, "implementation": _implementation(),
@@ -324,7 +334,8 @@ def material_prepare(store, client, cfg, source_text, *, name=None, editing=Fals
               "model": cfg.llm.cheap_model, "provider_hash": digest(cfg.llm.base_url)}
     _save_candidate(record)  # Exact source survives even process interruption before model receipt.
     payload = {"blocks": [{**b, "text": pm.block_text(material, b["block_id"])} for b in material["blocks"]]}
-    understood = _run_phase(store, client, cfg, record, payload, INTERPRET_INSTRUCTION, "interpret")
+    understood = _run_phase(store, client, cfg, record, payload, INTERPRET_INSTRUCTION, "interpret",
+                            on_progress=on_progress)
     if understood is not None:
         material, issues = pi.apply_rows(material, understood["rows"])
         record["issues"].extend(issues)
@@ -338,7 +349,8 @@ def material_prepare(store, client, cfg, source_text, *, name=None, editing=Fals
                           "layers": material["interpretation"]["blocks"][b["block_id"]]["layers"],
                           "text": pi.effective_text(material, b["block_id"])} for b in material["blocks"]
                          if pi.effective_text(material, b["block_id"]).strip()]
-    value = (_run_phase(store, client, cfg, record, {"blocks": classified_blocks}, CLASSIFY_INSTRUCTION, "classify")
+    value = (_run_phase(store, client, cfg, record, {"blocks": classified_blocks}, CLASSIFY_INSTRUCTION, "classify",
+                        on_progress=on_progress)
              if classified_blocks else None)
     if value is not None:
         material, report = pm.apply_classification(material, value["rows"])
@@ -402,7 +414,7 @@ def material_edit_active(store, cfg, payload):
     return {"staged": True, "preview": _preview_from(record, cfg)}
 
 
-def material_reinterpret_active(store, client, cfg, payload):
+def material_reinterpret_active(store, client, cfg, payload, on_progress=None):
     """Explicit paid preparation of the active source, preserving the conversation."""
     from .persona_context import parse_snapshot
     if (payload.get("session_epoch") != store.meta_get("session_epoch")
@@ -411,7 +423,8 @@ def material_reinterpret_active(store, client, cfg, payload):
     snapshot = parse_snapshot(current_text())
     if snapshot.get("format_version") != pm.FORMAT:
         raise ValueError("请从人格原稿新建六层导入；当前不是原文材料")
-    return material_prepare(store, client, cfg, snapshot["material"]["source_text"], editing=True)
+    return material_prepare(store, client, cfg, snapshot["material"]["source_text"], editing=True,
+                            on_progress=on_progress)
 
 
 def material_resume(store, cfg, payload):

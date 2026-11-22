@@ -1,9 +1,9 @@
-"""TUI 终端层：raw 输入、多行草稿编辑器、inline 渲染与 ANSI 清洗。
+"""TUI 终端层：raw 输入、多行草稿编辑器、inline 渲染、颜色角色与 ANSI 清洗。
 
-inline 模式：对话正文进终端原生回滚，本模块只拥有底部的状态行+草稿区。
-回复流式输出与用户编辑并发进行，共用一把打印锁：先擦除提示区、写正文、
-再重画提示区。模型文本一律清洗 ANSI/OSC 控制序列，只保留普通换行
-（设计 §3 终端内容）；样式由客户端生成。
+inline 模式：对话正文进终端原生回滚，本模块拥有底部区域（输入盒、命令菜单、
+流式块、状态行）的绘制原语。回复流式输出与用户编辑并发进行，共用一把打印
+锁：先擦除底部区域、写正文、再重画。模型文本一律清洗 ANSI/OSC 控制序列，
+只保留普通换行；样式由客户端按角色生成（无色终端退化为符号与标签）。
 """
 from __future__ import annotations
 
@@ -20,9 +20,22 @@ _CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
 _STRING_CONTROL = re.compile(r"(?:\x1b[\]PX^_]|[\x90\x98\x9d-\x9f]).*?(?:\x07|\x1b\\|\x9c|\Z)", re.S)
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
-STYLE = {
-    "user": "\x1b[1m", "alice": "\x1b[36m", "muted": "\x1b[2m",
-    "danger": "\x1b[31m", "ok": "\x1b[32m", "accent": "\x1b[94m", "reset": "\x1b[0m",
+# 颜色按角色统一映射（设计 §3.3）：正文一律终端默认前景/背景，彩色只落在
+# 角色名、符号、边界与提示上；256 色低饱和紫做品牌与焦点，浅/深主题同用。
+# 无色终端（NO_COLOR/TERM=dumb/非 tty）退化为纯符号与标签。
+_COLOR_OFF = (bool(os.environ.get("NO_COLOR")) or os.environ.get("TERM") in ("", "dumb")
+              or not sys.stdout.isatty())
+_ASCII = os.environ.get("ALICE_TUI_ASCII") == "1"
+
+_ROLE_CODES = {
+    "brand": "38;5;99",        # 低饱和紫：Alice 名、符号、焦点
+    "brand_bold": "1;38;5;99",
+    "user_mark": "38;5;131",   # 锈色：用户行引导符
+    "muted": "38;5;243",       # 弱化：辅助信息与非当前项
+    "border": "38;5;248",      # 边界：输入盒与分隔线
+    "danger": "38;5;167",      # 错误/断线
+    "warn": "38;5;179",
+    "reverse": "7",
 }
 TOOL_LABELS = {
     "memory_search": "正在查找相关记忆", "memory_load": "正在读取记忆正文",
@@ -31,6 +44,16 @@ TOOL_LABELS = {
     "history_search": "正在翻阅旧对话", "context_keep": "正在保留资料",
     "context_release": "正在移出本轮资料",
 }
+TOOL_NOUNS = {
+    "memory_search": "查找记忆", "memory_load": "读取记忆",
+    "recall": "检索记忆", "remember": "保存记忆",
+    "persona_load": "展开人格场景", "discovery_search": "查找资料",
+    "history_search": "翻阅旧对话", "context_keep": "保留资料",
+    "context_release": "移出资料",
+}
+_BOX = {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "h": "─", "v": "│"}
+if _ASCII:
+    _BOX = {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"}
 
 
 def scrub(text: str) -> str:
@@ -59,12 +82,54 @@ def wrap_line(text: str, width: int) -> list[str]:
     return rows
 
 
-def style(name: str, text: str) -> str:
-    return STYLE.get(name, "") + text + STYLE["reset"]
+def colors_on() -> bool:
+    return not _COLOR_OFF
+
+
+def style(role: str, text: str) -> str:
+    if _COLOR_OFF:
+        return text
+    code = _ROLE_CODES.get(role)
+    return f"\x1b[{code}m{text}\x1b[0m" if code else text
 
 
 def tool_label(name: str) -> str:
     return TOOL_LABELS.get(name, f"正在执行 {name}")
+
+
+def tool_noun(name: str) -> str:
+    return TOOL_NOUNS.get(name, f"调用 {name}")
+
+
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def visible_width(text: str) -> int:
+    """含 ANSI 样式码字符串的可见宽度（光标标记等不计宽）。"""
+    return display_width(_ANSI.sub("", text))
+
+
+def hrule(width: int) -> str:
+    return style("border", _BOX["h"] * width)
+
+
+def box_top(width: int, label: str = "") -> str:
+    inner = max(2, width - 2)
+    if label:
+        text = f" {label} "
+        fill = max(0, inner - display_width(text) - 1)
+        return (style("border", _BOX["tl"] + _BOX["h"]) + style("muted", text)
+                + style("border", _BOX["h"] * fill + _BOX["tr"]))
+    return style("border", _BOX["tl"] + _BOX["h"] * inner + _BOX["tr"])
+
+
+def box_bottom(width: int) -> str:
+    return style("border", _BOX["bl"] + _BOX["h"] * max(2, width - 2) + _BOX["br"])
+
+
+def box_row(content: str, width: int) -> str:
+    pad = " " * max(0, width - 2 - visible_width(content))
+    return style("border", _BOX["v"]) + content + pad + style("border", _BOX["v"])
 
 
 class Terminal:

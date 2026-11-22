@@ -81,13 +81,16 @@ class DesktopHost:
                 try:
                     raw = self.reader.readline(MAX_FRAME + 1)
                 except OSError:
-                    if not self._stop.is_set():
+                    # 独立启动 §5：控制管道断开只代表客户端离开，普通宿主留存至
+                    # 显式停止；Lab 实验宿主仍是短命实例，随管道消亡避免泄漏。
+                    if not self._stop.is_set() and self.lab_session:
                         shutdown(lost=True)
                     return
                 if self._stop.is_set():
                     return
                 if not raw:
-                    shutdown(lost=True)
+                    if self.lab_session:
+                        shutdown(lost=True)
                     return
                 try:
                     if len(raw) > MAX_FRAME or not raw.endswith(b"\n"):

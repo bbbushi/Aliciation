@@ -14,10 +14,14 @@ import urllib.parse
 PREFIX = "/api/tui/v1"
 
 
+def profile_id(root: Path) -> str:
+    """档案身份：规范绝对路径按文件系统编码后的 SHA-256 前 24 位（宿主同式样）。"""
+    return hashlib.sha256(os.fsencode(Path(root).resolve())).hexdigest()[:24]
+
+
 def socket_path(profile: Path) -> Path:
     # Public path format documented by Alice, without importing the host.
-    profile_id = hashlib.sha256(os.fsencode(profile.resolve())).hexdigest()[:24]
-    return Path.home() / ".alice" / f"tui-{profile_id}.sock"
+    return Path.home() / ".alice" / f"tui-{profile_id(profile)}.sock"
 
 
 class TuiApiError(Exception):

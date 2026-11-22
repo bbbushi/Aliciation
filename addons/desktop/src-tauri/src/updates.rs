@@ -306,6 +306,10 @@ pub async fn update_action(window: WebviewWindow, app: tauri::AppHandle, updates
     backend: tauri::State<'_, Arc<Backend>>, action: String, confirmed: bool, token: Option<String>) -> Result<Value, String> {
     if window.label() != "updates" { return Err("此入口仅供应用内更新窗口使用".into()); }
     if action == "state" { return Ok(state(&app, &updates)); }
+    if backend.shared.load(Ordering::SeqCst) {
+        // 共享宿主的更新回执走私有管道；本会话没有管道，先停止宿主再更新。
+        return Err("宿主由其他入口启动（如 alice）；请先执行 alice stop，并重启 Alice 桌面后再更新".into());
+    }
     if !matches!(action.as_str(), "check" | "download" | "install" | "forget" | "help" | "auto_on" | "auto_off") { return Err("未知更新操作".into()); }
     if !confirmed { return Err("更新操作需要明确确认".into()); }
     if action=="auto_on" || action=="auto_off" {

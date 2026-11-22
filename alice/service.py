@@ -1211,7 +1211,7 @@ class ChatService:
                             "已恢复完整装配，下一条对话生效；已保存的分层保留，无需重启。")
         return result
 
-    def material_import(self, payload) -> dict:
+    def material_import(self, payload, on_progress=None) -> dict:
         """GUI-owned source material candidates; model I/O only on explicit prepare."""
         from . import persona_material_prepare as prep
         from . import persona_material_archives as archives
@@ -1257,11 +1257,12 @@ class ChatService:
                                                   restore=action == "restore_preparation"))
                 if action == "prepare":
                     return decorate(prep.material_prepare(self.store, self.client, self.cfg,
-                        payload.get("source_text"), name=payload.get("name")))
+                        payload.get("source_text"), name=payload.get("name"), on_progress=on_progress))
                 if action == "edit_active":
                     return decorate(prep.material_edit_active(self.store, self.cfg, payload))
                 if action == "reinterpret_active":
-                    return decorate(prep.material_reinterpret_active(self.store, self.client, self.cfg, payload))
+                    return decorate(prep.material_reinterpret_active(self.store, self.client, self.cfg, payload,
+                                                                     on_progress=on_progress))
                 if action == "resume":
                     return decorate(prep.material_resume(self.store, self.cfg, payload))
                 if action == "update":

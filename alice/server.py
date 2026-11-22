@@ -137,7 +137,8 @@ class _DrainingHTTPServer(TrackedConnections, ThreadingHTTPServer):
         super().__init__(address, BaseHTTPRequestHandler)
 
 
-def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None, *, terminal=False):
+def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, connectors=None,
+                 *, terminal=False, on_stop=None):
     observation_grant = None if terminal else ObservationGrant(svc)
 
     class Handler(BaseHTTPRequestHandler):
@@ -742,7 +743,13 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "人格装配操作未能确认，请刷新状态核对后再重试"}, 500)
             elif path == "/api/persona/material":
                 try:
-                    self._json(svc.material_import(self._bounded_body(2097152)))
+                    body = self._bounded_body(2097152)
+                    if body.get("action") in ("prepare", "reinterpret_active"):
+                        # The two model-backed actions can legally run past the ~60s
+                        # no-bytes timeout in WKWebView; stream progress instead.
+                        self._material_stream(svc, body)
+                    else:
+                        self._json(svc.material_import(body))
                 except ChannelError:
                     raise
                 except ValueError as exc:
@@ -882,6 +889,60 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
 
         # ---------- SSE 流式对话 ----------
 
+        def _material_stream(self, svc, payload: dict) -> None:
+            """SSE for the two model-backed material actions (prepare / reinterpret_active).
+
+            These preparations can legally run past the ~60s no-bytes timeout that
+            WKWebView's network stack enforces, which read as "分类失败" on the client
+            while the server actually finished. Phase events plus a heartbeat keep the
+            channel alive; a client disconnect never cancels the persisted result.
+            """
+            import threading as _threading
+            done_event = _threading.Event()
+            write_lock = _threading.Lock()
+            connected = True
+            outcome: dict = {}
+
+            def emit(frame: dict) -> None:
+                nonlocal connected
+                if not connected:
+                    return
+                try:
+                    data = json.dumps(frame, ensure_ascii=True).encode("ascii")
+                    with write_lock:
+                        self.wfile.write(b"data: " + data + b"\n\n")
+                        self.wfile.flush()
+                except OSError:
+                    connected = False  # 断开不改写后台结果；候选照常落盘
+
+            def worker() -> None:
+                try:
+                    outcome["result"] = svc.material_import(payload, on_progress=emit)
+                except BaseException as exc:
+                    outcome["error"] = exc
+                finally:
+                    done_event.set()
+
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            except OSError:
+                connected = False
+            emit({"type": "start"})
+            worker_thread = _threading.Thread(target=worker, daemon=True, name="material-prepare")
+            worker_thread.start()
+            while not done_event.wait(15.0):  # 心跳周期必须短于 socket 的 30s 超时
+                emit({"type": "hb"})
+            worker_thread.join()
+            if "error" in outcome:
+                exc = outcome["error"]
+                emit({"type": "error", "message": str(exc) or type(exc).__name__,
+                      "code": getattr(exc, "code", None)})
+                return
+            emit({"type": "done", "result": outcome.get("result")})
+
         def _sse_chat(self, text: str, *, request_id=None, session_epoch=None,
                       search_intent=None, worker_target=None, public_tui=False) -> None:
             connected = True
@@ -971,11 +1032,21 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
             self._dispatch(self._post_terminal)
 
         def _dispatch(self, route):
+            parsed = urlparse(self.path)
+            if parsed.path == TUI_PREFIX + "/stop":
+                # 停止请求不计入在途连接（与 GUI /api/shutdown 同例）：它要等
+                # drain 完成（在途归零）才返回，把自己算进去就是等自己。
+                try:
+                    route(parsed.path, parsed.query)
+                except ChannelError as exc:
+                    self._channel_error(exc)
+                except ValueError:
+                    self._json({"error": "停止请求无效", "code": "invalid_request"}, 400)
+                return
             if not gate.admit():
                 self._json({"error": "服务正在退出", "code": "draining"}, 503)
                 return
             try:
-                parsed = urlparse(self.path)
                 route(parsed.path, parsed.query)
             except ChannelError as exc:
                 self._channel_error(exc)
@@ -987,6 +1058,10 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
         def _get_terminal(self, path, query):
             if path == TUI_PREFIX + "/status" and not query:
                 self._json(svc.tui_status())
+            elif path == TUI_PREFIX + "/gui" and not query:
+                # 独立启动说明 §4：本机控制面向原生端提供 GUI 就绪信息（socket 已核验同账户）。
+                from . import __version__
+                self._json({"url": runtime_info["gui_url"], "app_version": __version__})
             elif path == TUI_PREFIX + "/history":
                 params = parse_qs(query, keep_blank_values=True, max_num_fields=5)
                 allowed = {"after_id", "before_id", "limit", "session_epoch", "source_turn_ids"}
@@ -1003,7 +1078,31 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
 
         def _post_terminal(self, path, query):
-            if query or path not in (TUI_PREFIX + "/chat", TUI_PREFIX + "/chat/status"):
+            if query:
+                self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+                return
+            if path == TUI_PREFIX + "/stop":
+                # 显式停止（独立启动说明 §5）：socket 已核验同账户身份，控制面与
+                # 日常聊天权限分开；与 GUI 关闭走同一条排空收尾链，等同一个结果。
+                if self.headers.get_content_type() != "application/json" or self._bounded_body(16) != {}:
+                    raise ValueError("停止请求无效")
+                if on_stop is None:
+                    self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
+                    return
+                if not gate.begin():
+                    self._json({"error": "服务正在退出", "code": "draining"}, 409)
+                    return
+                svc.begin_shutdown()
+                gate.detach_shutdown_connection(self.connection)
+                # 本线程与 serve_forever 分离；run() 仍是 ChatService.close 的所有者。
+                on_stop()
+                code, result = gate.wait_result()
+                try:
+                    self._json(result, code)
+                except OSError:
+                    pass  # 终端已断开；宿主仍会完成收尾。
+                return
+            if path not in (TUI_PREFIX + "/chat", TUI_PREFIX + "/chat/status"):
                 self._json({"error": "终端接口不存在", "code": "not_found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -1040,7 +1139,8 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
     connectors = None
     try:
         runtime_info = {"restart_command": _restart_command(config_path, httpd.server_port),
-                        "desktop": host_control is not None}
+                        "desktop": host_control is not None,
+                        "gui_url": f"http://127.0.0.1:{httpd.server_port}"}
         effective_cfg = cfg if cfg is not None else load(config_path)
         if getattr(sys, "frozen", False):
             effective_cfg.plugins.context_inspector_enabled = False
@@ -1075,7 +1175,9 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         if not getattr(host_control, "lab_session", False):
             try:
                 unix_server = start_unix_listener(
-                    USER_DIR, make_handler(svc, gate, runtime_info, terminal=True), gate, REQUEST_IO_TIMEOUT)
+                    USER_DIR,
+                    make_handler(svc, gate, runtime_info, terminal=True, on_stop=httpd.shutdown),
+                    gate, REQUEST_IO_TIMEOUT)
             except OSError as exc:
                 print(f"（终端入口未启用：{exc}）")
         if open_browser:
@@ -1104,6 +1206,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
         if host_control is not None:
             host_control.ready(httpd, gate, svc)
         httpd.serve_forever()
+        print("\n收到停止请求，正在收尾。")
     except KeyboardInterrupt:
         print("\n再见。")
     finally:
@@ -1135,5 +1238,7 @@ def run(port: int = DEFAULT_PORT, host: str = "127.0.0.1", open_browser: bool = 
             code, result = 500, {"status": "failed", "error": "监听端口关闭未能确认；请在终端检查进程"}
         result.update(runtime_info)
         gate.finish(code, result)
+        if host_control is None:
+            print("已停止，对话与记忆已保存。")
         if host_control is not None:
             host_control.closed(code, result)

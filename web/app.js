@@ -85,6 +85,39 @@ const postJSON = (path, data) =>
     body: JSON.stringify(data),
   });
 
+/* 长任务的 SSE POST：done 帧携带结果，error 帧抛错；intent 头照 api() 的默认补齐。
+   进度经 onEvent 逐帧上报；连接中断时结果可能已在后台落盘，调用方文案须引导刷新核对。 */
+async function postStream(path, body, onEvent) {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  headers.set("X-Alice-Intent", "gui");
+  const r = await fetch(path, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store" });
+  if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", result = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      const ev = JSON.parse(line.slice(6));
+      if (ev.type === "done") result = ev.result;
+      else if (ev.type === "error") {
+        const error = new Error(ev.message || "处理失败");
+        error.importCode = ev.code;
+        throw error;
+      } else if (onEvent) onEvent(ev);
+    }
+  }
+  if (result === null) throw new Error("连接中断；处理可能已在后台完成，请刷新状态核对，不要立即重发。");
+  return result;
+}
+
 /* ---------- 小工具 ---------- */
 
 const esc = (s) =>
@@ -920,17 +953,20 @@ const INTRO_QUESTIONS = [
   ["有什么想先和我聊的？", "你可以留个话题，等准备好再开口。"],
 ];
 
-function showWizardProgress(node, step) {
-  node.setAttribute("aria-label", `第 ${step} 步，共 ${WIZARD_STEPS.length} 步：${WIZARD_STEPS[step - 1]}`);
-  const dots = WIZARD_STEPS.map((_, index) => {
+function wizardProgress(node, steps, step) {
+  node.setAttribute("aria-label", `第 ${step} 步，共 ${steps.length} 步：${steps[step - 1]}`);
+  const dots = steps.map((_, index) => {
     const dot = document.createElement("span");
     dot.dataset.state = index + 1 === step ? "current" : index + 1 < step ? "done" : "waiting";
     return dot;
   });
   const count = document.createElement("span");
   count.className = "wizard-count";
-  count.textContent = `${step} / ${WIZARD_STEPS.length}`;
+  count.textContent = `${step} / ${steps.length}`;
   node.replaceChildren(...dots, count);
+}
+function showWizardProgress(node, step) {
+  wizardProgress(node, WIZARD_STEPS, step);
 }
 
 function showIntroStep(step) {
@@ -1000,6 +1036,7 @@ async function finishUserIntro() {
     const updated = await postJSON("/api/user-intro", {session_epoch: view.epoch, revision: view.revision, ...fields});
     if (introView !== view) return;
     if (view.editing) {
+      hideUserIntro();
       state = updated;
       returnFromIntroToSettings();
       toast("介绍已保存");
@@ -1584,12 +1621,20 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
   const sourceName = draft?.sourceName || "";
   const current = () => materialViewGeneration === generation;
   const parts = value => value.split(/[,，;；]/).map(v => v.trim()).filter(Boolean);
-  const request = async payload => {
+  const phaseText = ev => {
+    const name = ev.stage?.startsWith("interpret") ? "六层理解" : ev.stage?.startsWith("classify") ? "轻分类" : ev.stage || "";
+    const round = ev.stage?.endsWith("_revision") ? "（协议修订）" : "";
+    return ev.status === "received" ? `${name}${round}完成` : ev.status === "started" ? `${name}${round}进行中…` : `${name}${round}异常：${ev.error || ev.status}`;
+  };
+  const request = async (payload, onEvent) => {
     const paid = ["prepare", "reinterpret_active"].includes(payload.action);
     if (paid && materialPreparationPending) throw new Error("已有原文准备请求正在处理，请等待或刷新状态核对");
     if (paid) materialPreparationPending = true;
     try {
-      const result = await postJSON("/api/persona/material", payload);
+      // 长阶段逐帧回报进度（顺带喂住 WebView 的无数据超时）；其余动作仍是一次性 JSON。
+      const result = paid
+        ? await postStream("/api/persona/material", payload, onEvent)
+        : await postJSON("/api/persona/material", payload);
       settings = {...settings, ...result};
       return result;
     } finally { if (paid) materialPreparationPending = false; }
@@ -1777,7 +1822,7 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
     if (!current()) return;
     let preparing = false;
     openModal("原文保留与轻分类", "准备不改变现有人格；网络或格式失败后可直接人工继续。",
-      `<div id="material-editor"><p class="hint">${sourceName ? `来源文件：${esc(sourceName)}` : "来自导入编辑框"} · 请核对原文后开始。</p><textarea id="mat-src" rows="10" placeholder="粘贴人格原稿全文"></textarea><input id="mat-name" maxlength="24" placeholder="人格名称（可选）"><p class="hint">先六层理解，再对有效表达轻分类；通常两次模型请求，每阶段至多一次协议修订，总计最多四次，网络失败不重发。安装新原稿会归档旧会话；本次不收养身份、观点、经历。</p><div id="material-history"></div></div>`, [
+      `<div id="material-editor"><p class="hint">${sourceName ? `来源文件：${esc(sourceName)}` : "来自导入编辑框"} · 请核对原文后开始。</p><textarea id="mat-src" rows="10" placeholder="粘贴人格原稿全文"></textarea><input id="mat-name" maxlength="24" placeholder="人格名称（可选）"><p class="hint">先六层理解，再对有效表达轻分类；通常两次模型请求，每阶段至多一次协议修订，总计最多四次，网络失败不重发。安装新原稿会归档旧会话；本次不收养身份、观点、经历。</p><p id="material-prepare-status" class="hint" role="status"></p><div id="material-history"></div></div>`, [
       {label: "开始轻分类", cls: "btn primary", disabled: true, onClick: async () => {
         if (preparing) return;
         const text = $("#mat-src").value;
@@ -1789,9 +1834,15 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
         const previous = nodes.map(n => n.disabled);
         nodes.forEach(n => n.disabled = true);
         const button = $("#modal-foot .btn.primary"); button.disabled = true; button.textContent = "正在准备…";
-        try { const r = await request({action: "prepare", source_text: text, name: $("#mat-name").value.trim() || undefined});
+        const showPhase = ev => {
+          const text = phaseText(ev);
+          if (button.isConnected) button.textContent = text;
+          const line = $("#material-prepare-status");
+          if (line) line.textContent = text;
+        };
+        try { const r = await request({action: "prepare", source_text: text, name: $("#mat-name").value.trim() || undefined}, showPhase);
           if (current() && r.preview) renderPreview(r.preview); }
-        catch (e) { if (current()) toast(`准备中断：${e.message}。原文若已登记，可在准备档案继续。`, 7000); }
+        catch (e) { if (current()) toast(`准备中断：${e.message}。原文若已登记，会保留在准备档案——点「刷新准备状态」查看，不要立即重发。`, 8000); }
         finally {
           preparing = false;
           nodes.forEach((n, i) => { if (n.isConnected) n.disabled = previous[i]; });
@@ -1884,8 +1935,9 @@ async function openMaterialImport(p, editActive = false, draft = null, reinterpr
     if (!current()) return;
     if (editActive) {
       if (reinterpret && !await confirmAction("将对已安装原稿重新进行六层理解和轻分类，通常两次模型请求（最多四次）。生成编辑候选后先预览；应用时保留当前对话与记忆。继续吗？")) return;
-      if (reinterpret) toast("正在重新理解原稿并轻分类，请稍候…", 12000);
-      const r = await request({action: reinterpret ? "reinterpret_active" : "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision});
+      const showPhase = ev => { if (ev.type === "phase") toast(`重新理解原稿：${phaseText(ev)}`, 15000); };
+      const r = await request({action: reinterpret ? "reinterpret_active" : "edit_active", session_epoch: p.expression.session_epoch, persona_revision: p.expression.revision},
+        reinterpret ? showPhase : undefined);
       renderPreview(r.preview);
       return;
     }
@@ -3386,7 +3438,8 @@ boot().catch(showStartupError);
   const nav = byId("app-nav");
   const narrow = matchMedia("(max-width: 900px)");
   const introModal = byId("user-intro");
-  const modals = [introModal, byId("modal"), byId("settings-modal")];
+  const introTitle = byId("user-intro-title");
+  const modals = [byId("modal"), byId("settings-modal"), introModal];
   const shutdownScreen = byId("shutdown-screen");
   let activeModal = null;
   let modalReturn = null;
@@ -3419,6 +3472,7 @@ boot().catch(showStartupError);
     window.AliceClaudeSettings?.setVisible(section === "claude" && showing);
   }
   window.AliceUI = {
+    wizardProgress(node, steps, step) { wizardProgress(node, steps, step); },
     selectSettings(section = "general") {
       if (!settingsRoute?.(section)) selectSettingsSection(section);
     },
@@ -3518,8 +3572,10 @@ boot().catch(showStartupError);
       byId("welcome").inert = true;
       modals.forEach((el) => { el.inert = el !== next; });
       next.setAttribute("tabindex", "-1");
-      // QQ explicitly focuses its section. Preserve that focus if already set.
-      if (!next.contains(document.activeElement)) focus(focusable(next)[0] || next);
+      // Preserve explicit focus. The intro heading can only receive focus once the prior modal releases it.
+      if (!next.contains(document.activeElement)) {
+        focus(next === introModal ? introTitle : focusable(next)[0] || next);
+      }
     } else {
       activeModal = null;
       app.inert = false;
@@ -3662,7 +3718,7 @@ boot().catch(showStartupError);
   const root = document.documentElement;
   const control = document.getElementById("ui-theme");
   const state = document.getElementById("ui-theme-state");
-  const normalize = (value) => ["legacy", "minimal", "orbit"].includes(value) ? value : "room";
+  const normalize = (value) => ["legacy", "orbit"].includes(value) ? value : "room";
   let preference = "room", canSave = true;
   try { preference = normalize(localStorage.getItem(key)); }
   catch { canSave = false; }
@@ -3869,155 +3925,3 @@ boot().catch(showStartupError);
   new ResizeObserver(reset).observe(chat);
 })();
 
-
-/* Progressive disclosure: existing controls keep their identity and drafts. */
-(() => {
-  const windows = new Map();
-  let serial = 0;
-  let active = false;
-  const cleanups = [];
-  function open(id) {
-    const item = windows.get(id);
-    if (!item) {
-      const original = document.getElementById(id);
-      if (original?.tagName === "DETAILS") { original.open = true; original.scrollIntoView({block:"nearest"}); }
-      return;
-    }
-    for (const other of windows.values()) if (other !== item && other.dialog.open) other.dialog.close();
-    if (item.dialog.open) return;
-    item.opener = document.activeElement;
-    item.dialog.showModal();
-    item.launcher?.setAttribute("aria-expanded", "true");
-  }
-  function mount(node, title, {statusId, follow = false, closeAction} = {}) {
-    if (!node) return;
-    const assigned = !node.id;
-    const id = node.id || (node.id = `ui-content-${++serial}`);
-    const summary = node.tagName === "DETAILS" ? node.querySelector(":scope > summary") : null;
-    const dialog = document.createElement("dialog");
-    dialog.id = `ui-window-${id}`;
-    dialog.className = "ui-window";
-    dialog.setAttribute("aria-labelledby", `${dialog.id}-title`);
-    const header = document.createElement("header"); header.className = "ui-window-head";
-    const heading = document.createElement("h2"); heading.id = `${dialog.id}-title`; heading.textContent = title;
-    const close = document.createElement("button"); close.type = "button"; close.className = "card-x ui-window-close";
-    close.textContent = "×"; close.setAttribute("aria-label", `关闭${title}`); close.autofocus = true;
-    header.append(heading, close);
-    const body = document.createElement("div"); body.className = "ui-window-body";
-    const parent = node.parentElement;
-    const marker = document.createComment("minimal-window-position");
-    parent.insertBefore(marker, node);
-    const wasOpen = node.open, wasSummaryHidden = summary?.hidden;
-    const observers = [];
-    let launcher = null;
-    if (!follow) {
-      launcher = document.createElement("button"); launcher.type = "button"; launcher.className = "ui-window-entry";
-      launcher.textContent = title; launcher.setAttribute("aria-haspopup", "dialog");
-      launcher.setAttribute("aria-controls", dialog.id); launcher.setAttribute("aria-expanded", "false");
-      parent.insertBefore(launcher, node);
-      launcher.onclick = () => open(id);
-    }
-    if (summary) { summary.hidden = true; node.open = true; }
-    node.classList.add("ui-window-content");
-    body.appendChild(node); dialog.append(header, body); parent.appendChild(dialog);
-    if (statusId) {
-      const original = document.getElementById(statusId);
-      if (original) {
-        const mirror = document.createElement("p"); mirror.className = "ui-window-status"; mirror.setAttribute("role", "status");
-        header.after(mirror);
-        const sync = () => { mirror.textContent = original.textContent; mirror.hidden = !original.textContent.trim(); };
-        const observer = new MutationObserver(sync);
-        observer.observe(original, {childList:true,subtree:true,characterData:true}); observers.push(observer); sync();
-      }
-    }
-    const item = {dialog, launcher, opener:null, destroyed:false}; windows.set(id, item);
-    close.onclick = () => dialog.close();
-    dialog.addEventListener("close", () => {
-      if (item.destroyed) return;
-      launcher?.setAttribute("aria-expanded", "false");
-      if (follow && !node.classList.contains("hidden")) closeAction?.();
-      const target = item.opener?.isConnected && item.opener.getClientRects().length ? item.opener : launcher;
-      target?.focus({preventScroll:true});
-    });
-    dialog.addEventListener("click", (event) => {
-      if (event.target !== dialog) return;
-      const r = dialog.getBoundingClientRect();
-      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
-    });
-    let restoreTrigger = () => {};
-    if (follow) {
-      const trigger = document.getElementById("discovery-preferences-toggle");
-      const prior = ["aria-haspopup", "aria-controls"].map((name) => [name, trigger?.getAttribute(name)]);
-      restoreTrigger = () => prior.forEach(([name, value]) => { if (value === null) trigger?.removeAttribute(name); else trigger?.setAttribute(name, value); });
-      trigger?.setAttribute("aria-haspopup", "dialog");
-      trigger?.setAttribute("aria-controls", dialog.id);
-      const observer = new MutationObserver(() => {
-        if (!node.classList.contains("hidden")) open(id);
-        else if (dialog.open) dialog.close();
-      });
-      observer.observe(node, {attributes:true,attributeFilter:["class"]}); observers.push(observer);
-    }
-    cleanups.push(() => {
-      item.destroyed = true; observers.forEach((observer) => observer.disconnect());
-      if (follow && dialog.open) closeAction?.();
-      if (dialog.open) dialog.close();
-      marker.replaceWith(node); launcher?.remove(); dialog.remove(); restoreTrigger();
-      node.classList.remove("ui-window-content");
-      if (summary) { summary.hidden = wasSummaryHidden; node.open = wasOpen; }
-      if (assigned) node.removeAttribute("id");
-    });
-    return item;
-  }
-  window.AlicePanels = {open};
-  function install() {
-    const thought = document.getElementById("thought-settings");
-    if (thought) {
-      for (const details of thought.querySelectorAll(":scope > details:not(.settings-inline-details)")) {
-        const title = details.querySelector(":scope > summary")?.textContent || "详情";
-        mount(details, title, {statusId:"thought-status"});
-      }
-      mount(document.getElementById("thought-record"), "留下疑问", {statusId:"thought-status"});
-    }
-    mount(document.querySelector(".memory-summary"), "记忆概览");
-    mount(document.getElementById("discovery-learning-preview"), "见闻维护", {statusId:"discovery-status"});
-    mount(document.querySelector("details.discovery-task"), "活动与用量", {statusId:"discovery-status"});
-    const refresh = document.getElementById("chat-refresh");
-    const refreshMarker = document.createComment("sync-button-position");
-    const refreshText = refresh.textContent;
-    refresh.before(refreshMarker);
-    document.querySelector(".chat-header-actions")?.prepend(refresh);
-    refresh.textContent = "同步";
-    cleanups.push(() => { refreshMarker.replaceWith(refresh); refresh.textContent = refreshText; });
-    function closeHidden() {
-      const activeModal = document.querySelector(".modal:not(.hidden)");
-      for (const item of windows.values()) if (item.dialog.open &&
-        (item.dialog.closest(".hidden") || activeModal && !activeModal.contains(item.dialog)
-          || !document.getElementById("shutdown-screen").classList.contains("hidden"))) item.dialog.close();
-    }
-    for (const selector of ["#settings-modal", "#thought-settings", "#app", "#discovery", "#shutdown-screen", "#modal"]) {
-      const owner = document.querySelector(selector);
-      if (owner) { const observer = new MutationObserver(closeHidden); observer.observe(owner, {attributes:true,attributeFilter:["class"]}); cleanups.push(() => observer.disconnect()); }
-    }
-  }
-  function applyTheme() {
-    const next = document.documentElement.dataset.theme === "minimal";
-    // Orbit restores the original forms before Minimal mounts its readers.
-    if (next && document.body.hasAttribute("data-orbit-page")) return;
-    if (next === active) return;
-    active = next;
-    if (next) install();
-    else { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); windows.clear(); }
-  }
-  function ready() {
-    applyTheme();
-    const themeObserver = new MutationObserver(applyTheme);
-    themeObserver.observe(document.documentElement, {attributes:true,attributeFilter:["data-theme"]});
-    themeObserver.observe(document.body, {attributes:true,attributeFilter:["data-orbit-page"]});
-    document.addEventListener("invalid", (event) => {
-      const dialog = event.target.closest("dialog.ui-window");
-      if (dialog && !dialog.open) { const entry = [...windows].find(([,item]) => item.dialog === dialog); if (entry) open(entry[0]); }
-    }, true);
-  }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, {once:true});
-  else ready();
-})();

@@ -14,9 +14,61 @@
 #thought-settings .thought-error { color:var(--danger, #ee9c9c); }
 #thought-settings #thought-activities { display:grid; gap:12px; }
 #thought-settings #thought-activities fieldset { min-width:0; margin:0; padding:12px; border:1px solid var(--line, #526071); border-radius:8px; }
-#thought-lifecycle { padding:6px 0; }
 #thought-lifecycle[data-state="awake"] { color:var(--accent, #b9d8bf); }
 #thought-invitations article strong, #thought-invitations article p { overflow-wrap:anywhere; }
 #thought-migration-note { margin:8px 0 0; }
 
 #thought-settings [hidden] { display: none !important; }
+
+/* 主开关卡（是否开启思想与探索）：开关+按钮一行，当前状态独立一行小字 */
+#thought-settings .thought-master { display:grid; gap:6px; margin:14px 0 10px; padding:14px 16px; }
+#thought-settings .thought-master-row { display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; }
+#thought-settings .thought-master-tools { display:flex; gap:10px; align-items:center; margin-inline-start:auto; }
+#thought-settings .thought-lifecycle-line { padding:0; font-size:12px; line-height:1.6; color:var(--muted, #a1adbb); overflow-wrap:anywhere; }
+#thought-settings #thought-status:empty { display:none; }
+
+/* 主开关（是否开启思想与探索）：滑动 toggle。
+   checkbox 本体即轨道（appearance:none），::after 做滑块——保持原生可聚焦/可键盘切换。 */
+#thought-settings .thought-switch { display:inline-flex; gap:9px; align-items:center; font-weight:600; font-size:14px; }
+#settings-modal #thought-settings .thought-switch input {
+  appearance: none; -webkit-appearance: none;
+  flex: 0 0 40px; width: 40px; height: 22px; margin: 0;
+  border: 1px solid var(--line, #303944); border-radius: 999px;
+  background: var(--soft, #222a34);
+  position: relative; cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+#settings-modal #thought-settings .thought-switch input::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 999px;
+  background: var(--ink, #e1e6ed);
+  transition: transform 160ms ease, background 160ms ease;
+}
+#settings-modal #thought-settings .thought-switch input:checked {
+  background: var(--accent, #a9c4e5); border-color: var(--accent, #a9c4e5);
+}
+#settings-modal #thought-settings .thought-switch input:checked::after {
+  transform: translateX(18px); background: var(--card, #191f27);
+}
+#settings-modal #thought-settings .thought-switch input:focus-visible { outline: 2px solid var(--accent, #a9c4e5); outline-offset: 2px; }
+
+/* 面板内分步设置向导：复用开始引导的进度点/按钮组语言。
+   --wizard-line 原定义在 .wizard-frame 上，这里在容器补齐，进度点才有颜色。 */
+#thought-wizard {
+  --wizard-line: color-mix(in srgb, var(--accent, #a9c4e5) 36%, var(--line, #303944));
+  margin:14px 0; padding:16px 18px 18px;
+  border:1px solid var(--wizard-line); border-radius:14px; background:var(--card, #191f27);
+}
+#thought-wizard .thought-wizard-title { margin:0 0 6px; font-size:16px; line-height:1.4; }
+#thought-wizard .thought-wizard-title:focus { outline:none; }
+#thought-wizard .thought-wizard-body { display:grid; gap:12px; margin-top:12px; min-width:0; }
+#thought-wizard .wizard-actions { margin-top:16px; }
+#thought-wizard .wizard-actions :is(#thought-wizard-back):not([hidden]) { margin-inline-end:auto; }
+#thought-wizard .wizard-actions button { border-radius:999px; }
+#thought-wizard #thought-wizard-status:empty { display:none; }
+#thought-wizard #thought-wizard-activities { display:grid; gap:12px; }
+#thought-wizard #thought-wizard-activities fieldset { min-width:0; margin:0; padding:12px; border:1px solid var(--line, #526071); border-radius:8px; }
+#thought-wizard label { display:flex; gap:8px; min-width:0; align-items:flex-start; line-height:1.7; }
+#thought-wizard label:has(> :is(input[type=number], input[type=time], select)) { flex-direction:column; align-items:stretch; }
+#thought-wizard :is(input[type=number], input[type=time], select) { min-width:0; max-width:100%; min-height:42px; padding:8px; }
+#thought-wizard input[type=checkbox] { flex:0 0 16px; width:16px; margin-top:3px; }

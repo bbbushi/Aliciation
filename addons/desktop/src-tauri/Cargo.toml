@@ -1,6 +1,6 @@
 [package]
 name = "alice-desktop"
-version = "0.1.37"
+version = "0.1.39"
 edition = "2021"
 default-run = "alice-desktop"
 

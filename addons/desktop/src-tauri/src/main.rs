@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     fs,
     io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -23,6 +23,7 @@ struct Backend {
     input: Mutex<Option<ChildStdin>>,
     identity: Mutex<Option<(String, String)>>,
     origin: Mutex<Option<String>>,
+    shared: AtomicBool,
     closing: AtomicBool,
     allow_exit: AtomicBool,
     launch_done: AtomicBool,
@@ -42,6 +43,7 @@ impl Backend {
             input: Mutex::new(None),
             identity: Mutex::new(None),
             origin: Mutex::new(None),
+            shared: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             allow_exit: AtomicBool::new(false),
             launch_done: AtomicBool::new(false),
@@ -63,34 +65,133 @@ impl Backend {
             return;
         }
         bubble::hide(app);
-        if let Some(child) = self.child.lock().unwrap().as_mut() {
-            if child.try_wait().ok().flatten().is_some() {
-                self.allow_exit.store(true, Ordering::SeqCst);
-                app.exit(0);
-                return;
-            }
-        } else if self.launch_done.load(Ordering::SeqCst) {
-            self.allow_exit.store(true, Ordering::SeqCst);
-            app.exit(0);
-            return;
+        // 独立启动 §5：退出界面只是客户端离开；宿主留存至显式停止
+        // （菜单「停止 Alice」或 alice stop），已接单轮次由宿主继续收尾。
+        self.allow_exit.store(true, Ordering::SeqCst);
+        app.exit(0);
+    }
+}
+
+fn valid_backend_url(url: &tauri::Url) -> bool {
+    url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/"
+}
+
+#[cfg(unix)]
+fn profile_socket(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    let root = app
+        .path()
+        .resolve("Alice", tauri::path::BaseDirectory::LocalData)
+        .map_err(|error| format!("无法解析档案目录（{error}）"))?;
+    let root = std::fs::canonicalize(&root).map_err(|error| format!("档案目录不可用（{error}）"))?;
+    // 与 alice/local_socket.py 同式样：规范绝对路径 SHA-256 的前 24 个十六进制字符。
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    let id: String = digest.iter().take(12).map(|byte| format!("{byte:02x}")).collect();
+    let home = app.path().home_dir().map_err(|error| format!("无法解析用户目录（{error}）"))?;
+    Ok(home.join(".alice").join(format!("tui-{id}.sock")))
+}
+
+#[cfg(unix)]
+fn socket_json(sock: &Path, method: &str, target: &str, body: Option<&str>) -> Result<Value, String> {
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(sock).map_err(|_| "宿主端点无法连接".to_string())?;
+    let payload = body.unwrap_or("");
+    let request = format!(
+        "{method} {target} HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len());
+    stream.write_all(request.as_bytes()).map_err(|_| "控制请求未能送达".to_string())?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|_| "控制响应读取失败".to_string())?;
+    let text = String::from_utf8_lossy(&response);
+    let mut sections = text.split("\r\n\r\n");
+    let head = sections.next().unwrap_or("");
+    let payload_text = sections.next().unwrap_or("").trim();
+    if !head.starts_with("HTTP/1.0 200") && !head.starts_with("HTTP/1.1 200") {
+        let code = head.split_whitespace().nth(1).unwrap_or("异常响应");
+        return Err(format!("宿主返回 HTTP {code}"));
+    }
+    serde_json::from_str(payload_text).map_err(|_| "宿主响应无法解析".to_string())
+}
+
+fn attach_shared(app: &tauri::AppHandle, state: &Arc<Backend>, url: &tauri::Url) -> bool {
+    if !valid_backend_url(url) {
+        return false;
+    }
+    state.shared.store(true, Ordering::SeqCst);
+    state.launch_done.store(true, Ordering::SeqCst);
+    *state.origin.lock().unwrap() = Some(url.origin().ascii_serialization());
+    if bubble::authorize_origin(app, &url.origin().ascii_serialization()).is_err() {
+        failure(app, "Alice 桌面气泡授权失败，请退出后重试");
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.navigate(url.clone());
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    true
+}
+
+#[cfg(unix)]
+fn try_attach(app: &tauri::AppHandle, state: &Arc<Backend>) -> bool {
+    let Ok(sock) = profile_socket(app) else { return false; };
+    let Ok(value) = socket_json(&sock, "GET", "/api/tui/v1/gui", None) else { return false; };
+    let Some(url) = value["url"].as_str().and_then(|text| tauri::Url::parse(text).ok()) else { return false; };
+    attach_shared(app, state, &url)
+}
+
+fn stop_host(app: &tauri::AppHandle) {
+    let state = app.state::<Arc<Backend>>();
+    if state.maintenance_pending.load(Ordering::SeqCst) || state.maintenance_busy.load(Ordering::SeqCst) {
+        return;
+    }
+    if state.shared.load(Ordering::SeqCst) {
+        // 共享宿主：经档案 socket 控制面停止，等待同一份收尾结果（与 alice stop 相同）。
+        #[cfg(unix)]
+        {
+            let handle = app.clone();
+            thread::spawn(move || {
+                let outcome = (|| -> Result<(), String> {
+                    let sock = profile_socket(&handle)?;
+                    socket_json(&sock, "POST", "/api/tui/v1/stop", Some("{}"))?;
+                    Ok(())
+                })();
+                match outcome {
+                    Ok(()) => {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.set_title("Alice — 已停止");
+                        }
+                        handle.exit(0);
+                    }
+                    Err(error) => failure(&handle, &format!("停止失败：{error}")),
+                }
+            });
         }
-        let identity = self.identity.lock().unwrap().clone();
-        if identity.is_none() {
-            // Before ready, EOF asks the backend to drain without model extraction.
-            self.input.lock().unwrap().take();
-        } else if !self.closing.swap(true, Ordering::SeqCst) {
-            let (instance, nonce) = identity.unwrap();
+        return;
+    }
+    let identity = state.identity.lock().unwrap().clone();
+    if let Some((instance, nonce)) = identity {
+        if !state.closing.swap(true, Ordering::SeqCst) {
             let frame = json!({"protocol":1,"instance_id":instance,"nonce":nonce,
                 "request_id":uuid::Uuid::new_v4().simple().to_string(),"op":"shutdown","reason":"quit"});
-            if let Some(input) = self.input.lock().unwrap().as_mut() {
+            if let Some(input) = state.input.lock().unwrap().as_mut() {
                 let _ = writeln!(input, "{}", frame);
                 let _ = input.flush();
             }
         }
-        self.closing.store(true, Ordering::SeqCst);
         if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_title("Alice — 正在保存并退出，请稍候…");
+            let _ = window.set_title("Alice — 正在停止，请稍候…");
         }
+    } else {
+        // 没有在管的宿主：退出即可。
+        state.allow_exit.store(true, Ordering::SeqCst);
+        app.exit(0);
     }
 }
 
@@ -125,6 +226,13 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
     let root = app
         .path()
         .resolve("Alice", tauri::path::BaseDirectory::LocalData)?;
+    // 独立启动 §6.2：先发现同档案宿主；已在线则作为客户端附接，不接管、不重复启动。
+    #[cfg(unix)]
+    {
+        if try_attach(&app, &state) {
+            return Ok(());
+        }
+    }
     fs::create_dir_all(root.join("logs"))?;
     #[cfg(unix)]
     {
@@ -192,15 +300,7 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
                     else {
                         break;
                     };
-                    if url.scheme() != "http"
-                        || url.host_str() != Some("127.0.0.1")
-                        || url.port().is_none()
-                        || !url.username().is_empty()
-                        || url.password().is_some()
-                        || url.query().is_some()
-                        || url.fragment().is_some()
-                        || url.path() != "/"
-                    {
+                    if !valid_backend_url(&url) {
                         break;
                     }
                     *state.identity.lock().unwrap() = Some((instance.to_owned(), nonce.clone()));
@@ -223,9 +323,16 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
                     maintenance::open(&app);
                 }
                 Some("failed") => {
-                    state.suspended.store(true, Ordering::SeqCst);
-                    failure(&app, "Alice 未能启动，可在备份与恢复窗口核对恢复点");
-                    maintenance::open(&app);
+                    // 并发启动竞态：spawn 输给了别的启动者时，宿主其实已在线，直接附接。
+                    #[cfg(unix)]
+                    let recovered = try_attach(&app, &state);
+                    #[cfg(not(unix))]
+                    let recovered = false;
+                    if !recovered {
+                        state.suspended.store(true, Ordering::SeqCst);
+                        failure(&app, "Alice 未能启动，可在备份与恢复窗口核对恢复点");
+                        maintenance::open(&app);
+                    }
                 }
                 Some("backup_started" | "backup_complete" | "backup_failed") => {
                     if frame["event"] == "backup_complete" { state.backup_completed.store(true,Ordering::SeqCst); }
@@ -252,6 +359,12 @@ fn start(app: tauri::AppHandle, state: Arc<Backend>, launch_nonce: Option<String
             }
         }
         // EOF is not itself proof of process exit. Never kill an unverified PID.
+        if state.shared.load(Ordering::SeqCst) {
+            // 已附接共享宿主；本次 spawn 尝试的退出不再处理。
+            state.reader_done.store(true, Ordering::SeqCst);
+            state.launch_done.store(true, Ordering::SeqCst);
+            return;
+        }
         state.input.lock().unwrap().take();
         let exit_status = loop {
             let result = state.child.lock().unwrap().as_mut().map(|p| p.try_wait());
@@ -306,12 +419,14 @@ fn main() {
             let menu = Menu::default(app)?;
             let item = MenuItem::with_id(app, "alice_maintenance", "备份与恢复…", true, None::<&str>)?;
             let check = MenuItem::with_id(app, "alice_updates", "检查更新…", true, None::<&str>)?;
-            menu.append(&Submenu::with_items(app, "数据与更新", true, &[&check,&item])?)?;
+            let stop = MenuItem::with_id(app, "alice_stop", "停止 Alice…", true, None::<&str>)?;
+            menu.append(&Submenu::with_items(app, "数据与更新", true, &[&stop,&check,&item])?)?;
             let bubbles = MenuItem::with_id(app,"bubble_settings","桌面气泡设置…",cfg!(target_os="macos"),None::<&str>)?;
             menu.append(&Submenu::with_items(app,"桌面",true,&[&bubbles])?)?;
             Ok(menu)
         })
         .on_menu_event(|app, event| {
+            if event.id().as_ref() == "alice_stop" { stop_host(app); }
             if event.id().as_ref() == "alice_maintenance" { maintenance::open(app); }
             if event.id().as_ref() == "alice_updates" { updates::open(app); }
             bubble::menu(app,event.id().as_ref());

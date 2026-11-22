@@ -2,7 +2,7 @@
    纯装饰，不读会话数据、不发请求、不响应指针。
    动效门禁与氛围层一致：设置关闭 / 系统减动效 / 页面隐藏时停帧（留一帧静态画面）；
    AI 回复中（#chat.is-receiving）粒子群轻微躁动；仅房间主题绘制——orbit 的常驻场景由
-   orbit-bg.js 接管，经典与简洁主题由 CSS 整层停用。 */
+   orbit-bg.js 接管，经典主题由 CSS 整层停用。 */
 (() => {
   const root = document.documentElement;
   const chat = document.getElementById("chat");
