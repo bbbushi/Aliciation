@@ -393,6 +393,7 @@ class AutonomyCoordinator:
         plan_stored = json.loads(store.meta_get("autonomy_migration_plan") or "null")
         return {"status": "ok", "session_epoch": self.epoch,
                 "revision": int(store.meta_get("autonomy_revision") or 0), "settings": config,
+                "settings_archived": store.meta_get("autonomy_settings") is not None,
                 "lifecycle": lifecycle, "scheduler": scheduler,
                 "questions": questions, "stances": stances, "contacts": contacts, "runs": runs, "events": events,
                 "intents": intents, "invitations": invitations, "communication_decisions": decisions,

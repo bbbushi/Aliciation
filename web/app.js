@@ -953,17 +953,20 @@ const INTRO_QUESTIONS = [
   ["有什么想先和我聊的？", "你可以留个话题，等准备好再开口。"],
 ];
 
-function showWizardProgress(node, step) {
-  node.setAttribute("aria-label", `第 ${step} 步，共 ${WIZARD_STEPS.length} 步：${WIZARD_STEPS[step - 1]}`);
-  const dots = WIZARD_STEPS.map((_, index) => {
+function wizardProgress(node, steps, step) {
+  node.setAttribute("aria-label", `第 ${step} 步，共 ${steps.length} 步：${steps[step - 1]}`);
+  const dots = steps.map((_, index) => {
     const dot = document.createElement("span");
     dot.dataset.state = index + 1 === step ? "current" : index + 1 < step ? "done" : "waiting";
     return dot;
   });
   const count = document.createElement("span");
   count.className = "wizard-count";
-  count.textContent = `${step} / ${WIZARD_STEPS.length}`;
+  count.textContent = `${step} / ${steps.length}`;
   node.replaceChildren(...dots, count);
+}
+function showWizardProgress(node, step) {
+  wizardProgress(node, WIZARD_STEPS, step);
 }
 
 function showIntroStep(step) {
@@ -3469,6 +3472,7 @@ boot().catch(showStartupError);
     window.AliceClaudeSettings?.setVisible(section === "claude" && showing);
   }
   window.AliceUI = {
+    wizardProgress(node, steps, step) { wizardProgress(node, steps, step); },
     selectSettings(section = "general") {
       if (!settingsRoute?.(section)) selectSettingsSection(section);
     },
@@ -3714,7 +3718,7 @@ boot().catch(showStartupError);
   const root = document.documentElement;
   const control = document.getElementById("ui-theme");
   const state = document.getElementById("ui-theme-state");
-  const normalize = (value) => ["legacy", "minimal", "orbit"].includes(value) ? value : "room";
+  const normalize = (value) => ["legacy", "orbit"].includes(value) ? value : "room";
   let preference = "room", canSave = true;
   try { preference = normalize(localStorage.getItem(key)); }
   catch { canSave = false; }
@@ -3921,155 +3925,3 @@ boot().catch(showStartupError);
   new ResizeObserver(reset).observe(chat);
 })();
 
-
-/* Progressive disclosure: existing controls keep their identity and drafts. */
-(() => {
-  const windows = new Map();
-  let serial = 0;
-  let active = false;
-  const cleanups = [];
-  function open(id) {
-    const item = windows.get(id);
-    if (!item) {
-      const original = document.getElementById(id);
-      if (original?.tagName === "DETAILS") { original.open = true; original.scrollIntoView({block:"nearest"}); }
-      return;
-    }
-    for (const other of windows.values()) if (other !== item && other.dialog.open) other.dialog.close();
-    if (item.dialog.open) return;
-    item.opener = document.activeElement;
-    item.dialog.showModal();
-    item.launcher?.setAttribute("aria-expanded", "true");
-  }
-  function mount(node, title, {statusId, follow = false, closeAction} = {}) {
-    if (!node) return;
-    const assigned = !node.id;
-    const id = node.id || (node.id = `ui-content-${++serial}`);
-    const summary = node.tagName === "DETAILS" ? node.querySelector(":scope > summary") : null;
-    const dialog = document.createElement("dialog");
-    dialog.id = `ui-window-${id}`;
-    dialog.className = "ui-window";
-    dialog.setAttribute("aria-labelledby", `${dialog.id}-title`);
-    const header = document.createElement("header"); header.className = "ui-window-head";
-    const heading = document.createElement("h2"); heading.id = `${dialog.id}-title`; heading.textContent = title;
-    const close = document.createElement("button"); close.type = "button"; close.className = "card-x ui-window-close";
-    close.textContent = "×"; close.setAttribute("aria-label", `关闭${title}`); close.autofocus = true;
-    header.append(heading, close);
-    const body = document.createElement("div"); body.className = "ui-window-body";
-    const parent = node.parentElement;
-    const marker = document.createComment("minimal-window-position");
-    parent.insertBefore(marker, node);
-    const wasOpen = node.open, wasSummaryHidden = summary?.hidden;
-    const observers = [];
-    let launcher = null;
-    if (!follow) {
-      launcher = document.createElement("button"); launcher.type = "button"; launcher.className = "ui-window-entry";
-      launcher.textContent = title; launcher.setAttribute("aria-haspopup", "dialog");
-      launcher.setAttribute("aria-controls", dialog.id); launcher.setAttribute("aria-expanded", "false");
-      parent.insertBefore(launcher, node);
-      launcher.onclick = () => open(id);
-    }
-    if (summary) { summary.hidden = true; node.open = true; }
-    node.classList.add("ui-window-content");
-    body.appendChild(node); dialog.append(header, body); parent.appendChild(dialog);
-    if (statusId) {
-      const original = document.getElementById(statusId);
-      if (original) {
-        const mirror = document.createElement("p"); mirror.className = "ui-window-status"; mirror.setAttribute("role", "status");
-        header.after(mirror);
-        const sync = () => { mirror.textContent = original.textContent; mirror.hidden = !original.textContent.trim(); };
-        const observer = new MutationObserver(sync);
-        observer.observe(original, {childList:true,subtree:true,characterData:true}); observers.push(observer); sync();
-      }
-    }
-    const item = {dialog, launcher, opener:null, destroyed:false}; windows.set(id, item);
-    close.onclick = () => dialog.close();
-    dialog.addEventListener("close", () => {
-      if (item.destroyed) return;
-      launcher?.setAttribute("aria-expanded", "false");
-      if (follow && !node.classList.contains("hidden")) closeAction?.();
-      const target = item.opener?.isConnected && item.opener.getClientRects().length ? item.opener : launcher;
-      target?.focus({preventScroll:true});
-    });
-    dialog.addEventListener("click", (event) => {
-      if (event.target !== dialog) return;
-      const r = dialog.getBoundingClientRect();
-      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
-    });
-    let restoreTrigger = () => {};
-    if (follow) {
-      const trigger = document.getElementById("discovery-preferences-toggle");
-      const prior = ["aria-haspopup", "aria-controls"].map((name) => [name, trigger?.getAttribute(name)]);
-      restoreTrigger = () => prior.forEach(([name, value]) => { if (value === null) trigger?.removeAttribute(name); else trigger?.setAttribute(name, value); });
-      trigger?.setAttribute("aria-haspopup", "dialog");
-      trigger?.setAttribute("aria-controls", dialog.id);
-      const observer = new MutationObserver(() => {
-        if (!node.classList.contains("hidden")) open(id);
-        else if (dialog.open) dialog.close();
-      });
-      observer.observe(node, {attributes:true,attributeFilter:["class"]}); observers.push(observer);
-    }
-    cleanups.push(() => {
-      item.destroyed = true; observers.forEach((observer) => observer.disconnect());
-      if (follow && dialog.open) closeAction?.();
-      if (dialog.open) dialog.close();
-      marker.replaceWith(node); launcher?.remove(); dialog.remove(); restoreTrigger();
-      node.classList.remove("ui-window-content");
-      if (summary) { summary.hidden = wasSummaryHidden; node.open = wasOpen; }
-      if (assigned) node.removeAttribute("id");
-    });
-    return item;
-  }
-  window.AlicePanels = {open};
-  function install() {
-    const thought = document.getElementById("thought-settings");
-    if (thought) {
-      for (const details of thought.querySelectorAll(":scope > details:not(.settings-inline-details)")) {
-        const title = details.querySelector(":scope > summary")?.textContent || "详情";
-        mount(details, title, {statusId:"thought-status"});
-      }
-      mount(document.getElementById("thought-record"), "留下疑问", {statusId:"thought-status"});
-    }
-    mount(document.querySelector(".memory-summary"), "记忆概览");
-    mount(document.getElementById("discovery-learning-preview"), "见闻维护", {statusId:"discovery-status"});
-    mount(document.querySelector("details.discovery-task"), "活动与用量", {statusId:"discovery-status"});
-    const refresh = document.getElementById("chat-refresh");
-    const refreshMarker = document.createComment("sync-button-position");
-    const refreshText = refresh.textContent;
-    refresh.before(refreshMarker);
-    document.querySelector(".chat-header-actions")?.prepend(refresh);
-    refresh.textContent = "同步";
-    cleanups.push(() => { refreshMarker.replaceWith(refresh); refresh.textContent = refreshText; });
-    function closeHidden() {
-      const activeModal = document.querySelector(".modal:not(.hidden)");
-      for (const item of windows.values()) if (item.dialog.open &&
-        (item.dialog.closest(".hidden") || activeModal && !activeModal.contains(item.dialog)
-          || !document.getElementById("shutdown-screen").classList.contains("hidden"))) item.dialog.close();
-    }
-    for (const selector of ["#settings-modal", "#thought-settings", "#app", "#discovery", "#shutdown-screen", "#modal"]) {
-      const owner = document.querySelector(selector);
-      if (owner) { const observer = new MutationObserver(closeHidden); observer.observe(owner, {attributes:true,attributeFilter:["class"]}); cleanups.push(() => observer.disconnect()); }
-    }
-  }
-  function applyTheme() {
-    const next = document.documentElement.dataset.theme === "minimal";
-    // Orbit restores the original forms before Minimal mounts its readers.
-    if (next && document.body.hasAttribute("data-orbit-page")) return;
-    if (next === active) return;
-    active = next;
-    if (next) install();
-    else { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); windows.clear(); }
-  }
-  function ready() {
-    applyTheme();
-    const themeObserver = new MutationObserver(applyTheme);
-    themeObserver.observe(document.documentElement, {attributes:true,attributeFilter:["data-theme"]});
-    themeObserver.observe(document.body, {attributes:true,attributeFilter:["data-orbit-page"]});
-    document.addEventListener("invalid", (event) => {
-      const dialog = event.target.closest("dialog.ui-window");
-      if (dialog && !dialog.open) { const entry = [...windows].find(([,item]) => item.dialog === dialog); if (entry) open(entry[0]); }
-    }, true);
-  }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, {once:true});
-  else ready();
-})();
