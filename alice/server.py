@@ -742,7 +742,13 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                     self._json({"error": "人格装配操作未能确认，请刷新状态核对后再重试"}, 500)
             elif path == "/api/persona/material":
                 try:
-                    self._json(svc.material_import(self._bounded_body(2097152)))
+                    body = self._bounded_body(2097152)
+                    if body.get("action") in ("prepare", "reinterpret_active"):
+                        # The two model-backed actions can legally run past the ~60s
+                        # no-bytes timeout in WKWebView; stream progress instead.
+                        self._material_stream(svc, body)
+                    else:
+                        self._json(svc.material_import(body))
                 except ChannelError:
                     raise
                 except ValueError as exc:
@@ -881,6 +887,60 @@ def make_handler(svc: ChatService, gate: _ShutdownGate, runtime_info: dict, conn
                 pass  # The browser closed; the server still completes shutdown.
 
         # ---------- SSE 流式对话 ----------
+
+        def _material_stream(self, svc, payload: dict) -> None:
+            """SSE for the two model-backed material actions (prepare / reinterpret_active).
+
+            These preparations can legally run past the ~60s no-bytes timeout that
+            WKWebView's network stack enforces, which read as "分类失败" on the client
+            while the server actually finished. Phase events plus a heartbeat keep the
+            channel alive; a client disconnect never cancels the persisted result.
+            """
+            import threading as _threading
+            done_event = _threading.Event()
+            write_lock = _threading.Lock()
+            connected = True
+            outcome: dict = {}
+
+            def emit(frame: dict) -> None:
+                nonlocal connected
+                if not connected:
+                    return
+                try:
+                    data = json.dumps(frame, ensure_ascii=True).encode("ascii")
+                    with write_lock:
+                        self.wfile.write(b"data: " + data + b"\n\n")
+                        self.wfile.flush()
+                except OSError:
+                    connected = False  # 断开不改写后台结果；候选照常落盘
+
+            def worker() -> None:
+                try:
+                    outcome["result"] = svc.material_import(payload, on_progress=emit)
+                except BaseException as exc:
+                    outcome["error"] = exc
+                finally:
+                    done_event.set()
+
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            except OSError:
+                connected = False
+            emit({"type": "start"})
+            worker_thread = _threading.Thread(target=worker, daemon=True, name="material-prepare")
+            worker_thread.start()
+            while not done_event.wait(15.0):  # 心跳周期必须短于 socket 的 30s 超时
+                emit({"type": "hb"})
+            worker_thread.join()
+            if "error" in outcome:
+                exc = outcome["error"]
+                emit({"type": "error", "message": str(exc) or type(exc).__name__,
+                      "code": getattr(exc, "code", None)})
+                return
+            emit({"type": "done", "result": outcome.get("result")})
 
         def _sse_chat(self, text: str, *, request_id=None, session_epoch=None,
                       search_intent=None, worker_target=None, public_tui=False) -> None:

@@ -24,7 +24,7 @@ Alice：陪伴型 harness，单一永久会话 + 三层记忆 + 可生长人格�
 
 ## 当前
 
-- 2026-11-21 各线未提交改动收拢上传 ytq（本次提交）：TUI 档案级 socket 终端客户端（连接级 UID 核验免配对、/api/tui/v1 四接口、addons/alice_tui 零依赖客户端、~/.local/bin/alice 启动器，TCP 配对与 tui_access 退役）+ 向导 user_intro + 投影环改版 + 主动交流独立调度（宪法 v13）+ 来源过期连带清空。
-- 待真人验收：TUI 设计 §5 场景（多行粘贴/跨端同步/历史翻页/Ctrl+C 中断核对/第二账户）、向导返回流程、投影环真机体验、自主调度与来源过期联动。
-- 运行时按用户要求全停（8800/8818），重启需手动；~/.alice/alice.sock 为旧版遗留死 socket 可删。SIGINT 优雅退出挂起需复测。
-- 11-20 技术债 D01–D10 已 PR 交 main；F01–F19 未修（docs/代码审查/*20261120）；R5a 遗留 P2-2/P2-3/P3-6 未动。分工与边界不变；历史细节进 git log。
+- 11-22 桌面 0.1.38 已打包（build/latest-release.json）：修复人格导入"分类失败"假警报——WKWebView 60s 无数据超时掐死长准备而服务端实际完成；prepare/reinterpret 改 SSE 流式（阶段进度+15s 心跳），前端 postStream+进度文字，中断文案引导刷新核对。离线假 LLM 全帧序 + 真浏览器真 DeepSeek 端到端（含心跳帧）均过。**待真人验收：导入人格全程看阶段文字、不再报分类失败。**
+- 工作区另有 TUI 线未提交半成品（勿动勿提交）：`alice/cli.py` 独立启动+stop、`addons/alice_tui/*`、server.py 的 on_stop//stop hunks、TUI 设计文档——本次提交 server.py 已按 hunk 拆分，只入库 material 流式部分。
+- 版本三处（alice/__init__、tauri.conf.json、Cargo.toml+lock）已同步 0.1.38；11-21 ytq 收拢的 TUI 客户端/user_intro/投影环/自主调度与来源过期联动不变。
+- 运行时全停，重启需手动；SIGINT 优雅退出挂起待复测。待真人沿用：TUI §3.6 视觉、独立启动 §7 场景表、向导、投影环、自主调度联动。F01–F19 未修。
