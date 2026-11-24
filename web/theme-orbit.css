@@ -1463,8 +1463,7 @@ html[data-theme=orbit] #settings-modal .discovery-setting-group > .discovery-swi
 }
 html[data-theme=orbit] #settings-modal .discovery-provider-config,
 html[data-theme=orbit] #settings-modal #discovery-interests { border-top-color: var(--orbit-line-faint); }
-/* 联网搜索保存条与人格窗底栏：不再用 --card/--bg 实底，让窗玻璃透上来 */
-html[data-theme=orbit] #settings-modal .discovery-settings-savebar { background: transparent; border-top-color: var(--orbit-line-faint); }
+/* 人格窗底栏：不再用 --card/--bg 实底，让窗玻璃透上来 */
 html[data-theme=orbit] :is(#settings-modal, #modal) .modal-foot {
   background: transparent; border-top: 1px solid var(--orbit-line-faint);
 }
@@ -1721,13 +1720,9 @@ html[data-theme=orbit] #settings-modal .btn.primary {
 html[data-theme=orbit] #settings-modal .btn.primary:hover:not(:disabled) {
   background: var(--accent); color: var(--on-accent);
 }
-html[data-theme=orbit] #settings-modal .discovery-settings-nav button { border: 1px solid transparent; border-radius: var(--radius); }
-html[data-theme=orbit] #settings-modal .discovery-settings-nav button[aria-current=page],
 html[data-theme=orbit] #settings-modal .discovery-daily-item[aria-pressed=true] {
   border-color: var(--orbit-line-strong); background: var(--accent-soft);
 }
-html[data-theme=orbit] #settings-modal .discovery-settings-nav button:focus-visible { outline-offset: -3px; }
-html[data-theme=orbit] #settings-modal .discovery-settings-savebar { background: transparent; }
 
 @media (max-width: 800px) {
   html[data-theme=orbit] #settings-modal { --orbit-settings-inset: 18px; --orbit-settings-margin: var(--sp-3); }

@@ -27,7 +27,7 @@
 .discovery-controls { min-width: 0; gap: 13px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .discovery-controls:not(.hidden) { display: grid; }
 .discovery-preferences-head, .discovery-preferences-note { grid-column: 1 / -1; }
-.discovery-preferences-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.discovery-preferences-head { display: none; }   /* 步骤标题由向导标题承担；h2 仅留作面板的无障碍名称 */
 .discovery-preferences-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .discovery-preferences-note { margin: 0; font-size: 13px; color: var(--muted); }
 .discovery-box { min-width: 0; padding: 16px; border: 2px solid var(--line); background: var(--card); border-radius: 6px; }
@@ -57,19 +57,33 @@
 .discovery-settings .discovery-form { padding-top: 4px; }
 .discovery-settings .discovery-policy-section[open] > summary { margin-bottom: 10px; }
 #discovery-settings-box { display: flex; flex-direction: column; flex: 1; gap: 18px; min-width: 0; min-height: 0; container: discovery-settings / inline-size; }
-#discovery-settings-box > .discovery-form { flex-shrink: 0; padding-top: 0; }
-#discovery-settings-box > .discovery-form > .discovery-switch { padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; }
+#discovery-settings [hidden] { display: none !important; }
+/* 主开关卡：开关与「更改设置」同一行，当前状态单独一行小字。开关沿用本页的 .discovery-switch。 */
+#discovery-settings-box > .discovery-master { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.discovery-master-row { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
+.discovery-master-row > .discovery-switch { flex: 1 1 220px; font-weight: 600; }
+.discovery-master-row > .link { margin-inline-start: auto; }
+.discovery-master-state { font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.discovery-master-state:empty { display: none; }
+.discovery-master-hint { margin: 0; }
 .discovery-settings-cost { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; padding: 8px 12px; min-width: 0; border: 1px solid var(--line); border-radius: 6px; }
 .discovery-settings-cost > [data-paid=true] { color: var(--warning); }
-.discovery-settings-workspace { display: flex; flex-direction: column; flex: 1; gap: 16px; min-width: 0; min-height: 0; overflow: hidden; }
-.discovery-settings-nav { display: flex; flex: 0 0 auto; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); min-width: 0; overflow-x: auto; overscroll-behavior: contain; }
-.discovery-settings-nav button { flex: 0 0 auto; min-height: 40px; border: 0; border-bottom: 2px solid transparent; padding: 8px 10px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
-.discovery-settings-nav button small { display: none; }
-.discovery-settings-nav button:hover { background: var(--soft); }
-.discovery-settings-nav button[aria-current=page] { border-bottom-color: var(--accent); color: var(--accent); background: var(--soft); }
+/* 分步设置向导：进度点与按钮组复用开始引导的 .wizard-*。
+   --wizard-line 原定义在 .wizard-frame 上，这里在容器补齐，进度点才有颜色。 */
+#discovery-settings-box > .discovery-wizard { --wizard-line: color-mix(in srgb, var(--accent) 36%, var(--line)); display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; padding: 14px 16px 16px; border: 1px solid var(--wizard-line); border-radius: 12px; background: var(--card); }
+.discovery-wizard .wizard-top { margin-bottom: 12px; }
+.discovery-wizard-title { margin: 0 0 4px; font-size: 16px; line-height: 1.4; }
+.discovery-wizard-title:focus { outline: none; }
+.discovery-wizard .discovery-settings-panes { margin-top: 12px; }
+.discovery-wizard .wizard-actions { flex-shrink: 0; margin-top: 16px; }
+.discovery-wizard-conflict { margin: 12px 0 0; color: var(--warning); }
+.discovery-wizard-status { margin: 12px 0 0; }
+.discovery-wizard-status:empty { display: none; }
+.discovery-wizard .wizard-actions :is(#discovery-wizard-back):not([hidden]) { margin-inline-end: auto; }
+.discovery-wizard .wizard-actions .btn { border-radius: 999px; }
 .discovery-settings-panes { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scroll-padding-block: 8px; }
 .discovery-settings-pane { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; }
-.discovery-settings-pane > h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.discovery-settings-pane > h3 { display: none; }   /* 步骤标题由向导标题承担；这里只留作无障碍名称 */
 .discovery-settings #discovery-preferences { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .discovery-settings-interest-learning { grid-column: 1 / -1; }
 .discovery-setting-stack { display: grid; gap: 10px; min-width: 0; }
@@ -113,19 +127,13 @@
 .discovery-settings #discovery-preferences > .discovery-box { border-width: 1px; padding: 12px 14px; }
 .discovery-settings #discovery-interests:not(:empty) { border-top: 1px solid var(--line); margin-top: 12px; }
 @container discovery-settings (min-width: 700px) {
-  #discovery-settings-box > .discovery-form { grid-template-columns: auto minmax(0, 1fr); }
   .discovery-settings #discovery-preferences { grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); }
 }
-.discovery-settings-savebar { flex-shrink: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 14px; padding-top: 12px; border-top: 1px solid var(--line); background: var(--card); }
-.discovery-settings-savebar .discovery-status { grid-column: 1 / -1; margin: 0; padding: 8px 11px; font-size: 13px; }
-.discovery-settings-savebar .discovery-draft { grid-column: 1 / -1; }
-.discovery-settings-savebar > .discovery-hint { margin: 0; font-size: 12px; }
-.discovery-settings-savebar .discovery-actions { justify-content: flex-end; }
 /* Small windows use one continuous scroll area so fixed chrome cannot squeeze
-   the fields out of view. The save bar follows the form in normal flow. */
+   the fields out of view. The wizard actions follow the step pane in normal flow. */
 @media (max-width: 800px), (max-height: 720px) {
-  #discovery-settings-box, .discovery-settings-workspace, .discovery-settings-panes { flex: 0 0 auto; }
-  .discovery-settings-workspace, .discovery-settings-panes { overflow: visible; }
+  #discovery-settings-box, #discovery-settings-box > .discovery-wizard, .discovery-settings-panes { flex: 0 0 auto; }
+  #discovery-settings-box > .discovery-wizard, .discovery-settings-panes { overflow: visible; }
   .discovery-settings-panes { scrollbar-gutter: auto; }
 }
 .discovery-policy-section > legend, .discovery-policy-section > summary { font-size: 14px; font-weight: 600; }
@@ -153,7 +161,6 @@
 .discovery-settings .discovery-policy-grid .discovery-limit-input > .discovery-check input { margin-top: 0; }
 .discovery-settings .discovery-policy-grid .discovery-policy-note { grid-column: 1 / -1; margin: 0; }
 @container discovery-settings (max-width: 540px) {
-  .discovery-settings-nav { flex-wrap: wrap; }
   .discovery-setting-row, .discovery-provider-config:has(> :not(.hidden)), .discovery-settings .discovery-policy-grid > .discovery-policy-field { grid-template-columns: minmax(0, 1fr); }
   .discovery-settings .discovery-policy-grid .discovery-limit-input { justify-content: flex-start; }
 }
@@ -280,8 +287,7 @@
   .discovery-card { padding: 16px; }
 }
 @media (max-width: 480px) {
-  .discovery-settings-savebar { grid-template-columns: minmax(0, 1fr); }
-  .discovery-settings-savebar .discovery-actions { justify-content: flex-start; }
+  .discovery-master-row > .discovery-switch { flex-basis: 100%; }
 }
 @media (max-width: 390px) {
   .discovery-policy-grid, .discovery-pair { grid-template-columns: minmax(0, 1fr); }

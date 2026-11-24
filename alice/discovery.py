@@ -375,9 +375,10 @@ class DiscoveryCoordinator:
         self._tieba_forum_check = None
         self._sharing_failed = False
         self._browser_results = {}
-        conn = self.service.store.conn
+        store = self.service.store
+        conn = store.conn
         conn.executescript(SCHEMA)
-        self.service.store.migrate_interest_evidence()
+        store.migrate_interest_evidence()
         from .dialogue_search import migrate
         migrate(self)
         with conn:
@@ -414,6 +415,10 @@ class DiscoveryCoordinator:
                 }
             if merged != previous:
                 conn.execute("UPDATE discovery_config SET value=?,revision=revision+1 WHERE id=1", (_json(merged),))
+            # Infer legacy setup once. Later platform and access changes can
+            # alter the configuration without completing the wizard.
+            if store.meta_get("discovery_settings_saved") is None:
+                store.meta_set("discovery_settings_saved", time.time() if merged != DEFAULTS else 0)
             conn.execute("UPDATE discovery_runs SET state='interrupted',reason='process_interrupted',"
                          "finished_at=? WHERE state IN ('queued','running','draining')", (time.time(),))
             conn.execute("UPDATE discovery_attempts SET state='unknown',reason='process_interrupted' "
@@ -624,7 +629,8 @@ class DiscoveryCoordinator:
         public = {k: copy.deepcopy(v) for k, v in settings.items()
                   if k not in ("brave_key", "provider_key", "platforms")}
         public.update(revision=revision, brave_key_present=bool(settings["brave_key"]),
-                      provider_key_present=settings["provider_kind"] == "brave" and bool(settings["brave_key"]))
+                      provider_key_present=settings["provider_kind"] == "brave" and bool(settings["brave_key"]),
+                      settings_archived=self.service.store.meta_get_time("discovery_settings_saved") > 0)
         learning_preview = self.service.store.learning_preview(self.service.cfg)
         platforms = []
         for identity, label in PLATFORMS.items():
@@ -755,7 +761,7 @@ class DiscoveryCoordinator:
             if type(payload.get("revision")) is not int or payload["revision"] != revision:
                 raise ChannelError(409, "revision_conflict", "设置已更新，请重新载入后再操作")
             allowed = {
-                "settings": {"settings"}, "platform": {"id", "enabled", "allow_third_party"},
+                "settings": {"settings", "configured"}, "platform": {"id", "enabled", "allow_third_party"},
                 "interest": {"id", "topic", "summary", "enabled", "external_allowed", "preferred_forums"},
                 "interest_delete": {"id"}, "run": {"interest_id"}, "cancel": {"task_id"},
                 "feedback": {"card_id", "value"}, "delete": {"card_id"}, "clear": {"platform_id"},
@@ -765,7 +771,12 @@ class DiscoveryCoordinator:
             if action not in allowed or set(payload) - allowed[action] - {"action", "dataset_id", "revision"}:
                 raise ChannelError(400, "invalid_request", "内容发现操作或字段无效")
             if action == "settings":
-                self._save_settings_locked(revision, settings, payload.get("settings"))
+                # 只有设置向导的最后一步会带 configured；单独拨动开关、平台卡片上的
+                # 即时改动不带，免得用户还没走过首启引导就被判定为"已配置"。
+                configured = payload.get("configured")
+                if "configured" in payload and configured is not True:
+                    raise ChannelError(400, "invalid_request", "设置完成标记无效")
+                self._save_settings_locked(revision, settings, payload.get("settings"), configured=configured is True)
             elif action == "platform":
                 identity = payload.get("id")
                 if identity not in PLATFORMS:
@@ -839,7 +850,7 @@ class DiscoveryCoordinator:
         finally:
             self.service._lock.release()
 
-    def _save_settings_locked(self, revision, previous, changes):
+    def _save_settings_locked(self, revision, previous, changes, *, configured=False):
         permitted = set(DEFAULTS) - {"platforms", "brave_key"} | {"provider_key", "clear_provider_key"}
         if not isinstance(changes, dict) or set(changes) - permitted:
             raise ChannelError(400, "invalid_request", "设置字段无效")
@@ -927,6 +938,8 @@ class DiscoveryCoordinator:
         qq_restricted = previous["share_in_qq"] and not settings["share_in_qq"]
         with self.service.store.source_transaction():
             self._write_config_locked(revision, settings)
+            if configured:
+                self.service.store.meta_set("discovery_settings_saved", time.time())
             if scope_changed:
                 self.service.store.conn.execute("UPDATE discovery_tieba_policy SET version=? WHERE id=1", (uuid.uuid4().hex,))
                 revoked_packets = self._restrict_tieba_sources_locked(settings)

@@ -1,9 +1,26 @@
-/* User-approved content discovery. No browser persistence, automatic POST, or message sending. */
+/* User-approved content discovery. No browser persistence, automatic POST, or message sending.
+   设置改为「主开关 + 分步设置向导」（2026-11-24，与思想与探索同一方式）：
+   - 主开关 = settings.enabled（允许内容访问），拨动即生效，不再随表单保存；
+   - 开启时先看 settings_archived：未配置过 → 五步向导，最后一步「保存并开启」一次提交；
+     已配置过 → 直接按上次的设置开启；「更改设置」重开向导（编辑态，预填当前值）；
+   - 旧的五个分类原样成为五步，顺序不变，每步可跳过；分类导航、底部保存条与脏草稿机制移除；
+   - 平台开关与兴趣各有自己的即时保存接口，不进设置草稿（向导中途放弃时它们会保留）。 */
 "use strict";
 (() => {
   const $ = (id) => document.getElementById(id);
   const panel = $("discovery"), app = $("app"), trigger = $("discovery-btn"), settingsPanel = $("discovery-settings");
   if (!panel || !app || !trigger || !settingsPanel) return;
+  // 五步 = 旧的五个分类，按原顺序。key 同时是面板的 data-discovery-settings-pane。
+  const WIZARD_STEPS = [
+    { key: "use", name: "使用与安排", title: "聊天时要不要查找资料？", hint: "决定 Alice 什么时候可以联网：聊天时按需查找，以及空闲时是否自动寻找。" },
+    { key: "scope", name: "平台与兴趣", title: "去哪里找、找什么？", hint: "开启至少一个平台，并添加一个允许搜索的兴趣。这一步的平台与兴趣在操作时就会保存。" },
+    { key: "budget", name: "费用与额度", title: "可以用到什么程度？", hint: "后台模型选题与整理可能产生费用；每日额度按次数计，不是金额上限。" },
+    { key: "memory", name: "资料与使用", title: "找到的资料怎么留、怎么用？", hint: "择要保存带出处的见闻。容量与保留时间保持默认也可以。" },
+    { key: "network", name: "网络与访问", title: "通过什么通道访问？", hint: "搜索服务、平台访问方式与网络路由。不确定就保持默认。" },
+  ];
+  const STEP_KEYS = WIZARD_STEPS.map((step) => step.key);
+  // 「去改某项」的深链目标不在某一步面板里时，落到哪一步。
+  const STEP_OF_TARGET = { "discovery-settings-box": "memory" };
   panel.innerHTML = `
     <div class="discovery-header">
       <div><span class="discovery-kicker">ALICE / DISCOVER</span><h1 id="discovery-title">内容发现</h1>
@@ -27,8 +44,8 @@
       </div>
       <div class="discovery-grid">
         <div id="discovery-preferences" class="discovery-controls hidden">
-          <div class="discovery-preferences-head"><h2 id="discovery-settings-scope-title">平台与兴趣</h2><button id="discovery-preferences-close" class="link" type="button">返回使用与安排</button></div>
-          <p class="discovery-hint discovery-preferences-note">平台操作即时保存。兴趣用自己的保存按钮，切换分类会保留草稿。</p>
+          <div class="discovery-preferences-head"><h2 id="discovery-settings-scope-title">平台与兴趣</h2></div>
+          <p class="discovery-hint discovery-preferences-note">平台与兴趣在操作时就会保存。兴趣还没点「添加兴趣」或「保存兴趣」就离开这一步，这次修改会放弃。</p>
           <details id="discovery-platforms-box" class="discovery-box" open><summary>平台访问</summary>
             <p id="discovery-settings-platforms" class="discovery-hint">尚未读取平台状态。</p>
             <p class="discovery-hint">默认查询使用已开放的全网入口。要使用全网，先开启全网并确认搜索服务许可；也可限定到已开放的平台。</p>
@@ -98,7 +115,7 @@
                 <p class="discovery-hint">模型额度按请求次数计算。已发出但取消的请求也可能计费。</p>
               </details>
               <div id="discovery-interest-learning" class="discovery-setting-group discovery-settings-interest-learning">
-                <label class="discovery-switch"><input id="discovery-chat-interests" type="checkbox" role="switch"><span>从聊天中整理兴趣<small>依据你的表达整理，可查看、纠正或停用。此项随底部设置保存。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
+                <label class="discovery-switch"><input id="discovery-chat-interests" type="checkbox" role="switch"><span>从聊天中整理兴趣<small>依据你的表达整理，可查看、纠正或停用。此项随向导最后一步保存。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
               </div>
               <div id="discovery-memory-options" class="discovery-setting-group">
                 <label class="discovery-switch"><input id="discovery-remember-observations" type="checkbox" role="switch"><span>保存带出处的见闻<small>择要保留，按价值与实际使用复核。</small></span><span class="discovery-switch-track" aria-hidden="true"></span></label>
@@ -154,9 +171,6 @@
                   </div>
                 </div>
               </div>
-              <p id="discovery-settings-draft" class="discovery-draft hidden"></p>
-              <div class="discovery-actions"><button id="discovery-settings-save" class="btn primary" type="submit" data-write>保存设置</button>
-                <button id="discovery-settings-reset" class="link" type="button">重新载入设置</button></div>
             </form>
           </div>
         </div>
@@ -179,28 +193,41 @@
     const label = (id) => $(id).closest("label");
     const policy = (id) => $(id).closest("details");
     const master = label("discovery-enabled");
-    const draft = $("discovery-settings-draft"), actions = $("discovery-settings-save").closest(".discovery-actions");
-    const workspace = node("div", null, "discovery-settings-workspace");
-    workspace.innerHTML = `
-      <nav class="discovery-settings-nav" aria-label="联网搜索分类">
-        <button type="button" data-discovery-settings-target="use" aria-controls="discovery-settings-use" aria-current="page">使用与安排<small>聊天、自动寻找与时段</small></button>
-        <button type="button" data-discovery-settings-target="scope" aria-controls="discovery-settings-scope">平台与兴趣<small>平台范围与兴趣来源</small></button>
-        <button type="button" data-discovery-settings-target="budget" aria-controls="discovery-settings-budget">费用与额度<small>模型许可与每日上限</small></button>
-        <button type="button" data-discovery-settings-target="memory" aria-controls="discovery-settings-memory">资料与使用<small>保存、QQ 与保留时间</small></button>
-        <button type="button" data-discovery-settings-target="network" aria-controls="discovery-settings-network">网络与访问<small>搜索服务与平台通道</small></button>
-      </nav>
-      <div class="discovery-settings-panes">
-        <section id="discovery-settings-use" class="discovery-settings-pane" data-discovery-settings-pane="use" aria-labelledby="discovery-settings-use-title"><h3 id="discovery-settings-use-title">使用与安排</h3></section>
-        <section id="discovery-settings-scope" class="discovery-settings-pane hidden" data-discovery-settings-pane="scope" aria-labelledby="discovery-settings-scope-title"></section>
-        <section id="discovery-settings-budget" class="discovery-settings-pane hidden" data-discovery-settings-pane="budget" aria-labelledby="discovery-settings-budget-title"><h3 id="discovery-settings-budget-title">费用与额度</h3></section>
-        <section id="discovery-settings-memory" class="discovery-settings-pane hidden" data-discovery-settings-pane="memory" aria-labelledby="discovery-settings-memory-title"><h3 id="discovery-settings-memory-title">资料与使用</h3></section>
-        <section id="discovery-settings-network" class="discovery-settings-pane hidden" data-discovery-settings-pane="network" aria-labelledby="discovery-settings-network-title"><h3 id="discovery-settings-network-title">网络与访问</h3></section>
-      </div>`;
-    const pane = (name) => workspace.querySelector(`[data-discovery-settings-pane="${name}"]`);
+    // 主开关卡：开关与「更改设置」同一行，当前状态单独一行小字。
+    const masterCard = node("div", null, "discovery-master"), masterRow = node("div", null, "discovery-master-row");
+    masterCard.id = "discovery-master";
+    const edit = node("button", "更改设置", "link"); edit.type = "button"; edit.id = "discovery-settings-edit"; edit.hidden = true;
+    const masterState = node("span", null, "discovery-master-state"); masterState.id = "discovery-master-state"; masterState.setAttribute("role", "status");
+    masterRow.append(master, edit); masterCard.append(masterRow, masterState);
+    const masterHint = node("p", "开启后 Alice 可以在聊天时查找资料、按兴趣寻找内容；关闭时聊天查找和自动寻找都暂停，已找到的资料仍可查看。首次开启会先带你把设置走一遍。", "discovery-hint discovery-master-hint");
+    masterHint.id = "discovery-master-hint";
     const cost = node("div", null, "discovery-settings-cost");
     const costText = node("span", "尚未读取后台模型使用许可。"); costText.id = "discovery-settings-cost";
     const costLink = node("button", "调整费用与额度", "link"); costLink.type = "button"; costLink.dataset.discoverySettingsTarget = "budget";
+    costLink.addEventListener("click", () => startWizard("edit", "budget"));
     cost.append(costText, costLink);
+    // 分步向导：五个分类各成一步面板；进度点与按钮组复用开始引导的样式。
+    const wizardBox = node("div", null, "discovery-wizard"); wizardBox.id = "discovery-wizard"; wizardBox.hidden = true;
+    wizardBox.innerHTML = `
+      <div class="wizard-top">
+        <div id="discovery-wizard-progress" class="wizard-progress" role="img"></div>
+        <button id="discovery-wizard-cancel" class="link" type="button">放弃</button>
+      </div>
+      <h3 id="discovery-wizard-title" class="discovery-wizard-title" tabindex="-1"></h3>
+      <p id="discovery-wizard-hint" class="discovery-hint"></p>
+      <div class="discovery-settings-panes">
+        ${WIZARD_STEPS.map(({ key, name }) => key === "scope"
+          ? `<section id="discovery-settings-scope" class="discovery-settings-pane hidden" data-discovery-settings-pane="scope" aria-labelledby="discovery-settings-scope-title"></section>`
+          : `<section id="discovery-settings-${key}" class="discovery-settings-pane hidden" data-discovery-settings-pane="${key}" aria-labelledby="discovery-settings-${key}-title"><h3 id="discovery-settings-${key}-title">${name}</h3></section>`).join("")}
+      </div>
+      <p id="discovery-wizard-conflict" class="discovery-hint discovery-wizard-conflict" role="status" hidden>设置已在别处更新。你的修改仍保留在这里；可点「放弃」重新读取后再改。</p>
+      <p id="discovery-wizard-status" class="discovery-hint discovery-wizard-status" role="status"></p>
+      <div class="wizard-actions">
+        <button id="discovery-wizard-back" class="btn ghost" type="button" hidden>上一步</button>
+        <button id="discovery-wizard-skip" class="btn ghost" type="button">跳过</button>
+        <button id="discovery-wizard-next" class="btn primary" type="button">继续</button>
+      </div>`;
+    const pane = (name) => wizardBox.querySelector(`[data-discovery-settings-pane="${name}"]`);
     pane("use").append($("discovery-chat-options"), $("discovery-autonomous-hint"), $("discovery-activity-options"));
     const preferences = $("discovery-preferences");
     preferences.classList.remove("hidden");
@@ -210,11 +237,9 @@
     pane("budget").append(label("discovery-paid"), daily);
     pane("memory").append($("discovery-memory-options"), policy("discovery-capacity-settings"), policy("discovery-retention-settings"));
     pane("network").append($("discovery-network-fields"), $("discovery-tieba-scope-box"), policy("discovery-execution-settings"));
-    const savebar = node("div", null, "discovery-settings-savebar");
-    const saveNote = node("p", "关闭不保存 · 普通草稿本页保留", "discovery-hint");
-    savebar.append($("discovery-settings-status"), draft, saveNote, actions);
-    master.after(cost);
-    box.append(workspace, savebar);
+    // 表单元素只留下来给控件当归属（控件靠 form 属性关联），本身不占位置。
+    form.replaceChildren(); form.hidden = true;
+    box.replaceChildren(masterCard, masterHint, cost, form, wizardBox);
   }
 
   // This is a notice beside the existing composer, not a second chat or send path.
@@ -228,9 +253,11 @@
   $("chat").querySelector("footer").prepend(composerNotice);
 
   let opened = false, settingsOpened = false, working = false, generation = 0, timer = null, controller = null;
-  let snapshot = null, dataset = null, fresh = false, settingsDirty = false, settingsRevision = null;
+  let snapshot = null, dataset = null, fresh = false, settingsRevision = null;
+  // 向导进行中 wizard 非空：表单里的值是尚未落盘的草稿，轮询不得覆盖。
+  let wizard = null;
   let interestDirty = false, interestRevision = null, editingInterest = null, stopped = false;
-  let settingsEdit = 0, interestEdit = 0, settingsSection = "use";
+  let interestEdit = 0, settingsSection = "use";
   let editingPreferredForums = [], forumCheckSignature = "";
   let platformSignature = "", interestSignature = "", cardSignature = "";
   let pendingDiscussion = null, discussionTimer = null;
@@ -520,24 +547,28 @@
   mountPolicyFields();
   mountDailyQuotaEditor();
   function currentRevision() { return snapshot?.settings?.revision; }
-  function settingsConflict() { return settingsDirty && settingsRevision !== currentRevision(); }
+  function settingsConflict() { return !!wizard && settingsRevision !== currentRevision(); }
+  function stepControls(key) {
+    const form = $("discovery-settings-form"), selector = `[data-discovery-settings-pane="${key}"]`;
+    // 平台开关与兴趣表单各有自己的即时保存，不属于设置草稿。
+    return [...settingsPanel.querySelectorAll(`${selector} input, ${selector} select, ${selector} textarea`)]
+      .filter((control) => control.form === form);
+  }
   function selectSettingsSection(section, resetScroll = false) {
-    if (!["use", "scope", "budget", "memory", "network"].includes(section)) section = "use";
+    if (!STEP_KEYS.includes(section)) section = "use";
     settingsSection = section;
-    settingsPanel.querySelectorAll("[data-discovery-settings-pane]").forEach((pane) => pane.classList.toggle("hidden", pane.dataset.discoverySettingsPane !== section));
-    settingsPanel.querySelectorAll(".discovery-settings-nav [data-discovery-settings-target]").forEach((button) => {
-      if (button.dataset.discoverySettingsTarget === section) button.setAttribute("aria-current", "page");
-      else button.removeAttribute("aria-current");
-    });
-    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(settingsOpened && section === "scope"));
+    // 向导没打开时不显示任何一步；打开时只显示当前这一步。
+    settingsPanel.querySelectorAll("[data-discovery-settings-pane]").forEach((pane) => pane.classList.toggle("hidden", !wizard || pane.dataset.discoverySettingsPane !== section));
+    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(settingsOpened && !!wizard && section === "scope"));
     if (resetScroll) {
-      settingsPanel.closest(".modal-body").scrollTop = 0;
-      settingsPanel.querySelector(".discovery-settings-panes").scrollTop = 0;
+      const body = settingsPanel.closest(".modal-body"); if (body) body.scrollTop = 0;
+      const panes = settingsPanel.querySelector(".discovery-settings-panes"); if (panes) panes.scrollTop = 0;
     }
   }
   function focusSetting(field) {
     const pane = field.closest("[data-discovery-settings-pane]");
-    if (pane) selectSettingsSection(pane.dataset.discoverySettingsPane);
+    const index = pane ? STEP_KEYS.indexOf(pane.dataset.discoverySettingsPane) : -1;
+    if (wizard && index >= 0 && wizard.step !== index) { wizard.step = index; showStep(); }   // 深链或校验失败：落到这一项所在的步骤
     for (let parent = field; parent && parent !== panel && parent !== settingsPanel; parent = parent.parentElement) {
       if (parent.tagName === "DETAILS") parent.open = true;
     }
@@ -554,26 +585,91 @@
       (target.closest(".discovery-daily-choice") || target).scrollIntoView({ block: "nearest" });
     });
   }
-  function showSettings(target = "discovery-settings-title") {
+  // 带目标的入口（「选择平台」「查看额度」「调整费用与额度」、校验失败的字段…）：
+  // 向导没开就先开编辑态，并落到目标所在的步骤；不带目标只是打开本页。
+  function showSettings(target = null) {
     if (!settingsOpened) window.AliceUI?.openSettings("discovery");
-    const field = $(target); if (field) focusSetting(field);
+    if (!target) return;
+    const field = $(target); if (!field) return;
+    const step = STEP_OF_TARGET[target] || field.closest("[data-discovery-settings-pane]")?.dataset.discoverySettingsPane;
+    if (!step) { field.focus?.(); return; }
+    if (!wizard) startWizard("edit", step);
+    if (wizard) focusSetting(field);
   }
   function showPreferences(show, target = null) {
-    if (show) { showSettings(target || "discovery-platforms-box"); return; }
-    const restoreFocus = $("discovery-preferences").contains(document.activeElement) && settingsOpened;
-    if (settingsSection === "scope") selectSettingsSection("use");
-    if (restoreFocus) settingsPanel.querySelector('.discovery-settings-nav [data-discovery-settings-target="use"]').focus();
+    if (show) showSettings(target || "discovery-platforms-box");
+  }
+  function renderMaster() {
+    const s = snapshot?.settings;
+    $("discovery-enabled").checked = !!s?.enabled;
+    $("discovery-enabled").disabled = !s || stopped;
+    $("discovery-settings-edit").hidden = !s?.settings_archived;
+    const unified = snapshot?.autonomous_scheduler === "lifecycle-v1";
+    text("discovery-master-state", !s ? "" : !s.enabled ? "已暂停：不查找、不自动寻找；已找到的资料仍可查看。"
+      : `${unified ? "自主寻找由思想与探索统一安排" : s.background_enabled ? "自动寻找已开启" : "自动寻找已关闭"} · 聊天查找${s.chat_search_enabled ? "已开启" : "已关闭"}`);
+  }
+  function applyWizardVisibility() {
+    const active = !!wizard;
+    $("discovery-wizard").hidden = !active;
+    $("discovery-master").hidden = active;
+    $("discovery-master-hint").hidden = active;
+    $("discovery-settings-cost").closest(".discovery-settings-cost").hidden = active;
+  }
+  function startWizard(mode, section = null) {
+    if (wizard || !snapshot?.settings) return false;
+    if (!settingsOpened) window.AliceUI?.openSettings("discovery");
+    fillSettings(true);                       // 从当前生效值起草；保存之前不落盘
+    wizard = { mode, step: 0, baseline: [] };
+    applyWizardVisibility();
+    wizard.step = Math.max(0, STEP_KEYS.indexOf(section));
+    showStep();
+    return true;
+  }
+  function showStep() {
+    const index = wizard.step, step = WIZARD_STEPS[index], last = index === WIZARD_STEPS.length - 1;
+    selectSettingsSection(step.key, true);
+    window.AliceUI?.wizardProgress($("discovery-wizard-progress"), WIZARD_STEPS.map((item) => item.name), index + 1);
+    text("discovery-wizard-title", step.title);
+    text("discovery-wizard-hint", step.hint);
+    $("discovery-wizard-back").hidden = index === 0;
+    $("discovery-wizard-skip").hidden = last;
+    text("discovery-wizard-next", last ? (wizard.mode === "fresh" ? "保存并开启" : "保存设置") : "继续");
+    // 记下进入这一步时的值：上一步与跳过都回到它，未经「继续」确认的修改不带走。
+    wizard.baseline = stepControls(step.key).map((control) => [control, control.type === "checkbox" || control.type === "radio" ? control.checked : control.value]);
+    $("discovery-wizard-title").focus();
+    text("discovery-wizard-status", "");
+    updateControls();
+  }
+  function restoreStep() {
+    for (const [control, value] of wizard.baseline) {
+      if (control.type === "checkbox" || control.type === "radio") control.checked = value; else control.value = value;
+    }
+    updatePolicyControls(); providerFields(); renderDailyQuotaEditor();
+  }
+  function stepValid() {
+    for (const control of stepControls(WIZARD_STEPS[wizard.step].key)) {
+      if (!control.willValidate || control.checkValidity()) continue;
+      revealSetting(control); control.reportValidity(); return false;
+    }
+    return true;
+  }
+  function closeWizard() {
+    wizard = null;
+    applyWizardVisibility(); selectSettingsSection("use");
+    resetInterest();                          // 没保存的兴趣编辑一并放弃
+    if (snapshot?.settings) fillSettings(true); else $("discovery-settings-form").reset();   // 未保存的设置修改丢弃，回到当前生效值
+    $("discovery-key").value = ""; $("discovery-clear-key").checked = false;
+    renderMaster(); updateControls();
   }
   function resolveDrafts() {
-    if (!settingsDirty && !interestDirty) return true;
-    showPreferences(true, settingsDirty ? "discovery-settings-box" : "discovery-interest-topic");
-    status("先保存或取消当前编辑，再更改寻找开关。草稿已保留。", "waiting");
+    if (!interestDirty) return true;
+    showPreferences(true, "discovery-interest-topic");
+    status("先保存或取消正在编辑的兴趣，再更改平台或寻找开关。", "waiting");
     return false;
   }
   function setupIssue() {
     if (!snapshot) return null;
     const s = snapshot.settings, budget = snapshot.budget || {};
-    if (settingsDirty) return { message: "活动设置尚未保存。", label: "继续编辑", target: "discovery-settings-box" };
     if (interestDirty) return { message: "兴趣尚未保存。", label: "继续编辑", target: "discovery-interest-topic" };
     if (!list(snapshot.platforms).some((p) => p.enabled && p.available && (!p.requires_third_party || p.allow_third_party)))
       return { message: "先开启全网搜索，或指定一个平台，告诉 Alice 去哪里找。", label: "选择平台", target: "discovery-platforms-box" };
@@ -586,15 +682,21 @@
     if (exhausted) return { message: "今日寻找额度已用完，可以等下次额度恢复，或自行调整。", label: "查看额度", target: `discovery-policy-${({ queries: "daily_queries", network: "daily_network", bytes: "daily_response_mib" })[exhausted]}` };
     return null;
   }
+  // 主开关（设置卡）与「内容发现」面板上的开启/暂停链接共用：拨动即生效。
   function toggleEnabled() {
     if (!fresh || working || !snapshot || !resolveDrafts()) return;
     const s = snapshot.settings;
-    if (!s.enabled && requiresDiscoveryPaid({ ...s, enabled: true })) {
-      showPreferences(true, "discovery-paid");
+    if (s.enabled) {
+      mutate("settings", { settings: { enabled: false } }, "正在更新寻找状态…", "已暂停发现。已找到的资料仍可查看。");
+      return;
+    }
+    if (!s.settings_archived) { startWizard("fresh"); return; }   // 还没配置过：先带你把设置走一遍
+    if (requiresDiscoveryPaid({ ...s, enabled: true })) {
+      startWizard("edit", "budget");
       status("请确认模型使用许可，或在每日额度中关闭后台模型请求，再开启发现。", "waiting");
       return;
     }
-    mutate("settings", { settings: { enabled: !s.enabled } }, "正在更新寻找状态…", s.enabled ? "已暂停发现。已找到的资料仍可查看。" : "已开启发现，将按已保存的平台、兴趣、时段与额度寻找。");
+    mutate("settings", { settings: { enabled: true } }, "正在开启发现…", "已开启，将按上次的平台、兴趣、时段与额度寻找。要调整可点「更改设置」。");
   }
   function requiresDiscoveryPaid(settings) {
     return snapshot.autonomous_scheduler !== "lifecycle-v1" && settings.enabled && settings.background_enabled
@@ -634,7 +736,6 @@
     for (const root of [panel, settingsPanel]) root.querySelectorAll("[data-write]").forEach((n) => { n.disabled = !ready || n.dataset.ineligible === "true"; });
     $("discovery-refresh").disabled = working || stopped;
     $("discovery-settings-refresh").disabled = working || stopped;
-    $("discovery-settings-reset").disabled = working || !snapshot;
     $("discovery-interest-reset").disabled = working;
     const forumCheck = snapshot?.tieba_forum_check;
     const checking = forumCheck && activeStates.has(forumCheck.state);
@@ -642,7 +743,12 @@
     $("discovery-forum-check").disabled = !ready || !has(snapshot, "tieba_forum_check") || checking || !preferredForumNames().length;
     $("discovery-forum-check").textContent = checking ? "正在检测…" : "检测吧名";
     renderForumCheck();
-    $("discovery-settings-save").disabled = !ready || settingsConflict();
+    // 向导：上一步/跳过/放弃在请求进行中才停用；最后一步的保存还要求状态是最新且没被别处改过。
+    const lastStep = !!wizard && wizard.step === WIZARD_STEPS.length - 1;
+    $("discovery-wizard-next").disabled = !wizard || working || stopped || (lastStep && (!ready || settingsConflict()));
+    $("discovery-wizard-conflict").hidden = !settingsConflict();
+    for (const id of ["discovery-wizard-back", "discovery-wizard-skip", "discovery-wizard-cancel"]) $(id).disabled = working || stopped;
+    $("discovery-settings-edit").disabled = working || stopped;
     const task = snapshot?.task || {}, active = isSearching();
     const issue = setupIssue();
     $("discovery-run").disabled = !ready || active || !!issue;
@@ -655,13 +761,10 @@
     $("discovery-next-action").disabled = reconnect ? false : !ready;
     text("discovery-preferences-toggle", interestDirty ? "平台与兴趣 · 未保存" : "平台与兴趣");
     $("discovery-preferences-toggle").setAttribute("aria-expanded", String(settingsOpened && settingsSection === "scope"));
-    text("discovery-settings-open", settingsDirty ? "联网搜索设置 · 未保存" : "联网搜索设置");
+    text("discovery-settings-open", "联网搜索设置");
     $("discovery-cancel").classList.toggle("hidden", !active);
     $("discovery-cancel").disabled = !ready || !task.id || ["draining", "cancelling"].includes(task.state);
     composerCancel.disabled = working || stopped || $("input").disabled;
-    const dirtyNote = $("discovery-settings-draft");
-    dirtyNote.classList.toggle("hidden", !settingsDirty);
-    dirtyNote.textContent = settingsConflict() ? "设置已在别处更新。你的草稿仍在；请先重新载入，再保存。" : "有尚未保存的设置。";
     $("discovery-interest-draft").classList.toggle("hidden", !interestDirty);
     text("discovery-interest-draft", interestDirty && interestRevision !== currentRevision() ? "设置已更新。请取消编辑并重新选择兴趣，避免覆盖新内容。" : "兴趣修改尚未保存。保存不会直接发送聊天消息。");
     const saved = snapshot?.settings, cost = $("discovery-settings-cost"), current = fresh ? "当前生效" : "上次读取";
@@ -742,8 +845,8 @@
     text("discovery-key-state", snapshot?.settings?.brave_key_present ? "已保存 Brave 密钥。" : "请填写并保存 Brave 搜索密钥。");
   }
   function fillSettings(force = false) {
-    const s = snapshot?.settings; if (!s || settingsDirty && !force) return;
-    settingsDirty = false; settingsRevision = s.revision;
+    const s = snapshot?.settings; if (!s || wizard && !force) return;
+    settingsRevision = s.revision;
     $("discovery-enabled").checked = !!s.enabled;
     $("discovery-background").checked = !!s.background_enabled;
     $("discovery-chat-search").checked = !!s.chat_search_enabled;
@@ -767,7 +870,7 @@
     $("discovery-tieba-text-limit").value = tiebaSupport.textLimit ? String(s.tieba_text_limit) : "";
     $("discovery-endpoint").value = s.provider_endpoint || ""; $("discovery-key").value = ""; $("discovery-clear-key").checked = false;
     $("discovery-engines").value = s.provider_engines || "duckduckgo";
-    providerFields();
+    providerFields(); renderMaster();
   }
   function renderPlatforms() {
     const rows = list(snapshot.platforms), signature = JSON.stringify([rows, snapshot.settings.bilibili_access, snapshot.settings.zhihu_access, snapshot.settings.tieba_access, snapshot.settings.tieba_read_replies, snapshot.settings.tieba_reply_limit, snapshot.settings.tieba_read_nested, snapshot.settings.tieba_text_limit]);
@@ -806,7 +909,7 @@
         if (!browserAccess) {
           const useBrowser = button("使用独立浏览器", () => {
             if (!resolveDrafts()) return;
-            mutate("settings", { settings: { [`${p.id}_access`]: "browser" } }, "正在设置访问方式…", `${name}已改用独立浏览器，平台开关保持当前选择。`);
+            mutate("settings", { settings: { [`${p.id}_access`]: "browser" } }, "正在设置访问方式…", `${name}已改用独立浏览器，平台开关保持当前选择。`, { after: () => syncAccessSelect(p.id) });
           }, "btn ghost");
           if (!p.browser.installed) useBrowser.dataset.ineligible = "true";
           browserActions.append(useBrowser);
@@ -855,6 +958,13 @@
       detail.append(actions); card.append(detail);
       target.append(card);
     }
+  }
+  function syncAccessSelect(id) {
+    // 平台卡片上的「使用独立浏览器」会即时改访问方式：让「网络与访问」那一步的下拉跟上，
+    // 否则向导最后保存时会被旧草稿改回去。
+    if (!wizard) return;
+    $(`discovery-${id}-access`).value = snapshot.settings[`${id}_access`];
+    providerFields();
   }
   function canonicalForumName(value) {
     return value.trim().normalize("NFC").replace(/[A-Z]/g, (letter) => letter.toLowerCase());
@@ -1075,7 +1185,7 @@
     text("discovery-bound-text", message); composerText.textContent = message;
   }
   function clearIdentity() {
-    snapshot = null; dataset = null; fresh = false; settingsDirty = false; settingsRevision = null;
+    snapshot = null; dataset = null; fresh = false; wizard = null; settingsRevision = null;
     window.dispatchEvent(new Event("alice:discovery-cleared"));
     interestDirty = false; pendingDiscussion = null; clearTimeout(discussionTimer);
     platformSignature = interestSignature = cardSignature = "";
@@ -1088,7 +1198,7 @@
     text("discovery-sharing-warning", ""); $("discovery-sharing-warning").classList.add("hidden");
     text("discovery-context", "正在读取寻找范围…"); text("discovery-mode", ""); $("discovery-next").classList.add("hidden");
     text("discovery-settings-platforms", "尚未读取平台状态。");
-    showPreferences(false);
+    applyWizardVisibility(); selectSettingsSection("use"); renderMaster();
     providerFields(); paintDiscussion();
   }
   function adopt(data) {
@@ -1167,12 +1277,14 @@
   }
   async function mutate(action, payload, progress, success, options = {}) {
     if (working || stopped || !dataset || !fresh) return false;
-    const epoch = generation, editAtSend = settingsEdit; working = true; clearTimeout(timer); updateControls(); status(progress);
+    const epoch = generation; working = true; clearTimeout(timer); updateControls(); status(progress);
     try {
       const data = await request("POST", { action, dataset_id: dataset, revision: options.revision ?? currentRevision(), ...payload }, epoch);
       if (!data) return false;
-      if (action === "settings" && editAtSend === settingsEdit) { settingsDirty = false; $("discovery-key").value = ""; }
-      adopt(data); if (options.after) options.after(data); status(success); return true;
+      adopt(data);
+      // 向导进行中，本人触发的即时保存（平台、兴趣）会抬高版本号：跟上去，不算外部改动。
+      if (wizard) settingsRevision = currentRevision();
+      if (options.after) options.after(data); status(success); return true;
     } catch (error) {
       if (epoch === generation) unavailable(error.name === "AbortError" ? "连接中断，操作结果尚未确认。请刷新检查；本页不会自动重发或再找一轮。" : error.message);
       return false;
@@ -1253,11 +1365,12 @@
     const next = !!value && !stopped;
     if (settingsOpened === next) return;
     settingsOpened = next;
-    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(next && settingsSection === "scope"));
+    $("discovery-preferences-toggle").setAttribute("aria-expanded", String(next && !!wizard && settingsSection === "scope"));
     if (next) {
       if (!snapshot) status("正在读取联网搜索设置…", "waiting");
       refresh();
     } else {
+      if (wizard) closeWizard();   // 关窗或切到别的分区：没保存的修改不落盘
       $("discovery-key").value = "";
       if (!opened) suspendView();
     }
@@ -1270,9 +1383,7 @@
   $("discovery-settings-refresh").addEventListener("click", refresh);
   $("discovery-settings-open").addEventListener("click", () => showSettings());
   $("discovery-open-thoughts").addEventListener("click", () => window.AliceUI?.selectSettings("thoughts"));
-  settingsPanel.querySelectorAll("[data-discovery-settings-target]").forEach((button) => button.addEventListener("click", () => selectSettingsSection(button.dataset.discoverySettingsTarget, true)));
   $("discovery-preferences-toggle").addEventListener("click", () => showPreferences(true));
-  $("discovery-preferences-close").addEventListener("click", () => showPreferences(false));
   $("discovery-toggle-enabled").addEventListener("click", toggleEnabled);
   $("discovery-next-action").addEventListener("click", () => { if (!fresh) { refresh(); return; } const issue = setupIssue(); if (issue?.enable) toggleEnabled(); else if (issue?.target) showPreferences(true, issue.target); });
   $("discovery-run").addEventListener("click", () => {
@@ -1290,8 +1401,6 @@
   $("discovery-go-chat").addEventListener("click", goChat);
   $("discovery-undiscuss").addEventListener("click", removeDiscussion); composerCancel.addEventListener("click", removeDiscussion);
   function recordSettingsEdit() {
-    settingsEdit++;
-    settingsDirty = true;
     updatePolicyControls();
     providerFields();
     updateControls();
@@ -1325,12 +1434,11 @@
   $("discovery-bilibili-access").addEventListener("change", providerFields);
   $("discovery-zhihu-access").addEventListener("change", providerFields);
   $("discovery-tieba-access").addEventListener("change", providerFields);
-  $("discovery-settings-reset").addEventListener("click", () => { fillSettings(true); updateControls(); });
-  $("discovery-settings-form").addEventListener("submit", (event) => {
-    event.preventDefault(); if (settingsConflict()) { showPreferences(true, "discovery-settings-reset"); return; }
+  // 向导最后一步用：汇总整份设置。有问题的字段会跳到它所在的步骤并提示，此时返回空。
+  function collectSettings(enabled) {
     let policy;
-    try { policy = readPolicySettings(); } catch (error) { status(error.message, "waiting"); return; }
-    const settings = { ...policy, enabled: $("discovery-enabled").checked, background_enabled: $("discovery-background").checked, chat_search_enabled: $("discovery-chat-search").checked, remember_observations: $("discovery-remember-observations").checked, window_start: $("discovery-start").value, window_end: $("discovery-end").value, allow_paid: $("discovery-paid").checked, allow_chat_interests: $("discovery-chat-interests").checked, share_in_qq: $("discovery-share-qq").checked, provider_kind: $("discovery-provider").value };
+    try { policy = readPolicySettings(); } catch (error) { status(error.message, "waiting"); return null; }
+    const settings = { ...policy, enabled, background_enabled: $("discovery-background").checked, chat_search_enabled: $("discovery-chat-search").checked, remember_observations: $("discovery-remember-observations").checked, window_start: $("discovery-start").value, window_end: $("discovery-end").value, allow_paid: $("discovery-paid").checked, allow_chat_interests: $("discovery-chat-interests").checked, share_in_qq: $("discovery-share-qq").checked, provider_kind: $("discovery-provider").value };
     if (has(snapshot?.settings, "network_mode") && ["system", "direct"].includes(snapshot.settings.network_mode)) {
       const networkMode = $("discovery-network-mode").value;
       if (!["system", "direct"].includes(networkMode)) { status("请选择服务支持的内容发现网络路由。", "waiting"); return; }
@@ -1375,8 +1483,52 @@
       if ($("discovery-key").value.trim()) settings.provider_key = $("discovery-key").value.trim();
       if ($("discovery-clear-key").checked) settings.clear_provider_key = true;
     }
-    if (settings.provider_key && settings.clear_provider_key) { status("填写新密钥和移除密钥只能选择一项。", "waiting"); return; }
-    mutate("settings", { settings }, "正在保存发现设置…", "设置已保存。自主寻找会遵守所选平台、兴趣、时段与额度。", { revision: settingsRevision });
+    if (settings.provider_key && settings.clear_provider_key) { status("填写新密钥和移除密钥只能选择一项。", "waiting"); return null; }
+    return settings;
+  }
+  function saveWizard() {
+    if (!wizard || working || stopped || !fresh) return;
+    if (settingsConflict()) { status("设置已在别处更新。你的修改仍在；可点「放弃」重新读取后再改。", "waiting"); return; }
+    const mode = wizard.mode;
+    // 首次开启由这一步一并打开开关；编辑态保持开关现状，不因改设置而开或关。
+    const enabling = mode === "fresh" || !!snapshot.settings.enabled;
+    const settings = collectSettings(enabling);
+    if (!settings) {
+      // 页首状态行每轮轮询都会被刷新；出错原因另外留在向导里，跳回上一步时不会一闪而过。
+      text("discovery-wizard-status", $("discovery-settings-status").textContent);
+      return;
+    }
+    mutate("settings", { settings, configured: true }, mode === "fresh" ? "正在保存设置并开启…" : "正在保存设置…",
+      mode === "fresh" ? "已开启，将按你的设置寻找。要调整可点「更改设置」。"
+        : enabling ? "设置已保存，联网搜索保持开启。要暂停请关掉上方的开关。" : "设置已保存。要启用请打开上方的开关。",
+      { revision: settingsRevision, after: () => { if (wizard) closeWizard(); } });
+  }
+  $("discovery-settings-form").addEventListener("submit", (event) => event.preventDefault());
+  $("discovery-wizard-next").addEventListener("click", () => {
+    if (!wizard || working || stopped) return;
+    if (!stepValid()) return;
+    if (wizard.step === WIZARD_STEPS.length - 1) saveWizard();
+    else { wizard.step += 1; showStep(); }
+  });
+  $("discovery-wizard-back").addEventListener("click", () => {
+    if (!wizard || working || stopped || wizard.step === 0) return;
+    restoreStep();                                   // 上一步不收集：这一步回到进入时的值
+    wizard.step -= 1; showStep();
+  });
+  $("discovery-wizard-skip").addEventListener("click", () => {
+    if (!wizard || working || stopped || wizard.step === WIZARD_STEPS.length - 1) return;
+    restoreStep();                                   // 跳过 = 这一步保持进入时的值
+    wizard.step += 1; showStep();
+  });
+  $("discovery-wizard-cancel").addEventListener("click", () => {
+    if (!wizard || working || stopped) return;
+    closeWizard();
+    status("已放弃本次设置修改。已在「平台与兴趣」里保存的平台和兴趣会保留。");
+  });
+  $("discovery-settings-edit").addEventListener("click", () => { if (!working && !stopped) startWizard("edit"); });
+  $("discovery-enabled").addEventListener("change", () => {
+    if (wizard || working || stopped || !fresh || !snapshot || !resolveDrafts()) { if (!working) renderMaster(); return; }
+    toggleEnabled();
   });
   $("discovery-interest-form").addEventListener("input", () => { interestEdit++; if (!interestDirty) interestRevision = currentRevision(); interestDirty = true; $("discovery-interest-reset").classList.remove("hidden"); updateControls(); });
   $("discovery-interest-form").addEventListener("invalid", (event) => revealSetting(event.target), true);
